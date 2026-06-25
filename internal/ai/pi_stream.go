@@ -166,7 +166,10 @@ func (p *PiStreamParser) parseMessageUpdate(msg *PiStreamMessage, ch chan<- Stre
 			ch <- StreamEvent{Type: "tool_use", Tool: tc}
 		}
 
-	case "thinking_start", "thinking_end", "text_start", "text_end":
+	case "thinking_end":
+		ch <- StreamEvent{Type: "thinking_done"}
+
+	case "thinking_start", "text_start", "text_end":
 		// No additional event needed — deltas already streamed
 	}
 }
