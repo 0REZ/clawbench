@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, computed, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import FileHeader from '../FileHeader.vue'
 
@@ -65,6 +65,17 @@ vi.mock('@/composables/useChatContext.ts', () => ({
 // Mock useToast
 vi.mock('@/composables/useToast.ts', () => ({
   useToast: () => ({ show: vi.fn() }),
+}))
+
+// Mock useToolbarOverflow — simulate wide toolbar: all demotable items inline
+vi.mock('@/composables/useToolbarOverflow', () => ({
+  useToolbarOverflow: (_getEl, getDemotableIds) => ({
+    inlineIds: computed(() => getDemotableIds()),
+    collapsedIds: computed(() => []),
+    contentWidth: ref(800),
+    startObserving: vi.fn(),
+    stopObserving: vi.fn(),
+  }),
 }))
 
 // Mock getFileType
@@ -263,5 +274,67 @@ describe('FileHeader', () => {
     vm.$.setupState.handleToggleStickyScroll()
     await nextTick()
     expect(getMenuOpen(wrapper)).toBe(false)
+  })
+
+  describe('media file filtering', () => {
+    it('hides code-only toolbar items for image files', async () => {
+      const wrapper = mountHeader({ file: { name: 'photo.png', path: '/tmp/photo.png', content: '' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isMediaFile).toBe(true)
+      // wordWrap, lineNumbers, stickyScroll should not be in toolbar IDs
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('wordWrap')
+      expect(ids).not.toContain('lineNumbers')
+      expect(ids).not.toContain('stickyScroll')
+      expect(ids).not.toContain('toggleView')
+      // attach should still be available
+      expect(ids).toContain('attach')
+      // refresh is not included for media files without text content
+      expect(ids).not.toContain('refresh')
+    })
+
+    it('hides code-only toolbar items for audio files', async () => {
+      const wrapper = mountHeader({ file: { name: 'song.mp3', path: '/tmp/song.mp3', content: '' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isMediaFile).toBe(true)
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('wordWrap')
+      expect(ids).not.toContain('lineNumbers')
+      expect(ids).not.toContain('stickyScroll')
+    })
+
+    it('hides code-only toolbar items for video files', async () => {
+      const wrapper = mountHeader({ file: { name: 'clip.mp4', path: '/tmp/clip.mp4', content: '' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isMediaFile).toBe(true)
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('wordWrap')
+      expect(ids).not.toContain('lineNumbers')
+      expect(ids).not.toContain('stickyScroll')
+    })
+
+    it('hides code-only toolbar items for PDF files', async () => {
+      const wrapper = mountHeader({ file: { name: 'doc.pdf', path: '/tmp/doc.pdf', content: '' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isMediaFile).toBe(true)
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('wordWrap')
+      expect(ids).not.toContain('lineNumbers')
+      expect(ids).not.toContain('stickyScroll')
+      expect(ids).not.toContain('toggleView')
+      // PDF keeps TOC and search
+      expect(ids).toContain('toc')
+      expect(ids).toContain('search')
+    })
+
+    it('shows code toolbar items for text files', async () => {
+      const wrapper = mountHeader({ file: { name: 'main.ts', path: '/tmp/main.ts', content: 'code' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isMediaFile).toBe(false)
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).toContain('wordWrap')
+      expect(ids).toContain('lineNumbers')
+      expect(ids).toContain('stickyScroll')
+    })
   })
 })

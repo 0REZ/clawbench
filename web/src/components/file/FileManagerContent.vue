@@ -2,14 +2,15 @@
   <div class="file-manager-content">
     <!-- Dir nav -->
     <div id="dirNav" class="dir-nav">
-      <div class="dir-toolbar">
-        <div ref="dirToolbarRef" class="dir-toolbar-btns">
-          <div class="toolbar-dropdown-wrap">
+      <div ref="dirToolbarRef" class="dir-toolbar">
+        <div class="dir-toolbar-btns">
+          <div ref="sortDropdownWrapRef" class="toolbar-dropdown-wrap">
             <button class="toolbar-btn" :class="{ 'sort-active': sortField }" @click="sortMenuOpen = !sortMenuOpen" :title="t('file.sortDefault')">
               <ArrowDownAz v-if="!sortField || sortDir === 'asc'" :size="16" />
               <ArrowUpZa v-else :size="16" />
             </button>
-            <div v-if="sortMenuOpen" class="toolbar-dropdown" @click.stop>
+            <Teleport to="body">
+              <div v-if="sortMenuOpen" class="toolbar-dropdown" :style="sortMenuStyle" @click.stop>
               <button class="toolbar-dropdown-item" :class="{ active: sortField === 'name' }" @click="onSortSelect('name')">
                 <ArrowDownAz :size="14" />
                 <span>{{ t('file.sortByName') }}</span>
@@ -35,19 +36,16 @@
                 <ChevronDown v-else-if="sortField === 'size' && sortDir === 'desc'" :size="12" class="sort-dir-icon" />
               </button>
             </div>
+            </Teleport>
           </div>
-          <button v-if="toolbarInlineIds.includes('hidden')" class="toolbar-btn" @click="$emit('toggleHidden')" :title="showHidden ? t('file.hideHiddenFiles') : t('file.showHiddenFiles')">
-            <EyeOff v-if="!showHidden" :size="16" />
-            <Eye v-else :size="16" />
-          </button>
           <button v-if="toolbarInlineIds.includes('refresh')" class="toolbar-btn" @click="$emit('refresh')" :title="t('nav.refresh')">
             <RotateCw :size="16" />
           </button>
-          <button v-if="toolbarInlineIds.includes('multiselect')" class="toolbar-btn" :class="{ active: multiSelect.active }" @click="multiSelect.active ? exitMultiSelect() : enterMultiSelect()" :title="multiSelect.active ? t('file.multiSelect.exit') : t('file.multiSelect.enter')">
-            <CheckSquare :size="16" />
-          </button>
           <button v-if="toolbarInlineIds.includes('newFile')" class="toolbar-btn" @click="doNewFile()" :title="t('file.context.newFile')">
             <FilePlus :size="16" />
+          </button>
+          <button v-if="toolbarInlineIds.includes('newFolder')" class="toolbar-btn" @click="doNewFolder()" :title="t('file.context.newFolder')">
+            <FolderPlus :size="16" />
           </button>
           <button v-if="toolbarInlineIds.includes('upload')" class="toolbar-btn" :disabled="dirUploading" @click="triggerUpload()" :title="t('file.uploadHere')">
             <Upload :size="16" />
@@ -56,42 +54,38 @@
             <LayoutGrid v-if="viewMode === 'list'" :size="16" />
             <LayoutList v-else :size="16" />
           </button>
-          <div class="toolbar-dropdown-wrap">
+          <button v-if="toolbarInlineIds.includes('multiselect')" class="toolbar-btn" :class="{ active: multiSelect.active }" @click="multiSelect.active ? exitMultiSelect() : enterMultiSelect()" :title="multiSelect.active ? t('file.multiSelect.exit') : t('file.multiSelect.enter')">
+            <CheckSquare :size="16" />
+          </button>
+          <button v-if="toolbarInlineIds.includes('hidden')" class="toolbar-btn" @click="$emit('toggleHidden')" :title="showHidden ? t('file.hideHiddenFiles') : t('file.showHiddenFiles')">
+            <EyeOff v-if="!showHidden" :size="16" />
+            <Eye v-else :size="16" />
+          </button>
+          <template v-if="showMoreDropdown">
+          <div ref="moreDropdownWrapRef" class="toolbar-dropdown-wrap">
             <button class="toolbar-btn" @click="moreMenuOpen = !moreMenuOpen" :title="t('nav.more')">
               <MoreHorizontal :size="16" />
             </button>
-            <div v-if="moreMenuOpen" class="toolbar-dropdown toolbar-dropdown-right" @click.stop>
-              <template v-if="toolbarCollapsedIds.includes('hidden')">
-                <button class="toolbar-dropdown-item" @click="$emit('toggleHidden'); moreMenuOpen = false">
-                  <EyeOff v-if="!showHidden" :size="14" />
-                  <Eye v-else :size="14" />
-                  <span>{{ showHidden ? t('file.hideHiddenFiles') : t('file.showHiddenFiles') }}</span>
-                </button>
-              </template>
+            <Teleport to="body">
+              <div v-if="moreMenuOpen" class="toolbar-dropdown" :style="moreMenuStyle" @click.stop>
               <template v-if="toolbarCollapsedIds.includes('refresh')">
                 <button class="toolbar-dropdown-item" @click="$emit('refresh'); moreMenuOpen = false">
                   <RotateCw :size="14" />
                   <span>{{ t('nav.refresh') }}</span>
                 </button>
               </template>
-              <template v-if="toolbarCollapsedIds.includes('multiselect')">
-                <button class="toolbar-dropdown-item" @click="multiSelect.active ? exitMultiSelect() : enterMultiSelect(); moreMenuOpen = false">
-                  <CheckSquare :size="14" />
-                  <span>{{ multiSelect.active ? t('file.multiSelect.exit') : t('file.multiSelect.enter') }}</span>
-                </button>
-              </template>
-              <div v-if="toolbarCollapsedIds.length > 0" class="toolbar-dropdown-divider" />
               <template v-if="toolbarCollapsedIds.includes('newFile')">
                 <button class="toolbar-dropdown-item" @click="doNewFile(); moreMenuOpen = false">
                   <FilePlus :size="14" />
                   <span>{{ t('file.context.newFile') }}</span>
                 </button>
               </template>
-              <button class="toolbar-dropdown-item" @click="doNewFolder(); moreMenuOpen = false">
-                <FolderPlus :size="14" />
-                <span>{{ t('file.context.newFolder') }}</span>
-              </button>
-              <div class="toolbar-dropdown-divider" />
+              <template v-if="toolbarCollapsedIds.includes('newFolder')">
+                <button class="toolbar-dropdown-item" @click="doNewFolder(); moreMenuOpen = false">
+                  <FolderPlus :size="14" />
+                  <span>{{ t('file.context.newFolder') }}</span>
+                </button>
+              </template>
               <template v-if="toolbarCollapsedIds.includes('upload')">
                 <button class="toolbar-dropdown-item" :disabled="dirUploading" @click="triggerUpload(); moreMenuOpen = false">
                   <Upload :size="14" />
@@ -105,8 +99,23 @@
                   <span>{{ viewMode === 'grid' ? t('file.viewList') : t('file.viewGrid') }}</span>
                 </button>
               </template>
+              <template v-if="toolbarCollapsedIds.includes('multiselect')">
+                <button class="toolbar-dropdown-item" @click="multiSelect.active ? exitMultiSelect() : enterMultiSelect(); moreMenuOpen = false">
+                  <CheckSquare :size="14" />
+                  <span>{{ multiSelect.active ? t('file.multiSelect.exit') : t('file.multiSelect.enter') }}</span>
+                </button>
+              </template>
+              <template v-if="toolbarCollapsedIds.includes('hidden')">
+                <button class="toolbar-dropdown-item" @click="$emit('toggleHidden'); moreMenuOpen = false">
+                  <EyeOff v-if="!showHidden" :size="14" />
+                  <Eye v-else :size="14" />
+                  <span>{{ showHidden ? t('file.hideHiddenFiles') : t('file.showHiddenFiles') }}</span>
+                </button>
+              </template>
             </div>
+            </Teleport>
           </div>
+          </template>
         </div>
         <SearchInput v-model="searchQuery" :placeholder="t('search.defaultPlaceholder')" @dblclick="searchQuery = ''" />
       </div>
@@ -342,7 +351,7 @@
 
 <script setup>
 import '@/assets/loading-mask.css'
-import { ref, computed, reactive, inject, nextTick, onMounted, onUnmounted, Teleport, watch } from 'vue'
+import { ref, computed, reactive, inject, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
 import { joinPath } from '@/utils/path'
@@ -425,13 +434,52 @@ const searchQuery = ref('')
 const sortMenuOpen = ref(false)
 const moreMenuOpen = ref(false)
 
+// Dropdown positioning (same pattern as FileHeader.vue)
+const sortDropdownWrapRef = ref(null)
+const moreDropdownWrapRef = ref(null)
+const sortMenuStyle = ref({})
+const moreMenuStyle = ref({})
+
+function updateSortMenuStyle() {
+  if (!sortDropdownWrapRef.value) return
+  const rect = sortDropdownWrapRef.value.getBoundingClientRect()
+  sortMenuStyle.value = {
+    position: 'fixed',
+    top: `${toFixedCSS(rect.bottom + 4)}px`,
+    left: `${toFixedCSS(rect.left)}px`,
+    right: 'auto',
+  }
+}
+
+function updateMoreMenuStyle() {
+  if (!moreDropdownWrapRef.value) return
+  const rect = moreDropdownWrapRef.value.getBoundingClientRect()
+  const vp = getZoomedViewport()
+  moreMenuStyle.value = {
+    position: 'fixed',
+    top: `${toFixedCSS(rect.bottom + 4)}px`,
+    right: `${toFixedCSS(vp.width - rect.right)}px`,
+    left: 'auto',
+  }
+}
+
+watch(sortMenuOpen, (open) => {
+  if (open) nextTick(() => updateSortMenuStyle())
+})
+watch(moreMenuOpen, (open) => {
+  if (open) nextTick(() => updateMoreMenuStyle())
+})
+
 // Responsive toolbar overflow
 const dirToolbarRef = ref(null)
 const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObserving: startToolbarResize, stopObserving: stopToolbarResize } = useToolbarOverflow(
   () => dirToolbarRef.value,
-  () => ['hidden', 'refresh', 'multiselect', 'newFile', 'upload', 'viewToggle'],
-  { inlineCount: 2, gap: 6 },
+  () => ['refresh', 'newFile', 'newFolder', 'upload', 'viewToggle', 'multiselect', 'hidden'],
+  { inlineCount: 2, gap: 6, hasSearch: true },
 )
+
+const moreDropdownItemCount = computed(() => toolbarCollapsedIds.value.length)
+const showMoreDropdown = computed(() => moreDropdownItemCount.value > 0)
 
 // ── View mode (list / grid) from settings config ──
 const viewMode = ref(localConfig.fileView || 'list')
@@ -479,7 +527,7 @@ function onSortSelect(field) {
 }
 
 function closeDropdowns(e) {
-  if (!e.target.closest('.toolbar-dropdown-wrap')) {
+  if (!e.target.closest('.toolbar-dropdown-wrap') && !e.target.closest('.toolbar-dropdown')) {
     sortMenuOpen.value = false
     moreMenuOpen.value = false
   }
@@ -1156,6 +1204,8 @@ function currentFileForClipboard() {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    /* No overflow:hidden — Teleported dropdowns need unclipped ancestors */
 }
 
 .dir-toolbar-btns {
@@ -1167,6 +1217,7 @@ function currentFileForClipboard() {
 
 .dir-toolbar :deep(.search-pill) {
     margin-left: auto;
+    flex: 0 1 auto;
     min-width: 80px;
     max-width: 200px;
     transition: opacity 0.15s;
@@ -1368,67 +1419,6 @@ function currentFileForClipboard() {
 .toolbar-dropdown-wrap {
     position: relative;
     flex-shrink: 0;
-}
-
-.toolbar-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    z-index: 100;
-    min-width: 140px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-    padding: 4px;
-}
-
-.toolbar-dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 6px 10px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.toolbar-dropdown-item:hover {
-    background: var(--bg-tertiary, #f0f0f0);
-}
-
-.toolbar-dropdown-item.active {
-    color: var(--accent-color, #4a90d9);
-    font-weight: 500;
-}
-
-.toolbar-dropdown-item svg {
-    flex-shrink: 0;
-}
-
-.toolbar-dropdown-divider {
-    height: 1px;
-    background: var(--border-color, #e5e5e5);
-    margin: 4px 6px;
-}
-
-.toolbar-dropdown-item .sort-dir-icon {
-    margin-left: auto;
-}
-
-.toolbar-dropdown-item:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
-
-.toolbar-dropdown-right {
-    left: auto;
-    right: 0;
 }
 
 /* ── File Items ── */
@@ -1732,4 +1722,55 @@ function currentFileForClipboard() {
     white-space: nowrap;
 }
 
+</style>
+
+<!-- Unscoped styles for Teleported dropdown (rendered in body, outside scoped context) -->
+<style>
+.toolbar-dropdown {
+    position: fixed;
+    z-index: 9999;
+    min-width: 140px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 4px;
+}
+
+.toolbar-dropdown .toolbar-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.toolbar-dropdown .toolbar-dropdown-item:hover {
+    background: var(--bg-tertiary, #f0f0f0);
+}
+
+.toolbar-dropdown .toolbar-dropdown-item.active {
+    color: var(--accent-color, #4a90d9);
+    font-weight: 500;
+}
+
+.toolbar-dropdown .toolbar-dropdown-item svg {
+    flex-shrink: 0;
+}
+
+.toolbar-dropdown .toolbar-dropdown-item .sort-dir-icon {
+    margin-left: auto;
+}
+
+.toolbar-dropdown .toolbar-dropdown-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
 </style>

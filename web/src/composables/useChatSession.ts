@@ -5,7 +5,7 @@ import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
 import { appLog } from '@/utils/appLog'
 
 const TAG = 'ChatSession'
-import { clearModeState, updateAvailableModes, clearCommandState, updateCommandState, updateAvailableThinkingEfforts, clearThinkingEffortState, clearUsageState, updateUsageState, currentAgentId as _currentAgentId } from '@/composables/useSessionIdentity.ts'
+import { clearModeState, updateAvailableModes, clearCommandState, updateCommandState, updateAvailableThinkingEfforts, clearThinkingEffortState, clearUsageState, clearUsageStateById, updateUsageState, currentAgentId as _currentAgentId } from '@/composables/useSessionIdentity.ts'
 import { clearPlanState, updatePlanEntries } from '@/composables/usePlanProgress'
 import { useAgents, restoreOriginalModels, getAgentThinkingEffortLevels } from '@/composables/useAgents'
 import { store } from '@/stores/app.ts'
@@ -187,10 +187,14 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
   }
 
-  // Helper: sync usage state from server data
-  function syncUsageFromData(usageStateData?: { used?: number; size?: number; cost?: number; currency?: string }) {
+  // Helper: sync usage state from server data.
+  // When usageStateData is missing or size=0, clears the target session's
+  // cache entry so the context bar doesn't show stale data.
+  function syncUsageFromData(usageStateData?: { used?: number; size?: number; cost?: number; currency?: string }, sessionId?: string) {
     if (usageStateData && (usageStateData.size ?? 0) > 0) {
-      updateUsageState(usageStateData.used ?? 0, usageStateData.size ?? 0, usageStateData.cost, usageStateData.currency)
+      updateUsageState(usageStateData.used ?? 0, usageStateData.size ?? 0, usageStateData.cost, usageStateData.currency, sessionId)
+    } else {
+      clearUsageState()
     }
   }
 
@@ -301,7 +305,7 @@ export function useChatSession(options: UseChatSessionOptions) {
             syncThinkingEffortFromData(recoverData.thinkingEffortState?.currentId || '')
             syncModeFromData(recoverData.modeState?.currentModeId || '', recoverData.modeState?.availableModes)
             syncTransportFromData(recoverData.transport)
-            syncUsageFromData(recoverData.usageState)
+            syncUsageFromData(recoverData.usageState, recoverData.sessionId)
             if (recoverData.autoApprove !== undefined) {
               autoApprove.value = recoverData.autoApprove
             }
@@ -324,8 +328,16 @@ export function useChatSession(options: UseChatSessionOptions) {
               }
               Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
               Object.keys(blockRagResults).forEach(k => delete blockRagResults[k])
-              // Replace messages — pending messages are in pendingStore, not messages.value
+              // Replace messages — preserve pending messages from messages.value
+              // (they're not in DB, so parseMessages won't include them)
+              const _pendingMsgs = messages.value.filter((m: any) => m.pending)
               messages.value = parseMessages(recoverMsgs, onParseAssistantContent, messages.value, recoverData.running)
+              // Re-append pending messages that aren't already represented in DB data
+              for (const pm of _pendingMsgs) {
+                if (!messages.value.some((m: any) => m.role === 'user' && m.content === pm.content && !m.pending)) {
+                  messages.value.push(pm)
+                }
+              }
               totalMessages.value = recoverData.total || messages.value.length
               // Sync remaining session metadata from recovery response
               if (recoverData.modeState && recoverData.modeState?.availableModes?.length > 0) {
@@ -441,10 +453,16 @@ export function useChatSession(options: UseChatSessionOptions) {
       Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
       Object.keys(blockRagResults).forEach(k => delete blockRagResults[k])
 
-      // Replace messages with server data. Pending messages are NOT in
-      // messages.value — they live in a separate per-session pendingStore.
-      // No need to preserve/re-append pending messages here.
+      // Replace messages with server data. Pending messages are in
+      // messages.value with pending:true — preserve them across the replacement.
+      const _pendingMsgs = messages.value.filter((m: any) => m.pending)
       messages.value = parseMessages(rawMsgs, onParseAssistantContent, messages.value, data.running)
+      // Re-append pending messages that aren't already represented in DB data
+      for (const pm of _pendingMsgs) {
+        if (!messages.value.some((m: any) => m.role === 'user' && m.content === pm.content && !m.pending)) {
+          messages.value.push(pm)
+        }
+      }
 
       totalMessages.value = data.total || messages.value.length
       // Sanity check: if the backend returned a different sessionId than what we
@@ -465,7 +483,7 @@ export function useChatSession(options: UseChatSessionOptions) {
       syncThinkingEffortFromData(data.thinkingEffortState?.currentId || '')
       syncModeFromData(data.modeState?.currentModeId || '', data.modeState?.availableModes)
       syncTransportFromData(data.transport)
-      syncUsageFromData(data.usageState)
+      syncUsageFromData(data.usageState, returnedId)
       // Restore autoApprove from server state (per-session, not global)
       if (data.autoApprove !== undefined) {
         autoApprove.value = data.autoApprove
@@ -598,7 +616,9 @@ export function useChatSession(options: UseChatSessionOptions) {
     clearModeState()
     clearCommandState()
     clearThinkingEffortState()
-    clearUsageState()
+    // No clearUsageState() here — usage state is per-session in a Map cache.
+    // Switching currentSessionId makes the computed refs read from the new
+    // session's cache entry instantly, with no clear→repopulate race.
     autoApprove.value = false
     // Restore original CLI model list in case ACP had overridden it
     const prevAgentId = _currentAgentId.value
@@ -656,7 +676,7 @@ export function useChatSession(options: UseChatSessionOptions) {
       syncThinkingEffortFromData(data.thinkingEffortState?.currentId || '')
       syncModeFromData(data.modeState?.currentModeId || '', data.modeState?.availableModes)
       syncTransportFromData(data.transport)
-      syncUsageFromData(data.usageState)
+      syncUsageFromData(data.usageState, data.sessionId || sessionId)
       // Restore autoApprove from server state (per-session, not global)
       if (data.autoApprove !== undefined) {
         autoApprove.value = data.autoApprove
@@ -754,6 +774,8 @@ export function useChatSession(options: UseChatSessionOptions) {
       })
       const data = await resp.json()
       if (data.ok) {
+        // Evict usage cache for the deleted session
+        clearUsageStateById(sessionId)
         // If deleted current session, switch to another
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')

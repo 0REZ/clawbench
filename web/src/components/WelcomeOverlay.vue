@@ -30,7 +30,7 @@
               {{ t('welcomeInfo.detected') }}
             </span>
             <button
-              v-if="!detectedBackends.has(b.id) && b.install_cmd && !installingBackendId"
+              v-if="!detectedBackends.has(b.id) && b.install_cmd"
               class="btn-install"
               @click="startInstall(b)"
             >{{ t('welcomeInfo.install') }}</button>
@@ -67,19 +67,17 @@
   <!-- iOS install instructions sheet -->
   <IosInstallDrawer :open="showIosSheet" @close="showIosSheet = false" />
 
-  <!-- Agent install dialog -->
+  <!-- Agent install command dialog -->
   <AgentInstallDialog
-    v-if="installDialog.visible"
-    :backend-id="installDialog.backendId"
-    :backend-name="installDialog.backendName"
-    :install-cmd="installDialog.installCmd"
-    @close="closeInstallDialog"
-    @success="handleInstallSuccess"
+    v-if="selectedBackend"
+    :backend-name="selectedBackend.name"
+    :install-cmd="selectedBackend.install_cmd || ''"
+    @close="selectedBackend = null"
   />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { useAgents } from '@/composables/useAgents'
@@ -113,15 +111,8 @@ const visible = ref(false)
 const backends = ref<BackendInfo[]>([])
 const detectedBackends = ref<Set<string>>(new Set())
 const showIosSheet = ref(false)
-const installingBackendId = ref<string | null>(null)
+const selectedBackend = ref<BackendInfo | null>(null)
 const rescanning = ref(false)
-
-const installDialog = reactive({
-  visible: false,
-  backendId: '',
-  backendName: '',
-  installCmd: '',
-})
 
 // Sort: installed first, not-installed last
 const sortedBackends = computed(() => {
@@ -147,7 +138,6 @@ async function loadBackends() {
     }
     if (agentsResp.ok) {
       const data = await agentsResp.json()
-      // agents is an array of { id, backend, ... } — collect backend IDs
       const agentBackends = (data.agents || data || []).map((a: { backend?: string; id?: string }) => a.backend || a.id)
       detectedBackends.value = new Set(agentBackends)
     }
@@ -183,21 +173,7 @@ async function rescan() {
 }
 
 function startInstall(b: BackendInfo) {
-  installingBackendId.value = b.id
-  installDialog.visible = true
-  installDialog.backendId = b.id
-  installDialog.backendName = b.name
-  installDialog.installCmd = b.install_cmd || ''
-}
-
-function closeInstallDialog() {
-  installDialog.visible = false
-  installingBackendId.value = null
-}
-
-async function handleInstallSuccess() {
-  closeInstallDialog()
-  await rescan()
+  selectedBackend.value = b
 }
 
 async function handlePwaInstall() {

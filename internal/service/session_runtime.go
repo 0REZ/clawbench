@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"clawbench/internal/ai"
@@ -184,12 +185,9 @@ func SetSessionRunning(sessionID string, running bool, skipEvent ...bool) {
 	}
 	activeMu.Unlock()
 
-	if !running {
-		// Safety net: finalize any orphaned streaming=1 messages for this session.
-		// This handles the case where FinalizeStreamingMessage failed due to SQLITE_BUSY
-		// during the stream, leaving the message stuck at streaming=1 forever.
-		go finalizeOrphanedStreamingMessages(sessionID)
-	}
+	// Note: orphan finalization is NOT triggered here automatically.
+	// It must be called explicitly from paths where FinalizeStreamingMessage
+	// is known to have failed or will not be called. See FinalizeOrphanedMessages.
 
 	// Emit event unless caller explicitly skips (e.g. CancelSession sends its own event)
 	if len(skipEvent) == 0 || !skipEvent[0] {
@@ -207,7 +205,9 @@ func SetSessionRunning(sessionID string, running bool, skipEvent ...bool) {
 
 // finalizeOrphanedStreamingMessages checks for and finalizes any streaming=1
 // assistant messages left behind for a session (e.g. due to SQLITE_BUSY failures).
-func finalizeOrphanedStreamingMessages(sessionID string) {
+// cancelReason is captured at the time SetSessionRunning(false) is called to avoid
+// a race with GetAndClearCancelReason in buildResult clearing the value first.
+func finalizeOrphanedStreamingMessages(sessionID string, cancelReason string) {
 	if db == nil {
 		return
 	}
@@ -247,13 +247,17 @@ func finalizeOrphanedStreamingMessages(sessionID string) {
 		} else {
 			if _, ok := contentMap["cancelled"]; !ok {
 				contentMap["cancelled"] = true
-				blocks, _ := contentMap["blocks"].([]any)
-				blocks = append(blocks, map[string]any{
-					"type":   "warning",
-					"text":   "Finalization failed, AI response may be incomplete",
-					"reason": "finalize_busy",
-				})
-				contentMap["blocks"] = blocks
+				// For user-initiated cancel, just mark cancelled without a warning block.
+				// The frontend renders a clean "cancelled" badge — no alarming warning needed.
+				if cancelReason != "user" {
+					blocks, _ := contentMap["blocks"].([]any)
+					blocks = append(blocks, map[string]any{
+						"type":   "warning",
+						"text":   "Finalization failed, AI response may be incomplete",
+						"reason": "finalize_busy",
+					})
+					contentMap["blocks"] = blocks
+				}
 			}
 		}
 		updatedContent, _ := json.Marshal(contentMap)
@@ -268,6 +272,16 @@ func finalizeOrphanedStreamingMessages(sessionID string) {
 				slog.String("session", sessionID))
 		}
 	}
+}
+
+// FinalizeOrphanedMessages finalizes any streaming=1 assistant messages left behind
+// for a session. This should only be called from code paths where
+// FinalizeStreamingMessage is known to have failed (e.g. SQLITE_BUSY) or will
+// not be called (e.g. scheduler cancel/crash, ForceCancelSession).
+// cancelReason controls the warning block: "user" suppresses it (clean cancel),
+// "" or "disconnect" adds a warning.
+func FinalizeOrphanedMessages(sessionID string, cancelReason string) {
+	finalizeOrphanedStreamingMessages(sessionID, cancelReason)
 }
 
 // TrySetSessionRunning atomically checks and sets running state.
@@ -323,6 +337,22 @@ func GetAndClearCancelReason(sessionID string) string {
 	return reason
 }
 
+// GetCancelReason returns the cancellation reason without clearing it.
+// Used by SetSessionRunning to capture the reason before launching the
+// finalizeOrphanedStreamingMessages goroutine, avoiding a race with
+// GetAndClearCancelReason in buildResult.
+func GetCancelReason(sessionID string) string {
+	val, ok := sessionCancelReasons.Load(sessionID)
+	if !ok {
+		return ""
+	}
+	reason, ok := val.(string)
+	if !ok {
+		return ""
+	}
+	return reason
+}
+
 // CancelSession cancels an ongoing AI stream for a session.
 // Returns true if session was found and cancelled, or if session is already not running (idempotent).
 func CancelSession(sessionID string) bool {
@@ -341,6 +371,8 @@ func CancelSession(sessionID string) bool {
 			slog.String("session_id", sessionID))
 		ClearQueue(sessionID)
 		SetSessionRunning(sessionID, false, true)
+		// Stuck session: nothing will finalize its streaming messages.
+		FinalizeOrphanedMessages(sessionID, "user")
 		return true
 	}
 	cancel, ok := val.(context.CancelFunc)
@@ -393,6 +425,15 @@ func ForceCancelSession(sessionID string) {
 	// Skip the "completed" event (true) — ForceCancelSession is for disconnected clients
 	// that won't see it anyway, and we don't want to emit a stale event on reconnection.
 	SetSessionRunning(sessionID, false, true)
+
+	// ForceCancel: the AI goroutine may still be running and may or may not
+	// complete FinalizeStreamingMessage. Launch orphan cleanup with a delay
+	// to give the goroutine a chance to finalize normally. If Finalize
+	// succeeds, streaming=0 and the orphan check is a no-op.
+	go func() {
+		time.Sleep(2 * time.Second)
+		FinalizeOrphanedMessages(sessionID, "disconnect")
+	}()
 }
 
 // sessionStreamBufferSize is the buffer capacity for the per-session event channel.

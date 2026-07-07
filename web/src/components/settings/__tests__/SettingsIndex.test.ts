@@ -21,7 +21,7 @@ const i18n = createI18n({
           summarization: '摘要',
           rag: 'RAG记忆',
           portForward: '端口转发',
-          push: '推送',
+          frp: 'FRP内网穿透',
           security: '安全',
           android: 'Android',
           about: '关于',
@@ -44,7 +44,7 @@ const globalStubs = {
   'lucide-sparkles': true,
   'lucide-brain': true,
   'lucide-arrow-left-right': true,
-  'lucide-bell': true,
+  'lucide-globe': true,
   'lucide-shield': true,
   'lucide-smartphone': true,
   'lucide-info': true,
@@ -81,7 +81,7 @@ describe('SettingsIndex', () => {
     expect(labels).toContain('聊天')
     expect(labels).toContain('文件')
     expect(labels).toContain('端口转发')
-    expect(labels).toContain('推送')
+    expect(labels).toContain('FRP内网穿透')
     expect(labels).toContain('安全')
     expect(labels).toContain('关于')
   })
@@ -103,7 +103,7 @@ describe('SettingsIndex', () => {
 
     const expectedIds = [
       'appearance', 'project', 'chat', 'agents', 'files', 'terminal',
-      'tts', 'summarization', 'rag', 'portForward', 'push', 'security', 'about',
+      'tts', 'summarization', 'rag', 'portForward', 'frp', 'security', 'about',
     ]
 
     const rows = wrapper.findAll('.settings-index__row')

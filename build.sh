@@ -67,22 +67,19 @@ if [ -f "package.json" ] && command -v npm >/dev/null 2>&1; then
         echo "  Installing dependencies..."
         npm install
     fi
-    # Clean stale hashed assets before rebuild (index-*.js, index-*.css, manifest-*.json)
-    find public/ -maxdepth 1 -name 'index-*.js' -o -name 'index-*.css' -o -name 'manifest-*.json' | xargs rm -f 2>/dev/null || true
+    # Clean all stale build output before rebuild.
+    # Vite generates new hashed filenames each build but does not remove old ones,
+    # so leftover chunks (diagram JS, CSS, fonts, etc.) accumulate indefinitely.
+    # Preserve only index.html and assets/ (static user assets); Vite regenerates the rest.
+    find public/ -maxdepth 1 -type f ! -name 'index.html' -delete 2>/dev/null || true
     npm run build
     echo "  Frontend: public/"
 
-    # Copy frontend build output for Go embed (go:embed all:dist in internal/frontend/)
-    # Include ALL JS/CSS files, not just index-* — Vite dynamic imports produce
-    # lazy chunks (e.g. pdf-*.js, dagre-*.js, mermaid diagram chunks).
+    # Copy ALL frontend build output for Go embed (go:embed all:dist in internal/frontend/)
+    # Vite outputs index.html, JS/CSS chunks, fonts (woff2), images (png),
+    # manifest, service worker, etc. — all must be embedded.
     rm -rf internal/frontend/dist
-    mkdir -p internal/frontend/dist
-    # Restore .gitkeep so go:embed works on fresh clone
-    touch internal/frontend/dist/.gitkeep
-    cp public/index.html internal/frontend/dist/
-    cp public/*.js public/*.css internal/frontend/dist/ 2>/dev/null || true
-    cp public/manifest-*.json public/sw.js internal/frontend/dist/ 2>/dev/null || true
-    cp -r public/assets internal/frontend/dist/assets 2>/dev/null || true
+    cp -r public internal/frontend/dist
     echo "  Frontend copied for embedding: internal/frontend/dist/"
 else
     echo "  npm not found or no package.json, skipping frontend build"

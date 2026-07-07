@@ -26,6 +26,11 @@ export function useSettingsNavigation() {
   let pollTimer: ReturnType<typeof setInterval> | null = null
 
   const currentCategory = ref<string | null>(null)
+  const beforeReset = ref<(() => boolean) | null>(null)
+
+  function setBeforeResetGuard(fn: (() => boolean) | null) {
+    beforeReset.value = fn
+  }
 
   // Update currentCategory whenever navStack changes
   function pushNav(categoryId: string) {
@@ -43,6 +48,7 @@ export function useSettingsNavigation() {
   }
 
   function resetState() {
+    if (beforeReset.value && !beforeReset.value()) return  // guard says don't reset
     navStack.value = []
     currentCategory.value = null
     needsRestart.value = false
@@ -129,5 +135,6 @@ export function useSettingsNavigation() {
     restartingOverlay,
     handleRestartNeeded,
     handleRestart,
+    setBeforeResetGuard,
   }
 }

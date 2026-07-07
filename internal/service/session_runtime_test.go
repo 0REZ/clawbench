@@ -134,6 +134,67 @@ func TestSetCancelReason_OverwritesPrevious(t *testing.T) {
 	assert.Equal(t, "user", reason)
 }
 
+// --- GetCancelReason ---
+
+func TestGetCancelReason_ReturnsReasonWithoutClearing(t *testing.T) {
+	cleanupCancelReasons()
+	defer cleanupCancelReasons()
+
+	SetCancelReason("session-getreason-1", "user")
+
+	reason := GetCancelReason("session-getreason-1")
+	assert.Equal(t, "user", reason)
+
+	// Should NOT be cleared after GetCancelReason (unlike GetAndClearCancelReason)
+	reason2 := GetCancelReason("session-getreason-1")
+	assert.Equal(t, "user", reason2)
+}
+
+func TestGetCancelReason_NoReason(t *testing.T) {
+	cleanupCancelReasons()
+
+	reason := GetCancelReason("nonexistent")
+	assert.Equal(t, "", reason)
+}
+
+func TestGetCancelReason_NonStringValue(t *testing.T) {
+	cleanupCancelReasons()
+	defer cleanupCancelReasons()
+
+	// Store a non-string value to trigger the safe type assertion path
+	sessionCancelReasons.Store("session-getreason-nonstring", 42)
+
+	reason := GetCancelReason("session-getreason-nonstring")
+	assert.Equal(t, "", reason)
+}
+
+// --- ChatSummary mode tests ---
+
+func TestSetChatSummaryMode_GetChatSummaryMode(t *testing.T) {
+	origMode := GetChatSummaryMode()
+	defer SetChatSummaryMode(origMode)
+
+	SetChatSummaryMode("simple")
+	assert.Equal(t, "simple", GetChatSummaryMode())
+
+	SetChatSummaryMode("ai")
+	assert.Equal(t, "ai", GetChatSummaryMode())
+
+	SetChatSummaryMode("")
+	assert.Equal(t, "", GetChatSummaryMode())
+}
+
+func TestSetChatSummaryEnabled_Runtime(t *testing.T) {
+	origEnabled := chatSummaryEnabled.Load()
+	defer chatSummaryEnabled.Store(origEnabled)
+
+	SetChatSummaryEnabled(false)
+	assert.False(t, chatSummaryEnabled.Load())
+
+	SetChatSummaryEnabled(true)
+	assert.True(t, chatSummaryEnabled.Load())
+}
+
 // --- CancelSession ---
 
 func TestCancelSession_WithCancelFunc(t *testing.T) {
@@ -1929,7 +1990,7 @@ func TestFinalizeOrphanedStreamingMessages_NilDB(t *testing.T) {
 
 	// Should return early without panic
 	assert.NotPanics(t, func() {
-		finalizeOrphanedStreamingMessages("session-orphan-nil")
+		finalizeOrphanedStreamingMessages("session-orphan-nil", "")
 	})
 }
 
@@ -1940,7 +2001,7 @@ func TestFinalizeOrphanedStreamingMessages_NoOrphans(t *testing.T) {
 
 	// No streaming messages → should return without error
 	assert.NotPanics(t, func() {
-		finalizeOrphanedStreamingMessages("session-no-orphans")
+		finalizeOrphanedStreamingMessages("session-no-orphans", "")
 	})
 }
 
@@ -1960,7 +2021,7 @@ func TestFinalizeOrphanedStreamingMessages_WithOrphan(t *testing.T) {
 	require.NoError(t, err)
 
 	// Finalize orphans
-	finalizeOrphanedStreamingMessages(sessionID)
+	finalizeOrphanedStreamingMessages(sessionID, "")
 
 	// Wait briefly for the async goroutine in SetSessionRunning to complete
 	time.Sleep(50 * time.Millisecond)
@@ -2005,7 +2066,7 @@ func TestFinalizeOrphanedStreamingMessages_WithAlreadyCancelledContent(t *testin
 	)
 	require.NoError(t, err)
 
-	finalizeOrphanedStreamingMessages(sessionID)
+	finalizeOrphanedStreamingMessages(sessionID, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Content should NOT have an additional warning block (already cancelled)
@@ -2042,7 +2103,7 @@ func TestFinalizeOrphanedStreamingMessages_WithInvalidJSON(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	finalizeOrphanedStreamingMessages(sessionID)
+	finalizeOrphanedStreamingMessages(sessionID, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Invalid JSON → fallback content with text block + cancelled=true
@@ -2068,6 +2129,44 @@ func TestFinalizeOrphanedStreamingMessages_WithInvalidJSON(t *testing.T) {
 	assert.Equal(t, invalidContent, firstBlock["text"])
 }
 
+func TestFinalizeOrphanedStreamingMessages_UserCancelNoWarning(t *testing.T) {
+	db := setupChatTestDB(t)
+	cleanup := SetDBForTest(db, db)
+	defer cleanup()
+
+	sessionID := "session-orphan-user-cancel"
+
+	// Insert a streaming=1 assistant message (orphan)
+	validContent := `{"blocks":[{"type":"text","text":"partial answer"}]}`
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, ?, ?, ?, 'claude', 1)",
+		"/test", "assistant", validContent, sessionID,
+	)
+	require.NoError(t, err)
+
+	// Finalize orphans with user cancel reason — should NOT add warning block
+	finalizeOrphanedStreamingMessages(sessionID, "user")
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify: cancelled=true, but NO warning block (user intentionally cancelled)
+	var streaming int
+	var updatedContent string
+	err = db.QueryRow(
+		"SELECT content, streaming FROM chat_history WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&updatedContent, &streaming)
+	require.NoError(t, err)
+	assert.Equal(t, 0, streaming, "orphaned message should be finalized (streaming=0)")
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updatedContent), &parsed))
+	assert.Equal(t, true, parsed["cancelled"])
+	blocks, ok := parsed["blocks"].([]any)
+	require.True(t, ok)
+	// Should still have 1 block only — no warning block appended for user cancel
+	assert.Equal(t, 1, len(blocks))
+}
+
 func TestFinalizeOrphanedStreamingMessages_MultipleOrphans(t *testing.T) {
 	db := setupChatTestDB(t)
 	cleanup := SetDBForTest(db, db)
@@ -2089,7 +2188,7 @@ func TestFinalizeOrphanedStreamingMessages_MultipleOrphans(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	finalizeOrphanedStreamingMessages(sessionID)
+	finalizeOrphanedStreamingMessages(sessionID, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Both messages should be finalized
@@ -2102,9 +2201,9 @@ func TestFinalizeOrphanedStreamingMessages_MultipleOrphans(t *testing.T) {
 	assert.Equal(t, 2, count, "both orphaned messages should be finalized")
 }
 
-// --- SetSessionRunning triggers finalizeOrphanedStreamingMessages ---
+// --- SetSessionRunning no longer triggers orphan finalization ---
 
-func TestSetSessionRunning_FalseTriggersOrphanFinalization(t *testing.T) {
+func TestSetSessionRunning_False_NoOrphanFinalization(t *testing.T) {
 	cleanupActiveSessions()
 	defer cleanupActiveSessions()
 
@@ -2112,7 +2211,7 @@ func TestSetSessionRunning_FalseTriggersOrphanFinalization(t *testing.T) {
 	cleanup := SetDBForTest(db, db)
 	defer cleanup()
 
-	sessionID := "session-orphan-trigger"
+	sessionID := "session-no-auto-orphan"
 
 	// Insert a streaming=1 orphan message
 	validContent := `{"blocks":[{"type":"text","text":"orphaned text"}]}`
@@ -2122,11 +2221,43 @@ func TestSetSessionRunning_FalseTriggersOrphanFinalization(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Set running=false triggers go finalizeOrphanedStreamingMessages
+	// Set running=false — should NOT trigger orphan finalization
 	SetSessionRunning(sessionID, false, true)
 
-	// Wait for async goroutine to complete
 	time.Sleep(100 * time.Millisecond)
+
+	// Verify the orphan was NOT finalized — still streaming=1
+	var streaming int
+	err = db.QueryRow(
+		"SELECT streaming FROM chat_history WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&streaming)
+	require.NoError(t, err)
+	assert.Equal(t, 1, streaming, "orphan should NOT be auto-finalized by SetSessionRunning(false)")
+}
+
+// Verify explicit FinalizeOrphanedMessages works correctly
+func TestFinalizeOrphanedMessages_ExplicitCall(t *testing.T) {
+	cleanupActiveSessions()
+	defer cleanupActiveSessions()
+
+	db := setupChatTestDB(t)
+	cleanup := SetDBForTest(db, db)
+	defer cleanup()
+
+	sessionID := "session-explicit-orphan"
+
+	// Insert a streaming=1 orphan message
+	validContent := `{"blocks":[{"type":"text","text":"orphaned text"}]}`
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, ?, ?, ?, 'claude', 1)",
+		"/test", "assistant", validContent, sessionID,
+	)
+	require.NoError(t, err)
+
+	// Explicit call — should finalize the orphan
+	FinalizeOrphanedMessages(sessionID, "")
+	time.Sleep(50 * time.Millisecond)
 
 	// Verify the orphan was finalized
 	var streaming int
@@ -2135,5 +2266,47 @@ func TestSetSessionRunning_FalseTriggersOrphanFinalization(t *testing.T) {
 		sessionID,
 	).Scan(&streaming)
 	require.NoError(t, err)
-	assert.Equal(t, 0, streaming, "orphan should be finalized when session stops")
+	assert.Equal(t, 0, streaming, "orphan should be finalized by explicit FinalizeOrphanedMessages call")
+}
+
+// Verify that FinalizeOrphanedMessages with cancelReason="user" does not add warning block
+func TestFinalizeOrphanedMessages_UserCancelNoWarning(t *testing.T) {
+	cleanupActiveSessions()
+	defer cleanupActiveSessions()
+
+	db := setupChatTestDB(t)
+	cleanup := SetDBForTest(db, db)
+	defer cleanup()
+
+	sessionID := "session-user-cancel-explicit"
+
+	// Insert a streaming=1 orphan message
+	validContent := `{"blocks":[{"type":"text","text":"partial answer"}]}`
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, ?, ?, ?, 'claude', 1)",
+		"/test", "assistant", validContent, sessionID,
+	)
+	require.NoError(t, err)
+
+	// Explicit call with user cancel reason — should NOT add warning block
+	FinalizeOrphanedMessages(sessionID, "user")
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify: cancelled=true, but NO warning block
+	var streaming int
+	var updatedContent string
+	err = db.QueryRow(
+		"SELECT content, streaming FROM chat_history WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&updatedContent, &streaming)
+	require.NoError(t, err)
+	assert.Equal(t, 0, streaming)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updatedContent), &parsed))
+	assert.Equal(t, true, parsed["cancelled"])
+	blocks, ok := parsed["blocks"].([]any)
+	require.True(t, ok)
+	// Should have 1 block only — no warning block for user cancel
+	assert.Equal(t, 1, len(blocks))
 }

@@ -92,7 +92,6 @@
               {{ t('file.header.stickyScroll') }}
               <span v-if="stickyScroll" class="wrap-check">✓</span>
             </button>
-            <div v-if="toolbarCollapsedIds.length > 0" class="dropdown-divider" />
             <!-- Always-in-dropdown items -->
             <button v-if="file.isBinary" class="dropdown-item" @click="handleOpenAsText">
               <Code2 :size="14" />
@@ -187,11 +186,11 @@ const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObs
     if (hasToc.value) ids.push('toc')
     if (hasToc.value) ids.push('search')
     ids.push('attach')
-    ids.push('refresh')
-    if (isMarkdown.value || isHtml.value) ids.push('toggleView')
-    if (!isMarkdownRendered.value) ids.push('wordWrap')
-    if (!isMarkdownRendered.value) ids.push('lineNumbers')
-    if (!isMarkdownRendered.value) ids.push('stickyScroll')
+    if (hasTextContent.value) ids.push('refresh')
+    if (hasTextContent.value && !isMediaFile.value && (isMarkdown.value || isHtml.value)) ids.push('toggleView')
+    if (hasTextContent.value && !isMediaFile.value && !isMarkdownRendered.value) ids.push('wordWrap')
+    if (hasTextContent.value && !isMediaFile.value && !isMarkdownRendered.value) ids.push('lineNumbers')
+    if (hasTextContent.value && !isMediaFile.value && !isMarkdownRendered.value) ids.push('stickyScroll')
     return ids
   },
   { inlineCount: 1, gap: 8 },
@@ -220,6 +219,12 @@ const fileType = computed(() => props.file ? getFileType(props.file.name) : null
 const isMarkdown = computed(() => fileType.value?.isMarkdown || false)
 const isHtml = computed(() => fileType.value?.isHtml || false)
 const isMarkdownRendered = computed(() => (isMarkdown.value || isHtml.value) && props.viewMode === 'rendered')
+const isMediaFile = computed(() => {
+    const ft = fileType.value
+    return ft?.isImage || ft?.isAudio || ft?.isVideo || ft?.isPdf || false
+})
+// File has usable text content for code-specific features
+const hasTextContent = computed(() => !!props.file?.content && !props.file?.tooLarge && !props.file?.isBinary)
 const hasToc = computed(() => {
     if (!props.file) return false
     const ft = fileType.value

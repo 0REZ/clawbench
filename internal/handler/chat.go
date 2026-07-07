@@ -201,6 +201,9 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 				// No session-level mapping yet (new session, never sent a message).
 				// Fall back to agent-level registry so mode/thinking/command chips
 				// appear immediately without requiring the first message.
+				// Note: usageState is NOT restored from agent-level registry — it is
+				// per-session and using the agent-level cache would show another
+				// session's context usage. It is resolved from orphanedUsage below.
 				reg := ai.GetAgentCapabilityRegistry()
 				agentCap := reg.Get(sessionAgentID)
 				if agentCap != nil && agentCap.HasData() {
@@ -216,9 +219,13 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 					if ml := reg.GetModelListState(sessionAgentID, ""); ml != nil {
 						modelListState = ml
 					}
-					if us := reg.GetUsageState(sessionAgentID); us != nil {
-						usageState = us
-					}
+				}
+			}
+			// If no usageState from live connection, try orphaned usage
+			// (preserved when the connection was reaped by idle sweep).
+			if usageState == nil {
+				if ou := ai.GetACPConnManager().GetOrphanedUsageState(sessionID); ou != nil {
+					usageState = ou
 				}
 			}
 		}
@@ -408,10 +415,17 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 		}
 		queueState := service.EnqueueMessage(sessionID, qMsg)
 
-		// Notify the running goroutine via SSE
+		// Notify the running goroutine via SSE — send queue_queued with the full
+		// message data so the frontend can push a pending message into messages
 		service.SendSessionEvent(sessionID, ai.StreamEvent{
-			Type:       "queue_update",
-			QueueEvent: &ai.QueueEventData{Queue: queueState},
+			Type: "queue_queued",
+			QueueEvent: &ai.QueueEventData{
+				SessionID: sessionID,
+				Text:      req.Message,
+				FilePaths: allFilePaths,
+				Files:     allFiles,
+				Queue:     queueState,
+			},
 		})
 
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -554,6 +568,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 			ai.SendStreamEvent(ctx, streamCh, ai.StreamEvent{
 				Type: "queue_drain",
 				QueueEvent: &ai.QueueEventData{
+					SessionID: sessionID,
 					Text:      qMsg.Text,
 					MessageID: drainMsgID,
 					FilePaths: qMsg.FilePaths,

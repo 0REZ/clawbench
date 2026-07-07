@@ -28,6 +28,8 @@ const (
 
 	// contentKeyBlocks is the JSON key for content blocks in serialized messages.
 	contentKeyBlocks = "blocks"
+	// contentKeyMetadata is the JSON key for response metadata.
+	contentKeyMetadata = "metadata"
 	// cancelReasonUser is the cancel reason when the user explicitly cancels.
 	cancelReasonUser = "user"
 	// blockTypeWarning is the content block type for warning messages.
@@ -348,7 +350,7 @@ func (e *SessionExecutor) flushStreamingMessage() {
 	}
 	contentMap := map[string]any{contentKeyBlocks: serializedBlocks}
 	if e.responseMetadata != nil {
-		contentMap["metadata"] = e.responseMetadata
+		contentMap[contentKeyMetadata] = e.responseMetadata
 	}
 	blocksJSON, _ := json.Marshal(contentMap)
 	if err := UpdateStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, string(blocksJSON)); err != nil {
@@ -370,7 +372,7 @@ func (e *SessionExecutor) handleResumeSplit() {
 	}
 	contentMap := map[string]any{contentKeyBlocks: serializedBlocks}
 	if e.responseMetadata != nil {
-		contentMap["metadata"] = e.responseMetadata
+		contentMap[contentKeyMetadata] = e.responseMetadata
 	}
 	blocksJSON, _ := json.Marshal(contentMap)
 	if msgID, err := FinalizeStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, string(blocksJSON)); err != nil {
@@ -437,12 +439,18 @@ func (e *SessionExecutor) injectSessionMetadata(meta *ai.Metadata) {
 // buildContentJSON serializes blocks and metadata into the DB content format,
 // handling empty-response warnings and cancellation markers.
 func (e *SessionExecutor) buildContentJSON(blocks []model.ContentBlock, result RunResult, meta *ai.Metadata) (string, []model.ContentBlock) {
+	// User-initiated cancel: just mark cancelled, never add a warning block.
+	// The frontend renders a clean "cancelled" badge — no alarming warning needed.
+	if result.CancelReason == cancelReasonUser {
+		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta, statusCancelled: true}
+		blocksJSON, _ := json.Marshal(contentMap)
+		return string(blocksJSON), blocks
+	}
+
 	if len(blocks) == 0 {
 		var errMsg string
 		var reason string
 		switch {
-		case result.CancelReason == cancelReasonUser:
-			errMsg, reason = "User cancelled", ai.ReasonUserCancel
 		case e.ctx.Err() == context.Canceled:
 			errMsg, reason = "AI response cancelled", ai.ReasonContextCancel
 		case e.ctx.Err() == context.DeadlineExceeded:
@@ -451,18 +459,16 @@ func (e *SessionExecutor) buildContentJSON(blocks []model.ContentBlock, result R
 			errMsg, reason = "AI returned no content", ai.ReasonEmpty
 		}
 		blocks = append(blocks, model.ContentBlock{Type: "warning", Text: errMsg, Reason: reason})
-		contentMap := map[string]any{contentKeyBlocks: blocks, "metadata": meta}
-		if result.CancelReason == cancelReasonUser || e.ctx.Err() == context.Canceled {
-			contentMap["cancelled"] = true
+		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta}
+		if e.ctx.Err() == context.Canceled {
+			contentMap[statusCancelled] = true
 		}
 		blocksJSON, _ := json.Marshal(contentMap)
 		return string(blocksJSON), blocks
 	}
 
 	contentMap := map[string]any{contentKeyBlocks: blocks, "metadata": meta}
-	if result.CancelReason == cancelReasonUser {
-		contentMap["cancelled"] = true
-	} else if e.ctx.Err() == context.Canceled {
+	if e.ctx.Err() == context.Canceled {
 		contentMap["cancelled"] = true
 	} else if e.ctx.Err() == context.DeadlineExceeded {
 		blocks = append(blocks, model.ContentBlock{Type: blockTypeWarning, Text: "AI response timed out (30 min)", Reason: ai.ReasonTimeout})

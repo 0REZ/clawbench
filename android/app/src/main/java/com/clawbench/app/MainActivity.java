@@ -57,7 +57,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
 import java.security.cert.X509Certificate;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -247,15 +246,22 @@ public class MainActivity extends AppCompatActivity {
         // to the app. Only first-time users see the login page.
 
         // Load saved URL or show configuration dialog
+        // Migration: clear QR-auth sentinel ("__qr__") from previous QR scan login feature.
+        // Treat it as "no password" — rely on session cookie instead.
+        String savedPassword = prefs.getString(KEY_SSH_PASSWORD, null);
+        if ("__qr__".equals(savedPassword)) {
+            prefs.edit().remove(KEY_SSH_PASSWORD).apply();
+            savedPassword = null;
+        }
         String savedUrl = prefs.getString(KEY_SERVER_URL, null);
         if (savedUrl != null) {
             // Auto-reconnect: use pre-authentication to verify server is reachable
             // before loading the WebView. This prevents Chrome's built-in error page.
-            String savedPassword = prefs.getString(KEY_SSH_PASSWORD, null);
             if (savedPassword != null && !savedPassword.isEmpty()) {
                 webView.setVisibility(View.INVISIBLE);
                 authenticateAndNavigate(savedUrl, savedPassword);
             } else {
+                // No password: rely on session cookie
                 webView.setVisibility(View.INVISIBLE);
                 checkConnectivityAndNavigate(savedUrl);
             }
@@ -683,15 +689,20 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             try {
                 AuthResult result = performLoginRequest(url, password);
-                handleAuthResponse(result.statusCode, url, password, result.cookies);
+                OkHttpClient standardClient = new OkHttpClient.Builder()
+                        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .build();
+                handleAuthResponse(result.statusCode, url, password, result.cookies, standardClient);
             } catch (javax.net.ssl.SSLException e) {
                 // SSL error (self-signed cert, hostname mismatch, etc.)
                 // Show native confirmation dialog on UI thread, then retry with trusting client
                 AppLog.w(TAG, "SSL error during pre-auth, showing confirmation dialog", e);
                 runOnUiThread(() -> showSslConfirmationDialog(() -> {
                     try {
-                        AuthResult result = performLoginRequestWithClient(buildTrustingOkHttpClient(), url, password);
-                        handleAuthResponse(result.statusCode, url, password, result.cookies);
+                        OkHttpClient trustClient = buildTrustingOkHttpClient();
+                        AuthResult result = performLoginRequestWithClient(trustClient, url, password);
+                        handleAuthResponse(result.statusCode, url, password, result.cookies, trustClient);
                     } catch (Exception retryEx) {
                         AppLog.w(TAG, "SSL retry failed", retryEx);
                         runOnUiThread(() -> showLoginPage(getNetworkErrorMessage(retryEx)));
@@ -901,7 +912,7 @@ public class MainActivity extends AppCompatActivity {
      * @param url        the server URL to navigate to on success/fallback
      * @param cookies    Set-Cookie headers from the response (may be empty)
      */
-    void handleAuthResponse(int statusCode, String url, String password, java.util.List<String> cookies) {
+    void handleAuthResponse(int statusCode, String url, String password, java.util.List<String> cookies, OkHttpClient client) {
         if (statusCode == 200) {
             // Extract Set-Cookie and inject into WebView CookieManager.
             // Before injecting, clear all ClawBench cookies for the target domain
@@ -926,11 +937,7 @@ public class MainActivity extends AppCompatActivity {
             }
             // Auth success — verify this is a ClawBench server before navigating WebView
             try {
-                OkHttpClient healthClient = new OkHttpClient.Builder()
-                        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                        .build();
-                String healthError = performHealthCheck(url, healthClient);
+                String healthError = performHealthCheck(url, client);
                 if (healthError != null) {
                     runOnUiThread(() -> showLoginPage(healthError));
                     return;
@@ -1611,8 +1618,7 @@ public class MainActivity extends AppCompatActivity {
                 activity.forwardedPorts.put(localPort, host != null ? host : "");
                 BackgroundService.addForwardedPort(activity, localPort, targetPort, host != null ? host : "");
 
-                // Request battery optimization exemption if not already granted.
-                // Re-check every time in case the user previously dismissed the dialog.
+                // Request battery optimization exemption on first port forward.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     PowerManager pm = (PowerManager) activity.getSystemService(Context.POWER_SERVICE);
                     if (pm != null && !pm.isIgnoringBatteryOptimizations(activity.getPackageName())) {
@@ -1642,7 +1648,6 @@ public class MainActivity extends AppCompatActivity {
                         AppLog.w(TAG, "Failed to request battery optimization exemption", e);
                     }
                 } else {
-                    // Already whitelisted, just mark as requested
                     BackgroundService.setBatteryOptRequested(activity);
                 }
             }
@@ -1843,14 +1848,21 @@ public class MainActivity extends AppCompatActivity {
 
         /**
          * Download a file from the ClawBench server to the Downloads directory.
-         * @param path Relative file path (as used in /api/local-file/ URL)
+         * @param path File path — relative (project-internal) or absolute (external, starts with /)
          */
         @JavascriptInterface
         public void downloadFile(String path) {
             activity.runOnUiThread(() -> {
                 String serverUrl = activity.prefs.getString(KEY_SERVER_URL, "");
                 if (serverUrl.isEmpty()) return;
-                String url = serverUrl + "/api/local-file/" + Uri.encode(path, "/") + "?download=1";
+                String url;
+                if (path.startsWith("/")) {
+                    // External file: use ?path= query param
+                    url = serverUrl + "/api/local-file/?download=1&path=" + Uri.encode(path);
+                } else {
+                    // Project-relative: use URL path
+                    url = serverUrl + "/api/local-file/" + Uri.encode(path, "/") + "?download=1";
+                }
                 // Trigger the DownloadListener by asking WebView to load the URL
                 // The ?download=1 param makes the server return Content-Disposition: attachment
                 // which forces WebView to trigger the DownloadListener instead of rendering inline
@@ -2055,19 +2067,19 @@ public class MainActivity extends AppCompatActivity {
          * Share a file from the ClawBench server with another app via ACTION_SEND.
          * Downloads the file to a temp directory, then creates a share intent
          * with a FileProvider content URI.
-         * @param path Relative file path (as used in /api/local-file/ URL)
+         * @param path File path — relative (project-internal) or absolute (external, starts with /)
          * @param mimeType MIME type for the share intent (e.g. "image/png", "application/pdf")
          */
         @JavascriptInterface
         public void shareFile(String path, String mimeType) {
-            // Path safety: reject traversal attempts (both raw and URL-decoded forms)
-            if (path == null || path.isEmpty() || path.contains("..") || path.startsWith("/")) {
+            // Path safety: reject traversal attempts
+            if (path == null || path.isEmpty() || path.contains("..")) {
                 AppLog.w(TAG, "shareFile: invalid path: " + path);
                 return;
             }
             try {
                 String decoded = java.net.URLDecoder.decode(path, "UTF-8");
-                if (decoded.contains("..") || decoded.startsWith("/")) {
+                if (decoded.contains("..")) {
                     AppLog.w(TAG, "shareFile: invalid decoded path: " + path);
                     return;
                 }
@@ -2095,8 +2107,15 @@ public class MainActivity extends AppCompatActivity {
                     }
 
                     // Download file from server
-                    String encodedPath = Uri.encode(path, "/");
-                    String downloadUrl = serverUrl + "/api/local-file/" + encodedPath + "?download=1";
+                    String downloadUrl;
+                    if (path.startsWith("/")) {
+                        // External file: use ?path= query param
+                        downloadUrl = serverUrl + "/api/local-file/?download=1&path=" + Uri.encode(path);
+                    } else {
+                        // Project-relative: use URL path
+                        String encodedPath = Uri.encode(path, "/");
+                        downloadUrl = serverUrl + "/api/local-file/" + encodedPath + "?download=1";
+                    }
 
                     OkHttpClient client = activity.buildTrustingOkHttpClient();
                     Request request = new Request.Builder()
@@ -2174,24 +2193,6 @@ public class MainActivity extends AppCompatActivity {
                     AppLog.w(TAG, "shareText: chooser failed", e);
                 }
             });
-        }
-
-        /**
-         * Control whether the BackgroundService shows a persistent notification.
-         * When enabled, the foreground service notification is visible (keeps service alive).
-         * When disabled, the service still runs but the notification is minimized/silent.
-         */
-        @JavascriptInterface
-        public void setPushPersistentNotification(boolean enabled) {
-            BackgroundService.setPersistentNotificationEnabled(activity, enabled);
-        }
-
-        /**
-         * Query whether persistent notification is currently enabled.
-         */
-        @JavascriptInterface
-        public boolean isPushPersistentNotification() {
-            return BackgroundService.isPersistentNotificationEnabled(activity);
         }
 
         /**

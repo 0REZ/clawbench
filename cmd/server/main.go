@@ -35,6 +35,8 @@ import (
 	_ "clawbench/internal/ai/backends/qoder"
 	_ "clawbench/internal/ai/backends/vecli"
 	"clawbench/internal/cli"
+	"clawbench/internal/frontend"
+	"clawbench/internal/frp"
 	"clawbench/internal/handler"
 	"clawbench/internal/model"
 	"clawbench/internal/platform"
@@ -140,6 +142,12 @@ func makeRestartFunc(shutdown func()) func() {
 func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	startTime := time.Now()
 
+	// Root --version flag
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println(version.Get())
+		os.Exit(0)
+	}
+
 	// Root --help handler
 	if len(os.Args) > 1 && (os.Args[1] == "--help" || os.Args[1] == "-h") {
 		fmt.Println("ClawBench - Mobile-first AI workstation")
@@ -155,6 +163,7 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		fmt.Println("Server options:")
 		fmt.Println("  --port PORT       Server port (overrides config file, default: 20000)")
 		fmt.Println("  --data-dir DIR    Runtime data directory (default: <binary_dir>/.clawbench)")
+		fmt.Println("  --version         Print version and exit")
 		os.Exit(0)
 	}
 
@@ -580,6 +589,13 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		port = cliPort
 	}
 
+	// If port was overridden and DevPort was auto-calculated from the original port,
+	// recalculate DevPort to match the new port.
+	if port != cfg.Port && cfg.DevPort == cfg.Port+2 {
+		cfg.DevPort = port + 2
+	}
+	cfg.Port = port
+
 	// Set global port for cookie name scoping (multi-instance on same hostname)
 	model.ServerPort = port
 
@@ -739,6 +755,40 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		slog.Info("SSH tunnel and port forwarding disabled by config")
 	}
 
+	// Initialize FRP tunnel (Fast Reverse Proxy for remote access from Android).
+	// FRP is disabled by default; requires user-provided frps server.
+	// The frp client runs in-process as a Go library — no external binary needed.
+	var frpManagerRef *frp.Manager
+	var frpStatus frp.Status
+	if cfg.FRP.Enabled && cfg.FRP.ServerAddr != "" {
+		sshPort := 0
+		if sshServerRef != nil {
+			sshPort = sshServerRef.Port()
+		}
+		mgr := frp.NewManager(cfg.FRP, port, sshPort)
+		if err := mgr.Start(); err != nil {
+			slog.Warn("FRP failed to start", slog.String("err", err.Error()))
+			cfg.FRP.Enabled = false
+		} else {
+			frpManagerRef = mgr
+			defer mgr.Stop()
+
+			select {
+			case frpStatus = <-mgr.OnReady():
+				slog.Info("FRP tunnel enabled",
+					slog.String("server", cfg.FRP.ServerAddr),
+					slog.Int("remotePort", frpStatus.RemotePort),
+				)
+			case <-time.After(30 * time.Second):
+				slog.Warn("FRP port allocation timeout")
+			}
+		}
+	} else if cfg.FRP.Enabled {
+		slog.Warn("FRP enabled but server_addr not configured, disabling")
+		cfg.FRP.Enabled = false
+	}
+	handler.SetFRPManager(frpManagerRef, cfg.FRP.Enabled)
+
 	// Initialize file watcher for auto-refresh (non-critical — continue on failure)
 	if err := service.InitFileWatcher(); err != nil {
 		slog.Warn(
@@ -885,6 +935,11 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		TerminalOn:      cfg.Terminal.Enabled,
 		TaskCount:       taskCount,
 		StartupDuration: time.Since(startTime),
+		FRPEnabled:      cfg.FRP.Enabled,
+		FRPRemoteURL:    frpStatus.RemoteURL,
+		FRPServerAddr:   cfg.FRP.ServerAddr,
+		FRPRemotePort:   frpStatus.RemotePort,
+		FrontendMode:    frontend.ModeLabel(),
 	})
 
 	// Graceful shutdown on SIGINT/SIGTERM
@@ -988,6 +1043,15 @@ func hotReloadReconfigure(port int) {
 
 	// --- Terminal: reconfigure or toggle enabled ---
 	hotReloadTerminal(cfg, port)
+
+	// --- SSH/Port-Forward: reconfigure or toggle enabled ---
+	hotReloadSSH(cfg, port)
+
+	// --- RAG: reconfigure embedder, indexer, cleanup worker ---
+	rag.Reconfigure(cfg.RAG)
+
+	// --- FRP: reconfigure or toggle enabled ---
+	hotReloadFRP(cfg, port)
 }
 
 // newTTSProvider creates a SpeechProvider from TTS config.
@@ -1120,6 +1184,68 @@ func hotReloadTaskSummarizer(cfg model.Config) {
 	}
 }
 
+// hotReloadSSH reconfigures or toggles the SSH tunnel / port-forward server on hot-reload.
+func hotReloadSSH(cfg model.Config, port int) {
+	sshRef := handler.GetSSHServer()
+
+	if cfg.PortForward.Enabled {
+		if sshRef != nil {
+			// SSH is running — check if port changed
+			newPort := cfg.PortForward.Port
+			if newPort == 0 {
+				newPort = port + 1
+			}
+			if sshRef.Port() != newPort {
+				// Port changed — close old server, start new one
+				sshRef.Close()
+				newSrv := ssh.NewServer(cfg.PortForward, port, cfg.Password, service.ProxyService)
+				handler.SetSSHServer(newSrv)
+				go func() {
+					if err := newSrv.ListenAndServe(); err != nil {
+						slog.Error("SSH server failed", slog.String("err", err.Error()))
+					}
+				}()
+				slog.Info("hot-reload: SSH tunnel restarted on new port", slog.Int("port", newPort))
+			} else {
+				// Port unchanged — just update allowed ports if ProxyService exists
+				if service.ProxyService != nil {
+					service.ProxyService.SetAllowedPorts(cfg.PortForward.AllowedPorts)
+				}
+				slog.Info("hot-reload: SSH tunnel reconfigured (allowed_ports)")
+			}
+		} else {
+			// SSH was disabled, now enabled — create ProxyRegistry + SSH server
+			proxySvc := service.NewProxyRegistry(port)
+			proxySvc.SetAllowedPorts(cfg.PortForward.AllowedPorts)
+			service.ProxyService = proxySvc
+
+			newSrv := ssh.NewServer(cfg.PortForward, port, cfg.Password, proxySvc)
+			handler.SetSSHServer(newSrv)
+			go func() {
+				if err := newSrv.ListenAndServe(); err != nil {
+					slog.Error("SSH server failed", slog.String("err", err.Error()))
+					// Clean up: SSH failed, stop the proxy registry we just created
+					proxySvc.Stop()
+					service.ProxyService = nil
+					handler.SetSSHServer(nil)
+				}
+			}()
+			slog.Info("hot-reload: SSH tunnel enabled")
+		}
+	} else {
+		// SSH should be disabled
+		if sshRef != nil {
+			sshRef.Close()
+			handler.SetSSHServer(nil)
+			if service.ProxyService != nil {
+				service.ProxyService.Stop()
+				service.ProxyService = nil
+			}
+			slog.Info("hot-reload: SSH tunnel disabled")
+		}
+	}
+}
+
 // hotReloadTerminal reconfigures or toggles the terminal subsystem on hot-reload.
 func hotReloadTerminal(cfg model.Config, port int) {
 	if cfg.Terminal.Enabled {
@@ -1139,6 +1265,59 @@ func hotReloadTerminal(cfg model.Config, port int) {
 			mgr.CloseAllSessions()
 			handler.SetTerminalManager(nil)
 			slog.Info("hot-reload: terminal disabled")
+		}
+	}
+}
+
+// hotReloadFRP reconfigures or toggles the FRP tunnel on hot-reload.
+func hotReloadFRP(cfg model.Config, port int) {
+	mgr := handler.GetFRPManager()
+
+	// Determine SSH port for FRP proxy
+	sshPort := 0
+	if sshRef := handler.GetSSHServer(); sshRef != nil {
+		sshPort = sshRef.Port()
+	}
+
+	if cfg.FRP.Enabled && cfg.FRP.ServerAddr != "" {
+		if mgr != nil {
+			// FRP is running — try in-place reconfigure
+			needsRestart, err := mgr.Reconfigure(cfg.FRP, port, sshPort)
+			if err != nil {
+				slog.Warn("hot-reload: FRP reconfigure failed", slog.String("err", err.Error()))
+				return
+			}
+			if needsRestart {
+				// Common config changed (server_addr/port/token) — restart service
+				slog.Info("hot-reload: FRP common config changed, restarting")
+				mgr.Stop()
+				newMgr := frp.NewManager(cfg.FRP, port, sshPort)
+				if err := newMgr.Start(); err != nil {
+					slog.Warn("hot-reload: FRP restart failed", slog.String("err", err.Error()))
+					handler.SetFRPManager(nil, false)
+				} else {
+					handler.SetFRPManager(newMgr, true)
+					slog.Info("hot-reload: FRP restarted")
+				}
+			} else {
+				slog.Info("hot-reload: FRP reconfigured (proxy only)")
+			}
+		} else {
+			// FRP was disabled, now enabled — create new Manager
+			newMgr := frp.NewManager(cfg.FRP, port, sshPort)
+			if err := newMgr.Start(); err != nil {
+				slog.Warn("hot-reload: FRP failed to start", slog.String("err", err.Error()))
+			} else {
+				handler.SetFRPManager(newMgr, true)
+				slog.Info("hot-reload: FRP enabled")
+			}
+		}
+	} else {
+		// FRP should be disabled
+		if mgr != nil {
+			mgr.Stop()
+			handler.SetFRPManager(nil, false)
+			slog.Info("hot-reload: FRP disabled")
 		}
 	}
 }

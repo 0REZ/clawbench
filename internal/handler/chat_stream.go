@@ -121,6 +121,16 @@ func AIChatStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		slog.Debug("sse: re-emitted cached ACP state on connect", "session_id", sessionID)
+	} else {
+		// No live connection — try orphaned usage for usage_update re-emit
+		if ou := ai.GetACPConnManager().GetOrphanedUsageState(sessionID); ou != nil {
+			data, _ := json.Marshal(ou)
+			fmt.Fprintf(w, "event: usage_update\ndata: %s\n\n", data)
+			if canFlush {
+				flusher.Flush()
+			}
+			slog.Debug("sse: re-emitted orphaned usage on connect", "session_id", sessionID)
+		}
 	}
 
 	// Send stream_start with the streaming assistant message ID so the frontend
@@ -264,7 +274,9 @@ func AIChatStream(w http.ResponseWriter, r *http.Request) {
 			case "queue_drain":
 				if event.QueueEvent != nil {
 					data, _ := json.Marshal(map[string]any{
+						"sessionId": event.QueueEvent.SessionID,
 						"text":      event.QueueEvent.Text,
+						"messageId": event.QueueEvent.MessageID,
 						"filePaths": event.QueueEvent.FilePaths,
 						"files":     event.QueueEvent.Files,
 						"queue":     event.QueueEvent.Queue,
@@ -276,9 +288,23 @@ func AIChatStream(w http.ResponseWriter, r *http.Request) {
 				// Syncs pending messages with the backend queue state.
 				if event.QueueEvent != nil {
 					data, _ := json.Marshal(map[string]any{
-						"queue": event.QueueEvent.Queue,
+						"sessionId": event.QueueEvent.SessionID,
+						"queue":     event.QueueEvent.Queue,
 					})
 					fmt.Fprintf(w, "event: queue_update\ndata: %s\n\n", data)
+				}
+			case "queue_queued":
+				// Sent when a new message is enqueued — carries full message data
+				// so the frontend can push a pending message into messages.value.
+				if event.QueueEvent != nil {
+					data, _ := json.Marshal(map[string]any{
+						"sessionId": event.QueueEvent.SessionID,
+						"text":      event.QueueEvent.Text,
+						"filePaths": event.QueueEvent.FilePaths,
+						"files":     event.QueueEvent.Files,
+						"queue":     event.QueueEvent.Queue,
+					})
+					fmt.Fprintf(w, "event: queue_queued\ndata: %s\n\n", data)
 				}
 			case "resume_split":
 				// Internal event from AutoResumeBackend: the AI detected ExitPlanMode

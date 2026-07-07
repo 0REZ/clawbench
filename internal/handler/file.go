@@ -86,9 +86,10 @@ func ListDir(w http.ResponseWriter, r *http.Request) {
 	items := buildDirEntries(entries)
 
 	relFromBase, _ := filepath.Rel(basePath, absPath)
+	relFromBase = filepath.ToSlash(relFromBase)
 	var parent *string
 	if relFromBase != "." {
-		parentDir := filepath.Dir(relFromBase)
+		parentDir := path.Dir(relFromBase)
 		if parentDir != "." {
 			parent = &parentDir
 		} else {
@@ -164,6 +165,10 @@ func resolveFilePath(w http.ResponseWriter, r *http.Request, projectPath string)
 		absPath, err = filepath.Abs(queryPath)
 		if err != nil {
 			writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidFilePath")
+			return "", false, false
+		}
+		if !isPathUnderAnyRoot(absPath) {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 			return "", false, false
 		}
 		return absPath, true, true
@@ -322,17 +327,32 @@ func responsePath(absPath, projectPath string, isExternal bool) string {
 	return filepath.ToSlash(relPath)
 }
 
-// ServeLocalFile serves a file directly (for images, PDFs, etc.).
-func ServeLocalFile(w http.ResponseWriter, r *http.Request) {
-	projectPath, ok := requireProject(w, r)
-	if !ok {
-		return
+// resolveLocalFilePath determines the absolute path for ServeLocalFile.
+// Supports absolute paths via ?path= query param and project-relative paths via URL path.
+func resolveLocalFilePath(w http.ResponseWriter, r *http.Request, projectPath string) (string, bool) {
+	if queryPath := r.URL.Query().Get("path"); queryPath != "" {
+		// Absolute path via ?path= — serves files outside the project directory
+		if !strings.HasPrefix(queryPath, "/") && !filepath.IsAbs(queryPath) {
+			writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidPath")
+			return "", false
+		}
+		absPath, err := filepath.Abs(queryPath)
+		if err != nil {
+			writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidPath")
+			return "", false
+		}
+		if !isPathUnderAnyRoot(absPath) {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return "", false
+		}
+		return absPath, true
 	}
 
+	// Project-relative path from URL path
 	filepathStr := r.URL.Path
 	if !strings.HasPrefix(filepathStr, "/api/local-file/") {
 		http.NotFound(w, r)
-		return
+		return "", false
 	}
 	filepathStr = filepathStr[len("/api/local-file/"):]
 	// Strip leading slashes to handle double-slash URLs (/api/local-file//path)
@@ -342,11 +362,23 @@ func ServeLocalFile(w http.ResponseWriter, r *http.Request) {
 
 	if filepathStr == ".." || path.IsAbs(filepathStr) {
 		writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidPath")
-		return
+		return "", false
 	}
 
 	basePath, _ := filepath.Abs(projectPath)
-	absPath, ok := validateAndResolvePath(w, r, basePath, filepathStr)
+	return validateAndResolvePath(w, r, basePath, filepathStr)
+}
+
+// ServeLocalFile serves a file directly (for images, PDFs, etc.).
+// Supports project-relative paths via URL path and absolute paths via ?path=
+// query param (for files outside the project directory).
+func ServeLocalFile(w http.ResponseWriter, r *http.Request) {
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+
+	absPath, ok := resolveLocalFilePath(w, r, projectPath)
 	if !ok {
 		return
 	}
@@ -468,12 +500,12 @@ func ServeProjects(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo //
 		}
 	}
 	if !isAtRoot {
-		p := filepath.Dir(absPath)
+		p := filepath.ToSlash(filepath.Dir(absPath))
 		parent = &p
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"path":   absPath,
+		"path":   filepath.ToSlash(absPath),
 		"parent": parent,
 		"items":  items,
 	})
@@ -887,7 +919,7 @@ func serveProjectsCreate(w http.ResponseWriter, r *http.Request) {
 		model.WriteError(w, model.Internal(fmt.Errorf("create directory failed: %w", err)))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "path": newDirAbs})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "path": filepath.ToSlash(newDirAbs)})
 }
 
 const (

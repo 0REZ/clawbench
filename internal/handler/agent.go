@@ -2,15 +2,12 @@
 package handler
 
 import (
-	"bufio"
 	"context"
-	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +17,65 @@ import (
 	"clawbench/internal/model"
 	"clawbench/internal/service"
 )
+
+// chinaMirrorChecked caches the result of isChinaMainland() to avoid repeated
+// network probes. 0 = not yet checked; 1 = true (China); 2 = false.
+var chinaMirrorChecked atomic.Int32
+
+var chinaProbeClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		Proxy: nil,
+	},
+}
+
+// isChinaMainland returns true if the server appears to be running in mainland China.
+// Uses network probe to ip-api.com — country_code == "CN". Result cached.
+func isChinaMainland() bool {
+	if v := chinaMirrorChecked.Load(); v != 0 {
+		return v == 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://ip-api.com/line/?fields=countryCode", http.NoBody)
+	if err != nil {
+		chinaMirrorChecked.Store(2)
+		return false
+	}
+	resp, err := chinaProbeClient.Do(req)
+	if err != nil {
+		chinaMirrorChecked.Store(2)
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16))
+	if err != nil {
+		chinaMirrorChecked.Store(2)
+		return false
+	}
+	code := strings.TrimSpace(string(body))
+	isCN := code == "CN"
+	if isCN {
+		chinaMirrorChecked.Store(1)
+	} else {
+		chinaMirrorChecked.Store(2)
+	}
+	return isCN
+}
+
+const npmMirrorRegistry = "https://registry.npmmirror.com"
+
+// prepareInstallCmd modifies an install command for display:
+// Adds China npm mirror registry if in mainland China.
+func prepareInstallCmd(installCmd string) string {
+	if !strings.HasPrefix(installCmd, "npm install") {
+		return installCmd
+	}
+	if isChinaMainland() && !strings.Contains(installCmd, "--registry") {
+		return installCmd + " --registry=" + npmMirrorRegistry
+	}
+	return installCmd
+}
 
 // ServeAgentSubRoutes handles /api/agents/* sub-routes (e.g. /api/agents/{id}/refresh-models).
 func ServeAgentSubRoutes(w http.ResponseWriter, r *http.Request) {
@@ -38,10 +94,6 @@ func ServeAgentSubRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(path, "/rescan") && r.Method == http.MethodPost {
 		serveAgentsRescan(w, r)
-		return
-	}
-	if strings.HasSuffix(path, "/install") && r.Method == http.MethodPost {
-		serveAgentsInstall(w, r)
 		return
 	}
 	writeLocalizedErrorf(w, r, http.StatusNotFound, "NotFound")
@@ -230,169 +282,6 @@ func serveAgentsRescan(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// installMu enforces one install at a time.
-var installMu sync.Mutex
-
-// serveAgentsInstall handles POST /api/agents/install — runs InstallCmd for a
-// backend and streams stdout/stderr via SSE. Only one install at a time.
-// Expects: {"backend_id": "opencode"}
-func serveAgentsInstall(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // SSE install streaming has multiple sequential branches
-	var req struct {
-		BackendID string `json:"backend_id"`
-	}
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	// Find the BackendSpec
-	var spec *model.BackendSpec
-	for i := range model.GetBackendRegistry() {
-		s := &model.GetBackendRegistry()[i]
-		if s.ID == req.BackendID {
-			spec = s
-			break
-		}
-	}
-	if spec == nil {
-		writeLocalizedErrorf(w, r, http.StatusNotFound, "BackendNotFound")
-		return
-	}
-	if spec.InstallCmd == "" {
-		writeLocalizedErrorf(w, r, http.StatusBadRequest, "BackendNotInstallable")
-		return
-	}
-
-	// One install at a time
-	if !installMu.TryLock() {
-		writeLocalizedErrorf(w, r, http.StatusConflict, "InstallInProgress")
-		return
-	}
-	defer installMu.Unlock()
-
-	// Set SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		slog.Error("response writer does not support flushing for install SSE")
-		return
-	}
-
-	// Emit initial state
-	_, _ = fmt.Fprintf(w, "event: install_start\ndata: {\"backend_id\":%q,\"command\":%q}\n\n", spec.ID, spec.InstallCmd)
-	flusher.Flush()
-
-	// Execute install command (no sudo)
-	// Note: strings.Fields works because all current InstallCmd values are simple
-	// space-separated tokens (no quoting needed). If future commands need quoted
-	// arguments, switch to sh.Split or similar.
-	cmdParts := strings.Fields(spec.InstallCmd)
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, cmdParts[0], cmdParts[1:]...)
-	cmd.Env = os.Environ()
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		_, _ = fmt.Fprintf(w, "event: install_error\ndata: {\"error\":%q}\n\n", err.Error())
-		flusher.Flush()
-		return
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		_, _ = fmt.Fprintf(w, "event: install_error\ndata: {\"error\":%q}\n\n", err.Error())
-		flusher.Flush()
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		_, _ = fmt.Fprintf(w, "event: install_error\ndata: {\"error\":%q,\"command\":%q}\n\n", err.Error(), spec.InstallCmd)
-		flusher.Flush()
-		return
-	}
-
-	// Stream stdout and stderr line-by-line as SSE events.
-	// Use a channel to merge both streams.
-	type logLine struct {
-		line   string
-		stream string
-	}
-	logCh := make(chan logLine, 64)
-
-	// Reader goroutine for stdout
-	var readerWg sync.WaitGroup
-	readerWg.Add(2)
-	go func() {
-		defer readerWg.Done()
-		scanner := bufio.NewScanner(stdoutPipe)
-		for scanner.Scan() {
-			logCh <- logLine{line: scanner.Text(), stream: "stdout"}
-		}
-	}()
-
-	// Reader goroutine for stderr
-	go func() {
-		defer readerWg.Done()
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			logCh <- logLine{line: scanner.Text(), stream: "stderr"}
-		}
-	}()
-
-	// Close logCh after both readers finish (pipes close at process exit)
-	go func() {
-		readerWg.Wait()
-		close(logCh)
-	}()
-
-	// Merger goroutine: send exit error when process completes
-	exitErrCh := make(chan error, 1)
-	go func() {
-		exitErrCh <- cmd.Wait()
-	}()
-
-	// Heartbeat ticker
-	heartbeat := time.NewTicker(15 * time.Second)
-	defer heartbeat.Stop()
-
-	// Main loop: forward log lines as SSE events, with heartbeats
-	for {
-		select {
-		case ll, ok := <-logCh:
-			if !ok {
-				// Channel closed (readers finished) — wait for exit status
-				logCh = nil
-				continue
-			}
-			_, _ = fmt.Fprintf(w, "event: install_log\ndata: {\"line\":%q,\"stream\":%q}\n\n", ll.line, ll.stream)
-			flusher.Flush()
-		case exitErr := <-exitErrCh:
-			// Drain remaining log lines (channel will be closed by reader goroutines)
-			for ll := range logCh {
-				_, _ = fmt.Fprintf(w, "event: install_log\ndata: {\"line\":%q,\"stream\":%q}\n\n", ll.line, ll.stream)
-				flusher.Flush()
-			}
-			if exitErr != nil {
-				_, _ = fmt.Fprintf(w, "event: install_error\ndata: {\"error\":%q,\"command\":%q}\n\n", exitErr.Error(), spec.InstallCmd)
-			} else {
-				_, _ = fmt.Fprintf(w, "event: install_success\ndata: {\"backend_id\":%q}\n\n", spec.ID)
-			}
-			flusher.Flush()
-			return
-		case <-heartbeat.C:
-			_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
-			flusher.Flush()
-		case <-r.Context().Done():
-			// Client disconnected
-			cancel()
-			return
-		}
-	}
-}
-
-// serveAgentsDelete handles DELETE /api/agents — deletes a single agent.
-// Expects: {"id": "claude"}. Cannot delete the default agent.
 func serveAgentsDelete(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID string `json:"id"`
@@ -974,7 +863,7 @@ func ServeBackends(w http.ResponseWriter, r *http.Request) {
 			Specialty:            spec.Specialty,
 			DefaultCmd:           spec.DefaultCmd,
 			ThinkingEffortLevels: spec.ThinkingEffortLevels,
-			InstallCmd:           spec.InstallCmd,
+			InstallCmd:           prepareInstallCmd(spec.InstallCmd),
 		})
 	}
 

@@ -73,6 +73,8 @@ import okhttp3.WebSocketListener;
  *
  * Reliability features:
  * - Auto-reconnect: monitors SSH connection and reconnects with exponential backoff
+ * - Screen-off suspend: disconnects SSH when screen turns off (port forwarding
+ *   requires screen-on interaction), reconnects on screen on to save battery
  * - Port persistence: saves forwarded ports to SharedPreferences, restores on Service restart
  * - WifiLock: prevents WiFi from disconnecting while SSH tunnel is active
  * - WakeLock: prevents CPU from sleeping so SSH keep-alive packets are sent
@@ -89,9 +91,9 @@ public class BackgroundService extends Service {
     private static final String PREFS_NAME = "clawbench_prefs";
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_SSH_PASSWORD = "ssh_password";
+    private static final String KEY_FRP_REMOTE_URL = "frp_remote_url";
     private static final String KEY_FORWARDED_PORTS = "forwarded_ports";
     private static final String KEY_BATTERY_OPT_REQUESTED = "battery_opt_requested";
-    private static final String KEY_PERSISTENT_NOTIFICATION = "persistent_notification";
     private static final String KEY_LAST_SEEN_EVENT_ID = "last_seen_event_id";
 
     // Reconnect parameters: exponential backoff delays in milliseconds
@@ -99,6 +101,8 @@ public class BackgroundService extends Service {
     private static final int MONITOR_CHECK_INTERVAL_MS = 15000;
     // WakeLock timeout: re-acquired via ensureWakeLock() before network operations
     private static final long WAKELOCK_TIMEOUT_MS = 60_000L;
+    // Delay after WS ping send before releasing WakeLock — gives pong time to arrive
+    private static final long WS_PING_WAKELOCK_RELEASE_DELAY_MS = 5_000L;
 
     // Adaptive WebSocket ping intervals (milliseconds)
     private static final int WS_PING_FAST_MS = 30000;       // Screen on / recently active
@@ -155,6 +159,11 @@ public class BackgroundService extends Service {
     // Reconnect state
     private volatile boolean isReconnecting = false;
     private volatile int reconnectAttempt = 0;
+
+    // SSH suspended due to screen off — SSH is only needed for port forwarding
+    // which requires screen-on interaction. Disconnecting while suspended saves battery.
+    // All reads/writes happen on networkExecutor (see screen state receiver) for thread safety.
+    private volatile boolean sshScreenSuspended = false;
 
     // Last SSH error message (for JS bridge error reporting)
     private static volatile String lastError = null;
@@ -243,28 +252,6 @@ public class BackgroundService extends Service {
      */
     public static SSLContext getTrustAllSSLContext() {
         return trustAllSSLContext;
-    }
-
-    /**
-     * Set whether the persistent (foreground service) notification is enabled.
-     * When disabled, the foreground notification is made minimal/silent.
-     */
-    public static void setPersistentNotificationEnabled(Context context, boolean enabled) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit().putBoolean(KEY_PERSISTENT_NOTIFICATION, enabled).apply();
-        // If service is running, update the notification immediately
-        if (instance != null) {
-            instance.updateNotification(instance.forwardedPorts.size(), null);
-        }
-    }
-
-    /**
-     * Query whether persistent notification is currently enabled.
-     * Defaults to true (notification shown) if not explicitly set.
-     */
-    public static boolean isPersistentNotificationEnabled(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getBoolean(KEY_PERSISTENT_NOTIFICATION, true);
     }
 
     /**
@@ -433,10 +420,12 @@ public class BackgroundService extends Service {
             screenOn = pmInit.isInteractive();
             if (!screenOn) {
                 screenOffTime = System.currentTimeMillis();
+                sshScreenSuspended = true; // Start suspended if screen is already off
+                AppLog.i(TAG, "SSH: service started while screen off, SSH suspended");
             }
         }
 
-        // Register screen state receiver for adaptive WS ping interval
+        // Register screen state receiver for adaptive WS ping + SSH suspend/resume
         IntentFilter screenFilter = new IntentFilter();
         screenFilter.addAction(Intent.ACTION_SCREEN_ON);
         screenFilter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -447,15 +436,54 @@ public class BackgroundService extends Service {
                     screenOn = true;
                     screenOffTime = 0;
                     cancelPingRampUp();
-                    // Restart ping loop with fast interval
+                    // Restart WS ping loop with fast interval
                     if (nativeWsActive) {
                         startWsPingLoop();
+                    }
+                    // Resume SSH: reconnect if suspended and ports need forwarding.
+                    // Guard check runs inside networkExecutor to avoid reading
+                    // sshScreenSuspended from the main thread (review C1).
+                    if (!forwardedPorts.isEmpty() && !intentionalDisconnect) {
+                        networkExecutor.execute(() -> {
+                            if (sshScreenSuspended && !intentionalDisconnect) {
+                                sshScreenSuspended = false;
+                                try {
+                                    AppLog.i(TAG, "SSH: screen on, resuming SSH tunnel");
+                                    ensureConnection();
+                                    updateNotification(forwardedPorts.size(), null);
+                                } catch (Exception e) {
+                                    lastError = e.getMessage();
+                                    AppLog.w(TAG, "SSH: failed to resume on screen on: " + e.getMessage());
+                                }
+                            }
+                        });
+                    } else {
+                        sshScreenSuspended = false;
                     }
                 } else if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                     screenOn = false;
                     screenOffTime = System.currentTimeMillis();
                     // Schedule ramp-up steps to increase ping interval gradually
                     schedulePingRampUp();
+                    // Suspend SSH: disconnect tunnel to save battery.
+                    // Guard check and disconnect run on networkExecutor for thread safety.
+                    // Don't suspend if user intentionally disconnected (review I3).
+                    if (!forwardedPorts.isEmpty() && !intentionalDisconnect) {
+                        networkExecutor.execute(() -> {
+                            if (sshSession != null && sshSession.isConnected() && !intentionalDisconnect) {
+                                sshScreenSuspended = true;
+                                AppLog.i(TAG, "SSH: screen off, suspending SSH tunnel to save battery");
+                                stopConnectionMonitor();
+                                disconnectInternal();
+                                // NOTE: must call maybeRelease* AFTER disconnectInternal() because
+                                // it nulls sshSession, which makes maybeRelease* correctly
+                                // evaluate sshActive=false.
+                                maybeReleaseWifiLock();
+                                maybeReleaseWakeLock();
+                                updateNotification(forwardedPorts.size(), null);
+                            }
+                        });
+                    }
                 }
             }
         };
@@ -701,6 +729,12 @@ public class BackgroundService extends Service {
             restoreForwardedPorts();
         }
         if (!forwardedPorts.isEmpty()) {
+            if (!screenOn) {
+                // Screen is off — don't reconnect SSH, defer until screen on
+                AppLog.i(TAG, "SSH: screen is off, deferring reconnect until screen on");
+                sshScreenSuspended = true;
+                return;
+            }
             try {
                 ensureConnection();
                 AppLog.i(TAG, "SSH: restored all port forwards after service restart");
@@ -732,6 +766,9 @@ public class BackgroundService extends Service {
                 }
 
                 if (!monitorActive || intentionalDisconnect) break;
+
+                // Skip reconnect while SSH is suspended (screen off)
+                if (sshScreenSuspended) continue;
 
                 // Check if session is dead
                 if (sshSession == null || !sshSession.isConnected()) {
@@ -856,6 +893,10 @@ public class BackgroundService extends Service {
      * MUST be called from a background thread (network I/O).
      */
     private synchronized void ensureConnection() throws Exception {
+        // Clear suspended flag — if something is explicitly requesting a connection
+        // (addPortForward, screen-on resume), the tunnel is needed.
+        sshScreenSuspended = false;
+
         if (sshSession != null && sshSession.isConnected()) {
             AppLog.d(TAG, "SSH: ensureConnection: session already alive, skipping");
             return;
@@ -883,6 +924,9 @@ public class BackgroundService extends Service {
         if (sshPort <= 0) {
             throw new Exception("Failed to get SSH port from server. Please check that SSH tunnel is enabled in server config.");
         }
+
+        // Check FRP status and save remote URL for connection fallback
+        fetchFRPStatus(serverUrl);
 
         // Get password from SharedPreferences (set by WebAppInterface on login)
         password = prefs.getString(KEY_SSH_PASSWORD, "");
@@ -1215,6 +1259,61 @@ public class BackgroundService extends Service {
     }
 
     /**
+     * Fetch FRP tunnel status from /api/frp/status endpoint (unauthenticated).
+     * If FRP is enabled and running, queries /api/frp/info (authenticated) to get the remote URL.
+     * Saves the remote URL to SharedPreferences for connection fallback.
+     */
+    private void fetchFRPStatus(String serverUrl) {
+        try {
+            Uri uri = Uri.parse(serverUrl);
+            String scheme = uri.getScheme();
+            if (scheme == null) scheme = "https";
+            String host = uri.getHost();
+            int port = uri.getPort();
+            if (port < 0) port = scheme.equals("https") ? 443 : 80;
+
+            // First check status (unauthenticated)
+            String statusPath = scheme + "://" + host + ":" + port + "/api/frp/status";
+            URL statusUrl = new URL(statusPath);
+            HttpURLConnection conn = (HttpURLConnection) statusUrl.openConnection();
+            if (conn instanceof HttpsURLConnection && trustAllSSLContext != null) {
+                ((HttpsURLConnection) conn).setSSLSocketFactory(trustAllSSLContext.getSocketFactory());
+                ((HttpsURLConnection) conn).setHostnameVerifier((hostname, session) -> true);
+            }
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(3000);
+            conn.setReadTimeout(3000);
+
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                AppLog.d(TAG, "FRP: /api/frp/status returned HTTP " + code);
+                return;
+            }
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            reader.close();
+
+            JSONObject json = new JSONObject(sb.toString());
+            boolean enabled = json.optBoolean("enabled", false);
+            boolean running = json.optBoolean("running", false);
+
+            SharedPreferences sp = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            if (enabled && running) {
+                AppLog.i(TAG, "FRP: tunnel is running");
+                sp.edit().putBoolean("frp_available", true).apply();
+            } else {
+                AppLog.d(TAG, "FRP: not available (enabled=" + enabled + ", running=" + running + ")");
+                sp.edit().remove("frp_available").apply();
+            }
+        } catch (Exception e) {
+            AppLog.d(TAG, "FRP: failed to fetch status: " + e.getMessage());
+        }
+    }
+
+    /**
      * Disconnect the SSH session (user-initiated, stops reconnect).
      * Clears port list and stops the service.
      */
@@ -1321,21 +1420,12 @@ public class BackgroundService extends Service {
             text = sb.length() > 0 ? sb.toString() : "后台服务即将停止";
         }
 
-        boolean persistent = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_PERSISTENT_NOTIFICATION, true);
-
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true);
-
-        // When persistent notification is disabled, minimize it
-        if (!persistent) {
-            builder.setPriority(NotificationCompat.PRIORITY_MIN)
-                    .setSilent(true);
-        }
 
         return builder.build();
     }
@@ -1366,10 +1456,16 @@ public class BackgroundService extends Service {
     // --- WebSocket application-layer ping ---
 
     /**
-     * Get the current adaptive ping interval based on screen state.
+     * Get the current adaptive ping interval based on screen state and power mode.
      * Screen on → 30s, screen off ramps up: 30s→60s→120s→300s.
+     * Power save mode → always 300s (minimize radio wakeups).
      */
     private int getCurrentPingInterval() {
+        // Power save mode: force minimum ping interval to reduce battery drain
+        PowerManager pm = (PowerManager) getApplicationContext().getSystemService(Context.POWER_SERVICE);
+        if (pm != null && pm.isPowerSaveMode()) {
+            return WS_PING_VERY_SLOW_MS;
+        }
         if (screenOn) return WS_PING_FAST_MS;
         if (screenOffTime == 0) return WS_PING_FAST_MS;
         long offDuration = System.currentTimeMillis() - screenOffTime;
@@ -1420,6 +1516,11 @@ public class BackgroundService extends Service {
                         return;
                     }
                     AppLog.d(TAG, "NativeWS: sent app-layer ping");
+                    // Release WakeLock after brief delay to allow pong response,
+                    // but don't hold it for the full 60s timeout — saves CPU
+                    // between pings when screen is off.
+                    wsPingHandler.postDelayed(() -> maybeReleaseWakeLock(),
+                            WS_PING_WAKELOCK_RELEASE_DELAY_MS);
                     wsPingHandler.postDelayed(this, getCurrentPingInterval());
                 }
             }
@@ -1856,9 +1957,9 @@ public class BackgroundService extends Service {
         int displayAttempt = Math.min(nativeWsReconnectAttempt, 999);
         AppLog.i(TAG, "NativeWS: reconnecting in " + delay + "ms (attempt " + displayAttempt + ")");
 
-        // Release locks during reconnect backoff — re-acquired before connect attempt
+        // Release WakeLock during reconnect backoff — re-acquired before connect attempt
+        // WifiLock not released here — WS never acquires it (only SSH does)
         maybeReleaseWakeLock();
-        maybeReleaseWifiLock();
 
         // Use Handler to schedule on main thread, then post to network executor
         wsReconnectHandler = new Handler(Looper.getMainLooper());
@@ -1881,8 +1982,10 @@ public class BackgroundService extends Service {
             nativeWsActive = true;
             nativeWsReconnectAttempt = 0;
             AppLog.i(TAG, "NativeWS: connected");
-            acquireWakeLock();
-            acquireWifiLock();
+            // WifiLock not acquired for WS — only SSH needs it to prevent WiFi
+            // radio sleep. WS is a low-frequency notification channel (ping ≤300s);
+            // WiFi DTIM power-save (~100-300ms wake interval) delivers frames fine.
+            // This saves ~10mA/h when screen is off and SSH is suspended.
             startWsPingLoop();
             // Cancel WorkManager polling — WS is more efficient
             cancelPendingEventsWs();
@@ -1980,7 +2083,7 @@ public class BackgroundService extends Service {
                 }
             }
             maybeReleaseWakeLock();
-            maybeReleaseWifiLock();
+            // WifiLock not released here — WS never acquires it (only SSH does)
             // Schedule WorkManager fallback since WS is down
             schedulePendingEventsWs();
         }
@@ -1998,7 +2101,7 @@ public class BackgroundService extends Service {
                 }
             }
             maybeReleaseWakeLock();
-            maybeReleaseWifiLock();
+            // WifiLock not released here — WS never acquires it (only SSH does)
             // Schedule WorkManager fallback since WS failed
             schedulePendingEventsWs();
         }

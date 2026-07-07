@@ -26,7 +26,7 @@
         :no-divider="false"
         :default-value="entry.defaultValue"
         :display-format="entry.displayFormat"
-        :status-dot="(entry as any).statusDot"
+        :display-transform="entry.displayTransform"
         @update:model-value="(v: any) => handleUpdate(entry, v)"
         @click="handleClick(entry)"
         @edit-toggle="(open: boolean) => handleEditToggle(entry.key, open)"
@@ -59,9 +59,7 @@ import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { useAppMode } from '@/composables/useAppMode'
 import { usePwaInstall } from '@/composables/usePwaInstall'
-import { useTerminalStatus } from '@/composables/useTerminalStatus'
-import { usePortForward } from '@/composables/usePortForward'
-import { categoryItems, engineVoiceOptions, type ItemSpec, type DependsOn } from './settingsFieldMap'
+import { categoryItems, type ItemSpec, type DependsOn } from './settingsFieldMap'
 
 const props = defineProps<{
   categoryId: string
@@ -80,9 +78,6 @@ const { localConfig, serverConfig, setLocalConfig, getServerValueWithDefault, se
 const { loadAgents } = useAgents()
 const { isAppMode } = useAppMode()
 const pwaInstall = usePwaInstall()
-const { loadTerminalStatus } = useTerminalStatus()
-const { loadSSHInfo } = usePortForward()
-
 const activeKey = ref<string | null>(null)
 const showPasswordDialog = ref(false)
 const showIosSheet = ref(false)
@@ -141,12 +136,6 @@ const renderList = computed(() => {
 // ── Standalone item helpers ──
 
 function resolveItemOptions(item: any): any {
-  // TTS voice: resolve options dynamically based on current tts.engine
-  if (item.key === 'tts.voice') {
-    const engine = resolveConfigValue('tts.engine') || 'edge'
-    const voiceOpts = engineVoiceOptions[engine] ?? []
-    return voiceOpts.map((o: any) => ({ ...o, label: t(o.labelKey) }))
-  }
   const resolvedOptions = item.options
   if (resolvedOptions) {
     return resolvedOptions.map((opt: any) => ({
@@ -177,10 +166,6 @@ function getItemValue(item: any): any {
     } catch { /* not in app mode */ }
     return '-'
   }
-  if (item.key === 'port_forward.port') {
-    const val = getServerValueWithDefault(item.key)
-    return val === 0 ? t('settings.items.portForwardPortAuto') : val
-  }
   if (item.source === 'local') {
     return localConfig[item.key]
   }
@@ -191,6 +176,7 @@ async function handleUpdate(item: any, value: any) {
   if (item.type === 'password') {
     if (!value || value.includes('•')) return
   }
+
   if (item.key === 'localhost_auth_exempt' && value === false) {
     const confirmed = await dialog.confirm(
       t('settings.items.localhostAuthExemptConfirm'),
@@ -213,21 +199,6 @@ async function handleUpdate(item: any, value: any) {
   }
   try {
     const result = await setServerValue(item.key, value)
-    // When TTS engine changes, reset voice to first available for new engine
-    if (item.key === 'tts.engine') {
-      const voiceOpts = engineVoiceOptions[value] ?? []
-      if (voiceOpts.length > 0) {
-        try { await setServerValue('tts.voice', voiceOpts[0].value) } catch { /* best-effort */ }
-      } else {
-        try { await setServerValue('tts.voice', '') } catch { /* best-effort */ }
-      }
-    }
-    if (item.key === 'terminal.enabled') {
-      loadTerminalStatus()
-    }
-    if (item.key === 'port_forward.enabled') {
-      loadSSHInfo()
-    }
     if (result.needsRestart && result.changedColdFields.length > 0) {
       emit('restartNeeded', result.changedColdFields)
     }

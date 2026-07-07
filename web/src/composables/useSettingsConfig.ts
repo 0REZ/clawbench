@@ -137,16 +137,6 @@ const legacyKeys: Record<string, {
     key: '',
     format: 'raw',
   },
-  pushPersistentNotification: {
-    key: '',
-    format: 'raw',
-    sideEffect(value: boolean) {
-      try {
-        const native = (window as any).AndroidNative
-        if (native?.setPushPersistentNotification) native.setPushPersistentNotification(value)
-      } catch { /* not in app mode */ }
-    },
-  },
   sortField: {
     key: '',
     format: 'raw',
@@ -275,7 +265,6 @@ const localDefaults: Record<string, any> = {
   androidLogCapture: false,
   swipeSession: false,
   preventScreenLock: true,
-  pushPersistentNotification: true,
   sortField: null,
   sortDir: 'asc',
   uiScale: 1,
@@ -356,6 +345,11 @@ const serverDefaults: Record<string, any> = {
   'summarize.model': '',
   'summarize.api.format': 'openai',
   'port_forward.allowed_ports': '1024-65535',
+  'frp.enabled': false,
+  'frp.server_port': 7000,
+  'frp.auto_port': true,
+  'frp.remote_port': 0,
+  'frp.ssh_remote_port': 0,
 }
 
 // ── Agent preference helpers ──────────────────────────────
@@ -419,18 +413,7 @@ function getAgentThinkingPref(agentId: string): string | null {
 export function useSettingsConfig() {
   /** Sync local-only settings from Android native to keep WebView and native state in sync. */
   function syncNativeSettings() {
-    try {
-      const native = (window as any).AndroidNative
-      if (native?.isPushPersistentNotification) {
-        const nativeValue = native.isPushPersistentNotification()
-        if (localConfig.pushPersistentNotification !== nativeValue) {
-          localConfig.pushPersistentNotification = nativeValue
-          try {
-            localStorage.setItem(LOCAL_PREFIX + 'pushPersistentNotification', JSON.stringify(nativeValue))
-          } catch { /* ignore */ }
-        }
-      }
-    } catch { /* not in app mode */ }
+    // No native settings to sync currently
   }
 
   async function loadConfig() {

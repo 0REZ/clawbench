@@ -451,6 +451,86 @@ func TestHandleToolCallUpdate_RawInputNilPreserved(t *testing.T) {
 	collectEvents(ch, 1, 200*time.Millisecond)
 }
 
+// --- Input preservation during merge ---
+
+// TestHandleToolCallUpdate_InputPreservedWhenNewEventLacksInput verifies that
+// when a ToolCallUpdate carrying rawInput is followed by one without rawInput
+// (e.g., a _meta.toolResponse update), the input from the first event is
+// preserved in the merged event. This is the bug fix for Claude ACP Read/Write/Edit
+// tools showing empty input and missing file_path in the UI.
+func TestHandleToolCallUpdate_InputPreservedWhenNewEventLacksInput(t *testing.T) {
+	d, ch := newTestDebouncer()
+
+	// First update with rawInput (e.g., Read tool with file_path)
+	tcu1 := makeToolCallUpdate("tool-read-1", false)
+	tcu1.RawInput = map[string]any{"file_path": "/home/user/project/main.go"}
+	d.handleToolCallUpdate(tcu1)
+
+	// Verify the first pending event has input
+	d.mu.Lock()
+	pending1, ok := d.pending["tool-read-1"]
+	d.mu.Unlock()
+	require.True(t, ok)
+	require.NotNil(t, pending1.event.Tool)
+	assert.Contains(t, pending1.event.Tool.Input, "file_path", "first update should have file_path in input")
+
+	// Second update WITHOUT rawInput (e.g., _meta.toolResponse update)
+	// This would previously zero out the input
+	tcu2 := makeToolCallUpdate("tool-read-1", false)
+	tcu2.RawInput = nil
+	d.handleToolCallUpdate(tcu2)
+
+	// After merge, input should be preserved
+	d.mu.Lock()
+	pending2, ok := d.pending["tool-read-1"]
+	d.mu.Unlock()
+	require.True(t, ok)
+	require.NotNil(t, pending2.event.Tool)
+	assert.Contains(t, pending2.event.Tool.Input, "file_path",
+		"input should be preserved when new event lacks rawInput")
+
+	// Flush and verify the forwarded event also has input
+	d.flushToolID("tool-read-1")
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Tool)
+		assert.Contains(t, ev.Tool.Input, "file_path",
+			"flushed event should preserve input")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("flushed event not received")
+	}
+}
+
+// TestHandleToolCallUpdate_InputOverwrittenWhenNewEventHasInput verifies that
+// when a subsequent ToolCallUpdate carries new rawInput, it correctly
+// overwrites the previous input (not just preserved the old one).
+func TestHandleToolCallUpdate_InputOverwrittenWhenNewEventHasInput(t *testing.T) {
+	d, ch := newTestDebouncer()
+
+	// First update with rawInput
+	tcu1 := makeToolCallUpdate("tool-edit-1", false)
+	tcu1.RawInput = map[string]any{"file_path": "a.go", "old_string": "foo"}
+	d.handleToolCallUpdate(tcu1)
+
+	// Second update with NEW rawInput — should overwrite
+	tcu2 := makeToolCallUpdate("tool-edit-1", false)
+	tcu2.RawInput = map[string]any{"file_path": "b.go", "old_string": "bar"}
+	d.handleToolCallUpdate(tcu2)
+
+	// After merge, input should be from the second update
+	d.mu.Lock()
+	pending, ok := d.pending["tool-edit-1"]
+	d.mu.Unlock()
+	require.True(t, ok)
+	require.NotNil(t, pending.event.Tool)
+	assert.Contains(t, pending.event.Tool.Input, "b.go",
+		"input should be from the latest update when it carries rawInput")
+
+	// Drain
+	d.flushToolID("tool-read-1")
+	collectEvents(ch, 1, 200*time.Millisecond)
+}
+
 // --- Concurrent safety ---
 
 func TestHandleToolCallUpdate_ConcurrentSafety(t *testing.T) {
@@ -486,6 +566,60 @@ func TestHandleToolCallUpdate_ConcurrentSafety(t *testing.T) {
 
 func TestDebounceInterval(t *testing.T) {
 	assert.Equal(t, 50*time.Millisecond, toolDebounceInterval)
+}
+
+// --- ToolMeta preservation during merge ---
+
+func TestHandleToolCallUpdate_ToolMetaPreservedWhenNewEventLacksMeta(t *testing.T) {
+	d, ch := newTestDebouncer()
+
+	// First update with ToolMeta
+	tcu1 := makeToolCallUpdate("tool-meta-1", false)
+	d.handleToolCallUpdate(tcu1)
+	// Manually set ToolMeta on the pending event to simulate a meta update
+	d.mu.Lock()
+	if p, ok := d.pending["tool-meta-1"]; ok {
+		p.event.ToolMeta = &ToolCallMeta{ToolID: "tool-meta-1", Summary: "test summary"}
+	}
+	d.mu.Unlock()
+
+	// Second update without ToolMeta — should preserve existing
+	tcu2 := makeToolCallUpdate("tool-meta-1", false)
+	tcu2.RawInput = nil
+	d.handleToolCallUpdate(tcu2)
+
+	// After merge, ToolMeta should be preserved
+	d.mu.Lock()
+	pending, ok := d.pending["tool-meta-1"]
+	d.mu.Unlock()
+	require.True(t, ok)
+	assert.NotNil(t, pending.event.ToolMeta, "ToolMeta should be preserved when new event lacks it")
+
+	// Drain
+	d.flushToolID("tool-meta-1")
+	collectEvents(ch, 1, 200*time.Millisecond)
+}
+
+// --- handleToolCallUpdate with nil conn ---
+
+func TestHandleToolCallUpdate_NilConn(t *testing.T) {
+	// Debouncer with nil conn — backendID should be empty
+	ch := make(chan StreamEvent, 64)
+	d := newToolCallDebouncer(ch, nil)
+
+	tcu := makeToolCallUpdate("tool-nil-conn", false)
+	result := d.handleToolCallUpdate(tcu)
+	assert.True(t, result)
+
+	// Should still work, just with empty backendID
+	d.flushToolID("tool-nil-conn")
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "tool_use", ev.Type)
+		assert.Equal(t, "tool-nil-conn", ev.Tool.ID)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("event should be forwarded even with nil conn")
+	}
 }
 
 // --- helpers ---

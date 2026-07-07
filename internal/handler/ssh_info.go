@@ -6,17 +6,31 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"clawbench/internal/service"
 	"clawbench/internal/ssh"
 )
 
 // sshServerRef holds a reference to the SSH server, set from main.go.
-var sshServerRef *ssh.Server
+var (
+	sshServerMu  sync.RWMutex
+	sshServerRef *ssh.Server
+)
 
 // SetSSHServer stores a reference to the SSH server for handler access.
 func SetSSHServer(s *ssh.Server) {
+	sshServerMu.Lock()
 	sshServerRef = s
+	sshServerMu.Unlock()
+}
+
+// GetSSHServer returns the SSH server reference (for hot-reload).
+func GetSSHServer() *ssh.Server {
+	sshServerMu.RLock()
+	s := sshServerRef
+	sshServerMu.RUnlock()
+	return s
 }
 
 // ServeSSHInfo returns SSH connection info for tunnel setup.
@@ -26,7 +40,9 @@ func ServeSSHInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sshServerRef == nil {
+	sshRef := GetSSHServer()
+
+	if sshRef == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"enabled":         false,
 			"host":            "",
@@ -45,8 +61,8 @@ func ServeSSHInfo(w http.ResponseWriter, r *http.Request) {
 		host = h
 	}
 
-	port := sshServerRef.Port()
-	fingerprint := sshServerRef.Fingerprint()
+	port := sshRef.Port()
+	fingerprint := sshRef.Fingerprint()
 
 	// Build ssh -L command from all registered ports.
 	// For non-localhost targets with a reverse proxy, the SSH tunnel must route
@@ -70,7 +86,7 @@ func ServeSSHInfo(w http.ResponseWriter, r *http.Request) {
 
 	command := ""
 	if len(forwardArgs) > 0 {
-		command = fmt.Sprintf("ssh %s clawbench@%s -p %d",
+		command = fmt.Sprintf("ssh -N %s clawbench@%s -p %d",
 			strings.Join(forwardArgs, " "), host, port)
 	}
 
@@ -81,6 +97,6 @@ func ServeSSHInfo(w http.ResponseWriter, r *http.Request) {
 		"username":        "clawbench",
 		"fingerprint":     fingerprint,
 		"command":         command,
-		"connectionStats": sshServerRef.ConnectionStats(),
+		"connectionStats": sshRef.ConnectionStats(),
 	})
 }
