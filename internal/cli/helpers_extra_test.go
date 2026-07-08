@@ -127,7 +127,115 @@ func TestHTTPDoWithProject_UnreachableServer(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// --- resolveDataDir ---
+
+func TestResolveDataDir_AlreadySet(t *testing.T) {
+	origDataDir := model.DataDir
+	t.Cleanup(func() { model.DataDir = origDataDir })
+
+	model.DataDir = "/custom/data"
+	dir, err := resolveDataDir()
+	assert.NoError(t, err)
+	assert.Equal(t, "/custom/data", dir)
+}
+
+func TestResolveDataDir_DefaultFromHome(t *testing.T) {
+	origDataDir := model.DataDir
+	t.Cleanup(func() { model.DataDir = origDataDir })
+
+	model.DataDir = ""
+	dir, err := resolveDataDir()
+	assert.NoError(t, err)
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		assert.Equal(t, filepath.Join(homeDir, ".clawbench"), dir)
+	}
+}
+
+func TestResolveDataDir_EmptyHome(t *testing.T) {
+	origDataDir := model.DataDir
+	t.Cleanup(func() { model.DataDir = origDataDir })
+
+	model.DataDir = ""
+	// Note: on Windows, platform.UserHomeDir() may still resolve via
+	// Go's os.UserHomeDir() even if HOME/USERPROFILE are unset (e.g.
+	// via Windows API). This test only verifies the error path on
+	// platforms where the home dir truly cannot be determined.
+	// We skip if the home dir is still resolvable after unsetting env vars.
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		_ = os.Setenv("HOME", origHome)
+		_ = os.Setenv("USERPROFILE", origUserProfile)
+	})
+
+	_ = os.Unsetenv("HOME")
+	_ = os.Unsetenv("USERPROFILE")
+
+	dir, err := resolveDataDir()
+	if err != nil {
+		assert.Contains(t, err.Error(), "cannot determine home directory")
+		assert.Empty(t, dir)
+	} else {
+		// Home dir was still resolvable (e.g. Windows API) — not an error
+		assert.NotEmpty(t, dir)
+	}
+}
+
 // --- loadConfig additional coverage ---
+
+func TestLoadConfig_HomeDirFallback(t *testing.T) {
+	// Verify that loadConfig sets DataDir to ~/.clawbench using platform.UserHomeDir()
+	origCfg := model.ConfigInstance
+	origBinDir := model.BinDir
+	origDataDir := model.DataDir
+	origServerPort := model.ServerPort
+	t.Cleanup(func() {
+		model.ConfigInstance = origCfg
+		model.BinDir = origBinDir
+		model.DataDir = origDataDir
+		model.ServerPort = origServerPort
+	})
+
+	model.ConfigInstance = model.Config{}
+	model.DataDir = "" // empty to trigger homeDir fallback
+
+	// We can't easily test the os.Exit(1) path (homeDir == ""),
+	// but we can verify the normal path sets DataDir to ~/.clawbench.
+	loadConfig()
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		expected := filepath.Join(homeDir, ".clawbench")
+		assert.Equal(t, expected, model.DataDir, "DataDir should default to ~/.clawbench")
+	}
+}
+
+func TestLoadConfig_CheckLegacyLayoutCalled(t *testing.T) {
+	// Verify that loadConfig calls CheckLegacyLayout by checking it doesn't panic
+	// when a legacy BinDir layout exists. CheckLegacyLayout just prints a warning.
+	origCfg := model.ConfigInstance
+	origBinDir := model.BinDir
+	origDataDir := model.DataDir
+	origServerPort := model.ServerPort
+	t.Cleanup(func() {
+		model.ConfigInstance = origCfg
+		model.BinDir = origBinDir
+		model.DataDir = origDataDir
+		model.ServerPort = origServerPort
+	})
+
+	tmpDir := t.TempDir()
+	// Create a legacy .clawbench dir next to a fake binary dir
+	legacyDataDir := filepath.Join(tmpDir, ".clawbench")
+	assert.NoError(t, os.MkdirAll(legacyDataDir, 0o755))
+
+	model.ConfigInstance = model.Config{}
+	model.BinDir = tmpDir
+	model.DataDir = filepath.Join(tmpDir, "newdata")
+
+	// loadConfig should not panic even with legacy layout
+	loadConfig()
+}
 
 func TestLoadConfig_SetsServerPort(t *testing.T) {
 	origCfg := model.ConfigInstance
@@ -144,18 +252,16 @@ func TestLoadConfig_SetsServerPort(t *testing.T) {
 	// Reset ConfigInstance so loadConfig actually runs
 	model.ConfigInstance = model.Config{}
 
-	// loadConfig() resets BinDir from os.Args[0] and then calls FindConfigPath(BinDir).
-	// We create a config file relative to the test binary's directory.
-	binDir := filepath.Dir(os.Args[0])
-	configDir := filepath.Join(binDir, "config")
+	// loadConfig() calls FindConfigPath(DataDir).
+	// We create a config file relative to DataDir.
+	dataDir := t.TempDir()
+	model.DataDir = dataDir
+	configDir := filepath.Join(dataDir, "config")
 	_ = os.MkdirAll(configDir, 0o755)
 	configPath := filepath.Join(configDir, "config.yaml")
 
 	// Write a config with a non-default port
 	_ = os.WriteFile(configPath, []byte("port: 9999\n"), 0o644)
-	defer os.Remove(configPath)
-	// Also try to remove the config dir if we created it
-	defer os.Remove(configDir)
 
 	loadConfig()
 
@@ -177,21 +283,22 @@ func TestLoadConfig_InvalidYAML(t *testing.T) {
 
 func TestLoadConfig_FullPathWithConfigFile(t *testing.T) {
 	// Test the full loadConfig path with Port=0 and a valid config file
-	// placed relative to the test binary (since loadConfig resets BinDir from os.Args[0])
+	// placed relative to DataDir (since loadConfig calls FindConfigPath(DataDir))
 	origCfg := model.ConfigInstance
 	origServerPort := model.ServerPort
+	origDataDir := model.DataDir
 	t.Cleanup(func() {
 		model.ConfigInstance = origCfg
 		model.ServerPort = origServerPort
+		model.DataDir = origDataDir
 	})
 
-	binDir := filepath.Dir(os.Args[0])
-	configDir := filepath.Join(binDir, "config")
+	dataDir := t.TempDir()
+	model.DataDir = dataDir
+	configDir := filepath.Join(dataDir, "config")
 	_ = os.MkdirAll(configDir, 0o755)
 	configPath := filepath.Join(configDir, "config.yaml")
 	_ = os.WriteFile(configPath, []byte("port: 12345\n"), 0o644)
-	defer os.Remove(configPath)
-	defer os.Remove(configDir)
 
 	model.ConfigInstance = model.Config{}
 

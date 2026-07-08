@@ -1083,6 +1083,31 @@ watch(() => inlineOverflowTabs.value.length, () => {
   overflowMenuOpen.value = false
 })
 
+// Safety net: re-measure dock when it becomes visible again after keyboard closes.
+// ResizeObserver should handle this, but Android WebView may miss the callback
+// after display:none → display:flex transitions (especially with CSS zoom applied).
+watch(anyKeyboardActive, (active) => {
+  if (!active) {
+    nextTick(() => startDockResize())
+  }
+})
+
+// Safety net: re-measure dock when UI scale (CSS zoom) changes.
+// ResizeObserver may not fire when CSS zoom on <html> changes, so we
+// must explicitly re-measure to recalculate overflow layout.
+// Use requestAnimationFrame to ensure browser has reflowed after the zoom change.
+watch(() => localConfig.uiScale, () => {
+  requestAnimationFrame(() => {
+    startDockResize()
+    // Also update --dock-height CSS variable for fixed-position elements
+    const dw = document.querySelector('.bottom-dock-wrapper')
+    if (dw) {
+      const h = dw.offsetHeight
+      document.documentElement.style.setProperty('--dock-height', h ? `${h}px` : '0px')
+    }
+  })
+})
+
 // Helpers for dynamic inline overflow buttons
 function dockTabIcon(tab) {
   return overflowTabMeta[tab]?.icon ?? CalendarClock

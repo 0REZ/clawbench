@@ -22,9 +22,9 @@ type BannerConfig struct {
 	Version         string
 	Scheme          string // "http" or "https"
 	Port            int
-	LocalIP         string // non-loopback LAN IP; empty = not available
-	AutoPassword    string // plaintext auto-generated password; empty = user configured
-	DataDir         string // .clawbench/ absolute path
+	LocalIPs        []string // non-loopback LAN IPs; nil/empty = not available
+	AutoPassword    string   // plaintext auto-generated password; empty = user configured
+	DataDir         string   // .clawbench/ absolute path
 	Agents          []AgentInfo
 	SSHEnabled      bool
 	SSHPort         int
@@ -114,6 +114,8 @@ func padRight(s string, width int) string {
 
 // buildLines constructs the content lines (without borders).
 // Each line is a plain string; the caller pads them to equal rune-width.
+//
+//nolint:gocyclo // banner assembly is inherently multi-branch; splitting hurts readability
 func buildLines(cfg BannerConfig) []string {
 	labelW := 14 // display width for label alignment
 	label := func(prefix, text string) string {
@@ -128,8 +130,12 @@ func buildLines(cfg BannerConfig) []string {
 	// --- URLs ---
 	localURL := fmt.Sprintf("%s://localhost:%d", cfg.Scheme, cfg.Port)
 	lines = append(lines, label("💻 Local:", localURL))
-	if cfg.LocalIP != "" {
-		networkURL := fmt.Sprintf("%s://%s:%d", cfg.Scheme, cfg.LocalIP, cfg.Port)
+	for _, ip := range cfg.LocalIPs {
+		host := ip
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]" // IPv6 literal bracket for URL
+		}
+		networkURL := fmt.Sprintf("%s://%s:%d", cfg.Scheme, host, cfg.Port)
 		lines = append(lines, label("🌐 Network:", networkURL))
 	}
 
@@ -164,7 +170,7 @@ func buildLines(cfg BannerConfig) []string {
 
 	// --- SSH (conditional) ---
 	if cfg.SSHEnabled {
-		sshCmd := fmt.Sprintf("ssh -p %d clawbench@%s", cfg.SSHPort, firstNonEmpty(cfg.LocalIP, "localhost"))
+		sshCmd := fmt.Sprintf("ssh -p %d clawbench@%s", cfg.SSHPort, firstNonEmpty(firstIP(cfg.LocalIPs), "localhost"))
 		lines = append(lines, label("🔒 SSH:", sshCmd), "")
 	}
 
@@ -226,6 +232,14 @@ func firstNonEmpty(ss ...string) string {
 		if s != "" {
 			return s
 		}
+	}
+	return ""
+}
+
+// firstIP returns the first IP from the slice, or "".
+func firstIP(ips []string) string {
+	if len(ips) > 0 {
+		return ips[0]
 	}
 	return ""
 }

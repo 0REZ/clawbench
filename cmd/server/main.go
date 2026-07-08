@@ -162,7 +162,7 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		fmt.Println()
 		fmt.Println("Server options:")
 		fmt.Println("  --port PORT       Server port (overrides config file, default: 20000)")
-		fmt.Println("  --data-dir DIR    Runtime data directory (default: <binary_dir>/.clawbench)")
+		fmt.Println("  --data-dir DIR    Runtime data directory (default: ~/.clawbench)")
 		fmt.Println("  --version         Print version and exit")
 		os.Exit(0)
 	}
@@ -204,11 +204,11 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		}
 	}
 
-	// Determine binary directory for data storage (green portable layout)
+	// Determine binary directory for config search path
 	absBinPath, _ := filepath.Abs(os.Args[0])
 	model.BinDir = filepath.Dir(absBinPath)
 
-	// Set data directory: --data-dir flag > default BinDir/.clawbench
+	// Set data directory: --data-dir flag > default ~/.clawbench
 	if cliDataDir != "" {
 		absDataDir, err := filepath.Abs(cliDataDir)
 		if err != nil {
@@ -217,7 +217,17 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		}
 		model.DataDir = absDataDir
 	} else {
-		model.DataDir = filepath.Join(model.BinDir, ".clawbench")
+		homeDir := platform.UserHomeDir()
+		if homeDir == "" {
+			fmt.Fprintf(os.Stderr, "Error: cannot determine home directory (set $HOME or $USERPROFILE)\n")
+			os.Exit(1)
+		}
+		model.DataDir = filepath.Join(homeDir, ".clawbench")
+	}
+
+	// Warn about legacy BinDir layout if detected
+	if cliDataDir == "" {
+		startup.CheckLegacyLayout(model.BinDir, model.DataDir)
 	}
 
 	// Load configuration — config/config.yaml is optional
@@ -225,9 +235,9 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	var presence map[string]bool
 
 	// Search for config in priority order:
-	// 1. <BinDir>/config/config.yaml (green portable: next to binary)
+	// 1. <DataDir>/config/config.yaml (data directory)
 	// 2. config/config.yaml (CWD-relative, standard layout)
-	configPath := cli.FindConfigPath(model.BinDir)
+	configPath := cli.FindConfigPath(model.DataDir)
 
 	data, err := os.ReadFile(configPath)
 	if err == nil {
@@ -415,20 +425,6 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	}
 	slog.SetDefault(slog.New(multiHandler))
 	slog.Info("server starting")
-
-	// Load .env file into process environment (before loading agents,
-	// so agent env ${VAR} references can be resolved at request time)
-	dotenvPath := filepath.Join(model.BinDir, ".env")
-	if _, err := os.Stat(dotenvPath); os.IsNotExist(err) {
-		dotenvPath = ".env"
-	}
-	if _, err := os.Stat(dotenvPath); err == nil {
-		if err := model.LoadDotEnv(dotenvPath); err != nil {
-			slog.Warn("failed to load .env file", slog.String("path", dotenvPath), slog.String("err", err.Error()))
-		} else {
-			slog.Info("loaded .env file", slog.String("path", dotenvPath))
-		}
-	}
 
 	// Ensure $SHELL reflects the user's login shell (from /etc/passwd).
 	// On Debian/Ubuntu, $SHELL may be /bin/sh (dash) when started from
@@ -924,7 +920,7 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		Version:         version.Get(),
 		Scheme:          scheme,
 		Port:            port,
-		LocalIP:         platform.GetOutboundIP(),
+		LocalIPs:        platform.GetLocalIPs(),
 		AutoPassword:    autoPassword,
 		DataDir:         model.DataDir,
 		Agents:          agentInfos,

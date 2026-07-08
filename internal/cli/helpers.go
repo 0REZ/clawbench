@@ -15,15 +15,17 @@ import (
 	"time"
 
 	"clawbench/internal/model"
+	"clawbench/internal/platform"
+	"clawbench/internal/startup"
 
 	"gopkg.in/yaml.v3"
 )
 
 // FindConfigPath searches for config.yaml in priority order:
-//  1. <BinDir>/config/config.yaml (green portable: next to binary)
+//  1. <DataDir>/config/config.yaml (data directory)
 //  2. config/config.yaml (CWD-relative, standard layout)
-func FindConfigPath(binDir string) string {
-	configPath := filepath.Join(binDir, "config", "config.yaml")
+func FindConfigPath(dataDir string) string {
+	configPath := filepath.Join(dataDir, "config", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		configPath = filepath.Join("config", "config.yaml")
 	}
@@ -33,6 +35,21 @@ func FindConfigPath(binDir string) string {
 // loadConfig loads the YAML config file and applies defaults.
 // It is safe to call multiple times — subsequent calls are no-ops
 // once model.ConfigInstance is populated.
+// resolveDataDir returns the data directory. If model.DataDir is already set,
+// it is returned as-is. Otherwise it defaults to ~/.clawbench using the
+// platform home directory. Returns an error if the home directory cannot be
+// determined.
+func resolveDataDir() (string, error) {
+	if model.DataDir != "" {
+		return model.DataDir, nil
+	}
+	homeDir := platform.UserHomeDir()
+	if homeDir == "" {
+		return "", fmt.Errorf("cannot determine home directory (set $HOME or $USERPROFILE)")
+	}
+	return filepath.Join(homeDir, ".clawbench"), nil
+}
+
 func loadConfig() {
 	if model.ConfigInstance.Port != 0 {
 		return // already loaded
@@ -40,13 +57,19 @@ func loadConfig() {
 
 	absBinPath, _ := filepath.Abs(os.Args[0])
 	model.BinDir = filepath.Dir(absBinPath)
-	if model.DataDir == "" {
-		model.DataDir = filepath.Join(model.BinDir, ".clawbench")
+	dataDir, err := resolveDataDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
+	model.DataDir = dataDir
+
+	// Warn about legacy BinDir layout
+	startup.CheckLegacyLayout(model.BinDir, model.DataDir)
 
 	var cfg model.Config
 	var presence map[string]bool
-	configPath := FindConfigPath(model.BinDir)
+	configPath := FindConfigPath(model.DataDir)
 
 	data, err := os.ReadFile(configPath)
 	if err == nil {

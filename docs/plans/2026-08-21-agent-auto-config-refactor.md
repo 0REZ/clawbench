@@ -720,13 +720,13 @@ Replace the section from `// Load agent configurations` through `// Initialize a
 ```go
 // Load agent configurations (set ClawbenchBin first for placeholder replacement)
 model.ClawbenchBin = absBinPath
-agentsDir := filepath.Join(model.BinDir, "config", "agents")
+agentsDir := filepath.Join(model.DataDir, "config", "agents")
 if _, err := os.Stat(agentsDir); os.IsNotExist(err) {
     agentsDir = filepath.Join("config", "agents")
 }
 
 // Model cache directory
-modelCacheDir := filepath.Join(model.BinDir, ".clawbench", "model-cache")
+modelCacheDir := filepath.Join(model.DataDir, "model-cache")
 
 // 1. Load existing agent YAMLs
 if err := model.LoadAgents(agentsDir); err != nil {
