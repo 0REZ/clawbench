@@ -19,7 +19,6 @@
       @touchend="swipeSession.onTouchEnd"
       @toggle-tool="render.toggleToolDetail"
       @show-tool-detail="handleShowToolDetail"
-      @show-thinking-detail="handleShowThinkingDetail"
       @show-metadata="showMetadata"
       @file-tag-click="handleFileTagClick"
       @load-more="handleLoadMore"
@@ -69,8 +68,9 @@
       @toggle-collapse="togglePlanCollapse"
     />
 
-    <!-- Unified input container -->
+    <!-- Unified input container — hidden when no agents configured -->
     <ChatInputBar
+      v-if="agentsList.length > 0"
       ref="inputBarRef"
       :inputDisabled="inputDisabled"
       :loading="loading"
@@ -155,7 +155,6 @@ import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
-import HeaderMarquee from '@/components/common/HeaderMarquee.vue'
 import RagDetailDrawer from './RagDetailDrawer.vue'
 import ChatMetadataModal from './ChatMetadataModal.vue'
 import ToolDetailDrawer from './ToolDetailDrawer.vue'
@@ -169,7 +168,7 @@ import { useChatStream } from '@/composables/useChatStream.ts'
 import { useChatSession, loadSessionsOnce } from '@/composables/useChatSession.ts'
 import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
 import { useSessionManager } from '@/composables/useSessionManager.ts'
-import { usePendingStore, createPendingMessage } from '@/composables/usePendingStore.ts'
+
 import { useAgents, populateACPStateFromCache } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
@@ -183,7 +182,7 @@ import { useAutoSpeech, extractSpeakableText } from '@/composables/useAutoSpeech
 import { useSwipeSession } from '@/composables/useSwipeSession.ts'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { store } from '@/stores/app.ts'
-import { renderMarkdown } from '@/composables/useMarkdownRenderer.ts'
+
 import { useDialog } from '@/composables/useDialog'
 
 import '@/assets/loading-mask.css'
@@ -202,17 +201,10 @@ const emit = defineEmits(['open', 'message', 'open-file', 'task-card-click'])
 // ── Singletons ──
 const identity = useSessionIdentity()
 const agentsComposable = useAgents()
-const { agents: agentsList, getAgent, getAgentIcon, getAgentName, getAgentModels, isMultiModel, getDefaultModelId } = agentsComposable
-// Expose as `agents` for template access to getAgentModels/isMultiModel
-const agents = agentsComposable
-
+const { agents: agentsList, getAgent, getAgentIcon, getAgentName } = agentsComposable
 const messages = ref([])
-const pendingStore = usePendingStore()
-/** Rendered messages = persisted messages + pending messages for current session */
-const renderedMessages = computed(() => [
-  ...messages.value,
-  ...pendingStore.getPending(identity.currentSessionId.value),
-])
+/** Rendered messages = persisted messages (pending messages already in messages.value with pending: true) */
+const renderedMessages = computed(() => messages.value)
 const inputDisabled = ref(false)
 const loading = ref(false)
 // Incremented when the panel reopens, so ChatMessageItem can re-check
@@ -256,18 +248,9 @@ function handleQuoteClick() {
     }
 }
 
-const { planEntries, planCollapsed, planHasUpdate, hasPlan, togglePlanCollapse, clearPlanState } = usePlanProgress()
+const { planEntries, planCollapsed, planHasUpdate, togglePlanCollapse } = usePlanProgress()
 
 const render = useChatRender({ messages, theme, currentSessionId: identity.currentSessionId })
-
-/** Look up the thinking block from the live messages array by msgId + blockKey */
-function findThinkingBlock({ msgId, blockKey }) {
-  if (!blockKey) return null
-  const msg = messages.value.find(m => String(m.id) === msgId)
-  if (!msg || !msg.blocks) return null
-  const block = msg.blocks.find(b => b._key === blockKey)
-  return (block && block.type === 'thinking') ? block : null
-}
 
 /** Look up the tool_use block from the live messages array by msgId + blockIdx */
 function findToolBlock({ msgId, blockIdx }) {
@@ -286,7 +269,6 @@ const {
   handleOverlayRetryClick,
   fetchToolCallDetail,
   handleFileOpenInOverlay,
-  closeOverlay,
 } = useToolDetailDrawer({
   chatRender: render,
   onFileOpen: async (path, lineStart, lineEnd) => {
@@ -297,9 +279,7 @@ const {
 })
 const toolDetailDrawer = useTabDrawer('chat', toolDetailShow)
 
-// Active thinking overlay: tracks which block is being shown so we can reactively update
-const activeThinkingOverlay = ref(null) // { msgId, blockKey } or null
-let thinkingRenderTimer = null
+// Thinking overlay removed — thinking blocks now expand/collapse inline
 let streamingRefreshTimer = null
 
 const session = useChatSession({
@@ -355,7 +335,9 @@ function onStreamEnd(reason) {
     store.loadGitBranch().catch(() => {})
   } else if (reason === 'cancelled') {
     // Backend already cleared queue; clear locally for immediate UI response
-    pendingStore.clearPending(identity.currentSessionId.value)
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      if (messages.value[i].pending) messages.value.splice(i, 1)
+    }
     // Restore screen lock — output was cancelled, no TTS will play
     autoSpeech.onOutputEndNoSpeech()
   }
@@ -381,7 +363,6 @@ const stream = useChatStream({
   currentSessionId: identity.currentSessionId,
   currentBackend: identity.currentBackend,
   loading,
-  pendingStore,
   onRenderNeeded: (forceFull) => render.updateRenderedContents(forceFull),
   onScrollBottom: (force) => scrollBottom(force),
   onLoadHistory: () => session.loadHistory(),
@@ -426,7 +407,6 @@ const { quoteData, setQuoteData, clearAll } = useChatContext()
 const manager = useSessionManager({
   messages,
   loading,
-  pendingStore,
   switchSessionCore: session.switchSession,
   createSessionCore: session.createSession,
   deleteSessionCore: session.deleteSession,
@@ -510,25 +490,6 @@ watch(() => props.active, async (val) => {
   }
 }, { immediate: true })
 
-// Reactively update thinking overlay content as block.text changes during streaming
-watch(
-  () => {
-    if (!activeThinkingOverlay.value || !toolDetailOverlay.value.show) return null
-    const block = findThinkingBlock(activeThinkingOverlay.value)
-    return block ? block.text : null
-  },
-  (text) => {
-    if (text === null) return
-    // Debounce: avoid re-rendering markdown on every SSE event
-    if (thinkingRenderTimer) clearTimeout(thinkingRenderTimer)
-    thinkingRenderTimer = setTimeout(() => {
-      const b = findThinkingBlock(activeThinkingOverlay.value)
-      toolDetailData.value.inputHtml = `<div class="thinking-overlay-md">${renderMarkdown(text)}</div>`
-      toolDetailData.value.done = b ? !!b.done : !loading.value
-    }, 300)
-  }
-)
-
 // Reactively update tool overlay content as block.output/done/status changes during streaming
 watch(
   () => {
@@ -552,14 +513,12 @@ watch(
 // Clean up overlay state when overlay closes
 watch(() => toolDetailShow.value, (show) => {
   if (!show) {
-    activeThinkingOverlay.value = null
     activeToolOverlay.value = null
-    if (thinkingRenderTimer) { clearTimeout(thinkingRenderTimer); thinkingRenderTimer = null }
     if (streamingRefreshTimer) { clearInterval(streamingRefreshTimer); streamingRefreshTimer = null }
   }
 })
 
-// Streaming refresh: when overlay is open and streaming is not done, poll every 1s
+// Streaming refresh: when overlay is open and streaming is not done, poll every 2s
 // to refresh content. This supplements the passive watch — SSE doesn't push tool output,
 // and thinking text updates may be missed during SSE reconnection/buffering.
 function startStreamingRefresh() {
@@ -570,25 +529,6 @@ function startStreamingRefresh() {
       streamingRefreshTimer = null
       return
     }
-    // Thinking overlay: re-render from live block text
-    if (activeThinkingOverlay.value) {
-      const block = findThinkingBlock(activeThinkingOverlay.value)
-      if (block) {
-        toolDetailData.value.inputHtml = `<div class="thinking-overlay-md">${renderMarkdown(block.text)}</div>`
-        toolDetailData.value.done = !!block.done
-        // Block is done — no further updates needed
-        if (block.done) {
-          clearInterval(streamingRefreshTimer)
-          streamingRefreshTimer = null
-          return
-        }
-      }
-      if (!loading.value) {
-        clearInterval(streamingRefreshTimer)
-        streamingRefreshTimer = null
-      }
-      return
-    }
     // Tool overlay: fetch output from API if not done
     if (activeToolOverlay.value) {
       const block = findToolBlock(activeToolOverlay.value)
@@ -597,15 +537,12 @@ function startStreamingRefresh() {
         streamingRefreshTimer = null
         return
       }
-      if (block && block.tool_id && block.msgId) {
-        fetchToolCallDetail(block.tool_id, block.msgId, block)
-      }
-      if (!loading.value && block && block.done) {
-        clearInterval(streamingRefreshTimer)
-        streamingRefreshTimer = null
+      // ContentBlock.id is the tool_id; msgId is stored on activeToolOverlay
+      if (block && block.id) {
+        fetchToolCallDetail(block.id, activeToolOverlay.value.msgId, block)
       }
     }
-  }, 1000)
+  }, 2000)
 }
 
 watch(
@@ -710,12 +647,23 @@ async function sendMessage(text, extraFilePaths) {
       clearAll()
       inputBarRef.value?.clearInput()
       clearPendingFiles()
-      // Push a pending user message into pendingStore (per-session)
-      pendingStore.addPending(identity.currentSessionId.value, createPendingMessage(inputText || '', allFiles))
+      // Push a pending user message directly into messages.value
+      // (pendingStore.addPending was a no-op stub — use messages.value directly)
+      messages.value.push({
+        role: 'user',
+        id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        content: inputText || '',
+        blocks: (inputText || '') ? [{ type: 'text', text: inputText }] : [],
+        files: allFiles.map(p => ({ path: p })),
+        createdAt: new Date().toISOString(),
+        pending: true,
+      })
       render.updateRenderedContents()
       scrollBottom(true)
+      // Capture session ID before any async boundary
+      const capturedSessionId = identity.currentSessionId.value
       // Enqueue to backend (POST /api/ai/queue)
-      const result = await manager.enqueueMessage(inputText, extraFilePaths, capturedAttached, capturedPending)
+      const result = await manager.enqueueMessage(capturedSessionId, inputText, extraFilePaths, capturedAttached, capturedPending)
       // Race condition: if AI finished right as we enqueued, the backend
       // dequeued the message and wants us to resubmit as a new chat.
       if (result.needsStart) {
@@ -801,9 +749,34 @@ async function sendMessageNow(text, filePaths, files) {
             if (localIdx !== -1) {
                 messages.value.splice(localIdx, 1)
             }
-            pendingStore.addPending(identity.currentSessionId.value, createPendingMessage(text || '', files || []))
+            // Push pending message directly into messages.value
+            // (pendingStore.addPending was a no-op stub)
+            messages.value.push({
+                role: 'user',
+                id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                content: text || '',
+                blocks: (text || '') ? [{ type: 'text', text }] : [],
+                files: (files || []).map(p => ({ path: p })),
+                createdAt: new Date().toISOString(),
+                pending: true,
+            })
             if (data.queued && data.queue) {
-                pendingStore.syncFromBackendQueue(identity.currentSessionId.value, data.queue)
+                // Sync backend queue state: remove all pending, re-push from backend
+                for (let i = messages.value.length - 1; i >= 0; i--) {
+                    if (messages.value[i].pending) messages.value.splice(i, 1)
+                }
+                for (const item of data.queue) {
+                    const itemFiles = [...(item.files || []), ...(item.filePaths || [])]
+                    messages.value.push({
+                        role: 'user',
+                        id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        content: item.text || '',
+                        blocks: item.text ? [{ type: 'text', text: item.text }] : [],
+                        files: itemFiles.map(p => ({ path: p })),
+                        createdAt: item.createdAt || new Date().toISOString(),
+                        pending: true,
+                    })
+                }
             }
             stream.connectStream(identity.currentSessionId.value)
             // Proactively sync ACP state for the running session
@@ -847,11 +820,19 @@ async function sendMessageNow(text, filePaths, files) {
 async function handleToolSendMessage(text) {
     if (!text) return
     if (loading.value) {
-      // Push a pending user message into pendingStore (per-session)
-      pendingStore.addPending(identity.currentSessionId.value, createPendingMessage(text))
+      // Push a pending user message directly into messages.value
+      // (pendingStore.addPending was a no-op stub)
+      messages.value.push({
+        role: 'user',
+        id: `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        content: text,
+        blocks: text ? [{ type: 'text', text }] : [],
+        createdAt: new Date().toISOString(),
+        pending: true,
+      })
       render.updateRenderedContents()
       scrollBottom(true)
-      manager.enqueueMessage(text)
+      manager.enqueueMessage(identity.currentSessionId.value, text)
     } else {
       await sendMessage(text)
     }
@@ -875,12 +856,10 @@ async function handleLoadMore() {
 
 /** Handle remove-pending event from ChatMessageItem.
  *  The event passes the pending message's content text (not index).
- *  We look up the pendingIndex by content in the pendingStore for the
- *  backend API, and also remove from pendingStore optimistically. */
+ *  We look up the pendingIndex in messages.value for the backend API. */
 function handleRemovePending(content) {
-    const sessionId = identity.currentSessionId.value
-    const pending = pendingStore.getPending(sessionId)
-    const pendingIndex = pending.findIndex(m => m.content === content)
+    const pendingMessages = messages.value.filter(m => m.pending)
+    const pendingIndex = pendingMessages.findIndex(m => m.content === content)
     if (pendingIndex < 0) return
     manager.handleRemovePending(pendingIndex)
 }
@@ -894,27 +873,6 @@ function showMetadata(msg) {
     metadataModal.value.sessionId = msg.sessionId || ''
     metadataModal.value.indexed = !!msg.indexed
     metadataShow.value = true
-}
-
-function handleShowThinkingDetail({ text, msgId, blockKey }) {
-  // Store identifiers for reactive lookup (survives messages array replacement on loadHistory)
-  activeThinkingOverlay.value = { msgId: String(msgId), blockKey }
-
-  // Initial render
-  const block = findThinkingBlock(activeThinkingOverlay.value)
-  const currentText = block ? block.text : text // fallback to snapshot if lookup fails
-
-  toolDetailShow.value = true
-  toolDetailData.value = {
-    name: 'DeepThink',
-    displayNameOverride: t('chat.message.deepThinking'),
-    summary: '',
-    inputHtml: `<div class="thinking-overlay-md">${renderMarkdown(currentText)}</div>`,
-    outputHtml: '',
-    status: '',
-    done: block ? !!block.done : !loading.value,
-    _fetchIds: toolDetailData.value._fetchIds,
-  }
 }
 
 // Wire up WS event handler for session_update
@@ -974,7 +932,7 @@ async function handleResumeFromDetail(item) {
             return
         }
         await session.switchSession(item.sessionId)
-    } catch (err) {
+    } catch {
         toast.show(t('chat.contentBlocks.ragResumeFailed'), { icon: '⚠️', type: 'error' })
     }
 }
@@ -999,9 +957,25 @@ async function handleResumeSession({ sessionId, sessionTitle }) {
             return
         }
         await session.switchSession(sessionId)
-    } catch (err) {
+    } catch {
         toast.show(t('chat.contentBlocks.ragResumeFailed'), { icon: '⚠️', type: 'error' })
     }
+}
+
+// Desktop: Ctrl+Left/Right to switch sessions (always enabled, independent of swipeSession toggle)
+function handleCtrlArrowSessionSwitch(e) {
+  if (!props.active) return
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  if (e.target?.closest?.('.terminal-panel')) return
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    swipeSession.swipeToPrev()
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault()
+    swipeSession.swipeToNext()
+  }
 }
 
 // Start one-time session load when component mounts
@@ -1014,6 +988,7 @@ onMounted(() => {
     session.loadSessionsOnce()
     document.addEventListener('visibilitychange', session.handleVisibilityChange)
     window.addEventListener('clawbench-summary-update', handleSummaryUpdate)
+    document.addEventListener('keydown', handleCtrlArrowSessionSwitch)
 })
 
 // Cleanup preview URLs on unmount
@@ -1023,10 +998,10 @@ onUnmounted(() => {
     stream.disconnectStream()
     stream.stopPolling()
     session.stopMsgCountPolling()
-    if (thinkingRenderTimer) { clearTimeout(thinkingRenderTimer); thinkingRenderTimer = null }
     document.removeEventListener('visibilitychange', session.handleVisibilityChange)
     document.removeEventListener('visibilitychange', manager._visibilityHandler)
     window.removeEventListener('clawbench-summary-update', handleSummaryUpdate)
+    document.removeEventListener('keydown', handleCtrlArrowSessionSwitch)
     notification.closeAll()
 })
 </script>

@@ -1,12 +1,8 @@
-import { ref, reactive, nextTick, watch } from 'vue'
-import { marked, DOMPurify } from '@/utils/globals.ts'
+import { ref, reactive, nextTick, watch, type Ref } from 'vue'
+import { renderMarkdown as baseRenderMarkdown, renderMarkdownHtml, renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
 import { formatToolInput } from '@/utils/renderToolDetail.ts'
-import { renderKatexInString, renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useCommitHashAnnotation } from '@/composables/useCommitHashAnnotation.ts'
-import { useWorktreeAnnotation } from '@/composables/useWorktreeAnnotation.ts'
-import { useLocalhostAnnotation } from '@/composables/useLocalhostAnnotation.ts'
-import { injectTableRowAttrs } from '@/utils/tableRowExpand.ts'
 import { store } from '@/stores/app.ts'
 import { apiGet } from '@/utils/api'
 import { createTaskBlockStore } from '@/utils/taskBlockStore.ts'
@@ -19,10 +15,7 @@ import {
   taskChanged,
   StaticBlockCache,
 } from '@/utils/streamPerf.ts'
-import { annotateCodeBlockHeaders, annotateTableBlockHeaders } from '@/composables/useCodeBlockHeader.ts'
 import {
-  rewriteImageUrls,
-  convertAudioLinks,
   parseAskQuestionContent,
   parseRagResultsContent,
 } from '@/utils/chatRenderUtils.ts'
@@ -39,17 +32,18 @@ import {
   repeatLabel,
 } from '@/utils/format.ts'
 
-export function useChatRender(options: { messages: any; theme: any; currentSessionId: any }) {
+export function useChatRender(options: { messages: { value: Array<Record<string, unknown>> }; theme: { value: unknown }; currentSessionId: { value: unknown } }) {
   const { messages, theme, currentSessionId } = options
-  const { annotateFilePaths, verifyFilePaths } = useFilePathAnnotation()
-  const { annotateCommitHashes, verifyCommitHashes } = useCommitHashAnnotation()
-  const { annotateWorktreePaths } = useWorktreeAnnotation()
-  const { annotateLocalhostUrls } = useLocalhostAnnotation()
+  const { verifyFilePaths } = useFilePathAnnotation()
+  const { verifyCommitHashes } = useCommitHashAnnotation()
 
-  const blockTasks: Record<string, any> = reactive({})
-  const blockAskQuestions: Record<string, any> = reactive({})
-  const blockRagResults: Record<string, any> = reactive({})
-  const expandedTools: Record<string, any> = ref({})
+  // Local type for accessing message properties with known types
+  type RenderMessage = { id?: string | number; role?: string; blocks?: Array<{ type?: string; text?: string } & Record<string, unknown>>; streaming?: boolean; [key: string]: unknown }
+
+  const blockTasks: Record<string, unknown> = reactive({})
+  const blockAskQuestions: Record<string, unknown> = reactive({})
+  const blockRagResults: Record<string, unknown> = reactive({})
+  const expandedTools = ref({}) as Ref<Record<string, boolean>>
   let lastRenderedCount = 0
 
   // ── Task block store for batch fetching (ISS-013) ──
@@ -69,12 +63,12 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
   // Called via requestIdleCallback after initial fast render for instant display.
   staticBlockCache.setUpgradeFn(() => {
     let upgraded = 0
-    for (const msg of messages.value) {
+    for (const msg of messages.value as RenderMessage[]) {
       if (msg.role !== 'assistant' || !msg.blocks || msg.streaming) continue
       for (let bi = 0; bi < msg.blocks.length && upgraded < 5; bi++) {
         const block = msg.blocks[bi]
         if (block.type !== 'text' || !block.text) continue
-        if (staticBlockCache.isDeferred(msg.id, bi, block.text)) {
+        if (staticBlockCache.isDeferred(msg.id!, bi, block.text)) {
           // Re-render with full pipeline and replace cache entry
           const fullHtml = renderTextBlock(block.text, String(msg.id), bi, false, false)
           staticBlockCache.set(String(msg.id), bi, block.text, fullHtml, false)
@@ -104,6 +98,8 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
     staticBlockCache.clear()
   })
 
+  type BlockTaskEntry = { taskId?: number; deleted?: boolean; loading?: boolean; task?: unknown; [key: string]: unknown }
+
   // Sync blockTasks with latest task data from store (global polling updates store.state.tasks).
   // Use a tasks Map for O(1) lookup, and taskChanged() for semantic comparison.
   watch(() => store.state.tasks, (tasks) => {
@@ -112,20 +108,21 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
     // Empty tasks list means all tasks were deleted — mark all blockTasks as deleted
     if (!tasks || tasks.length === 0) {
       for (const key of keys) {
-        if (!blockTasks[key].deleted) blockTasks[key].deleted = true
-        blockTasks[key].loading = false
+        const e = blockTasks[key] as BlockTaskEntry
+        if (!e.deleted) e.deleted = true
+        e.loading = false
       }
       return
     }
-    const taskMap = new Map(tasks.map(t => [t.id, t]))
+    const taskMap = new Map(tasks.map((t: Record<string, unknown>) => [t.id, t]))
     for (const key of keys) {
-      const entry = blockTasks[key]
+      const entry = blockTasks[key] as BlockTaskEntry
       if (entry.deleted) continue
       const updated = taskMap.get(entry.taskId)
       if (!updated) {
         entry.deleted = true
         entry.loading = false
-      } else if (entry.task && taskChanged(entry.task, updated)) {
+      } else if (entry.task && taskChanged(entry.task as Record<string, unknown>, updated as Record<string, unknown>)) {
         entry.task = updated
       } else if (!entry.task) {
         entry.task = updated
@@ -146,14 +143,16 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
 
   async function refreshTaskData(taskId: number) {
     for (const key of Object.keys(blockTasks)) {
-      if (blockTasks[key].taskId === taskId && !blockTasks[key].deleted) {
+      const entry = blockTasks[key] as BlockTaskEntry
+      if (entry.taskId === taskId && !entry.deleted) {
         try {
           const data = await apiGet(`/api/tasks/${taskId}`)
-          blockTasks[key].task = data
-        } catch (err: any) {
-          if (err?.message?.includes('404') || err?.message?.toLowerCase().includes('not found')) {
-            blockTasks[key].deleted = true
-            blockTasks[key].task = null
+          const bk = blockTasks[key] as BlockTaskEntry
+          bk.task = data
+        } catch (err: unknown) {
+          if ((err instanceof Error && (err.message.includes('404') || err.message.toLowerCase().includes('not found')))) {
+            entry.deleted = true
+            entry.task = null
           }
           // Other errors: leave existing data, don't mark deleted
         }
@@ -162,59 +161,27 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
   }
 
   /**
-   * Render markdown to HTML.
-   * When skipEnhancements=true (streaming mode), only marked + DOMPurify + table-wrap runs.
-   * When skipEnhancements=false (post-streaming), the full pipeline runs:
-   * marked → KaTeX → DOMPurify → table-wrap → img → audio → annotateFilePaths → verifyFilePaths.
+   * Render markdown to HTML using the unified pipeline.
+   * When skipEnhancements=true (streaming mode), KaTeX and path annotations are skipped.
+   * After rendering, schedules nextTick verifyFilePaths/verifyCommitHashes if detected.
    */
-  function renderMarkdown(text: string, { skipEnhancements = false }: { skipEnhancements?: boolean } = {}) {
-    let html = marked.parse((text || '').trim()) as string
+  function renderMarkdown(text: string, { skipEnhancements = false }: { skipEnhancements?: boolean } = {}): string {
+    const { html, detectedPaths, detectedSHAs } = baseRenderMarkdown(text, { skipEnhancements })
 
-    if (!skipEnhancements) {
-      // KaTeX: deferred to post-streaming — formula may be incomplete during streaming
-      html = renderKatexInString(html)
+    // Schedule async verification for detected paths/commits
+    if (detectedPaths.length > 0) {
+      const uniquePaths = [...new Set(detectedPaths)]
+      nextTick(() => {
+        const el = document.getElementById('aiChatMessages')
+        if (el) verifyFilePaths(uniquePaths, el)
+      })
     }
-
-    html = DOMPurify.sanitize(html, { ADD_TAGS: ['math', 'button', 'rag-results', 'rag-item', 'session-id', 'session-title', 'created-at', 'summary'], ADD_ATTR: ['data-file-path', 'data-fallback-path', 'data-line-start', 'data-line-end', 'data-commit-sha', 'data-worktree-path', 'data-url', 'data-port', 'data-protocol', 'data-table-idx', 'data-row-idx', 'data-action', 'aria-label', 'title'] })
-    html = html.replace(/<table>/g, '<div class="table-wrap"><table>').replace(/<\/table>/g, '</table></div>')
-    html = injectTableRowAttrs(html)
-    // Code block headers: add language label + copy/wrap buttons
-    html = annotateCodeBlockHeaders(html)
-    // Table block headers: add label + copy/wrap buttons
-    html = annotateTableBlockHeaders(html)
-
-    if (!skipEnhancements) {
-      // Image styling, audio links, annotations: deferred to post-streaming
-      const projectRoot = store.state.projectRoot
-      const homeDir = store.state.homeDir
-      html = rewriteImageUrls(html, projectRoot)
-      html = convertAudioLinks(html)
-      // Annotate worktree paths BEFORE file paths — prevents file-path regex from
-      // partially matching worktree directory paths (e.g. matching
-      // /home/x/project/.worktrees instead of the full /home/x/project/.worktrees/fix)
-      const { html: worktreeHtml } = annotateWorktreePaths(html, { projectRoot })
-      html = worktreeHtml
-      const { html: annotatedHtml, detectedPaths } = annotateFilePaths(html, { projectRoot, homeDir })
-      html = annotatedHtml
-      if (detectedPaths.length > 0) {
-        const uniquePaths = [...new Set(detectedPaths)]
-        nextTick(() => {
-          const el = document.getElementById('aiChatMessages')
-          if (el) verifyFilePaths(uniquePaths, el)
-        })
-      }
-      // Annotate commit hashes (7-40 hex chars with at least one a-f letter)
-      const { html: commitAnnotatedHtml, detectedSHAs } = annotateCommitHashes(html)
-      html = commitAnnotatedHtml
-      if (detectedSHAs.length > 0) {
-        const uniqueSHAs = [...new Set(detectedSHAs)]
-        nextTick(() => {
-          const el = document.getElementById('aiChatMessages')
-          if (el) verifyCommitHashes(uniqueSHAs, el)
-        })
-      }
-      // Annotate localhost URLs (e.g. http://localhost:30080) with clickable tags
-      html = annotateLocalhostUrls(html)
+    if (detectedSHAs.length > 0) {
+      const uniqueSHAs = [...new Set(detectedSHAs)]
+      nextTick(() => {
+        const el = document.getElementById('aiChatMessages')
+        if (el) verifyCommitHashes(uniqueSHAs, el)
+      })
     }
 
     return html
@@ -238,9 +205,9 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
    *   The cache upgrade mechanism will later re-render with full enhancements.
    */
   function renderTextBlock(text: string, msgId: string, blockIdx: number, streaming = false, deferEnhancements = false) {
-    // ── Streaming: pure markdown only ──
+    // ── Streaming: pure markdown only (no detections/verification) ──
     if (streaming) {
-      return renderMarkdown(text, { skipEnhancements: true })
+      return renderMarkdownHtml(text, { skipEnhancements: true })
     }
 
     // ── Post-streaming: full pipeline ──
@@ -335,10 +302,10 @@ export function useChatRender(options: { messages: any; theme: any; currentSessi
     return cleanText ? renderMarkdown(cleanText, { skipEnhancements: deferEnhancements }) : ''
   }
 
-  function extractScheduledTasks(msgs: any[]) {
+  function extractScheduledTasks(msgs: Array<Record<string, unknown>>) {
     // Collect all task keys across messages for a single batch fetch
     const allTaskKeys = []
-    for (const msg of msgs) {
+    for (const msg of msgs as RenderMessage[]) {
       if (msg.role === 'assistant' && msg.blocks && !msg.streaming) {
         for (let bi = 0; bi < msg.blocks.length; bi++) {
           const block = msg.blocks[bi]

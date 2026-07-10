@@ -158,6 +158,8 @@ export default {
       used: 'Used',
       size: 'Total',
       remaining: 'Remaining',
+      inputTokens: 'Input',
+      outputTokens: 'Output',
     },
     create: {
       selectAgentOrLongPress: 'Select agent (long press to create new)',
@@ -1031,7 +1033,7 @@ export default {
       preventScreenLock: 'No Screen Lock During Output',
       preventScreenLockDesc: 'Prevent the screen from turning off during AI output',
       swipeSession: 'Swipe to Switch Session',
-      swipeSessionDesc: 'Swipe left/right in the chat area to switch to the previous/next session',
+      swipeSessionDesc: 'Swipe in chat area to switch sessions (Ctrl+←/→ always works on desktop)',
       defaultAgent: 'Default Agent',
       defaultAgentDesc: 'AI agent used by default when starting a new chat',
       agentIsDefault: 'Default Agent',

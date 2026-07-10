@@ -47,6 +47,33 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     css: true,
+    // Detect async resource leaks (unclosed timers, sockets) in test files.
+    // Helps identify which tests cause worker processes to hang on exit.
+    detectAsyncLeaks: true,
+    // Teardown timeout: vitest waits this long for workers to close after
+    // tests finish. If workers have open handles (Vite server FILEHANDLEs,
+    // vue-i18n enableDevTools promise), they can't exit cleanly.
+    // Set to 5s (reduced from default 10s) as a balance between waiting
+    // for normal cleanup and not blocking too long on hung workers.
+    // The globalSetup force-exit timer (2s) fires after pool cleanup.
+    teardownTimeout: 5_000,
+    // Force-exit safety net for vitest 4.x pool cleanup hang bug.
+    // See vitest-dev/vitest#8766, #9494, #8861, #9123.
+    globalSetup: [resolve(__dirname, 'vitest-globalSetup.ts')],
+    // 'hanging-process' reporter warns when tests leave open handles
+    // (timers, sockets, etc.) that prevent worker processes from exiting.
+    reporters: ['default', 'hanging-process'],
+    // Use 'forks' pool. Vitest 4.x has a known bug where fork workers can
+    // become zombies on pool cleanup (vitest-dev/vitest#8766). Mitigated by:
+    // - vitest-globalSetup.ts: force-exit timer + orphan worker kill
+    // - scripts/vitest-run.sh: watchdog timeout + process tree kill
+    // We use 'forks' (not 'threads') because with threads, open handles
+    // (setInterval, addEventListener) in test components keep the shared
+    // main process event loop alive, preventing globalSetup teardown() from
+    // ever running. With forks, teardown() runs in the main process even if
+    // worker child processes hang.
+    pool: 'forks',
+    maxWorkers: 4,
     exclude: [
       '**/.worktrees/**',
       '**/.codebuddy/worktrees/**',

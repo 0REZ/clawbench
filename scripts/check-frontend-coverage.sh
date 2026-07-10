@@ -39,7 +39,7 @@ fi
 
 result=0
 if [ "$SKIP_TEST" = false ]; then
-  npx --prefix "$WEB_DIR" vitest run --coverage || result=$?
+  "$SCRIPT_DIR/vitest-run.sh" --coverage || result=$?
   if [ $result -ne 0 ]; then
     echo "ERROR: Frontend tests failed. Fix test failures before checking coverage."
     exit 1
@@ -354,6 +354,7 @@ else:
             "src/components/file/FileViewer.vue",  # PDF/image/video/audio previews, heavy component mocking
             "src/components/file/FileHeader.vue",  # Menu with many action handlers, needs full app context
             "src/components/media/PdfPreview.vue",  # PDF.js worker integration, needs real browser
+            "src/stores/app.ts",  # Reactive store: 1000+ lines with heavy deps, integration-level testing only
         )
         if any(file_path.endswith(s) for s in TIER2_EXCLUDED_SUFFIXES):
             continue

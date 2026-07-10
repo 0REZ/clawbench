@@ -8,20 +8,89 @@
          algorithm fails to correctly transition between different Fragment
          structures (summary div vs blocks template v-for). -->
     <div v-show="showingSummary && summary" v-html="renderTextBlock(summary || '', msgId, 0, false)"></div>
+    <!-- In summary mode: still show auto-expand tools (AskUserQuestion, PermissionApproval), scheduled tasks, and RAG blocks -->
+    <!-- Keep in sync with original branch below (~line 78) -->
+    <template v-if="showingSummary && summary">
+    <template v-for="(block, bi) in blocks" :key="'summary-ask-' + stableBlockKey(bi, block)">
+      <!-- Auto-expand tool blocks (AskUserQuestion, PermissionApproval) via tool_use -->
+      <template v-if="block.type === 'tool_use' && shouldAutoExpand(block)">
+        <div class="chat-tool-call" :class="{ done: block.done }" :data-category="getToolIcon(block.name).category" @click.stop="handleToolClick(block, key(bi), bi)">
+          <component :is="getToolIcon(block.name).icon" :size="12" class="tool-icon" />
+          <span class="tool-name">{{ toolDisplayName(block.name, block.input, block.display_name) }}</span>
+          <span v-if="toolCallSummary(block)" class="tool-summary">{{ toolCallSummary(block) }}</span>
+          <span v-if="!block.done" class="tool-spinner"></span>
+          <XCircle v-else-if="block.status === 'error'" :size="14" color="#ef4444" class="tool-error-icon" />
+          <CheckCircle2 v-else :size="14" color="#22c55e" class="tool-check" />
+        </div>
+        <div class="tool-detail" :data-tool-name="block.name" :data-session-id="sessionId" :data-tool-call-id="block.id" @click="handleToolDetailClick">
+          <div v-html="formatToolInput(block.input, block.name, { done: block.done, status: block.status, output: block.output })"></div>
+        </div>
+      </template>
+      <!-- Scheduled task card(s) — check before ask-question for text blocks (matches original branch order) -->
+      <template v-else-if="block.type === 'text' && hasScheduledTasks(bi)">
+        <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
+        <div v-for="(sKey, sIdx) in scheduledTaskKeys(bi)" :key="sIdx" class="scheduled-task-card" :class="{ deleted: blockTasks[sKey].deleted }" @click="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task && $emit('task-card-click', blockTasks[sKey].taskId)">
+          <div class="stask-header">
+            <span v-if="blockTasks[sKey].deleted" class="stask-icon">🗑️</span>
+            <span v-else class="stask-icon">⏰</span>
+            <template v-if="blockTasks[sKey].deleted">{{ t('chat.contentBlocks.taskDeleted') }}</template>
+            <template v-else-if="blockTasks[sKey].loading">{{ t('chat.contentBlocks.loading') }}</template>
+            <template v-else>{{ blockTasks[sKey].task?.name || t('chat.contentBlocks.scheduledTaskCreated') }}</template>
+            <span v-if="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task" class="stask-status-badge" :class="blockTasks[sKey].task.status">{{ statusLabelSimple(blockTasks[sKey].task) }}</span>
+          </div>
+          <div v-if="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task" class="stask-body">
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.frequency') }}</strong>{{ humanizeCron(blockTasks[sKey].task.cronExpr) }}</div>
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.executor') }}</strong>{{ getAgentIcon(blockTasks[sKey].task.agentId) }} {{ getAgentName(blockTasks[sKey].task.agentId) }}</div>
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.repeat') }}</strong>{{ repeatLabel(blockTasks[sKey].task.repeatMode, blockTasks[sKey].task.maxRuns) }}</div>
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.status') }}</strong><span class="stask-status-dot" :class="statusClass(blockTasks[sKey].task)"></span>{{ statusLabel(blockTasks[sKey].task) }}</div>
+            <div v-if="blockTasks[sKey].task.lastRunAt" class="stask-row"><strong>{{ t('chat.contentBlocks.lastRun') }}</strong>{{ formatTime(blockTasks[sKey].task.lastRunAt) }}</div>
+            <div v-if="blockTasks[sKey].task.nextRunAt" class="stask-row"><strong>{{ t('chat.contentBlocks.nextRun') }}</strong>{{ formatTime(blockTasks[sKey].task.nextRunAt) }}</div>
+          </div>
+          <div class="stask-view-btn" v-if="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task">
+            {{ t('chat.contentBlocks.viewDetail') }}
+            <ChevronRight :size="12" />
+          </div>
+        </div>
+      </template>
+      <!-- AskUserQuestion via <ask-question> XML in text block (ACP backend) -->
+      <template v-else-if="block.type === 'text' && blockAskQuestions[blockTaskKey(bi)]">
+        <div class="chat-tool-call done" data-category="ask" @click.stop="$emit('toggle-tool', key(bi))">
+          <component :is="getToolIcon('AskUserQuestion').icon" :size="12" class="tool-icon" />
+          <span class="tool-name">{{ t('tool.askUser.name') }}</span>
+          <span class="tool-summary">{{ askQuestionSummary(blockAskQuestions[blockTaskKey(bi)]) }}</span>
+          <CheckCircle2 :size="14" color="#f59e0b" class="tool-warn" />
+        </div>
+        <div v-if="expandedTools[key(bi)] || true" class="tool-detail" data-tool-name="AskUserQuestion" @click="handleToolDetailClick" v-html="formatToolInput(blockAskQuestions[blockTaskKey(bi)], 'AskUserQuestion')"></div>
+      </template>
+      <!-- RAG results card -->
+      <template v-else-if="block.type === 'text' && blockRagResults[blockTaskKey(bi)]">
+        <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
+        <div v-for="(ragItem, ragIdx) in blockRagResults[blockTaskKey(bi)]" :key="ragIdx" class="rag-result-card" @click.stop="emit('show-rag-detail', ragItem)">
+          <div class="rag-header">
+            <span class="rag-icon">🔍</span>
+            <span class="rag-title">{{ ragItem.sessionTitle || t('chat.contentBlocks.ragUntitled') }}</span>
+          </div>
+          <div v-if="ragItem.summary" class="rag-summary">{{ ragItem.summary }}</div>
+          <div v-if="ragItem.createdAt" class="rag-time">{{ formatTime(ragItem.createdAt) }}</div>
+        </div>
+      </template>
+    </template>
+    </template>
     <!-- Original content mode -->
     <template v-if="!showingSummary || !summary">
     <template v-for="(block, bi) in blocks" :key="stableBlockKey(bi, block)">
-      <!-- Thinking block: streaming shows inline content, collapsed shows clickable chip -->
+      <!-- Thinking block: streaming or expanded shows inline content, collapsed shows clickable chip -->
       <div v-if="block.type === 'thinking'"
-        :ref="isThinkingStreaming(block) ? (el) => setThinkingRef(stableBlockKey(bi, block), el) : undefined"
+        :ref="(el) => setThinkingRef(stableBlockKey(bi, block), el)"
         class="chat-thinking"
         :class="{
           'thinking-streaming': isThinkingStreaming(block),
-          'thinking-collapsed': !isThinkingStreaming(block),
+          'thinking-expanded-done': isThinkingExpandedDone(block, bi),
+          'thinking-collapsed': isThinkingCollapsed(block, bi),
           'thinking-collapsing': !!collapsingThinking[stableBlockKey(bi, block)],
+          'thinking-expanding': !!expandingThinking[stableBlockKey(bi, block)],
         }"
-        :style="collapsingThinking[stableBlockKey(bi, block)] ? { maxHeight: collapsingMaxHeight[stableBlockKey(bi, block)] + 'px' } : {}"
-        @click.stop="!isThinkingStreaming(block) && handleThinkingClick(block, bi)"
+        @click.stop="handleThinkingClick(block, bi)"
       >
         <div class="thinking-header">
           <Brain :size="12" class="thinking-icon" />
@@ -31,10 +100,17 @@
           <!-- Cancelled marker: show inline in thinking header when this is the last block and message was cancelled.
                Prevents the cancelled mark from being visually hidden/trapped under the collapsed thinking chip. -->
           <span v-else-if="isLastBlock(bi) && cancelled" class="chat-cancelled-mark-inline">{{ t('chat.contentBlocks.cancelled') }}</span>
-          <CheckCircle2 v-else :size="14" color="#22c55e" class="thinking-check" />
+          <ChevronUp v-else-if="isThinkingExpandedDone(block, bi) || expandingThinking[stableBlockKey(bi, block)]" :size="12" class="thinking-chevron" />
+          <ChevronDown v-else :size="12" class="thinking-chevron" />
         </div>
-        <!-- Inline streaming content: only visible during streaming or collapse animation -->
-        <div v-if="isThinkingStreaming(block) || !!collapsingThinking[stableBlockKey(bi, block)]" class="thinking-inline-content" v-html="getThinkingHtml(bi, block)"></div>
+        <!-- Content wrapper: CSS grid 0fr/1fr transition for smooth expand/collapse -->
+        <div class="thinking-content-wrapper"
+          :class="{
+            'thinking-content-open': isThinkingStreaming(block) || isThinkingExpandedDone(block, bi) || !!expandingThinking[stableBlockKey(bi, block)],
+          }"
+        >
+          <div class="thinking-inline-content" v-html="getThinkingHtml(bi, block)"></div>
+        </div>
       </div>
       <!-- Tool use block -->
       <template v-else-if="block.type === 'tool_use'">
@@ -146,8 +222,8 @@ import { ref, watch, onUnmounted, computed, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { handleToolAction, shouldAutoExpandTool } from '@/utils/renderToolDetail.ts'
 import { getToolIcon, toolDisplayName } from '@/utils/icons'
-import { Brain, ChevronRight, CheckCircle2, AlertCircle, AlertTriangle, XCircle } from 'lucide-vue-next'
-import { renderMarkdown } from '@/composables/useMarkdownRenderer.ts'
+import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import {
   isSevereWarning,
   getWarningText as getWarningTextUtil,
@@ -263,7 +339,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-thinking-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session', 'show-rag-detail'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session', 'show-rag-detail'])
 
 // Key helper: use msgId if available, otherwise msgIndex
 function key(bi) {
@@ -300,7 +376,28 @@ function stableBlockKey(bi, block) {
 }
 
 function handleThinkingClick(block, bi) {
-  emit('show-thinking-detail', { text: block.text, msgId: props.msgId, blockKey: block._key })
+  const blockKey = stableBlockKey(bi, block)
+  if (isThinkingCollapsed(block, bi)) {
+    // Expand inline with animation
+    expandingThinking.value[blockKey] = true
+    thinkingExpanded.value[blockKey] = true
+    blockHtmlCache.value = {}
+    nextTick(() => {
+      const el = _collapseElRefs[blockKey] || document.querySelector(`[data-thinking-key="${blockKey}"]`)
+      if (el && el.isConnected) {
+        _collapseElRefs[blockKey] = el
+        observeThinkingEl(blockKey, el)
+      }
+    })
+    // Clean up expanding state after animation
+    const t = setTimeout(() => {
+      delete expandingThinking.value[blockKey]
+    }, EXPAND_TRANSITION_MS)
+    _collapseTimers.push(t)
+  } else if (isThinkingExpandedDone(block, bi)) {
+    // Collapse inline with animation
+    triggerThinkingCollapse(blockKey)
+  }
 }
 
 /** Whether a thinking block should show inline streaming content.
@@ -311,6 +408,21 @@ function handleThinkingClick(block, bi) {
 function isThinkingStreaming(block) {
   if (block.done) return false
   return props.streaming
+}
+
+/** Whether a thinking block is done (not streaming) but still expanded with inline content visible. */
+function isThinkingExpandedDone(block, bi) {
+  if (isThinkingStreaming(block)) return false
+  if (collapsingThinking.value[stableBlockKey(bi, block)]) return false
+  return !!thinkingExpanded.value[stableBlockKey(bi, block)]
+}
+
+/** Whether a thinking block is collapsed to a chip (done, not streaming, not expanded, not collapsing). */
+function isThinkingCollapsed(block, bi) {
+  if (isThinkingStreaming(block)) return false
+  if (collapsingThinking.value[stableBlockKey(bi, block)]) return false
+  if (thinkingExpanded.value[stableBlockKey(bi, block)]) return false
+  return !props.streaming || block.done // block is done
 }
 
 /** Whether the given block index is the last block in the blocks array. */
@@ -325,17 +437,96 @@ const isLastBlockThinking = computed(() => {
   return blocks[blocks.length - 1].type === 'thinking'
 })
 
-// ── Thinking block collapse animation state ──
+// ── Thinking block collapse/expand animation state ──
 const collapsingThinking = ref({})   // { [blockKey]: true } for blocks mid-collapse
-const collapsingMaxHeight = ref({})  // { [blockKey]: maxHeightPx } for animation
+const expandingThinking = ref({})    // { [blockKey]: true } for blocks mid-expand
+const thinkingExpanded = ref({})     // { [blockKey]: true } — completed blocks that are still expanded (will collapse when leaving viewport)
 let _collapseElRefs = {}             // { [blockKey]: HTMLElement } tracked during streaming
 let _collapseTimers = []             // setTimeout IDs for collapse animation (cleaned up on unmount)
 
-// Collapse animation constants — must stay in sync with CSS
-const COLLAPSED_CHIP_HEIGHT = 28     // px — matches .thinking-collapsed { max-height: 28px }
-const COLLAPSE_READ_DELAY = 3000     // ms — time to read thinking output before collapsing
-const COLLAPSE_TRANSITION_MS = 400   // ms — must match CSS transition-duration + buffer
-const COLLAPSE_PLACEHOLDER_MAX = 99999 // large sentinel to keep content visible during nextTick
+// Animation constants
+const COLLAPSE_VIEWPORT_DELAY = 3000 // ms — time after leaving viewport before collapsing
+const EXPAND_TRANSITION_MS = 300     // ms — expand animation duration
+const COLLAPSE_TRANSITION_MS = 350   // ms — collapse animation duration
+
+// ── IntersectionObserver for viewport-based collapse ──
+let _viewportObserver = null         // IntersectionObserver instance
+let _viewportOutTimers = {}          // { [blockKey]: timeoutId } — timers for blocks that left viewport
+let _observedThinkingKeys = new Set() // blockKeys currently being observed
+
+/** Called when a thinking block enters/leaves the viewport. */
+function onThinkingViewportChange(entries) {
+  for (const entry of entries) {
+    const blockKey = entry.target.dataset?.thinkingKey
+    if (!blockKey) continue
+    if (entry.isIntersecting) {
+      // Re-entered viewport: cancel any pending collapse timer
+      if (_viewportOutTimers[blockKey]) {
+        clearTimeout(_viewportOutTimers[blockKey])
+        delete _viewportOutTimers[blockKey]
+      }
+    } else {
+      // Left viewport: start 3s timer to collapse
+      if (thinkingExpanded.value[blockKey] && !collapsingThinking.value[blockKey] && !_viewportOutTimers[blockKey]) {
+        _viewportOutTimers[blockKey] = setTimeout(() => {
+          delete _viewportOutTimers[blockKey]
+          triggerThinkingCollapse(blockKey)
+        }, COLLAPSE_VIEWPORT_DELAY)
+      }
+    }
+  }
+}
+
+/** Start observing a thinking block element for viewport changes. */
+function observeThinkingEl(blockKey, el) {
+  if (!el || !blockKey) return
+  if (!_viewportObserver) {
+    _viewportObserver = new IntersectionObserver(onThinkingViewportChange, { threshold: 0 })
+  }
+  // Tag the element for lookup in the callback
+  el.dataset.thinkingKey = blockKey
+  _viewportObserver.observe(el)
+  _observedThinkingKeys.add(blockKey)
+}
+
+/** Stop observing a thinking block element. */
+function unobserveThinkingEl(blockKey) {
+  // Find and unobserve the DOM element by data attribute
+  if (_viewportObserver) {
+    const el = document.querySelector(`[data-thinking-key="${blockKey}"]`)
+    if (el) _viewportObserver.unobserve(el)
+  }
+  _observedThinkingKeys.delete(blockKey)
+  // Cancel any pending viewport-out timer
+  if (_viewportOutTimers[blockKey]) {
+    clearTimeout(_viewportOutTimers[blockKey])
+    delete _viewportOutTimers[blockKey]
+  }
+}
+
+/** Trigger the collapse animation for a completed thinking block. */
+function triggerThinkingCollapse(blockKey) {
+  // Find the element — prefer tracked ref, fall back to DOM query
+  const el = _collapseElRefs[blockKey] || document.querySelector(`[data-thinking-key="${blockKey}"]`)
+  if (!el || !el.isConnected) {
+    // Element gone — just mark as collapsed directly
+    delete thinkingExpanded.value[blockKey]
+    unobserveThinkingEl(blockKey)
+    return
+  }
+  // Mark as collapsing — this removes thinking-content-open from the wrapper,
+  // triggering the CSS grid 0fr transition. We also clear thinkingExpanded so
+  // the wrapper transitions from 1fr→0fr immediately.
+  collapsingThinking.value[blockKey] = true
+  delete thinkingExpanded.value[blockKey]
+  blockHtmlCache.value = {}
+  // After transition completes, clean up collapsing state
+  const t = setTimeout(() => {
+    delete collapsingThinking.value[blockKey]
+    unobserveThinkingEl(blockKey)
+  }, COLLAPSE_TRANSITION_MS)
+  _collapseTimers.push(t)
+}
 
 /** Track thinking block element refs during streaming for collapse animation. */
 function setThinkingRef(key, el) {
@@ -381,8 +572,8 @@ function flushBlockHtml() {
       // streaming=true: deferred rendering — pure markdown only
       newCache[key] = props.renderTextBlock(block.text, props.msgId, i, true)
     } else if (block.type === 'thinking') {
-      // Thinking blocks use renderMarkdown during streaming
-      newCache[`t-${key}`] = renderMarkdown(block.text)
+      // Thinking blocks use renderMarkdownHtml during streaming
+      newCache[`t-${key}`] = renderMarkdownHtml(block.text)
     }
   }
   blockHtmlCache.value = newCache
@@ -436,17 +627,17 @@ function getBlockHtml(bi, block) {
   return html
 }
 
-/** Get HTML for thinking block content during streaming (uses renderMarkdown with throttling). */
+/** Get HTML for thinking block content during streaming (uses renderMarkdownHtml with throttling). */
 function getThinkingHtml(bi, block) {
   if (!props.streaming || !props.active) {
-    return renderMarkdown(block.text)
+    return renderMarkdownHtml(block.text)
   }
   const cacheKey = `t-${stableBlockKey(bi, block)}`
   // Streaming: deferred rendering with throttling (same pattern as text blocks)
   if (blockHtmlCache.value[cacheKey] !== undefined) {
     if (!_throttleTimer) {
       const newCache = { ...blockHtmlCache.value }
-      newCache[cacheKey] = renderMarkdown(block.text)
+      newCache[cacheKey] = renderMarkdownHtml(block.text)
       blockHtmlCache.value = newCache
       _throttleTimer = setTimeout(flushBlockHtml, THROTTLE_MS)
     } else {
@@ -454,7 +645,7 @@ function getThinkingHtml(bi, block) {
     }
     return blockHtmlCache.value[cacheKey]
   }
-  const html = renderMarkdown(block.text)
+  const html = renderMarkdownHtml(block.text)
   blockHtmlCache.value = { ...blockHtmlCache.value, [cacheKey]: html }
   return html
 }
@@ -464,67 +655,27 @@ watch(() => props.streaming, (streaming, wasStreaming) => {
     if (_throttleTimer) { clearTimeout(_throttleTimer); _throttleTimer = null }
     _throttlePending = false
     // Snapshot element refs before Vue clears them
-    // (isThinkingStreaming becomes false → :ref becomes undefined → ref cleared).
     const refSnapshot = { ..._collapseElRefs }
     _collapseElRefs = {}
-    // Only process blocks not already being collapsed by Trigger B (thinking_done)
-    const collapsingKeys = Object.keys(refSnapshot).filter(
-      idxStr => !collapsingThinking.value[idxStr]
+    // Mark all completed thinking blocks as expanded (will collapse when leaving viewport)
+    const expandedKeys = Object.keys(refSnapshot).filter(
+      idxStr => !collapsingThinking.value[idxStr] && !thinkingExpanded.value[idxStr]
     )
-    if (collapsingKeys.length > 0) {
-      // Immediately mark as "collapsing" with a large maxHeight so the template
-      // keeps showing inline content and doesn't flash to the 28px collapsed chip.
-      const placeholderCollapsing = {}
-      const placeholderMaxHeight = {}
-      for (const idxStr of collapsingKeys) {
-        placeholderCollapsing[idxStr] = true
-        placeholderMaxHeight[idxStr] = COLLAPSE_PLACEHOLDER_MAX
+    if (expandedKeys.length > 0) {
+      for (const blockKey of expandedKeys) {
+        thinkingExpanded.value[blockKey] = true
       }
-      Object.assign(collapsingThinking.value, placeholderCollapsing)
-      Object.assign(collapsingMaxHeight.value, placeholderMaxHeight)
     }
     // Clear throttle cache and force a full re-render of thinking HTML
-    // so the DOM reflects the complete block.text before we measure scrollHeight.
-    // Without this, scrollHeight may reflect stale throttled HTML (up to 300ms old),
-    // causing the collapse animation to clip the bottom of the content.
     blockHtmlCache.value = {}
-    // Wait for Vue to flush the DOM with complete content, then measure heights.
+    // After Vue flushes DOM, set up IntersectionObserver for expanded thinking blocks
     nextTick(() => {
-      const newCollapsing = {}
-      const newMaxHeights = {}
-      for (const idxStr of collapsingKeys) {
-        const el = refSnapshot[idxStr]
-        // el.isConnected: defensive check — element must still be in the document
-        if (el && el.isConnected && el.scrollHeight) {
-          newCollapsing[idxStr] = true
-          newMaxHeights[idxStr] = el.scrollHeight
-        }
-      }
-      if (Object.keys(newCollapsing).length > 0) {
-        Object.assign(collapsingThinking.value, newCollapsing)
-        Object.assign(collapsingMaxHeight.value, newMaxHeights)
-        // Delay before starting collapse animation so user can read the thinking output
-        const t1 = setTimeout(() => {
-          const updatedMaxHeights = {}
-          Object.keys(newCollapsing).forEach(idx => {
-            updatedMaxHeights[idx] = COLLAPSED_CHIP_HEIGHT
-          })
-          Object.assign(collapsingMaxHeight.value, updatedMaxHeights)
-          // After transition completes, clean up animation state
-          const t2 = setTimeout(() => {
-            for (const idx of Object.keys(newCollapsing)) {
-              delete collapsingThinking.value[idx]
-              delete collapsingMaxHeight.value[idx]
-            }
-          }, COLLAPSE_TRANSITION_MS)
-          _collapseTimers.push(t2)
-        }, COLLAPSE_READ_DELAY)
-        _collapseTimers.push(t1)
-      } else {
-        // No measurable elements — clean up placeholder state
-        for (const idxStr of collapsingKeys) {
-          delete collapsingThinking.value[idxStr]
-          delete collapsingMaxHeight.value[idxStr]
+      for (const blockKey of expandedKeys) {
+        const el = refSnapshot[blockKey]
+        if (el && el.isConnected) {
+          // Re-track the ref since Vue cleared it during the streaming→done transition
+          _collapseElRefs[blockKey] = el
+          observeThinkingEl(blockKey, el)
         }
       }
     })
@@ -532,74 +683,31 @@ watch(() => props.streaming, (streaming, wasStreaming) => {
 })
 
 // Watch for thinking blocks that become "done" mid-stream (via thinking_done SSE event).
-// This triggers the collapse animation immediately instead of waiting for streaming to end.
+// Instead of collapsing immediately, mark as expanded and set up viewport observer.
 watch(() => props.blocks.filter(b => b.type === 'thinking' && b.done).map(b => b.done), (_newDones, _oldDones) => {
   if (!props.streaming) return // Only relevant during streaming
-  // Find thinking blocks that just became done (newly true), not already collapsing
-  const refSnapshot = {}
+  // Find thinking blocks that just became done (newly true), not already expanded/collapsing
+  const newDoneBlocks = {}
   for (let i = 0; i < props.blocks.length; i++) {
     const block = props.blocks[i]
     if (block.type === 'thinking' && block.done) {
       const key = stableBlockKey(i, block)
       const el = _collapseElRefs[key]
-      if (el && !collapsingThinking.value[key]) {
-        refSnapshot[key] = el
-        delete _collapseElRefs[key]
+      if (el && !collapsingThinking.value[key] && !thinkingExpanded.value[key]) {
+        newDoneBlocks[key] = el
       }
     }
   }
-  const collapsingKeys = Object.keys(refSnapshot)
-  if (collapsingKeys.length === 0) return
-  // Immediately mark as collapsing with placeholder maxHeight to prevent
-  // flash to 28px collapsed chip while we wait for nextTick.
-  const placeholderCollapsing = {}
-  const placeholderMaxHeight = {}
-  for (const idxStr of collapsingKeys) {
-    placeholderCollapsing[idxStr] = true
-    placeholderMaxHeight[idxStr] = COLLAPSE_PLACEHOLDER_MAX
+  const doneKeys = Object.keys(newDoneBlocks)
+  if (doneKeys.length === 0) return
+  // Mark as expanded and observe for viewport changes
+  for (const blockKey of doneKeys) {
+    thinkingExpanded.value[blockKey] = true
+    observeThinkingEl(blockKey, newDoneBlocks[blockKey])
+    // Don't delete from _collapseElRefs — keep tracking for later collapse
   }
-  Object.assign(collapsingThinking.value, placeholderCollapsing)
-  Object.assign(collapsingMaxHeight.value, placeholderMaxHeight)
   // Clear throttle cache so DOM re-renders with complete thinking content
   blockHtmlCache.value = {}
-  // Wait for Vue to flush DOM, then measure scrollHeight of complete content
-  nextTick(() => {
-    const newCollapsing = {}
-    const newMaxHeights = {}
-    for (const idxStr of collapsingKeys) {
-      const el = refSnapshot[idxStr]
-      if (el && el.isConnected && el.scrollHeight) {
-        newCollapsing[idxStr] = true
-        newMaxHeights[idxStr] = el.scrollHeight
-      }
-    }
-    if (Object.keys(newCollapsing).length > 0) {
-      Object.assign(collapsingThinking.value, newCollapsing)
-      Object.assign(collapsingMaxHeight.value, newMaxHeights)
-      // Delay before starting collapse animation so user can read the thinking output
-      const t1 = setTimeout(() => {
-        const updatedMaxHeights = {}
-        Object.keys(newCollapsing).forEach(idx => {
-          updatedMaxHeights[idx] = COLLAPSED_CHIP_HEIGHT
-        })
-        Object.assign(collapsingMaxHeight.value, updatedMaxHeights)
-        const t2 = setTimeout(() => {
-          for (const idx of Object.keys(newCollapsing)) {
-            delete collapsingThinking.value[idx]
-            delete collapsingMaxHeight.value[idx]
-          }
-        }, COLLAPSE_TRANSITION_MS)
-        _collapseTimers.push(t2)
-      }, COLLAPSE_READ_DELAY)
-      _collapseTimers.push(t1)
-    } else {
-      // No measurable elements — clean up placeholder state
-      for (const idxStr of collapsingKeys) {
-        delete collapsingThinking.value[idxStr]
-        delete collapsingMaxHeight.value[idxStr]
-      }
-    }
-  })
 })
 
 // Reset cache when panel becomes active — allows re-render with fresh markdown
@@ -611,10 +719,39 @@ watch(() => props.active, (active) => {
   }
 })
 
+// Re-observe expanded thinking blocks when elements change (Vue may re-create DOM nodes on re-render)
+watch(() => props.blocks, () => {
+  // On next tick, re-observe any expanded thinking blocks whose elements may have been replaced
+  nextTick(() => {
+    for (const blockKey of Object.keys(thinkingExpanded.value)) {
+      if (thinkingExpanded.value[blockKey] && !collapsingThinking.value[blockKey]) {
+        const el = _collapseElRefs[blockKey]
+        if (el && el.isConnected) {
+          // Only re-observe if not already being observed
+          if (!_observedThinkingKeys.has(blockKey)) {
+            observeThinkingEl(blockKey, el)
+          }
+        }
+      }
+    }
+  })
+}, { flush: 'post' })
+
 onUnmounted(() => {
   if (_throttleTimer) { clearTimeout(_throttleTimer); _throttleTimer = null }
   _collapseTimers.forEach(t => clearTimeout(t))
   _collapseTimers = []
+  // Clean up IntersectionObserver
+  if (_viewportObserver) {
+    _viewportObserver.disconnect()
+    _viewportObserver = null
+  }
+  // Clean up viewport-out timers
+  for (const key of Object.keys(_viewportOutTimers)) {
+    clearTimeout(_viewportOutTimers[key])
+  }
+  _viewportOutTimers = {}
+  _observedThinkingKeys.clear()
 })
 </script>
 
@@ -734,14 +871,15 @@ onUnmounted(() => {
   color: #fcd34d;
 }
 
-/* Thinking block */
+/* Thinking block — callout style distinct from tool calls */
 .chat-thinking {
   --thinking-accent: #8b5cf6;
-  background: color-mix(in srgb, var(--thinking-accent) 6%, var(--bg-secondary));
-  border: 1px solid color-mix(in srgb, var(--thinking-accent) 15%, var(--border-color));
-  border-radius: 4px;
-  margin: 4px 0;
-  overflow: hidden;
+  --thinking-transition: 300ms ease;
+  background: color-mix(in srgb, var(--thinking-accent) 4%, transparent);
+  border: none;
+  border-left: 3px solid color-mix(in srgb, var(--thinking-accent) 50%, transparent);
+  border-radius: 0 6px 6px 0;
+  margin: 6px 0;
   width: 100%;
 }
 
@@ -749,33 +887,77 @@ onUnmounted(() => {
   --thinking-accent: #a78bfa;
 }
 
-/* Collapsed state: clickable chip (header only) */
+/* Collapsed state: pill-shaped clickable chip */
 .chat-thinking.thinking-collapsed {
   cursor: pointer;
-  max-height: 28px;
-  transition: max-height 0.35s ease-out;
+  border-radius: 12px;
+  border-left: none;
+  border: 1px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
+  background: color-mix(in srgb, var(--thinking-accent) 6%, var(--bg-secondary));
 }
 
 .chat-thinking.thinking-collapsed:hover {
   background: color-mix(in srgb, var(--thinking-accent) 12%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--thinking-accent) 35%, var(--border-color));
 }
 
-/* Streaming state: inline content visible, no height constraint */
+/* Expanded-done state: callout style, clickable to collapse */
+.chat-thinking.thinking-expanded-done {
+  cursor: pointer;
+}
+
+.chat-thinking.thinking-expanded-done:hover {
+  background: color-mix(in srgb, var(--thinking-accent) 7%, transparent);
+  border-left-color: color-mix(in srgb, var(--thinking-accent) 65%, transparent);
+}
+
+/* Streaming state: callout style */
 .chat-thinking.thinking-streaming {
-  max-height: none;
+  /* no extra rules needed — base callout style applies */
 }
 
-/* Collapse animation state: transitioning from full to collapsed */
+/* Collapse animation state: transitioning border from callout to pill */
 .chat-thinking.thinking-collapsing {
-  transition: max-height 0.35s ease-out;
+  cursor: pointer;
+  border-radius: 12px;
+  border-left: none;
+  border: 1px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
+  background: color-mix(in srgb, var(--thinking-accent) 6%, var(--bg-secondary));
+}
+
+/* Expand animation state: transitioning border from pill to callout */
+.chat-thinking.thinking-expanding {
+  /* Uses base callout style — border transition handled by content wrapper */
+}
+
+/* Content wrapper: CSS grid 0fr↔1fr transition for buttery smooth expand/collapse */
+.thinking-content-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--thinking-transition), opacity 200ms ease, padding 200ms ease;
+}
+
+.thinking-content-wrapper.thinking-content-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  padding: 0 10px 3px;
+}
+
+.thinking-inline-content {
   overflow: hidden;
+  min-height: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  word-break: break-word;
 }
 
 .thinking-header {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 8px;
+  padding: 3px 10px;
   font-size: 12px;
   color: var(--text-secondary);
 }
@@ -789,12 +971,13 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--thinking-accent);
   font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 .thinking-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--border-color);
+  border: 2px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
   border-top-color: var(--thinking-accent);
   border-radius: 50%;
   animation: tool-spin 0.6s linear infinite;
@@ -802,21 +985,21 @@ onUnmounted(() => {
   margin-left: auto;
 }
 
-.thinking-check {
+.thinking-chevron {
   flex-shrink: 0;
   margin-left: auto;
+  color: var(--text-tertiary, #999);
+  transition: color 0.15s;
 }
 
-.thinking-inline-content {
-  padding: 0 8px 6px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  word-break: break-word;
+.chat-thinking.thinking-expanded-done:hover .thinking-chevron,
+.chat-thinking.thinking-collapsed:hover .thinking-chevron {
+  color: var(--thinking-accent);
 }
 
 /* Markdown styles inside thinking inline content */
 .thinking-inline-content p { margin: 0 0 0.5em; }
+.thinking-inline-content p:last-child { margin-bottom: 0; }
 .thinking-inline-content pre {
   margin: 0.5em 0;
   padding: 6px 8px;

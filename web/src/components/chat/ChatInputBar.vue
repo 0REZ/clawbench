@@ -200,7 +200,7 @@
         </button>
       </PopupMenu>
       <!-- Context usage detail popup -->
-      <PopupMenu v-if="showUsageInfo" v-model:show="showUsagePopup" :target-element="usageElRef" :max-width="220" :max-height="240" :menu-items-count="4">
+      <PopupMenu v-if="showUsageInfo" v-model:show="showUsagePopup" :target-element="usageElRef" :max-width="220" :max-height="280" :menu-items-count="6">
         <div class="usage-popup">
           <div class="usage-popup-header">
             <Activity :size="14" />
@@ -223,6 +223,14 @@
           <div class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.remaining') }}</span>
             <span class="usage-popup-value">{{ Math.max(contextSize - contextUsed, 0).toLocaleString() }}</span>
+          </div>
+          <div v-if="contextInputTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.inputTokens') }}</span>
+            <span class="usage-popup-value">{{ contextInputTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="contextOutputTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.outputTokens') }}</span>
+            <span class="usage-popup-value">{{ contextOutputTokens.toLocaleString() }}</span>
           </div>
           <div v-if="contextCost > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
@@ -262,7 +270,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, List, Plus, Trash2, Volume2, Upload, Paperclip, FileText, Folder, XCircle, Inbox, Send, Square, Settings, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare, FileImage, FileVideo, FileMusic } from 'lucide-vue-next'
+import { MessageSquare, List, Plus, Trash2, Volume2, Upload, Paperclip, FileText, Folder, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare, FileImage, FileVideo, FileMusic } from 'lucide-vue-next'
 import { baseName } from '@/utils/path.ts'
 import { formatFileSize, getFileType } from '@/utils/fileType.ts'
 import { isThumbableExt } from '@/utils/fileManager.ts'
@@ -280,7 +288,7 @@ import { useSessionIdentity } from '@/composables/useSessionIdentity'
 import { useAgents } from '@/composables/useAgents'
 
 const { t } = useI18n()
-const { availableCommands, availableModes, availableThinkingEfforts, currentThinkingEffortName, currentTransport: sessionTransport, autoApprove, contextUsed, contextSize, contextCost, contextCurrency } = useSessionIdentity()
+const { availableCommands, availableModes, availableThinkingEfforts, currentThinkingEffortName, currentTransport: sessionTransport, autoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextCost, contextCurrency } = useSessionIdentity()
 const { supportsDualTransport, hasThinkingEffortLevels } = useAgents()
 
 // isACP: true when the current agent supports ACP (has acpCommand).
@@ -307,21 +315,6 @@ const usageColor = computed(() => {
   if (pct >= 90) return '#f97316'
   if (pct >= 75) return '#eab308'
   return '#22c55e'
-})
-const usageText = computed(() => {
-  const fmt = (n) => {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-    if (n >= 1000) return (n / 1000).toFixed(0) + 'K'
-    return String(n)
-  }
-  return `${fmt(contextUsed.value)}/${fmt(contextSize.value)}`
-})
-const usageTooltip = computed(() => {
-  let tip = `${usageText.value} tokens (${usagePct.value}%)`
-  if (contextCost.value > 0) {
-    tip += ` | $${contextCost.value.toFixed(2)} ${contextCurrency.value || 'USD'}`
-  }
-  return tip
 })
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
