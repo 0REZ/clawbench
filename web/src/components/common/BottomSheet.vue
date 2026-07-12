@@ -46,7 +46,7 @@ const props = defineProps({
   handleOnly: Boolean, // 仅显示拖拽手柄，无标题栏
   transparentOverlay: Boolean, // 透明遮罩（可点击关闭但可见底层内容）
   fullscreen: Boolean, // 全屏模式，覆盖 app header，用于无 header 的页面（如终端）
-  noSwipeClose: Boolean, // 禁用边缘滑动关闭（用于有自定义返回逻辑的抽屉）
+  closeGuard: Boolean, // 阻止一切关闭操作（overlay点击/header点击/返回手势），用于内部有原生选择器等场景
 })
 
 const emit = defineEmits(['close'])
@@ -69,20 +69,8 @@ watch(() => props.open, (val) => {
     everOpened.value = true
     leaving.value = false
     // Register back handler so edge-swipe / Android back closes this drawer
-    if (!props.noSwipeClose && !unregisterBack) {
-      const id = `bs-drawer-${instanceSeq}`
-      // Encode sequence in priority fraction so higher seq (newer drawer)
-      // wins among same-tier PRIORITY_OVERLAY handlers.
-      const priority = PRIORITY_OVERLAY + instanceSeq * 0.001
-      unregisterBack = registerBackHandler({
-        id,
-        canGoBack: () => props.open && !leaving.value,
-        goBack: () => {
-          appLog.d('BottomSheet', `back gesture closing drawer: ${id}`)
-          handleClose()
-        },
-        priority,
-      })
+    if (!props.closeGuard && !unregisterBack) {
+      registerDrawerBackHandler()
     }
   } else if (leaving.value) {
     // Close triggered externally while animating — cancel animation, hide now
@@ -95,6 +83,32 @@ watch(() => props.open, (val) => {
   }
 }, { immediate: true })
 
+// Respond to dynamic closeGuard changes (e.g. when a native file picker
+// opens inside the drawer, we block all close attempts to prevent the
+// drawer from dismissing while the picker is active).
+watch(() => props.closeGuard, (guard) => {
+  if (guard && unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  } else if (!guard && props.open && !unregisterBack) {
+    registerDrawerBackHandler()
+  }
+})
+
+function registerDrawerBackHandler() {
+  const id = `bs-drawer-${instanceSeq}`
+  const priority = PRIORITY_OVERLAY + instanceSeq * 0.001
+  unregisterBack = registerBackHandler({
+    id,
+    canGoBack: () => props.open && !leaving.value,
+    goBack: () => {
+      appLog.d('BottomSheet', `back gesture closing drawer: ${id}`)
+      handleClose()
+    },
+    priority,
+  })
+}
+
 onBeforeUnmount(() => {
   if (unregisterBack) {
     unregisterBack()
@@ -103,6 +117,7 @@ onBeforeUnmount(() => {
 })
 
 function handleClose() {
+  if (props.closeGuard) return
   if (leaving.value) return
   if (props.instant) {
     emit('close')

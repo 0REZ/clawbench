@@ -4,29 +4,53 @@ import { gt } from '@/composables/useLocale'
 import { store } from '@/stores/app.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 
+// ── Module-level singleton state ──
+// pendingFiles MUST be shared across all callers (AttachDrawer, ChatPanelContent,
+// FileManagerContent) so that uploads initiated in the drawer are visible to
+// sendMessage in ChatPanelContent. Same pattern as useChatContext.
+
+interface PendingFile {
+  path: string
+  previewUrl: string | null
+  isImage: boolean
+  uploading: boolean
+  progress: number
+  size: number
+}
+
+const pendingFiles = ref<PendingFile[]>([])
+
+// Upload progress for directory uploads (file manager)
+const dirUploading = ref(false)
+const dirUploadProgress = ref(0)
+const dirUploadTotal = ref(0)
+const dirUploadDone = ref(0)
+
 export function useFileUpload() {
   const toast = useToast()
-
-  const pendingFiles = ref<Array<{ path: string; previewUrl: string | null; isImage: boolean; uploading: boolean; progress: number; size: number }>>([])
 
   // attachedFiles is managed globally via useChatContext so any tab
   // (file preview, chat input, quote-question) can read/write it.
   const { attachedFiles, addAttachedFile, removeAttachedFile } = useChatContext()
 
-  // Upload progress for directory uploads (file manager)
-  const dirUploading = ref(false)
-  const dirUploadProgress = ref(0)
-  const dirUploadTotal = ref(0)
-  const dirUploadDone = ref(0)
-
   function uploadOneFile(file: File, dir?: string) {
     return new Promise((resolve) => {
+      // Pre-flight size check: prevent sending a request that will be
+      // rejected by the server's MaxBytesReader (which causes onerror
+      // instead of a readable error response).
+      const maxSizeBytes = store.state.uploadMaxSizeMB * 1024 * 1024
+      if (file.size > maxSizeBytes) {
+        toast.show(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }), { icon: '⚠️', type: 'error' })
+        resolve(false)
+        return
+      }
+
       const isImage = file.type.startsWith('image/')
       const previewUrl = isImage ? URL.createObjectURL(file) : null
 
       // Push entry then get reactive proxy from array (only for chat upload, not dir upload)
       const isDirUpload = !!dir
-      let entry = null
+      let entry: PendingFile | null = null
       if (!isDirUpload) {
         const idx = pendingFiles.value.length
         pendingFiles.value.push({
@@ -93,7 +117,13 @@ export function useFileUpload() {
           const i = pendingFiles.value.indexOf(entry)
           if (i !== -1) pendingFiles.value.splice(i, 1)
         }
-        toast.show(gt('upload.networkError'), { icon: '⚠️', type: 'error' })
+        // When the server's MaxBytesReader rejects the upload, the XHR
+        // gets onerror instead of onload with a parseable response.
+        // If the file exceeds the threshold, show a size-specific error.
+        const msg = file.size > maxSizeBytes
+          ? gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB })
+          : gt('upload.networkError')
+        toast.show(msg, { icon: '⚠️', type: 'error' })
         resolve(false)
       }
 

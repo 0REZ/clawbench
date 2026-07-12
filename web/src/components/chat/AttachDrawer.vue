@@ -1,11 +1,12 @@
 <template>
-  <BottomSheet :open="open" auto @close="$emit('close')">
+  <BottomSheet :open="open" :close-guard="filePickerOpen" auto @close="onDrawerClose">
     <template #header>
       <div class="ad-header">
         <Paperclip :size="16" class="bs-header-icon" />
         <span class="bs-header-title">{{ t('chat.attach.drawerTitle') }}</span>
-        <button class="ad-upload-btn" @click="handleUpload" :title="t('chat.attach.uploadFile')">
+        <button class="ad-upload-btn" @click="handleUploadClick" :title="t('chat.attach.uploadFile')">
           <Upload :size="16" />
+          <span class="ad-upload-label">{{ t('chat.attach.uploadFile') }}</span>
         </button>
       </div>
     </template>
@@ -27,7 +28,9 @@
         <button v-if="effectiveCurrentDir"
           class="ad-file-row ad-current-item" :class="{ 'ad-file-attached': isAttached(effectiveCurrentDir) }"
           @click="toggleAttached(effectiveCurrentDir)">
-          <Folder :size="16" class="ad-file-icon" />
+          <div class="ad-icon-wrap">
+            <Folder :size="28" class="ad-file-icon" />
+          </div>
           <div class="ad-file-info">
             <span class="ad-file-name">
               <span class="ad-label">{{ t('chat.attach.currentDir') }}</span>
@@ -42,7 +45,11 @@
         <button v-if="currentFile"
           class="ad-file-row ad-current-item" :class="{ 'ad-file-attached': isAttached(currentFile) }"
           @click="toggleAttached(currentFile)">
-          <FileText :size="16" class="ad-file-icon" />
+          <div class="ad-icon-wrap">
+            <img v-if="isImageFile(currentFile) && isThumbableExt(currentFile) && !thumbErrors.has(currentFile)"
+              class="ad-thumb" :src="thumbUrl(currentFile)" loading="lazy" @error="onThumbError(currentFile)" />
+            <component v-else :is="getFileIcon(currentFile)" :size="28" class="ad-file-icon" :color="getFileIconColor(currentFile)" />
+          </div>
           <div class="ad-file-info">
             <span class="ad-file-name">
               <span class="ad-label">{{ t('chat.attach.currentFile') }}</span>
@@ -64,7 +71,11 @@
           class="ad-file-row" :class="{ 'ad-file-attached': isAttached(item.path) }"
           @click="toggleAttached(item.path)"
         >
-          <FileText :size="16" class="ad-file-icon" />
+          <div class="ad-icon-wrap">
+            <img v-if="isImageFile(item.path) && isThumbableExt(item.path) && !thumbErrors.has(item.path)"
+              class="ad-thumb" :src="thumbUrl(item.path)" loading="lazy" @error="onThumbError(item.path)" />
+            <component v-else :is="getFileIcon(item.path)" :size="28" class="ad-file-icon" :color="getFileIconColor(item.path)" />
+          </div>
           <div class="ad-file-info">
             <span class="ad-file-name">{{ baseName(item.path) }}</span>
             <span class="ad-file-meta">{{ dirName(item.path) }} · x{{ item.count }}</span>
@@ -82,7 +93,11 @@
           class="ad-file-row" :class="{ 'ad-file-attached': isAttached(item.path) }"
           @click="toggleAttached(item.path)"
         >
-          <Share2 :size="16" class="ad-file-icon" />
+          <div class="ad-icon-wrap">
+            <img v-if="isImageFile(item.path) && isThumbableExt(item.path) && !thumbErrors.has(item.path)"
+              class="ad-thumb" :src="thumbUrl(item.path)" loading="lazy" @error="onThumbError(item.path)" />
+            <component v-else :is="getFileIcon(item.path)" :size="28" class="ad-file-icon" :color="getFileIconColor(item.path)" />
+          </div>
           <div class="ad-file-info">
             <span class="ad-file-name">{{ item.name }}</span>
             <span class="ad-file-meta">{{ dirName(item.path) }} · {{ formatRelativeTime(item.modTime) }} · {{ formatFileSize(item.size) }}</span>
@@ -92,15 +107,35 @@
         </button>
       </template>
 
-      <!-- Recently uploaded -->
+      <!-- Recently uploaded + pending uploads -->
       <template v-if="activeTab === 'uploads'">
-        <div v-if="recentUploads.length === 0" class="ad-empty">{{ t('chat.attach.emptyUploads') }}</div>
+        <!-- Pending uploads: only show while uploading (failed items removed by useFileUpload) -->
+        <button
+          v-for="(f, idx) in pendingFiles" :key="'pending-' + idx"
+          v-show="f.uploading"
+          class="ad-file-row" :class="{ 'ad-file-attached': f.path && isAttached(f.path) }"
+          @click="f.path && !f.uploading && toggleAttached(f.path)"
+        >
+          <div class="ad-icon-wrap ad-uploading-icon">
+            <span class="ad-upload-pct">{{ f.progress }}%</span>
+          </div>
+          <div class="ad-file-info">
+            <span class="ad-file-name">{{ getFileName(f.path) || t('chat.attach.uploading') }}</span>
+            <span class="ad-file-meta">{{ f.path ? dirName(f.path) + ' · ' : '' + formatFileSize(f.size) }}</span>
+          </div>
+        </button>
+        <!-- Completed uploads from server -->
+        <div v-if="recentUploads.length === 0 && pendingFiles.length === 0" class="ad-empty">{{ t('chat.attach.emptyUploads') }}</div>
         <button
           v-for="item in recentUploads" :key="item.path"
           class="ad-file-row" :class="{ 'ad-file-attached': isAttached(item.path) }"
           @click="toggleAttached(item.path)"
         >
-          <Upload :size="16" class="ad-file-icon" />
+          <div class="ad-icon-wrap">
+            <img v-if="isImageFile(item.path) && isThumbableExt(item.path) && !thumbErrors.has(item.path)"
+              class="ad-thumb" :src="thumbUrl(item.path)" loading="lazy" @error="onThumbError(item.path)" />
+            <component v-else :is="getFileIcon(item.path)" :size="28" class="ad-file-icon" :color="getFileIconColor(item.path)" />
+          </div>
           <div class="ad-file-info">
             <span class="ad-file-name">{{ item.name }}</span>
             <span class="ad-file-meta">{{ dirName(item.path) }} · {{ formatRelativeTime(item.modTime) }} · {{ formatFileSize(item.size) }}</span>
@@ -110,19 +145,26 @@
         </button>
       </template>
     </div>
+
+    <!-- Hidden file input (owned by drawer) -->
+    <input type="file" ref="fileInputRef" @change="onFileSelect" @blur="onFileInputBlur" style="display:none" multiple />
   </BottomSheet>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { Paperclip, Upload, FileText, Folder, Share2, Check, ExternalLink } from 'lucide-vue-next'
+import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { Paperclip, Upload, Check, ExternalLink } from 'lucide-vue-next'
+import { getFileIcon, getFileIconColor, buildPathThumbUrl, Folder } from '@/utils/fileIcon'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import { useI18n } from 'vue-i18n'
 import { useShareIn } from '@/composables/useShareIn'
 import { useUploadRecent } from '@/composables/useUploadRecent'
+import { useFileUpload } from '@/composables/useFileUpload'
 import { baseName, dirName } from '@/utils/path'
 import { formatFileSize } from '@/utils/fileType'
 import { formatRelativeTime } from '@/utils/format'
+import { isThumbableExt } from '@/utils/fileManager'
+import { isImageFile } from '@/utils/fileAttachmentUtils'
 
 interface ReferencedFile {
   path: string
@@ -146,7 +188,6 @@ const emit = defineEmits<{
   close: []
   'add-attached': [path: string]
   'remove-attached': [path: string]
-  upload: []
   'file-open': [path: string]
 }>()
 
@@ -154,7 +195,12 @@ const { t } = useI18n()
 const { recentShares, fetchRecentShares } = useShareIn()
 const { recentUploads, fetchRecentUploads } = useUploadRecent()
 
+// ── Upload logic (now lives inside the drawer) ──
+const { pendingFiles, handleFileSelect, handleFileDrop } = useFileUpload()
+
 const activeTab = ref('current')
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const filePickerOpen = ref(false)
 
 const tabs = [
   { key: 'current', label: '' },
@@ -168,6 +214,65 @@ tabs[0].label = t('chat.attach.currentTab')
 tabs[1].label = t('chat.attach.recentReferences')
 tabs[2].label = t('chat.attach.recentShares')
 tabs[3].label = t('chat.attach.recentUploads')
+
+// ── File icon and thumbnail helpers (imported from utils/fileIcon) ──
+const thumbUrl = buildPathThumbUrl
+
+const thumbErrors = ref(new Set<string>())
+function onThumbError(path: string) {
+  const next = new Set(thumbErrors.value)
+  next.add(path)
+  thumbErrors.value = next
+}
+
+// ── Upload UI logic ──
+
+const uploadingFiles = computed(() => pendingFiles.value.filter(f => f.uploading))
+
+function getFileName(path: string) {
+  return path ? baseName(path) : ''
+}
+
+function handleUploadClick() {
+  if (fileInputRef.value) {
+    fileInputRef.value.value = ''
+    filePickerOpen.value = true
+    // Defer click to nextTick so BottomSheet's closeGuard watch
+    // runs first and blocks all close attempts. Without this,
+    // Android's native file chooser launch can trigger a close event
+    // that closes the drawer before closeGuard takes effect.
+    nextTick(() => { fileInputRef.value?.click() })
+  }
+}
+
+async function onFileSelect(e: Event) {
+  filePickerOpen.value = false
+  await handleFileSelect(e)
+  // Switch to uploads tab to show the upload progress
+  activeTab.value = 'uploads'
+}
+
+// When uploads complete, remove finished items from pendingFiles
+// (they'll appear in recentUploads after refresh) and fetch the list.
+let wasUploading = false
+let uploadRefreshScheduled = false
+watch(uploadingFiles, (now) => {
+  if (wasUploading && now.length === 0) {
+    // Remove finished (non-uploading) entries from pendingFiles
+    pendingFiles.value = pendingFiles.value.filter(f => f.uploading)
+    // Refresh recent uploads so completed files appear
+    if (!uploadRefreshScheduled) {
+      uploadRefreshScheduled = true
+      Promise.resolve().then(() => {
+        uploadRefreshScheduled = false
+        fetchRecentUploads()
+      })
+    }
+  }
+  wasUploading = now.length > 0
+})
+
+// ── Attachment logic ──
 
 function isAttached(path: string) {
   return props.attachedFiles?.includes(path) ?? false
@@ -188,17 +293,67 @@ const currentDirDisplayName = computed(() => {
   return dir === '.' ? '/' : baseName(dir)
 })
 
-function handleUpload() {
-  emit('upload')
-}
-
 // Fetch data when drawer opens
 watch(() => props.open, (v) => {
   if (v) {
     fetchRecentShares()
     fetchRecentUploads()
+  } else {
+    filePickerOpen.value = false
+    // Clear thumb errors when drawer closes
+    if (thumbErrors.value.size > 0) {
+      thumbErrors.value = new Set()
+    }
   }
 })
+
+// When the native file picker closes (user picks files or cancels),
+// we need to reset filePickerOpen so BottomSheet's closeGuard lifts
+// and the drawer becomes closable again.
+// (onFileSelect also resets it, but the cancel path has no JS
+// callback — only focus/visibility events fire.)
+// We use multiple redundant events because no single event is
+// reliable across all platforms:
+// - window focus: works on desktop browsers when the picker is a
+//   separate OS dialog that blurs the window
+// - visibilitychange: works on Android WebView where the file
+//   chooser is a separate activity that hides the document
+// - input blur: works in some browsers when the file input loses
+//   focus as the native picker dismisses
+function onWindowFocus() {
+  if (filePickerOpen.value) filePickerOpen.value = false
+}
+function onVisibilityChange() {
+  if (filePickerOpen.value && document.visibilityState === 'visible') {
+    filePickerOpen.value = false
+  }
+}
+function onFileInputBlur() {
+  // Defer slightly — on some platforms blur fires before the change
+  // event, and we don't want to lift the guard prematurely if the
+  // user actually selected files (onFileSelect will reset it).
+  setTimeout(() => { filePickerOpen.value = false }, 150)
+}
+onMounted(() => {
+  window.addEventListener('focus', onWindowFocus)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+})
+onUnmounted(() => {
+  window.removeEventListener('focus', onWindowFocus)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
+
+// ── Drawer close handler ──
+// BottomSheet emits 'close' → propagate to parent so ChatInputBar
+// sets showAttachDrawer = false. No guard needed here — BottomSheet's
+// closeGuard prop handles all close blocking while the native file
+// picker is open.
+function onDrawerClose() {
+  emit('close')
+}
+
+// Expose for parent: activeTab + handleFileDrop (for drag-and-drop from ChatInputBar)
+defineExpose({ activeTab, handleFileDrop })
 </script>
 
 <style>
@@ -212,14 +367,19 @@ watch(() => props.open, (v) => {
   margin-left: auto;
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
+  gap: 4px;
+  padding: 0 8px;
   height: 28px;
   border-radius: 8px;
   border: none;
   background: var(--bg-hover);
   color: var(--text-secondary);
   cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ad-upload-label {
+  line-height: 1;
 }
 .ad-upload-btn:active {
   background: var(--accent-color);
@@ -234,6 +394,7 @@ watch(() => props.open, (v) => {
   overflow-x: auto;
   border-bottom: 1px solid var(--border-color);
   -webkit-overflow-scrolling: touch;
+  flex-shrink: 0;
 }
 .ad-tab {
   padding: 8px 14px;
@@ -285,6 +446,30 @@ watch(() => props.open, (v) => {
 .ad-file-attached {
   opacity: 0.45;
 }
+
+/* Icon container: holds icon or thumbnail.
+ * 28x28 matches FileManagerContent list-view icon size.
+ * Thumbnails fill the container; icons stay at their :size prop. */
+.ad-icon-wrap {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 6px;
+  position: relative;
+}
+.ad-icon-wrap .ad-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
 .ad-file-icon {
   flex-shrink: 0;
   color: var(--text-muted);
@@ -346,5 +531,17 @@ watch(() => props.open, (v) => {
 }
 .ad-current-item {
   background: var(--bg-secondary);
+}
+
+/* Upload progress percent in icon slot */
+.ad-uploading-icon {
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
+  border-radius: 6px;
+}
+.ad-upload-pct {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-color);
+  letter-spacing: -0.3px;
 }
 </style>

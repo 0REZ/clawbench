@@ -36,25 +36,18 @@
       </button>
     </div>
     <!-- Input container -->
-    <div class="chat-input-container" :class="{ 'drag-over': isDragOver }"
+    <div class="chat-input-container"
       @dragenter="onDragEnter"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop">
-      <input type="file" ref="fileInputRef" @change="onFileSelect" style="display:none" multiple />
-      <!-- Drop overlay -->
+      <!-- Drop overlay (opens the attach drawer on drop) -->
       <div v-if="isDragOver" class="drop-overlay">
         <Upload :size="24" :stroke-width="1.5" />
         <span>{{ t('chat.attach.dropToUpload') }}</span>
       </div>
-      <!-- Upload progress bars -->
-      <div v-if="uploadingFiles.length > 0" class="chat-upload-progress">
-        <div v-for="(f, idx) in uploadingFiles" :key="'prog-' + idx" class="upload-progress-item">
-          <div class="upload-progress-bar" :style="{ width: f.progress + '%' }"></div>
-        </div>
-      </div>
-      <!-- Attachment tags (horizontal scrollable cards) -->
-      <div v-if="quoteData || attachedFiles.length > 0 || pendingFiles.length > 0" class="chat-attachment-tags">
+      <!-- Attachment tags (horizontal scrollable cards — only quote + attached file refs) -->
+      <div v-if="quoteData || attachedFiles.length > 0" class="chat-attachment-tags">
         <!-- Quote selection card -->
         <span v-if="quoteData" class="chat-file-attachment attachment-quote" :title="quoteData.filePath" @click="$emit('quote-click')">
           <MessageSquare :size="14" :stroke-width="1.5" class="attachment-quote-icon" />
@@ -67,20 +60,9 @@
           <img v-if="isImageFile(filePath) && isThumbableExt(filePath) && !thumbErrors.has(filePath)"
             class="attachment-thumb-img"
             :src="attachmentThumbUrl(filePath)" loading="lazy" @error="onThumbError(filePath)" />
-          <component v-if="!isImageFile(filePath)" :is="getFileIcon(filePath)" :size="14" :stroke-width="1.5" class="attachment-file-icon" />
+          <component v-if="!isImageFile(filePath)" :is="getFileIcon(filePath)" :size="14" :stroke-width="1.5" :color="getFileIconColor(filePath)" class="attachment-file-icon" />
           <span v-if="!isImageFile(filePath)" class="attachment-filename">{{ getFileName(filePath) }}</span>
           <button class="attachment-close-btn" @click.stop="$emit('remove-attached', idx)" :title="t('common.remove')">×</button>
-        </span>
-        <!-- Pending upload cards -->
-        <span v-for="(f, idx) in pendingFiles" :key="'upload-' + idx" class="chat-file-attachment attachment-upload" :class="{ 'is-uploading': f.uploading, 'attachment-image-only': f.isImage }">
-          <img v-if="f.isImage && f.previewUrl" class="attachment-thumb-img" :src="f.previewUrl" loading="lazy" />
-          <img v-else-if="f.isImage && !thumbErrors.has(f.path)"
-            class="attachment-thumb-img"
-            :src="attachmentThumbUrl(f.path)" loading="lazy" @error="onThumbError(f.path)" />
-          <component v-if="!f.isImage" :is="getFileIcon(f.path)" :size="14" :stroke-width="1.5" class="attachment-file-icon" />
-          <span v-if="!f.isImage" class="attachment-filename">{{ getFileName(f.path) || t('chat.attach.uploading') }}</span>
-          <span v-if="!f.isImage" class="attachment-filesize">{{ f.uploading ? f.progress + '%' : formatFileSize(f.size) }}</span>
-          <button class="attachment-close-btn" @click.stop="$emit('remove-file', idx)" :title="t('common.remove')">×</button>
         </span>
       </div>
       <!-- Input row: attach + clear + textarea + stop + send -->
@@ -118,15 +100,15 @@
       </div>
       <!-- Attach drawer (BottomSheet) -->
       <AttachDrawer
+        ref="attachDrawerRef"
         :open="attachDrawer.effectiveOpen.value"
         :current-file="currentFile?.path"
         :current-dir="currentDir"
         :attached-files="attachedFiles"
         :recent-referenced-files="recentReferencedFiles"
-        @close="showAttachDrawer = false"
+        @close="attachDrawer.close()"
         @add-attached="handleAttachFile"
         @remove-attached="handleRemoveAttached"
-        @upload="handleUploadClick"
         @file-open="(path) => emit('file-tag-click', path)"
       />
       <!-- Teleported quick-send menu -->
@@ -146,7 +128,7 @@
           <div v-if="quickSendPressingId === item.id" class="qs-fill-bar" />
         </button>
         <div class="quick-send-divider" />
-        <button class="quick-send-item" @click="showQuickMenu = false; quickSendStore.showEditDialog.value = true">
+        <button class="quick-send-item" @click="showQuickMenu = false; quickSendDrawer.open()">
           ⚙️ {{ t('chat.quickSend.edit') }}
         </button>
       </PopupMenu>
@@ -155,13 +137,13 @@
         :show="settingsDrawer.effectiveOpen.value"
         :agent-id="currentAgentId"
         :initial-tab="settingsModalInitialTab"
-        @update:show="showSettingsModal = $event"
+        @update:show="$event ? settingsDrawer.open() : settingsDrawer.close()"
         @switch-model="handleSwitchModel"
         @switch-thinking-effort="handleSwitchThinkingEffort"
         @switch-mode="handleSwitchMode"
         @switch-transport="handleSwitchTransport"
       />
-      <QuickSendDrawer :open="quickSendDrawer.effectiveOpen.value" @close="quickSendStore.showEditDialog.value = false" />
+      <QuickSendDrawer :open="quickSendDrawer.effectiveOpen.value" @close="quickSendDrawer.close()" />
       <!-- @ command autocomplete menu (ClawBench built-in) -->
       <PopupMenu v-model:show="showAtMenu" :target-element="textareaRef" anchor="left" :max-width="260" :max-height="200" :menu-items-count="atMenuItems.length">
         <div class="at-menu-title">{{ t('chat.atCommand.title') }}</div>
@@ -249,12 +231,12 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, List, Plus, Trash2, Volume2, Upload, Paperclip, FileText, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare, FileImage, FileVideo, FileMusic } from 'lucide-vue-next'
+import { MessageSquare, List, Plus, Trash2, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare } from 'lucide-vue-next'
 import { baseName } from '@/utils/path.ts'
-import { formatFileSize, getFileType } from '@/utils/fileType.ts'
 import { isThumbableExt } from '@/utils/fileManager.ts'
 import { isImageFile } from '@/utils/fileAttachmentUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
+import { getFileIcon, getFileIconColor, buildPathThumbUrl } from '@/utils/fileIcon.ts'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
@@ -299,10 +281,9 @@ const usageColor = computed(() => {
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
 const { items: quickSendItems, fetchItems } = quickSendStore
-const showSettingsModal = ref(false)
 const settingsModalInitialTab = ref('model')
 const quickSendDrawer = useTabDrawer('chat', quickSendStore.showEditDialog)
-const settingsDrawer = useTabDrawer('chat', showSettingsModal)
+const settingsDrawer = useTabDrawer('chat')
 
 // ── Rotating placeholder ──
 const placeholderIndex = ref(0)
@@ -344,7 +325,6 @@ watch(placeholderHints, () => {
 const isTextareaFocused = ref(false)
 
 const dynamicPlaceholder = computed(() => {
-  if (props.pendingFiles.length > 0) return t('chat.input.placeholderOptional')
   if (props.loading) return t('chat.input.placeholderQueue')
   if (isTextareaFocused.value) return t('chat.input.placeholder')
   // Unfocused & empty: cycle through hints
@@ -356,7 +336,6 @@ const props = defineProps({
   loading: Boolean,
   currentFile: Object,
   currentDir: String,
-  pendingFiles: Array,
   attachedFiles: Array,
   quoteData: Object,
   messages: Array,
@@ -376,9 +355,6 @@ const props = defineProps({
 const emit = defineEmits([
   'send',
   'cancel',
-  'file-select',
-  'file-drop',
-  'remove-file',
   'add-attached',
   'remove-attached',
   'remove-attached-by-path',
@@ -399,18 +375,17 @@ const emit = defineEmits([
 
 const inputText = ref('')
 const textareaRef = ref(null)
-const fileInputRef = ref(null)
 const isDragOver = ref(false)
 const dragCounter = ref(0)
-const showAttachDrawer = ref(false)
-const attachDrawer = useTabDrawer('chat', showAttachDrawer)
+const attachDrawer = useTabDrawer('chat')
+const attachDrawerRef = ref(null)
 const attachMenuRef = ref(null) // kept for ref stability, no longer used for PopupMenu
 const showQuickMenu = ref(false)
 const sendBtnRef = ref(null)
 
 function openSettingsModal(tab) {
   settingsModalInitialTab.value = tab
-  showSettingsModal.value = true
+  settingsDrawer.open()
 }
 
 // ── @ command autocomplete ──
@@ -530,9 +505,7 @@ watch(() => props.currentSessionId, (newId, oldId) => {
   // autoResizeTextarea is called automatically by the inputText watcher
 })
 
-const uploadingFiles = computed(() => props.pendingFiles.filter(f => f.uploading))
-
-const hasInputContent = computed(() => inputText.value.trim() || props.pendingFiles.length > 0 || props.attachedFiles.length > 0 || props.quoteData)
+const hasInputContent = computed(() => inputText.value.trim() || props.attachedFiles.length > 0 || props.quoteData)
 
 // Extract recently referenced files from message history
 const recentReferencedFiles = computed(() => {
@@ -556,24 +529,14 @@ function getFileName(path) {
   return baseName(path)
 }
 
-function getFileIcon(path) {
-  const ft = getFileType(path)
-  if (ft.isImage) return FileImage
-  if (ft.isAudio) return FileMusic
-  if (ft.isVideo) return FileVideo
-  return FileText
-}
-
 function truncateQuoteText(text, maxLen) {
   if (!text) return ''
   const oneLine = text.replace(/\n/g, ' ')
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '...' : oneLine
 }
 
-/** Build thumbnail URL for a file path. */
-function attachmentThumbUrl(filePath) {
-  return `/api/file/thumb?path=${encodeURIComponent(filePath)}&w=80`
-}
+/** Alias for the shared thumb URL builder. */
+const attachmentThumbUrl = buildPathThumbUrl
 
 // Track thumbnail load errors so fallback icon is shown
 // Must replace the Set (not mutate in-place) to trigger Vue reactivity
@@ -585,8 +548,8 @@ function onThumbError(path) {
 }
 
 // Clear thumb errors when all attachments are removed
-watch([() => props.attachedFiles.length, () => props.pendingFiles.length], ([attLen, pendLen]) => {
-  if (attLen === 0 && pendLen === 0 && thumbErrors.value.size > 0) {
+watch(() => props.attachedFiles.length, (attLen) => {
+  if (attLen === 0 && thumbErrors.value.size > 0) {
     thumbErrors.value = new Set()
   }
 })
@@ -631,10 +594,6 @@ function onTextareaBlur() {
 // to ensure textarea height stays in sync with content
 watch(inputText, () => nextTick(() => autoResizeTextarea()))
 
-function onFileSelect(e) {
-  emit('file-select', e)
-}
-
 function onDragEnter(e) {
   e.preventDefault()
   dragCounter.value++
@@ -660,7 +619,18 @@ function onDrop(e) {
   isDragOver.value = false
   const files = Array.from(e.dataTransfer?.files || [])
   if (files.length > 0) {
-    emit('file-drop', files)
+    // Open the drawer and delegate upload to it.
+    // Retry until the drawer ref is available (may take a few ticks
+    // if the BottomSheet enter transition hasn't mounted yet).
+    if (!attachDrawer.isOpen.value) attachDrawer.open()
+    const tryDrop = () => {
+      if (attachDrawerRef.value?.handleFileDrop) {
+        attachDrawerRef.value.handleFileDrop(files)
+      } else {
+        nextTick(tryDrop)
+      }
+    }
+    nextTick(tryDrop)
   }
 }
 
@@ -680,24 +650,14 @@ function handleRemoveAttached(filePath) {
   emit('remove-attached-by-path', filePath)
 }
 
-function handleUploadClick() {
-  showAttachDrawer.value = false
-  if (fileInputRef.value) {
-    // Clear previous selection BEFORE opening picker to prevent stale
-    // file data on Android WebView when user cancels the picker
-    fileInputRef.value.value = ''
-    fileInputRef.value.click()
-  }
-}
-
 async function toggleAttachMenu() {
-  showAttachDrawer.value = !showAttachDrawer.value
+  attachDrawer.toggle()
 }
 
 function handleSendClick() {
   if (inputText.value.trim()) {
     emit('send', inputText.value.trim())
-  } else if (props.pendingFiles.length > 0 || props.attachedFiles.length > 0) {
+  } else if (props.attachedFiles.length > 0) {
     emit('send', '')
   } else {
     toggleQuickMenu()
@@ -812,11 +772,11 @@ function handleSwitchTransport(transport) {
 }
 
 // Menu mutual exclusion: opening one closes the others
-watch(showAttachDrawer, (v) => { if (v) { showQuickMenu.value = false; showSettingsModal.value = false; showSlashMenu.value = false; showUsagePopup.value = false } })
-watch(showQuickMenu, (v) => { if (v) { showAttachDrawer.value = false; showSettingsModal.value = false; showSlashMenu.value = false; showUsagePopup.value = false } })
-watch(showSettingsModal, (v) => { if (v) { showAttachDrawer.value = false; showQuickMenu.value = false; showSlashMenu.value = false; showUsagePopup.value = false } })
-watch(showSlashMenu, (v) => { if (v) { showAttachDrawer.value = false; showQuickMenu.value = false; showSettingsModal.value = false; showUsagePopup.value = false } })
-watch(showUsagePopup, (v) => { if (v) { showAttachDrawer.value = false; showQuickMenu.value = false; showSettingsModal.value = false; showSlashMenu.value = false } })
+watch(() => attachDrawer.isOpen.value, (v) => { if (v) { showQuickMenu.value = false; settingsDrawer.close(); showSlashMenu.value = false; showUsagePopup.value = false } })
+watch(showQuickMenu, (v) => { if (v) { attachDrawer.close(); settingsDrawer.close(); showSlashMenu.value = false; showUsagePopup.value = false } })
+watch(() => settingsDrawer.isOpen.value, (v) => { if (v) { attachDrawer.close(); showQuickMenu.value = false; showSlashMenu.value = false; showUsagePopup.value = false } })
+watch(showSlashMenu, (v) => { if (v) { attachDrawer.close(); showQuickMenu.value = false; settingsDrawer.close(); showUsagePopup.value = false } })
+watch(showUsagePopup, (v) => { if (v) { attachDrawer.close(); showQuickMenu.value = false; settingsDrawer.close(); showSlashMenu.value = false } })
 
 onMounted(() => {
   fetchItems()
@@ -1180,33 +1140,6 @@ defineExpose({
   pointer-events: none;
 }
 
-/* Upload progress bars at top of input */
-.chat-upload-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px 8px 0;
-}
-
-.upload-progress-item {
-  height: 3px;
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 15%, transparent);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.upload-progress-bar {
-  height: 100%;
-  background: var(--accent-color, #0066cc);
-  border-radius: 2px;
-  transition: width 0.15s ease;
-}
-
-/* Uploading state for attachment card */
-.attachment-upload.is-uploading {
-  opacity: 0.7;
-}
-
 /* Attach button (inside input row) */
 .chat-attach-btn {
   background: none;
@@ -1351,24 +1284,17 @@ defineExpose({
   background: var(--danger-color, #dc3545);
 }
 
-/* Input area attachment card style (both upload and ref use same style) */
-.chat-attachment-tags .attachment-upload,
+/* Input area attachment card style */
 .chat-attachment-tags .attachment-ref {
   background: color-mix(in srgb, var(--accent-color, #0066cc) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 20%, transparent);
   color: var(--accent-color, #0066cc);
 }
 
-.chat-attachment-tags .attachment-upload .attachment-filename,
 .chat-attachment-tags .attachment-ref .attachment-filename {
   color: var(--accent-color, #0066cc);
 }
 
-.chat-attachment-tags .attachment-upload .attachment-filesize {
-  color: color-mix(in srgb, var(--accent-color, #0066cc) 60%, transparent);
-}
-
-.chat-attachment-tags .attachment-upload:hover,
 .chat-attachment-tags .attachment-ref:hover {
   background: color-mix(in srgb, var(--accent-color, #0066cc) 18%, transparent);
 }

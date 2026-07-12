@@ -51,7 +51,7 @@ vi.mock('@/utils/chatSessionUtils', () => ({
     parseMessages: vi.fn().mockReturnValue([]),
 }))
 
-import { useSessionIdentity, registerSessionActions, initSessionFromAPI, resetIdentity, updateModeState, updateAvailableModes, clearModeState, updateCommandState, clearCommandState, updateThinkingEffortState, updateAvailableThinkingEfforts, clearThinkingEffortState, updateUsageState, clearUsageState, clearAllUsageState, toggleAutoApprove, getSessionId, prefetchCommands, registerSessionDrawerRef } from '@/composables/useSessionIdentity'
+import { useSessionIdentity, registerSessionActions, initSessionFromAPI, resetIdentity, updateModeState, updateAvailableModes, clearModeState, updateCommandState, clearCommandState, updateThinkingEffortState, updateAvailableThinkingEfforts, clearThinkingEffortState, updateUsageState, clearUsageState, clearAllUsageState, clearUsageStateById, toggleAutoApprove, getSessionId, prefetchCommands, registerSessionDrawerRef } from '@/composables/useSessionIdentity'
 
 describe('useSessionIdentity', () => {
     beforeEach(() => {
@@ -71,7 +71,7 @@ describe('useSessionIdentity', () => {
             expect(identity.currentModelName).toBeDefined()
             expect(identity.currentThinkingEffort).toBeDefined()
             expect(identity.runningSessions).toBeDefined()
-            expect(identity.sessionDrawerOpen).toBeDefined()
+            expect(identity.sessionDrawer).toBeDefined()
         })
 
         it('shares state across multiple instances (singleton)', () => {
@@ -117,32 +117,32 @@ describe('useSessionIdentity', () => {
         })
     })
 
-    // ── sessionDrawerOpen ──
+    // ── sessionDrawer ──
 
-    describe('sessionDrawerOpen', () => {
-        it('can be toggled', async () => {
-            const { sessionDrawerOpen } = useSessionIdentity()
-            sessionDrawerOpen.value = true
+    describe('sessionDrawer', () => {
+        it('can be opened and closed', async () => {
+            const { sessionDrawer } = useSessionIdentity()
+            sessionDrawer.open()
             await nextTick()
-            expect(sessionDrawerOpen.value).toBe(true)
+            expect(sessionDrawer.isOpen.value).toBe(true)
 
-            sessionDrawerOpen.value = false
+            sessionDrawer.close()
             await nextTick()
-            expect(sessionDrawerOpen.value).toBe(false)
+            expect(sessionDrawer.isOpen.value).toBe(false)
         })
     })
 
     // ── openSessionTab ──
 
     describe('openSessionTab', () => {
-        it('sets sessionDrawerOpen to true', async () => {
+        it('opens the session drawer', async () => {
             const identity = useSessionIdentity()
-            identity.sessionDrawerOpen.value = false
+            identity.sessionDrawer.close()
 
             identity.openSessionTab()
             await nextTick()
 
-            expect(identity.sessionDrawerOpen.value).toBe(true)
+            expect(identity.sessionDrawer.isOpen.value).toBe(true)
         })
     })
 
@@ -509,7 +509,7 @@ describe('useSessionIdentity', () => {
             identity.currentModelName.value = 'Model One'
             identity.currentThinkingEffort.value = 'high'
             identity.runningSessions.value = new Set(['s1', 's2'])
-            identity.sessionDrawerOpen.value = true
+            identity.sessionDrawer.open()
 
             resetIdentity()
 
@@ -521,7 +521,7 @@ describe('useSessionIdentity', () => {
             expect(identity.currentModelName.value).toBe('')
             expect(identity.currentThinkingEffort.value).toBe('')
             expect(identity.runningSessions.value.size).toBe(0)
-            expect(identity.sessionDrawerOpen.value).toBe(false)
+            expect(identity.sessionDrawer.isOpen.value).toBe(false)
         })
 
         it('clears registered session action callbacks', async () => {
@@ -1404,6 +1404,67 @@ describe('useSessionIdentity', () => {
                 forkSession: vi.fn().mockResolvedValue(true),
             }
             expect(() => registerSessionActions(actions)).not.toThrow()
+        })
+    })
+
+    // ── clearUsageStateById ──
+
+    describe('clearUsageStateById', () => {
+        beforeEach(() => {
+            clearAllUsageState()
+        })
+
+        it('removes usage state for a specific session by ID', () => {
+            const identity = useSessionIdentity()
+            updateUsageState(5000, 200000, 0.05, 'USD', 'session-A')
+            updateUsageState(3000, 100000, 0.02, 'EUR', 'session-B')
+
+            clearUsageStateById('session-A')
+
+            // session-A data is gone
+            identity.currentSessionId.value = 'session-A'
+            expect(identity.contextUsed.value).toBe(0)
+            expect(identity.contextSize.value).toBe(0)
+
+            // session-B data is still there
+            identity.currentSessionId.value = 'session-B'
+            expect(identity.contextUsed.value).toBe(3000)
+            expect(identity.contextSize.value).toBe(100000)
+        })
+
+        it('does nothing when session ID is not in cache', () => {
+            updateUsageState(5000, 200000, 0.05, 'USD', 'session-A')
+
+            // Clearing a non-existent session should not throw or affect existing data
+            expect(() => clearUsageStateById('session-unknown')).not.toThrow()
+
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            expect(identity.contextUsed.value).toBe(5000)
+        })
+    })
+
+    // ── closeSessionDrawer ──
+
+    describe('closeSessionDrawer', () => {
+        it('closes the session drawer', async () => {
+            const identity = useSessionIdentity()
+            identity.sessionDrawer.open()
+            await nextTick()
+            expect(identity.sessionDrawer.isOpen.value).toBe(true)
+
+            identity.closeSessionDrawer()
+            await nextTick()
+            expect(identity.sessionDrawer.isOpen.value).toBe(false)
+        })
+    })
+
+    // ── loadModePref ──
+
+    describe('loadModePref', () => {
+        it('returns null when agentId is empty', () => {
+            const identity = useSessionIdentity()
+            expect(identity.loadModePref('')).toBeNull()
         })
     })
 })
