@@ -8,10 +8,17 @@ vi.mock('@/utils/appLog', () => ({
   appLog: { d: vi.fn(), i: vi.fn(), w: vi.fn(), e: vi.fn() },
 }))
 
+// Mock navToFileInManager
+const mockNavToFileInManager = vi.fn().mockResolvedValue(true)
+vi.mock('@/composables/useFilePathAnnotation', () => ({
+  navToFileInManager: (...args: any[]) => mockNavToFileInManager(...args),
+}))
+
 // Mock useFileSearch to control state
 const mockState = {
   query: '',
   recursive: true,
+  scope: 'current' as 'current' | 'global',
   results: [] as Array<{ name: string; path: string; type: string; matchedIndices: number[] }>,
   searching: false,
   total: 0,
@@ -25,6 +32,7 @@ const mockReset = vi.fn()
 vi.mock('@/composables/useFileSearch', () => ({
   useFileSearch: () => ({
     state: mockState,
+    effectiveDir: { value: '' },
     startSearch: mockStartSearch,
     cancelSearch: mockCancelSearch,
     reset: mockReset,
@@ -40,6 +48,10 @@ const i18n = createI18n({
       file: {
         search: {
           title: 'Search Files',
+          titleCurrent: 'Search in current directory',
+          titleCurrentRecursive: 'Recursive search in current directory',
+          titleGlobal: 'Search in project',
+          titleGlobalRecursive: 'Recursive search in project',
           placeholder: 'Search filenames...',
           recursive: 'Recursive',
           noResults: 'No files found',
@@ -48,6 +60,12 @@ const i18n = createI18n({
           truncated: 'Showing first {max} results',
           searchFrom: 'From: {path}',
           reset: 'Reset',
+          scopeGlobal: 'Global search',
+        },
+      },
+      chat: {
+        attach: {
+          openDirectory: 'Open directory',
         },
       },
     },
@@ -85,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockState.query = ''
   mockState.recursive = true
+  mockState.scope = 'current'
   mockState.results = []
   mockState.searching = false
   mockState.total = 0
@@ -189,5 +208,154 @@ describe('FileSearchDrawer', () => {
     const buttons = wrapper.findAll('.fs-toggle-btn')
     await buttons[buttons.length - 1].trigger('click')
     expect(mockReset).toHaveBeenCalled()
+  })
+
+  it('header title shows "Recursive search in current directory" by default', () => {
+    mockState.scope = 'current'
+    mockState.recursive = true
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.bs-header-title').text()).toBe('Recursive search in current directory')
+  })
+
+  it('header title shows "Search in current directory" when recursive is off', () => {
+    mockState.scope = 'current'
+    mockState.recursive = false
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.bs-header-title').text()).toBe('Search in current directory')
+  })
+
+  it('header title shows "Recursive search in project" when scope is global', () => {
+    mockState.scope = 'global'
+    mockState.recursive = true
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.bs-header-title').text()).toBe('Recursive search in project')
+  })
+
+  it('header title shows "Search in project" when scope is global and recursive is off', () => {
+    mockState.scope = 'global'
+    mockState.recursive = false
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.bs-header-title').text()).toBe('Search in project')
+  })
+
+  it('scope toggle button uses fs-toggle-btn style and shows active when global', () => {
+    mockState.scope = 'global'
+    const wrapper = mountDrawer()
+    // Find the scope toggle (3rd toggle btn: recursive, scope, reset)
+    const toggleBtns = wrapper.findAll('.fs-toggle-btn')
+    // The scope btn is the second one (index 1)
+    const scopeBtn = toggleBtns[1]
+    expect(scopeBtn.classes()).toContain('active')
+  })
+
+  it('scope toggle button is not active when scope is current', () => {
+    mockState.scope = 'current'
+    const wrapper = mountDrawer()
+    const toggleBtns = wrapper.findAll('.fs-toggle-btn')
+    const scopeBtn = toggleBtns[1]
+    expect(scopeBtn.classes()).not.toContain('active')
+  })
+
+  it('toggling scope switches from current to global', async () => {
+    mockState.scope = 'current'
+    const wrapper = mountDrawer()
+    const toggleBtns = wrapper.findAll('.fs-toggle-btn')
+    await toggleBtns[1].trigger('click')
+    expect(mockState.scope).toBe('global')
+  })
+
+  it('toggling scope switches from global to current', async () => {
+    mockState.scope = 'global'
+    const wrapper = mountDrawer()
+    const toggleBtns = wrapper.findAll('.fs-toggle-btn')
+    await toggleBtns[1].trigger('click')
+    expect(mockState.scope).toBe('current')
+  })
+
+  it('toggling scope triggers search when query exists', async () => {
+    mockState.query = 'test'
+    mockState.scope = 'current'
+    const wrapper = mountDrawer()
+    const toggleBtns = wrapper.findAll('.fs-toggle-btn')
+    await toggleBtns[1].trigger('click')
+    expect(mockStartSearch).toHaveBeenCalled()
+  })
+
+  it('shows header description when scope is current and searchBasePath exists', () => {
+    mockState.scope = 'current'
+    mockState.searchBasePath = 'internal/handler'
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.marquee-stub').exists()).toBe(true)
+  })
+
+  it('hides header description when scope is global', () => {
+    mockState.scope = 'global'
+    mockState.searchBasePath = 'internal/handler'
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.bs-header-description').exists()).toBe(false)
+  })
+
+  it('file result with project-relative path emits correct navigateDir and selectFile', async () => {
+    // This tests the bug fix: results from subdirectory search should have
+    // project-relative paths (e.g., 'internal/handler/dir_search.go'),
+    // not search-directory-relative paths (e.g., 'dir_search.go')
+    mockState.query = 'dir_search'
+    mockState.results = [
+      { name: 'dir_search.go', path: 'internal/handler/dir_search.go', type: 'file', matchedIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8] },
+    ]
+    mockState.total = 1
+    const wrapper = mountDrawer()
+    await wrapper.find('.fs-result-item').trigger('click')
+    // Should navigate to the correct parent directory
+    expect(wrapper.emitted('navigateDir')![0][0]).toBe('internal/handler')
+    // Should select the file with the full project-relative path
+    expect(wrapper.emitted('selectFile')![0][0]).toBe('internal/handler/dir_search.go')
+  })
+
+  it('file result in project root emits empty navigateDir', async () => {
+    mockState.query = 'main'
+    mockState.results = [
+      { name: 'main.go', path: 'main.go', type: 'file', matchedIndices: [0, 1, 2, 3] },
+    ]
+    mockState.total = 1
+    const wrapper = mountDrawer()
+    await wrapper.find('.fs-result-item').trigger('click')
+    expect(wrapper.emitted('navigateDir')![0][0]).toBe('')
+    expect(wrapper.emitted('selectFile')![0][0]).toBe('main.go')
+  })
+
+  it('renders open directory button on each result', () => {
+    mockState.query = 'main'
+    mockState.results = [
+      { name: 'main.go', path: 'cmd/main.go', type: 'file', matchedIndices: [0, 1, 2, 3] },
+    ]
+    mockState.total = 1
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.fs-result-dir-btn').exists()).toBe(true)
+  })
+
+  it('clicking open directory button calls navToFileInManager and closes drawer', async () => {
+    mockState.query = 'main'
+    mockState.results = [
+      { name: 'main.go', path: 'cmd/main.go', type: 'file', matchedIndices: [0, 1, 2, 3] },
+    ]
+    mockState.total = 1
+    const wrapper = mountDrawer()
+    await wrapper.find('.fs-result-dir-btn').trigger('click')
+    expect(mockNavToFileInManager).toHaveBeenCalledWith('cmd/main.go')
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('clicking open directory button does not trigger result click', async () => {
+    mockState.query = 'main'
+    mockState.results = [
+      { name: 'main.go', path: 'cmd/main.go', type: 'file', matchedIndices: [0, 1, 2, 3] },
+    ]
+    mockState.total = 1
+    const wrapper = mountDrawer()
+    await wrapper.find('.fs-result-dir-btn').trigger('click')
+    // Should NOT emit selectFile or navigateDir (those are from onResultClick)
+    expect(wrapper.emitted('selectFile')).toBeFalsy()
+    expect(wrapper.emitted('navigateDir')).toBeFalsy()
   })
 })

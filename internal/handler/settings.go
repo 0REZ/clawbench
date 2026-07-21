@@ -88,19 +88,20 @@ var hotReloadFields = map[string]bool{
 	"port_forward.port":          true,
 	"port_forward.allowed_ports": true,
 	// RAG — reconfigure embedder, indexer, cleanup worker
-	"rag.base_url":         true,
-	"rag.model":            true,
-	"rag.api_key":          true,
-	"rag.chunk_size":       true,
-	"rag.search_limit":     true,
-	"rag.search_pool_size": true,
-	"rag.retention_days":   true,
-	"dingtalk.enabled":     true,
-	"dingtalk.app_key":     true,
-	"dingtalk.app_secret":  true,
-	"dingtalk.agent_id":    true,
-	"dingtalk.users":       true,
-	"push_mode":            true,
+	"rag.base_url":              true,
+	"rag.model":                 true,
+	"rag.api_key":               true,
+	"rag.chunk_size":            true,
+	"rag.search_limit":          true,
+	"rag.search_pool_size":      true,
+	"rag.retention_days":        true,
+	"dingtalk.enabled":          true,
+	"dingtalk.app_key":          true,
+	"dingtalk.app_secret":       true,
+	"dingtalk.agent_id":         true,
+	"dingtalk.users":            true,
+	"push_mode":                 true,
+	"file_search.display_limit": true,
 }
 
 // restartGracePeriod is the delay before shutting down the server after a restart
@@ -173,6 +174,7 @@ type configResponse struct {
 	Summarize           configSummarize      `json:"summarize"`
 	DingTalk            configDingTalk       `json:"dingtalk"`
 	PushMode            string               `json:"push_mode"`
+	FileSearch          configFileSearch     `json:"file_search"`
 }
 
 type configChat struct {
@@ -278,6 +280,10 @@ type configDingTalk struct {
 	Users     []string `json:"users"`
 }
 
+type configFileSearch struct {
+	DisplayLimit int `json:"display_limit"`
+}
+
 // PatchableConfigPaths defines the whitelist of config paths that PATCH /api/config accepts.
 // Any path not in this list will be rejected with 400 Bad Request.
 var PatchableConfigPaths = map[string]bool{
@@ -340,6 +346,7 @@ var PatchableConfigPaths = map[string]bool{
 	"dingtalk.agent_id":           true,
 	"dingtalk.users":              true,
 	"push_mode":                   true,
+	"file_search.display_limit":   true,
 }
 
 // validTTSEngines is the set of valid TTS engine values.
@@ -456,6 +463,9 @@ func serveConfigGet(w http.ResponseWriter, _ *http.Request) {
 			Users:     cfg.DingTalk.Users,
 		},
 		PushMode: cfg.PushMode,
+		FileSearch: configFileSearch{
+			DisplayLimit: cfg.FileSearch.DisplayLimit,
+		},
 	}
 
 	// Conditionally populate Summarize API sub-config when each backend is "api"
@@ -852,6 +862,12 @@ func validatePatchValues(patch map[string]any) error { //nolint:gocognit,gocyclo
 		}
 	}
 
+	if fs, ok := patch["file_search"].(map[string]any); ok {
+		if v, ok := fs["display_limit"].(float64); ok && (v < 10 || v > 500) {
+			return fmt.Errorf("file_search.display_limit must be between 10 and 500")
+		}
+	}
+
 	return nil
 }
 
@@ -1092,6 +1108,12 @@ func applyConfigPatch(patch map[string]any) { //nolint:gocognit,gocyclo // exhau
 				}
 			}
 			cfg.DingTalk.Users = users
+		}
+	}
+
+	if fs, ok := patch["file_search"].(map[string]any); ok {
+		if v, ok := fs["display_limit"].(float64); ok {
+			cfg.FileSearch.DisplayLimit = int(v)
 		}
 	}
 

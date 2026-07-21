@@ -2,8 +2,8 @@
   <BottomSheet :open="open" auto @close="handleClose">
     <template #header>
       <Search :size="16" class="bs-header-icon" />
-      <span class="bs-header-title">{{ t('file.search.title') }}</span>
-      <div v-if="search.state.searchBasePath" class="bs-header-description">
+      <span class="bs-header-title">{{ headerTitle }}</span>
+      <div v-if="search.state.searchBasePath && search.state.scope === 'current'" class="bs-header-description">
         <HeaderMarquee :text="search.state.searchBasePath">{{ search.state.searchBasePath }}</HeaderMarquee>
       </div>
     </template>
@@ -24,6 +24,14 @@
         >
           <FolderTree :size="16" />
         </button>
+        <button
+          class="fs-toggle-btn"
+          :class="{ active: search.state.scope === 'global' }"
+          :title="t('file.search.scopeGlobal')"
+          @click="toggleScope"
+        >
+          <Globe :size="16" />
+        </button>
         <button class="fs-toggle-btn" :title="t('file.search.reset')" @click="handleReset">
           <RotateCcw :size="14" />
         </button>
@@ -41,7 +49,7 @@
         </div>
         <template v-else>
           <div class="fs-results-count">
-            {{ t('file.search.resultCount', { count: search.state.total }) }}
+            {{ search.state.truncated ? t('file.search.resultCountPlus', { limit: search.getDisplayLimit() }) : t('file.search.resultCount', { count: search.state.total }) }}
           </div>
           <div class="fs-results">
             <div
@@ -58,9 +66,16 @@
                 <span class="fs-result-name" v-html="highlightName(r.name, r.matchedIndices)" />
                 <span class="fs-result-path">{{ formatPath(r.path) }}</span>
               </div>
+              <button
+                class="fs-result-dir-btn"
+                :title="t('chat.attach.openDirectory')"
+                @click.stop="onOpenDir(r)"
+              >
+                <FolderOpen :size="16" />
+              </button>
             </div>
             <div v-if="search.state.truncated" class="fs-truncated">
-              {{ t('file.search.truncated', { max: 100 }) }}
+              {{ t('file.search.truncated') }}
             </div>
           </div>
         </template>
@@ -70,14 +85,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, FolderTree, RotateCcw } from 'lucide-vue-next'
+import { Search, FolderTree, Globe, RotateCcw, FolderOpen } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import HeaderMarquee from '@/components/common/HeaderMarquee.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
 import { useFileSearch, type FileSearchResult } from '@/composables/useFileSearch'
+import { navToFileInManager } from '@/composables/useFilePathAnnotation'
 import { appLog } from '@/utils/appLog'
 import { isThumbableExt } from '@/utils/fileManager'
 
@@ -96,6 +112,17 @@ const emit = defineEmits<{
 
 const search = useFileSearch()
 const inputRef = ref<InstanceType<typeof SearchInput> | null>(null)
+
+const headerTitle = computed(() => {
+  if (search.state.scope === 'global') {
+    return search.state.recursive
+      ? t('file.search.titleGlobalRecursive')
+      : t('file.search.titleGlobal')
+  }
+  return search.state.recursive
+    ? t('file.search.titleCurrentRecursive')
+    : t('file.search.titleCurrent')
+})
 
 // Focus input when drawer opens
 watch(() => props.open, async (val) => {
@@ -137,6 +164,13 @@ function toggleRecursive() {
   }
 }
 
+function toggleScope() {
+  search.state.scope = search.state.scope === 'current' ? 'global' : 'current'
+  if (search.state.query.trim()) {
+    search.startSearch(props.currentDir)
+  }
+}
+
 function handleReset() {
   search.reset()
 }
@@ -163,6 +197,12 @@ function onResultClick(r: FileSearchResult) {
     emit('navigateDir', dir)
     emit('selectFile', r.path)
   }
+}
+
+function onOpenDir(r: FileSearchResult) {
+  appLog.d('FileSearch', 'open directory', r.path)
+  handleClose()
+  navToFileInManager(r.path)
 }
 
 const thumbErrors = ref(new Set<string>())
@@ -339,6 +379,26 @@ function formatPath(path: string): string {
   text-overflow: ellipsis;
 }
 
+.fs-result-dir-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #999);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fs-result-dir-btn:hover {
+  background: var(--bg-hover, rgba(0,0,0,0.06));
+  color: var(--accent-color, #4a90d9);
+}
+
 .fs-truncated {
   padding: 10px 14px;
   text-align: center;
@@ -347,6 +407,7 @@ function formatPath(path: string): string {
   background: var(--bg-secondary, #f8f9fa);
   border-top: 1px solid var(--border-color, #e5e5e5);
 }
+
 </style>
 
 <style>

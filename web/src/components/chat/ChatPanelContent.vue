@@ -128,7 +128,7 @@
 
   <!-- Tool Detail Overlay -->
   <ToolDetailDrawer
-    :show="toolDetailIsOpen.value"
+    :show="toolDetailDrawer.effectiveOpen.value"
     :toolName="toolDetailOverlay.name"
     :toolSubagentType="toolDetailOverlay.subagentType"
     :toolSummary="toolDetailOverlay.summary"
@@ -230,7 +230,11 @@ const { openFilePath } = useFilePathAnnotation()
 
 async function handleFileTagClick(filePath) {
     if (filePath) {
-        const ok = await openFilePath(filePath)
+        // Attachment paths from backend are absolute; strip projectRoot prefix
+        // so openFilePath doesn't treat in-project files as external.
+        const root = store.state.projectRoot
+        const relPath = root && filePath.startsWith(root + '/') ? filePath.slice(root.length + 1) : filePath
+        const ok = await openFilePath(relPath)
         if (ok) switchTab('browse')
     }
 }
@@ -257,6 +261,7 @@ function findToolBlock({ msgId, blockIdx }) {
 }
 
 const {
+  drawer: toolDetailDrawer,
   isOpen: toolDetailIsOpen,
   toolDetailData,
   toolDetailOverlay,
@@ -268,6 +273,7 @@ const {
   closeOverlay: closeToolDetailOverlay,
 } = useToolDetailDrawer({
   chatRender: render,
+  tabId: 'chat',
   onFileOpen: async (path, lineStart, lineEnd) => {
     const ok = await openFilePath(path, lineStart, lineEnd)
     if (ok) switchTab('browse')
@@ -441,8 +447,9 @@ const manager = useSessionManager({
   disconnectStream: stream.disconnectStream,
   updateRenderedContents: (forceFull) => render.updateRenderedContents(forceFull),
   clearInputState: () => {
+    inputBarRef.value?.saveDraft()
     clearAll()
-    inputBarRef.value?.clearInput()
+    inputBarRef.value?.clearInputPreserveDraft()
     clearPendingFiles()
   },
   scrollBottom: (force) => scrollBottom(force),
