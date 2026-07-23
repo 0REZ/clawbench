@@ -81,7 +81,7 @@ function mountHeader(props = {}) {
       showLineNumbers: false,
       stickyScroll: false,
       overlayOpen: false,
-      overlayCanGoBack: false,
+      recentFilesAvailable: 0,
       ...props,
     },
     global: {

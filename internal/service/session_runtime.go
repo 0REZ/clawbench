@@ -34,8 +34,8 @@ var (
 const responsePreviewMaxRunes = model.ResponsePreviewMaxRunes
 
 // EmitSessionEvent broadcasts a session_update event to connected clients.
-// toolName is optional and only used for "permission_pending" status.
-func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolName ...string) {
+// toolName and toolInput are optional and only used for "permission_pending" status.
+func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolNameAndInput ...string) {
 	mgr := ws.GetManager()
 	if mgr == nil {
 		return
@@ -47,25 +47,27 @@ func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolName ..
 		HasNewMessages: hasNewMessages,
 	}
 
-	// On completion, include session title for push notification
+	// Include session title and project path for push notifications
+	if title, err := GetSessionTitle(sessionID); err == nil && title != "" {
+		data.SessionTitle = title
+	}
+
 	var responsePreviewRaw string
-	if status == "completed" || status == "cancelled" {
-		if title, err := GetSessionTitle(sessionID); err == nil && title != "" {
-			data.SessionTitle = title
-		}
+	if status == "completed" {
 		// Include response preview for DingTalk (Markdown) and Android/browser (plain text)
-		if status == "completed" {
-			responsePreviewRaw = getSessionResponsePreviewRaw(sessionID)
-			data.ResponsePreview = truncatePreview(responsePreviewRaw)
-			if responsePreviewRaw != "" {
-				data.ResponsePreviewPlain = truncatePreview(summarize.StripMarkdown(responsePreviewRaw))
-			}
+		responsePreviewRaw = getSessionResponsePreviewRaw(sessionID)
+		data.ResponsePreview = truncatePreview(responsePreviewRaw)
+		if responsePreviewRaw != "" {
+			data.ResponsePreviewPlain = truncatePreview(summarize.StripMarkdown(responsePreviewRaw))
 		}
 	}
 
-	// Include toolName for permission_pending events
-	if status == "permission_pending" && len(toolName) > 0 {
-		data.ToolName = toolName[0]
+	// Include toolName and toolInput for permission_pending events
+	if status == "permission_pending" && len(toolNameAndInput) > 0 {
+		data.ToolName = toolNameAndInput[0]
+		if len(toolNameAndInput) > 1 {
+			data.ToolInput = toolNameAndInput[1]
+		}
 	}
 
 	data.ProjectPath = GetSessionProjectPath(sessionID)
@@ -88,7 +90,7 @@ func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolName ..
 	// Pass raw (untruncated) preview — DingTalk package applies its own limit.
 	// If push succeeds, remove from pending_events to avoid duplicate
 	// Android notification when the app comes back online.
-	if dingtalk.IsStarted() && dingtalk.PushSessionEvent(sessionID, status, data.SessionTitle, responsePreviewRaw, data.ProjectPath, data.ToolName) {
+	if dingtalk.IsStarted() && dingtalk.PushSessionEvent(sessionID, status, data.SessionTitle, responsePreviewRaw, data.ProjectPath, data.ToolName, data.ToolInput) {
 		_ = DeletePendingEvent(msg.ID)
 	}
 }

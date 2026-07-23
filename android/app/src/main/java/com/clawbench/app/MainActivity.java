@@ -20,6 +20,7 @@ import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.animation.LinearInterpolator;
 import android.webkit.CookieManager;
 import android.widget.FrameLayout;
 import android.webkit.DownloadListener;
@@ -35,6 +36,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -49,6 +51,10 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.splashscreen.SplashScreen;
+
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 
 import org.json.JSONArray;
 
@@ -105,6 +111,9 @@ public class MainActivity extends AppCompatActivity {
 
     WebView webView;
     private ProgressBar progressBar;
+    private View splashScreen;
+    private ImageView splashSweep;
+    private ObjectAnimator sweepAnimator;
     private SharedPreferences prefs;
 
     // Tracks whether the WebView is showing a successfully loaded remote page.
@@ -215,6 +224,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // Install splash screen before super.onCreate to override Android 12+ system splash
+        SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
 
         instance = this;
@@ -232,6 +243,17 @@ public class MainActivity extends AppCompatActivity {
 
         webView = findViewById(R.id.webView);
         progressBar = findViewById(R.id.progressBar);
+        splashScreen = findViewById(R.id.splashScreen);
+        splashSweep = findViewById(R.id.splashSweep);
+
+        // Start sweep rotation animation on splash screen
+        if (splashSweep != null) {
+            sweepAnimator = ObjectAnimator.ofFloat(splashSweep, View.ROTATION, 0f, 360f);
+            sweepAnimator.setDuration(1600);
+            sweepAnimator.setInterpolator(new LinearInterpolator());
+            sweepAnimator.setRepeatCount(ValueAnimator.INFINITE);
+            sweepAnimator.start();
+        }
 
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
@@ -276,6 +298,41 @@ public class MainActivity extends AppCompatActivity {
         } else {
             webView.loadUrl(LOGIN_HTML_URL);
         }
+    }
+
+    /**
+     * Show the native splash screen overlay and start the sweep animation.
+     * Used when connecting to a new server from the login page.
+     */
+    private void showSplash() {
+        if (splashScreen == null) return;
+        splashScreen.setAlpha(1f);
+        splashScreen.setVisibility(View.VISIBLE);
+        if (splashSweep != null && sweepAnimator == null) {
+            sweepAnimator = ObjectAnimator.ofFloat(splashSweep, View.ROTATION, 0f, 360f);
+            sweepAnimator.setDuration(1600);
+            sweepAnimator.setInterpolator(new LinearInterpolator());
+            sweepAnimator.setRepeatCount(ValueAnimator.INFINITE);
+            sweepAnimator.start();
+        }
+    }
+
+    /**
+     * Dismiss the native splash screen with a fade-out animation.
+     * Called when the remote WebView page finishes loading successfully,
+     * or from JS via AndroidNative.dismissSplash() when Vue finishes mounting.
+     */
+    private void dismissSplash() {
+        if (splashScreen == null || splashScreen.getVisibility() != View.VISIBLE) return;
+        if (sweepAnimator != null) {
+            sweepAnimator.cancel();
+            sweepAnimator = null;
+        }
+        splashScreen.animate()
+                .alpha(0f)
+                .setDuration(200)
+                .withEndAction(() -> splashScreen.setVisibility(View.GONE))
+                .start();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -675,6 +732,7 @@ public class MainActivity extends AppCompatActivity {
         loadErrorPending = false;
         sslCertTrustedByUser = false;
         webView.setVisibility(View.GONE);
+        showSplash();
 
         // Save URL and password
         prefs.edit().putString(KEY_SERVER_URL, url).apply();
@@ -1172,6 +1230,12 @@ public class MainActivity extends AppCompatActivity {
         // Do NOT stop BackgroundService here — it should survive Activity lifecycle
         // so the SSH tunnel continues running when the app is in background.
         cancelConnectionTimeout();
+        if (sweepAnimator != null) {
+            sweepAnimator.cancel();
+            sweepAnimator = null;
+        }
+        splashSweep = null;
+        splashScreen = null;
         cleanupSharedCacheDir();
         instance = null; // Clear static reference to prevent memory leak / stale access
         super.onDestroy();
@@ -1539,6 +1603,7 @@ public class MainActivity extends AppCompatActivity {
                 webViewConnected = false;
                 loadErrorPending = false;
                 view.setVisibility(View.VISIBLE);
+                dismissSplash();
             } else {
                 // Navigating to a remote page — keep WebView hidden until it loads
                 // to prevent flashing ugly browser error pages.
@@ -1570,6 +1635,9 @@ public class MainActivity extends AppCompatActivity {
                 // This prevents the browser's built-in error page from flashing.
             } else {
                 // Remote page finished loading successfully — show the WebView.
+                // Note: do NOT dismiss native splash here; the JS app will call
+                // AndroidNative.dismissSplash() once Vue finishes mounting,
+                // so the splash covers the full gap from cold start to app ready.
                 webViewConnected = true;
                 cancelConnectionTimeout();
                 view.setVisibility(View.VISIBLE);
@@ -1744,6 +1812,15 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean isNativeApp() {
             return true;
+        }
+
+        /**
+         * Dismiss the native splash overlay. Called by the JS app after Vue finishes
+         * mounting, so the native splash covers the entire gap from cold start to app ready.
+         */
+        @JavascriptInterface
+        public void dismissSplash() {
+            activity.runOnUiThread(() -> activity.dismissSplash());
         }
 
         /**

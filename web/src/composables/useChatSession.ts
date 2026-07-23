@@ -12,6 +12,7 @@ import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
+import type { FileEntry } from '@/utils/fileAttachmentUtils'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -99,7 +100,7 @@ export function useChatSession(options: UseChatSessionOptions) {
 
   // ── Identity refs from singleton ──
   const identity = useSessionIdentity()
-  const { currentSessionTitle, currentBackend, currentAgentId, currentModelId, currentModelName, currentThinkingEffort, runningSessions, runningSessionsVersion, availableCommands, autoApprove, availableThinkingEfforts } = identity
+  const { currentSessionTitle, currentBackend, currentAgentId, currentModelId, currentModelName, runningSessions, runningSessionsVersion, availableCommands, autoApprove, thinkingEffortState, modeState } = identity
 
   // ── Agents from singleton ──
   const { agents, loadAgents, getAgentIcon, getAgentName, getAgent, syncModelFromAgent, getAgentModel, agentHeaderTitle: makeAgentTitle, supportsDualTransport } = useAgents()
@@ -142,33 +143,44 @@ export function useChatSession(options: UseChatSessionOptions) {
   // Falls back to localStorage for a previously saved preference.
   function syncThinkingEffortFromData(thinkingEffortFromServer: string) {
     if (thinkingEffortFromServer) {
-      currentThinkingEffort.value = thinkingEffortFromServer
+      thinkingEffortState.currentId.value = thinkingEffortFromServer
       // Resolve name from available levels (may be empty if levels haven't loaded yet;
       // updateAvailableThinkingEfforts will resolve it when levels arrive)
-      const levels = availableThinkingEfforts.value
+      const levels = thinkingEffortState.available.value
       if (levels.length > 0) {
         const level = levels.find(l => l.id === thinkingEffortFromServer)
-        identity.currentThinkingEffortName.value = level?.name || thinkingEffortFromServer
+        thinkingEffortState.currentName.value = level?.name || thinkingEffortFromServer
       }
-    } else {
-      currentThinkingEffort.value = identity.loadThinkingPref(currentAgentId.value) || ''
+    } else if (!thinkingEffortState.currentId.value) {
+      // No server-persisted thinking effort AND no user/ACP-set value — try agent preference.
+      const preferredEffort = identity.loadThinkingPref(currentAgentId.value)
+      if (preferredEffort) {
+        thinkingEffortState.currentId.value = preferredEffort
+        const levels = thinkingEffortState.available.value
+        const level = levels.find(l => l.id === preferredEffort)
+        thinkingEffortState.currentName.value = level?.name || preferredEffort
+      } else {
+        thinkingEffortState.currentId.value = ''
+        thinkingEffortState.currentName.value = ''
+      }
     }
   }
 
   function syncModeFromData(modeIdFromServer?: string, availableModes?: Array<{id: string; name: string}>) {
     if (modeIdFromServer) {
-      identity.currentModeId.value = modeIdFromServer
+      modeState.currentId.value = modeIdFromServer
       const mode = availableModes?.find(m => m.id === modeIdFromServer)
-      identity.currentModeName.value = mode?.name || modeIdFromServer
-    } else if (!identity.currentModeId.value) {
+      modeState.currentName.value = mode?.name || modeIdFromServer
+    } else if (!modeState.currentId.value) {
       // No server-persisted mode AND no agent-set mode via SSE — try agent preference.
       const preferredMode = identity.loadModePref(currentAgentId.value)
       if (preferredMode) {
-        identity.currentModeId.value = preferredMode
+        modeState.currentId.value = preferredMode
         const mode = availableModes?.find(m => m.id === preferredMode)
-        identity.currentModeName.value = mode?.name || preferredMode
+        modeState.currentName.value = mode?.name || preferredMode
       } else {
-        identity.currentModeName.value = ''
+        modeState.currentId.value = ''
+        modeState.currentName.value = ''
       }
     }
   }
@@ -448,6 +460,26 @@ export function useChatSession(options: UseChatSessionOptions) {
 
       // Replace messages with server data.
       messages.value = parseMessages(rawMsgs, onParseAssistantContent, messages.value, forceNotRunning ? false : data.running)
+
+      // Append pending messages from the queue field in the backend response.
+      // The queue lives in-memory (not in DB), so parseMessages won't include them.
+      // Since parseMessages just replaced messages.value, there are no stale
+      // pending messages to clear — just append from the authoritative backend queue.
+      const queueItems = data.queue as Array<Record<string, unknown>> | undefined
+      if (queueItems) {
+        for (const item of queueItems) {
+          const itemFiles = [...(item.files as FileEntry[] || []).map((f: FileEntry) => typeof f === 'string' ? { path: f, isDir: false } : f), ...(item.filePaths as string[] || []).map((p: string) => ({ path: p, isDir: false }))]
+          messages.value.push({
+            role: 'user',
+            id: item.queueId || `queue-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            content: item.text || '',
+            blocks: item.text ? [{ type: 'text', text: item.text as string }] : [],
+            files: itemFiles,
+            createdAt: item.createdAt || new Date().toISOString(),
+            pending: true,
+          })
+        }
+      }
 
       totalMessages.value = data.total || messages.value.length
       // Sanity check: if the backend returned a different sessionId than what we

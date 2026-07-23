@@ -671,6 +671,10 @@ export default {
     overlay: {
       back: '返回',
     },
+    recent: {
+      title: '最近文件',
+      empty: '暂无最近打开的文件',
+    },
     search: {
       title: '搜索文件',
       titleCurrent: '在当前目录搜索',
@@ -1140,6 +1144,8 @@ export default {
       filesSectionHeader: '文件',
       showHidden: '显示隐藏文件',
       showHiddenDesc: '在文件管理器中显示以 . 开头的隐藏文件',
+      recentFilesCount: '最近文件数量',
+      recentFilesCountDesc: '记住的最近打开文件的最大数量',
       wordWrap: '自动换行',
       wordWrapDesc: '文件预览时自动折行显示长行',
       lineNumbers: '行号',

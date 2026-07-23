@@ -39,7 +39,7 @@ func (b *ACPBackend) Name() string {
 //
 // Flow: GetOrCreateConn → (ResumeSession or NewSession) → emit cached state → Prompt
 // On peer disconnect during Prompt, automatically retries once after respawn + ResumeSession.
-func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) { //nolint:gocognit // complex ACP protocol handler, refactoring would reduce readability
+func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) { //nolint:gocognit,gocyclo // complex ACP protocol handler, refactoring would reduce readability
 	ch := make(chan StreamEvent, streamChanSize)
 
 	go func() {
@@ -50,6 +50,11 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 		// Step 1: Get or create a dedicated connection for this session
 		mgr := GetACPConnManager()
 		connStart := time.Now()
+		if req.WorkDir == "" {
+			slog.Warn("acp: WorkDir is EMPTY in ChatRequest, ACP process will inherit server CWD",
+				slog.String("session_id", req.SessionID),
+				slog.String("agent_id", b.agent.ID))
+		}
 		conn, isNew, err := mgr.GetOrCreateConn(ctx, b.agent, req.SessionID, req.WorkDir)
 		slog.Info("acp: GetOrCreateConn done", "session_id", req.SessionID, "agent_id", b.agent.ID, "is_new", isNew, "elapsed", time.Since(connStart), "error", err)
 		if err != nil {
@@ -72,11 +77,11 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 		// instead of the agent's default (e.g. "bypassPermissions") during streaming.
 		// The actual RPC to set the config is still done inside Prompt().
 		if req.Mode != "" {
-			conn.UpdateCachedCurrentMode(req.Mode)
+			conn.UpdateCachedCurrent("mode", req.Mode)
 			conn.PreApplyConfigCurrentID("mode", req.Mode)
 		}
 		if req.ThinkingEffort != "" {
-			conn.UpdateCachedCurrentThinkingEffort(req.ThinkingEffort)
+			conn.UpdateCachedCurrent("thought_level", req.ThinkingEffort)
 			conn.PreApplyConfigCurrentID("thinkingEffort", req.ThinkingEffort)
 		}
 
