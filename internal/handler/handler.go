@@ -20,6 +20,9 @@ import (
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 )
 
+// jsonKeyStatus is the JSON key "status" used across handler responses (goconst).
+const jsonKeyStatus = "status"
+
 // loc returns the Localizer for the current request.
 func loc(r *http.Request) *i18n.Localizer {
 	return middleware.GetLocalizer(r)
@@ -353,6 +356,11 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// Chat quick-send (CRUD for quick-send presets stored in database)
 	register("/api/chat/quick-send", middleware.Auth(ServeChatQuickSend))
 	register("/api/chat/quick-send/", middleware.Auth(ServeChatQuickSendByID))
+
+	// Self-upgrade
+	register("/api/upgrade/check", middleware.Auth(ServeUpgradeCheck))
+	register("/api/upgrade/start", middleware.Auth(ServeUpgradeStart))
+	register("/api/upgrade/status", middleware.Auth(ServeUpgradeStatus))
 
 	// Serve static assets from frontend filesystem (disk public/ > embed fallback)
 	// http.FileServerFS internally cleans paths before Open(), preventing traversal.

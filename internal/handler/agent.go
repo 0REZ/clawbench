@@ -3,64 +3,22 @@ package handler
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync/atomic"
-	"time"
 	"unicode/utf8"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	"clawbench/internal/ai"
 	"clawbench/internal/model"
+	"clawbench/internal/platform"
 	"clawbench/internal/service"
 )
 
-// chinaMirrorChecked caches the result of isChinaMainland() to avoid repeated
-// network probes. 0 = not yet checked; 1 = true (China); 2 = false.
-var chinaMirrorChecked atomic.Int32
-
-var chinaProbeClient = &http.Client{
-	Timeout: 3 * time.Second,
-	Transport: &http.Transport{
-		Proxy: nil,
-	},
-}
-
-// isChinaMainland returns true if the server appears to be running in mainland China.
-// Uses network probe to ip-api.com — country_code == "CN". Result cached.
-func isChinaMainland() bool {
-	if v := chinaMirrorChecked.Load(); v != 0 {
-		return v == 1
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://ip-api.com/line/?fields=countryCode", http.NoBody)
-	if err != nil {
-		chinaMirrorChecked.Store(2)
-		return false
-	}
-	resp, err := chinaProbeClient.Do(req)
-	if err != nil {
-		chinaMirrorChecked.Store(2)
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16))
-	if err != nil {
-		chinaMirrorChecked.Store(2)
-		return false
-	}
-	code := strings.TrimSpace(string(body))
-	isCN := code == "CN"
-	if isCN {
-		chinaMirrorChecked.Store(1)
-	} else {
-		chinaMirrorChecked.Store(2)
-	}
-	return isCN
+// IsChinaMainland exports the China detection result for use by other packages.
+func IsChinaMainland() bool {
+	return platform.IsChinaMainland()
 }
 
 const npmMirrorRegistry = "https://registry.npmmirror.com"
@@ -71,7 +29,7 @@ func prepareInstallCmd(installCmd string) string {
 	if !strings.HasPrefix(installCmd, "npm install") {
 		return installCmd
 	}
-	if isChinaMainland() && !strings.Contains(installCmd, "--registry") {
+	if platform.IsChinaMainland() && !strings.Contains(installCmd, "--registry") {
 		return installCmd + " --registry=" + npmMirrorRegistry
 	}
 	return installCmd
@@ -334,6 +292,51 @@ func serveAgentsDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveAgentsPatch handles PATCH /api/agents — updates an agent's configurable fields.
+// isValidThinkingEffort checks if a thinking effort level is valid for an agent.
+// It checks levels based on the agent's effective transport:
+//   - ACP mode: only ACP-reported levels from AgentCapabilityRegistry
+//   - CLI mode: only static ThinkingEffortLevels from BackendSpec
+//   - Neither has levels: allow any value (backward compatible)
+func isValidThinkingEffort(agent *model.Agent, level string) bool {
+	transport := agent.Transport
+	if transport == "" {
+		if agent.AcpCommand != "" {
+			transport = "acp-stdio"
+		} else {
+			transport = "cli"
+		}
+	}
+
+	reg := ai.GetAgentCapabilityRegistry()
+
+	if transport == "acp-stdio" {
+		// ACP mode: only check ACP-reported levels
+		if es := reg.GetThinkingEffortState(agent.ID, ""); es != nil && len(es.AvailableLevels) > 0 {
+			for _, l := range es.AvailableLevels {
+				if l.ID == level {
+					return true
+				}
+			}
+			return false
+		}
+		// No ACP levels yet (pool not initialized) — allow any value
+		return true
+	}
+
+	// CLI mode: check static levels from BackendSpec
+	if len(agent.ThinkingEffortLevels) > 0 {
+		for _, l := range agent.ThinkingEffortLevels {
+			if l == level {
+				return true
+			}
+		}
+		return false
+	}
+
+	// No static levels and not ACP — allow any value
+	return true
+}
+
 // Expects: {"id": "claude", "preferred_model": "claude-opus-4-5", "preferred_thinking_effort": "high", ...}
 // Patchable fields: preferred_model, preferred_thinking_effort, transport,
 // name, icon, specialty, custom_system_prompt, sort_order.
@@ -396,14 +399,8 @@ func serveAgentsPatch(w http.ResponseWriter, r *http.Request) { //nolint:gocogni
 	// Validate and apply preferred_thinking_effort
 	if v, exists := patch["preferred_thinking_effort"]; exists {
 		level, _ := v.(string)
-		if level != "" && len(agent.ThinkingEffortLevels) > 0 {
-			found := false
-			for _, l := range agent.ThinkingEffortLevels {
-				if l == level {
-					found = true
-					break
-				}
-			}
+		if level != "" {
+			found := isValidThinkingEffort(agent, level)
 			if !found {
 				writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidThinkingEffort")
 				return

@@ -16,21 +16,22 @@
             v-for="b in sortedBackends"
             :key="b.id"
             class="backend-item"
-            :class="{ 'backend-not-detected': !detectedBackends.has(b.id) }"
+            :class="{ 'backend-not-detected': !loading && !detectedBackends.has(b.id) }"
           >
             <div class="backend-icon">{{ b.icon }}</div>
             <div class="backend-info">
               <div class="backend-name">{{ b.name }}</div>
               <div class="backend-specialty">{{ b.specialty }}</div>
             </div>
+            <Loader2 v-if="loading" :size="12" class="spin backend-status-spinner" />
             <span
-              v-if="detectedBackends.has(b.id)"
+              v-else-if="detectedBackends.has(b.id)"
               class="backend-badge badge-installed"
             >
               {{ t('welcomeInfo.detected') }}
             </span>
             <button
-              v-if="!detectedBackends.has(b.id) && b.install_cmd"
+              v-else-if="b.install_cmd"
               class="btn-install"
               @click="startInstall(b)"
             >{{ t('welcomeInfo.install') }}</button>
@@ -53,6 +54,7 @@
           </button>
           <div class="footer-secondary">
             <button class="btn-rescan" :disabled="rescanning" @click="rescan">
+              <Loader2 v-if="rescanning" :size="12" class="spin" />
               {{ rescanning ? t('welcomeInfo.rescanning') : t('welcomeInfo.rescan') }}
             </button>
             <button class="btn-dont-show" @click="dontShowAgain">
@@ -81,7 +83,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { useAgents } from '@/composables/useAgents'
-import { MonitorSmartphone, Smartphone } from 'lucide-vue-next'
+import { MonitorSmartphone, Smartphone, Loader2 } from 'lucide-vue-next'
 import IosInstallDrawer from './common/IosInstallDrawer.vue'
 import AgentInstallDialog from './AgentInstallDialog.vue'
 import { appLog } from '@/utils/appLog'
@@ -113,6 +115,7 @@ const detectedBackends = ref<Set<string>>(new Set())
 const showIosSheet = ref(false)
 const selectedBackend = ref<BackendInfo | null>(null)
 const rescanning = ref(false)
+const loading = ref(true)
 
 // Sort: installed first, not-installed last
 const sortedBackends = computed(() => {
@@ -142,6 +145,9 @@ async function loadBackends() {
       detectedBackends.value = new Set(agentBackends)
     }
   } catch { /* will show empty list */ }
+  finally {
+    loading.value = false
+  }
 }
 
 function show() {
@@ -162,6 +168,7 @@ function dontShowAgain() {
 async function rescan() {
   if (rescanning.value) return
   rescanning.value = true
+  loading.value = true
   try {
     await rescanAgents()
     await loadBackends()
@@ -366,6 +373,11 @@ onUnmounted(() => {
   opacity: 0.85;
 }
 
+.backend-status-spinner {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
 /* Install section */
 .welcome-install {
   padding: 8px 12px 4px;
@@ -425,6 +437,9 @@ onUnmounted(() => {
 }
 
 .btn-rescan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
@@ -473,5 +488,14 @@ onUnmounted(() => {
 .welcome-fade-enter-from,
 .welcome-fade-leave-to {
   opacity: 0;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

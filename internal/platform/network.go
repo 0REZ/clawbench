@@ -2,8 +2,13 @@ package platform
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -104,3 +109,96 @@ func GetLocalIPs() []string {
 	})
 	return ips
 }
+
+// ChinaMirrorChecked caches the result of IsChinaMainland() to avoid repeated
+// network probes. 0 = not yet checked; 1 = true (China); 2 = false.
+// Exported for test access from handler package.
+var ChinaMirrorChecked atomic.Int32
+
+var chinaProbeClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		Proxy: nil,
+	},
+}
+
+// IsChinaMainland returns true if the server appears to be running in mainland China.
+// Uses a multi-strategy approach:
+//  1. Direct connectivity: try TCP connect to npmmirror — if fast, likely in China.
+//  2. Fallback: IP geolocation via ip-api.com — country_code == "CN".
+//
+// Result is cached (ChinaMirrorChecked: 0=unchecked, 1=China, 2=non-China).
+func IsChinaMainland() bool {
+	if v := ChinaMirrorChecked.Load(); v != 0 {
+		return v == 1
+	}
+
+	// Strategy 1: Direct TCP connectivity test to npmmirror.
+	// If we can connect to the China mirror within 500ms, we're likely in China.
+	// This is more reliable than IP geolocation because it tests actual network reachability.
+	if probeChinaMirror() {
+		slog.Debug("china detected via mirror connectivity")
+		ChinaMirrorChecked.Store(1)
+		return true
+	}
+
+	// Strategy 2: Fallback to IP geolocation via ip-api.com
+	if probeIPApi() {
+		slog.Debug("china detected via ip-api geolocation")
+		ChinaMirrorChecked.Store(1)
+		return true
+	}
+
+	ChinaMirrorChecked.Store(2)
+	return false
+}
+
+// probeChinaMirror tries to TCP connect to registry.npmmirror.com:443.
+// Returns true if the connection succeeds within 500ms, indicating we're
+// likely in China (or at least have fast access to the China mirror).
+func probeChinaMirror() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	conn, err := probeChinaDialer.DialContext(ctx, "tcp", "registry.npmmirror.com:443")
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// probeChinaDialer is the dialer used by probeChinaMirror.
+// Package-level variable for testability.
+var probeChinaDialer = net.Dialer{}
+
+// probeIPApi queries ip-api.com for the country code. Returns true if "CN".
+func probeIPApi() bool {
+	return probeIPApiWithClient(chinaProbeClient)
+}
+
+// probeIPApiWithClient is the testable core of probeIPApi.
+// Package-level variable for testability — tests can override to inject
+// custom behavior.
+var probeIPApiWithClient = func(client *http.Client) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://ip-api.com/line/?fields=countryCode", http.NoBody)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Debug("ip-api probe failed", "error", err)
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16))
+	if err != nil {
+		return false
+	}
+	code := strings.TrimSpace(string(body))
+	return code == "CN"
+}
+
+// NpmMirrorRegistry is the China npm mirror URL.
+const NpmMirrorRegistry = "https://registry.npmmirror.com"

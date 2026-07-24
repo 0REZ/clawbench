@@ -118,6 +118,14 @@ func SetRestartFunc(f func()) {
 	restartFunc = f
 }
 
+// TriggerRestart invokes the configured restart function.
+// Used by the upgrade service to trigger graceful shutdown after replacement.
+func TriggerRestart() {
+	if restartFunc != nil {
+		restartFunc()
+	}
+}
+
 // reconfigureOnHotReload is called by applyHotReloadGlobals() to apply
 // hot-reload changes that require subsystem reconfiguration (TTS engine swap,
 // summarize reconstruction, terminal reconfigure).
@@ -1440,7 +1448,7 @@ func ServeConfigRestart(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "restarting",
+		jsonKeyStatus: "restarting",
 	})
 }
 

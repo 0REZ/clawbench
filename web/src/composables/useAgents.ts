@@ -240,6 +240,19 @@ export function getAgentThinkingEffortLevels(agentId: string): string[] {
     return agent?.thinkingEffortLevels || []
 }
 
+/** Get thinking effort levels including ACP-reported levels for dual-transport agents. */
+export function getAgentThinkingEffortLevelsIncludingACP(agentId: string): string[] {
+    const agent = agents.value.find(a => a.id === agentId)
+    if (!agent) return []
+    // For ACP-transport agents, prefer ACP-reported levels
+    if (agent.transport === 'acp-stdio') {
+        const state = acpStatesCache[agentId] as AcpState | undefined
+        const acpLevels = state?.thinkingEffortState?.availableLevels?.map(l => l.id)
+        if (acpLevels && acpLevels.length > 0) return acpLevels
+    }
+    return agent.thinkingEffortLevels || []
+}
+
 /** Check if an agent supports @resume (LoadSession + ListSessions capabilities). */
 export function agentCanResume(agentId: string): boolean {
     const state = acpStatesCache[agentId] as AcpState | undefined
@@ -267,6 +280,11 @@ function getEffectiveThinkingEffort(agentId: string): string {
 function getEffectiveModeId(agentId: string): string {
     const agent = agents.value.find(a => a.id === agentId)
     return agent?.preferredMode || ''
+}
+
+/** Check if an agent has a preferred mode configured. */
+function hasPreferredMode(agentId: string): boolean {
+    return getEffectiveModeId(agentId) !== ''
 }
 
 /** Update a single field on an agent in the reactive store (for immediate UI feedback after PATCH). */
@@ -421,9 +439,11 @@ export function useAgents() {
         agentHeaderTitle,
         syncModelFromAgent,
         getAgentThinkingEffortLevels,
+        getAgentThinkingEffortLevelsIncludingACP,
         hasThinkingEffortLevels,
         getEffectiveThinkingEffort,
         getEffectiveModeId,
+        hasPreferredMode,
         updateAgentField,
         setDefaultAgent,
         canRefreshModels,
