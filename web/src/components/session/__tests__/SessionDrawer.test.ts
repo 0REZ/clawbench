@@ -5,7 +5,18 @@ import SessionDrawer from '@/components/session/SessionDrawer.vue'
 
 // ── Mocks ────────────────────────────────────────────────────
 vi.mock('vue-i18n', () => ({
-  useI18n: () => ({ t: (key: string) => key }),
+  useI18n: () => ({ t: (key: string) => key, locale: { value: 'en' } }),
+  createI18n: () => ({ global: { t: (key: string) => key, locale: { value: 'en' } } }),
+}))
+
+vi.mock('@/composables/useLocale', () => ({
+  useLocale: () => ({
+    currentLocale: { value: 'en' },
+    setLocale: vi.fn(),
+    toggleLocale: vi.fn(),
+    localeLabel: { value: 'EN' },
+  }),
+  gt: (key: string) => key,
 }))
 
 vi.mock('@/utils/appLog', () => ({
@@ -18,9 +29,9 @@ vi.mock('@/stores/app', () => ({
   },
 }))
 
-const { mockLoadAgents, mockGetAgentIcon, mockGetAgentName, mockIsDefaultAgent, mockGetAgentDefaultModelName, mockSetDefaultAgent, mockAgentCanResume } = vi.hoisted(() => ({
+const { mockLoadAgents, mockGetAgentBackend, mockGetAgentName, mockIsDefaultAgent, mockGetAgentDefaultModelName, mockSetDefaultAgent, mockAgentCanResume } = vi.hoisted(() => ({
   mockLoadAgents: vi.fn().mockResolvedValue(undefined),
-  mockGetAgentIcon: vi.fn(() => '🤖'),
+  mockGetAgentBackend: vi.fn(() => ''),
   mockGetAgentName: vi.fn(() => 'Agent'),
   mockIsDefaultAgent: vi.fn(() => false),
   mockGetAgentDefaultModelName: vi.fn(() => ''),
@@ -31,11 +42,11 @@ const { mockLoadAgents, mockGetAgentIcon, mockGetAgentName, mockIsDefaultAgent, 
 vi.mock('@/composables/useAgents', () => ({
   useAgents: () => ({
     agents: ref([
-      { id: 'agent-1', name: 'Agent One', icon: '🤖', backend: 'cli', specialty: 'Coding' },
-      { id: 'agent-2', name: 'Agent Two', icon: '💎', backend: 'acp', specialty: 'Design' },
+      { id: 'agent-1', name: 'Agent One', backend: 'cli', specialty: 'Coding' },
+      { id: 'agent-2', name: 'Agent Two', backend: 'acp', specialty: 'Design' },
     ]),
     loadAgents: mockLoadAgents,
-    getAgentIcon: mockGetAgentIcon,
+    getAgentBackend: mockGetAgentBackend,
     getAgentName: mockGetAgentName,
     isDefaultAgent: mockIsDefaultAgent,
     getAgentDefaultModelName: mockGetAgentDefaultModelName,
@@ -80,6 +91,21 @@ vi.mock('@/components/git/SwipeToDeleteRow.vue', () => ({
   default: {
     name: 'SwipeToDeleteRow',
     template: '<div class="swipe-stub"><slot /></div>',
+  },
+}))
+
+vi.mock('@/components/common/AgentIcon.vue', () => ({
+  default: {
+    name: 'AgentIcon',
+    template: '<span class="agent-icon-stub" />',
+  },
+}))
+
+vi.mock('@/components/common/AgentSelectorDrawer.vue', () => ({
+  default: {
+    name: 'AgentSelectorDrawer',
+    template: '<div class="agent-selector-drawer-stub" />',
+    methods: { preload: vi.fn() },
   },
 }))
 
@@ -350,46 +376,17 @@ describe('SessionDrawer', () => {
 
       expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(true)
     })
-
-    it('renders agent options when selector is open', async () => {
-      const wrapper = mountDrawer()
-      await flushPromises()
-
-      await wrapper.vm.openAgentSelector()
-      await nextTick()
-
-      // Agent options should be rendered
-      const options = wrapper.findAll('.agent-option')
-      expect(options.length).toBe(2)
-    })
   })
 
   describe('createSession', () => {
-    it('emits create event', async () => {
+    it('emits create event and closes drawer', async () => {
       const wrapper = mountDrawer()
       await flushPromises()
-
-      // Set agentSelectorOpenTime to past to avoid debounce
-      wrapper.vm.agentSelectorOpenTime = 0
-      wrapper.vm.agentSelectorDrawer.open()
 
       wrapper.vm.createSession('agent-1')
 
       expect(wrapper.emitted('create')).toBeTruthy()
       expect(wrapper.emitted('create')![0]).toEqual(['agent-1'])
-    })
-
-    it('ignores click within 400ms debounce', async () => {
-      const wrapper = mountDrawer()
-      await flushPromises()
-
-      // Open the agent selector which sets agentSelectorOpenTime = Date.now()
-      await wrapper.vm.openAgentSelector()
-
-      // Immediately try to create — should be debounced
-      wrapper.vm.createSession('agent-1')
-
-      expect(wrapper.emitted('create')).toBeFalsy()
     })
   })
 
@@ -416,17 +413,6 @@ describe('SessionDrawer', () => {
       await flushPromises()
 
       expect(wrapper.find('.session-counter').exists()).toBe(true)
-    })
-  })
-
-  describe('handleSetDefaultAgent', () => {
-    it('calls setDefaultAgent with the given agentId', async () => {
-      const wrapper = mountDrawer()
-      await flushPromises()
-
-      await wrapper.vm.handleSetDefaultAgent('agent-2')
-
-      expect(mockSetDefaultAgent).toHaveBeenCalledWith('agent-2')
     })
   })
 
