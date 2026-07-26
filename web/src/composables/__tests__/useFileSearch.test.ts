@@ -52,7 +52,7 @@ describe('useFileSearch', () => {
   it('initializes with default state', () => {
     const { state } = useFileSearch()
     expect(state.query).toBe('')
-    expect(state.recursive).toBe(true)
+    expect(state.recursive).toBe(false)
     expect(state.scope).toBe('current')
     expect(state.results).toEqual([])
     expect(state.searching).toBe(false)
@@ -87,7 +87,7 @@ describe('useFileSearch', () => {
     expect(MockEventSource.instances[0].url).toContain('/api/dir/search')
     expect(MockEventSource.instances[0].url).toContain('q=main')
     expect(MockEventSource.instances[0].url).toContain('path=src')
-    expect(MockEventSource.instances[0].url).toContain('recursive=true')
+    expect(MockEventSource.instances[0].url).toContain('recursive=false')
   })
 
   it('startSearch cancels previous search before starting new one', () => {
