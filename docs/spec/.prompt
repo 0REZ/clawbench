@@ -18,24 +18,38 @@ docs/spec/
 │   ├── chat-flow.md                 # 聊天核心流程
 │   ├── ai-backend.md                # AI 后端抽象层
 │   ├── streaming.md                 # 流式传输体系
-│   └── session-lifecycle.md         # 会话生命周期
+│   ├── session-lifecycle.md         # 会话生命周期
+│   └── summarization.md             # 摘要管线
 ├── features/                        # 功能特性
+│   ├── setup-wizard.md              # 首次访问欢迎面板
 │   ├── scheduled-tasks.md           # 定时任务
 │   ├── tts.md                       # 语音合成
 │   ├── terminal.md                  # Web 终端
-│   ├── git-management.md           # Git 管理
+│   ├── git-management.md            # Git 管理
 │   ├── file-management.md           # 文件管理
+│   ├── file-discovery.md            # 文件搜索与最近文件
+│   ├── attachments-and-share.md     # 附件与系统分享
+│   ├── session-navigation.md        # 会话索引与分叉
+│   ├── quick-actions.md             # 聊天与终端快捷操作
 │   ├── rag.md                       # RAG 检索
-│   └── push-notifications.md       # 推送通知
+│   └── push-notifications.md        # 推送通知
 ├── infra/                           # 基础设施
 │   ├── auth-and-middleware.md       # 认证与中间件
 │   ├── ssh-tunnel.md               # SSH 隧道
+│   ├── frp-tunnel.md               # FRP 隧道
 │   ├── proxy.md                    # 代理注册表
 │   ├── config-and-discovery.md     # 配置与自动发现
-│   └── event-system.md             # 事件体系
+│   ├── event-system.md             # 事件体系
+│   ├── self-upgrade.md             # 应用自升级
+│   ├── local-file-serving.md       # 本地文件服务
+│   ├── docker-deployment.md        # Docker 部署
+│   ├── cli-reference.md            # CLI 子命令
+│   └── bugfix-workflow.md          # Bugfix 工作流
 └── client/                          # 客户端
     ├── frontend-architecture.md    # 前端架构
-    └── android-integration.md      # Android 集成
+    ├── android-integration.md      # Android 集成
+    ├── multi-server.md             # 多服务器管理
+    └── install-and-app-mode.md     # 客户端安装与 App 模式
 ```
 
 ## 每个文件的格式（三段式）
