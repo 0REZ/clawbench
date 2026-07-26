@@ -141,7 +141,6 @@
 
       <RecentFilesDrawer
         :open="recentFilesDrawer.effectiveOpen.value"
-        :current-file-path="currentFile?.path"
         @close="recentFilesDrawer.close()"
         @select-file="handleRecentFileSelect"
       />
