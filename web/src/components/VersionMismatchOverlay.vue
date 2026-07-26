@@ -25,10 +25,13 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppMode } from '@/composables/useAppMode'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import { appLog } from '@/utils/appLog'
 import { normalizeVersion, isVersionedBuild, compareVersions, extractBaseVersion } from '@/utils/version'
 
 const STORAGE_KEY = 'clawbench_version_mismatch_skip'
+
+let unregisterBack: (() => void) | null = null
 
 defineExpose({ show })
 
@@ -83,6 +86,21 @@ function tryShow() {
 watch(serverVersion, (newVal) => {
   if (hasAttemptedShow.value && newVal && !visible.value) {
     tryShow()
+  }
+})
+
+// Register back handler when overlay opens, unregister on close
+watch(visible, (v) => {
+  if (v) {
+    unregisterBack = registerBackHandler({
+      id: 'version-mismatch',
+      canGoBack: () => visible.value,
+      goBack: () => { visible.value = false },
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
   }
 })
 

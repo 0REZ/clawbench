@@ -78,13 +78,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, inject, watch } from 'vue'
+import { ref, computed, onMounted, inject, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { GitBranch as GitBranchIcon, FolderTree, Tag } from 'lucide-vue-next'
 import { store } from '@/stores/app.ts'
 import { apiGet, apiPost, apiDelete } from '@/utils/api'
 import { useDialog } from '@/composables/useDialog.ts'
 import { refreshCurrentFile } from '@/composables/useFileRefresh.ts'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import GitWorktreeList from './GitWorktreeList.vue'
 import GitBranchList from './GitBranchList.vue'
 import GitTagList from './GitTagList.vue'
@@ -127,6 +128,26 @@ const showDirtyModal = ref(false)
 const pendingRef = ref('')
 const dirtyCount = ref(0)
 const pendingReload = ref<(() => Promise<void>) | null>(null)
+let unregisterDirtyBack: (() => void) | null = null
+
+// Register back handler when dirty modal opens
+watch(showDirtyModal, (v) => {
+  if (v) {
+    unregisterDirtyBack = registerBackHandler({
+      id: 'git-dirty-modal',
+      canGoBack: () => showDirtyModal.value,
+      goBack: () => { showDirtyModal.value = false },
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterDirtyBack) {
+    unregisterDirtyBack()
+    unregisterDirtyBack = null
+  }
+})
+
+onBeforeUnmount(() => {
+  if (unregisterDirtyBack) { unregisterDirtyBack(); unregisterDirtyBack = null }
+})
 
 const TAB_STORAGE_KEY = 'git-manage-active-tab'
 const activeTab = ref<'worktrees' | 'branches' | 'tags'>('worktrees')

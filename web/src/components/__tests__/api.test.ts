@@ -51,10 +51,45 @@ describe('apiGet', () => {
   it('throws error on non-ok response', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
-      text: () => Promise.resolve('Not Found'),
+      json: () => Promise.resolve({ error: 'Not Found' }),
     })
 
     await expect(apiGet('/api/missing')).rejects.toThrow('Not Found')
+  })
+
+  it('attaches msgKey to error on non-ok response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'Directory not found', msgKey: 'DirectoryNotFound' }),
+    })
+
+    try {
+      await apiGet('/api/missing-dir')
+      expect.fail('Should have thrown')
+    } catch (err) {
+      expect((err as Error).message).toBe('Directory not found')
+      expect((err as Error & { msgKey?: string }).msgKey).toBe('DirectoryNotFound')
+    }
+  })
+
+  it('throws with statusText when JSON error has no error field', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({}),
+    })
+
+    await expect(apiGet('/api/bad')).rejects.toThrow('Bad Request')
+  })
+
+  it('handles JSON parse failure in error response', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      statusText: 'Internal Server Error',
+      json: () => Promise.reject(new Error('Invalid JSON')),
+    })
+
+    await expect(apiGet('/api/broken')).rejects.toThrow('Internal Server Error')
   })
 })
 

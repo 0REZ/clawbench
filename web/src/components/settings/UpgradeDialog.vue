@@ -68,11 +68,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUpgrade } from '@/composables/useUpgrade'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const visible = ref(false)
+let unregisterBack: (() => void) | null = null
 defineExpose({ show })
 
 const { t } = useI18n()
@@ -106,6 +108,21 @@ const phaseMessage = computed(() => {
 function close() {
   visible.value = false
 }
+
+// Register back handler when dialog opens (only if canClose), unregister on close
+watch(visible, (v) => {
+  if (v) {
+    unregisterBack = registerBackHandler({
+      id: 'upgrade-dialog',
+      canGoBack: () => visible.value && canClose.value,
+      goBack: () => close(),
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  }
+})
 </script>
 
 <style scoped>

@@ -23,7 +23,7 @@
           <!-- Chat Tab -->
           <TabPanel tabId="chat" :activeTab="activeTab">
             <template #header>
-              <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" /> {{ sessionIdentity.agentHeaderTitle.value }}</span>
+              <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
               <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description">
                 <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
               </div>
@@ -141,7 +141,7 @@
 
       <RecentFilesDrawer
         :open="recentFilesDrawer.effectiveOpen.value"
-        :current-file-path="currentFile?.path"
+        :current-file-path="fileNav.overlayOpen.value ? currentFile?.path : null"
         @close="recentFilesDrawer.close()"
         @select-file="handleRecentFileSelect"
       />

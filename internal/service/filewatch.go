@@ -253,11 +253,12 @@ func (fw *FileWatcher) handleFsEvent(event fsnotify.Event) { //nolint:gocyclo //
 	for clientID, client := range fw.clients {
 		var eventType string
 
-		// Match file watch FIRST: Write/Create/Rename mean file content changed.
+		// Match file watch FIRST: Write/Create/Rename mean file content changed;
+		// Remove means the file was deleted (viewer should close).
 		// File match takes priority over directory match because the client explicitly
 		// opened this file and wants content updates, not just listing changes.
 		if client.filePath != "" && absPath == client.filePath {
-			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
+			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.Remove) {
 				eventType = "file_change"
 			}
 		}

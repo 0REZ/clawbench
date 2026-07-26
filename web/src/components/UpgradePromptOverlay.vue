@@ -18,9 +18,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUpgrade } from '@/composables/useUpgrade'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const { t } = useI18n()
 const { skipVersion: doSkip, startUpgrade } = useUpgrade()
@@ -28,6 +29,7 @@ const { skipVersion: doSkip, startUpgrade } = useUpgrade()
 const visible = ref(false)
 const latestVersion = ref('')
 const currentVersion = ref('')
+let unregisterBack: (() => void) | null = null
 
 defineExpose({ show })
 
@@ -50,6 +52,21 @@ function skipVersion() {
 function dismiss() {
   visible.value = false
 }
+
+// Register back handler when overlay opens, unregister on close
+watch(visible, (v) => {
+  if (v) {
+    unregisterBack = registerBackHandler({
+      id: 'upgrade-prompt',
+      canGoBack: () => visible.value,
+      goBack: () => dismiss(),
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  }
+})
 </script>
 
 <style scoped>

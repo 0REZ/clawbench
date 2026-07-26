@@ -396,7 +396,7 @@ const stream = useChatStream({
 
     if (isMatch && currentFilePath) {
       // refreshCurrentFile handles both file content and directory listing
-      refreshCurrentFile({ loadDir: true })
+      refreshCurrentFile({ loadDir: true, clearOnError: true })
     } else {
       // File not currently viewed, but still refresh directory listing
       const currentDir = store.state.currentDir

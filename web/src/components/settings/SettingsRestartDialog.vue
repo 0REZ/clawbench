@@ -19,20 +19,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { serverFieldToLabelKey } from './settingsFieldMap'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const props = defineProps<{
   changedFields: string[]
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   restart: []
   later: []
 }>()
 
 const { t } = useI18n()
+let unregisterBack: (() => void) | null = null
+
+onMounted(() => {
+  unregisterBack = registerBackHandler({
+    id: 'settings-restart-dialog',
+    canGoBack: () => true,
+    goBack: () => emit('later'),
+    priority: PRIORITY_OVERLAY,
+  })
+})
+
+onBeforeUnmount(() => {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
+})
 
 const displayFields = computed(() =>
   props.changedFields.map(key => {

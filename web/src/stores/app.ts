@@ -6,6 +6,7 @@ import { baseName, dirName } from '@/utils/path.ts'
 import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
+import { useFileNavStack } from '@/composables/useFileNavStack'
 
 const TAG = 'Store'
 
@@ -280,7 +281,7 @@ async function loadGitBranch(): Promise<{ isGit: boolean; branch: string; head: 
 let loadFilesSeq = 0 // monotonic counter to suppress stale concurrent loads
 let selectFileSeq = 0 // monotonic counter to suppress stale concurrent file loads
 
-async function loadFiles(dir = '', silent = false): Promise<void> {
+async function loadFiles(dir = '', silent = false, _depth = 0): Promise<void> {
     const seq = ++loadFilesSeq // this call supersedes any earlier in-flight call
     // Defensive: strip leading slashes so currentDir is always a project-relative path.
     // The Go backend treats paths starting with "/" as absolute filesystem paths,
@@ -303,6 +304,13 @@ async function loadFiles(dir = '', silent = false): Promise<void> {
     } catch (err: unknown) {
         // A newer loadFiles call started — don't corrupt its state
         if (seq !== loadFilesSeq) return
+        const msgKey = (err as Error & { msgKey?: string })?.msgKey
+        if (msgKey === 'DirectoryNotFound' && prevDir !== '' && _depth < 10) {
+            // Directory was deleted — navigate to parent instead of showing stale content
+            const parent = dirName(prevDir)
+            await loadFiles(parent, silent, _depth + 1)
+            return
+        }
         // Roll back to previous state on failure
         state.currentDir = prevDir
         state.dirEntries = prevEntries
@@ -442,6 +450,7 @@ async function deleteFile(filePath: string): Promise<void> {
     }
     if (state.currentFile?.path === filePath) {
         state.currentFile = null
+        useFileNavStack().removePath(filePath)
     }
     appLog.d(TAG, '[deleteFile] refreshing, currentDir:', state.currentDir, 'loadFilesSeq:', loadFilesSeq)
     await Promise.all([loadFiles(state.currentDir), loadGitBranch()])
@@ -462,6 +471,7 @@ async function deleteFiles(paths: string[]): Promise<void> {
         useToast().show(gt('file.toast.deleteFailed'), { type: 'error', icon: '⚠️' })
     }
     if (state.currentFile && paths.includes(state.currentFile.path)) {
+        useFileNavStack().removePath(state.currentFile.path)
         state.currentFile = null
     }
     await Promise.all([loadFiles(state.currentDir), loadGitBranch()])

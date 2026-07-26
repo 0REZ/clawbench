@@ -78,10 +78,15 @@ vi.mock('@/utils/fileType.ts', () => ({
   getFileType: vi.fn(),
 }))
 
+vi.mock('@/composables/useFileNavStack.ts', () => ({
+  useFileNavStack: vi.fn(() => ({ removePath: vi.fn() })),
+}))
+
 import { refreshCurrentFile, flashRanges, flashType } from '../useFileRefresh.ts'
 import { store } from '@/stores/app.ts'
 import { computeDiff } from '@/utils/diffUtils.ts'
 import { computeCodeDiffMarkers, diffMarkers, diffOldContent } from '@/composables/useMarkdownDiff.ts'
+import { useFileNavStack } from '@/composables/useFileNavStack.ts'
 
 describe('useFileRefresh deduplication', () => {
   beforeEach(() => {
@@ -337,6 +342,100 @@ describe('useFileRefresh modified-line flash', () => {
     expect(flashType.value).toBe('add')
     expect(flashRanges.value.some(r => r.line === 4)).toBe(true)
     expect(diffMarkers.value.length).toBeGreaterThan(0)
+
+    globalThis.fetch = originalFetch
+  })
+})
+
+describe('useFileRefresh clearOnError', () => {
+  let removePathMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    flashRanges.value = []
+    flashType.value = 'add'
+    diffMarkers.value = []
+    diffOldContent.value = null
+    removePathMock = vi.fn()
+    vi.mocked(useFileNavStack).mockReturnValue({ removePath: removePathMock })
+  })
+
+  it('clears currentFile and removes path from nav stack when selectFile fails with clearOnError', async () => {
+    store.state.currentFile = {
+      name: 'deleted.go',
+      path: 'src/deleted.go',
+      content: 'old content\n',
+    }
+    store.state.currentDir = 'src'
+
+    // selectFile returns false (file not found)
+    vi.mocked(store.selectFile).mockResolvedValue(false)
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'File not found', msgKey: 'FileNotFoundShort' }),
+    })
+
+    await refreshCurrentFile({ clearOnError: true })
+
+    // currentFile should be cleared
+    expect(store.state.currentFile).toBeNull()
+    // removePath should be called for the deleted file
+    expect(removePathMock).toHaveBeenCalledWith('src/deleted.go')
+
+    globalThis.fetch = originalFetch
+  })
+
+  it('does not clear currentFile when selectFile succeeds with clearOnError', async () => {
+    store.state.currentFile = {
+      name: 'exists.go',
+      path: 'src/exists.go',
+      content: 'old content\n',
+    }
+    store.state.currentDir = 'src'
+
+    // selectFile returns true (file exists)
+    vi.mocked(store.selectFile).mockResolvedValue(true)
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ content: 'new content\n' }),
+    })
+
+    await refreshCurrentFile({ clearOnError: true })
+
+    // currentFile should NOT be cleared
+    expect(store.state.currentFile).not.toBeNull()
+    // removePath should NOT be called
+    expect(removePathMock).not.toHaveBeenCalled()
+
+    globalThis.fetch = originalFetch
+  })
+
+  it('does not clear currentFile when selectFile fails without clearOnError', async () => {
+    store.state.currentFile = {
+      name: 'error.go',
+      path: 'src/error.go',
+      content: 'old content\n',
+    }
+    store.state.currentDir = 'src'
+
+    // selectFile returns false (network error)
+    vi.mocked(store.selectFile).mockResolvedValue(false)
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      json: () => Promise.resolve({ error: 'Network error' }),
+    })
+
+    await refreshCurrentFile({ clearOnError: false })
+
+    // Without clearOnError, currentFile should remain even on failure
+    expect(store.state.currentFile).not.toBeNull()
+    expect(removePathMock).not.toHaveBeenCalled()
 
     globalThis.fetch = originalFetch
   })

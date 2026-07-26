@@ -117,4 +117,57 @@ describe('useFileNavStack', () => {
     nav2.openFile('/src/b.ts')
     expect(nav1.currentFilePath.value).toBe('/src/b.ts')
   })
+
+  describe('removePath', () => {
+    it('removes a path from the middle of the stack', () => {
+      const nav = useFileNavStack()
+      nav.openFile('/src/a.ts')
+      nav.openFile('/src/b.ts')
+      nav.openFile('/src/c.ts')
+      nav.removePath('/src/b.ts')
+      expect(nav.currentFilePath.value).toBe('/src/c.ts')
+      expect(nav.canGoBack.value).toBe(true)
+      // goBack should skip the removed entry
+      const back = nav.goBack()
+      expect(back).toBe('/src/a.ts')
+    })
+
+    it('removes the top path from the stack', () => {
+      const nav = useFileNavStack()
+      nav.openFile('/src/a.ts')
+      nav.openFile('/src/b.ts')
+      nav.removePath('/src/b.ts')
+      expect(nav.currentFilePath.value).toBe('/src/a.ts')
+      expect(nav.canGoBack.value).toBe(false)
+    })
+
+    it('closes overlay when stack becomes empty', () => {
+      const nav = useFileNavStack()
+      nav.openFile('/src/a.ts')
+      nav.removePath('/src/a.ts')
+      expect(nav.overlayOpen.value).toBe(false)
+      expect(nav.currentFilePath.value).toBeNull()
+    })
+
+    it('no-op for path not in stack', () => {
+      const nav = useFileNavStack()
+      nav.openFile('/src/a.ts')
+      nav.openFile('/src/b.ts')
+      nav.removePath('/src/missing.ts')
+      expect(nav.currentFilePath.value).toBe('/src/b.ts')
+      expect(nav.canGoBack.value).toBe(true)
+    })
+
+    it('removes only the last occurrence of a duplicate path', () => {
+      const nav = useFileNavStack()
+      nav.openFile('/src/a.ts')
+      nav.openFile('/src/b.ts')
+      nav.openFile('/src/a.ts')
+      nav.removePath('/src/a.ts')
+      // Should remove the top occurrence, leaving a.ts at the bottom
+      expect(nav.currentFilePath.value).toBe('/src/b.ts')
+      const back = nav.goBack()
+      expect(back).toBe('/src/a.ts')
+    })
+  })
 })

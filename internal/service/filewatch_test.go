@@ -442,6 +442,28 @@ func TestHandleFsEvent_FileRename(t *testing.T) {
 	assert.Equal(t, "file_change", events[0].Type)
 }
 
+func TestHandleFsEvent_FileRemove(t *testing.T) {
+	fw := setupFileWatcher(t)
+	ch := fw.RegisterClient("c1")
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "test.txt")
+	_ = os.WriteFile(file, []byte("hello"), 0o644)
+
+	fw.UpdateWatch("c1", dir, file)
+
+	// Remove event on a specifically-watched file should emit file_change
+	fw.handleFsEvent(fsnotify.Event{
+		Name: file,
+		Op:   fsnotify.Remove,
+	})
+
+	events := collectEvents(ch, 1, 500*time.Millisecond)
+	assert.Len(t, events, 1)
+	assert.Equal(t, "file_change", events[0].Type)
+	assert.Equal(t, file, events[0].Path)
+}
+
 func TestHandleFsEvent_UnrelatedPath(t *testing.T) {
 	fw := setupFileWatcher(t)
 	ch := fw.RegisterClient("c1")

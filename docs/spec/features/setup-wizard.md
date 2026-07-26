@@ -1,14 +1,12 @@
 # 首次访问欢迎面板（WelcomeOverlay）
 
-> **重要说明**：本文档的历史版本（5 步设置向导）已废弃——引用的 `/api/setup/{status,models,verify,complete}` 端点、`PiConfig` 写入、`auth.json`/`models.json` 等机制在当前代码中**不存在**（`grep` 在 `internal/` 中零输出）。当前系统不再有独立的"设置向导"页面，Agent 创建直接通过 `AgentInstallDialog` 组件 + 数据库 `agents` 表完成。
-> 
-> 当前用户首次访问时看到的是 **`WelcomeOverlay`**——一个"已安装后端检测"面板，不是逐步向导。
+当前首次访问界面是 `WelcomeOverlay`：它展示已安装后端及安装入口，不是分步设置向导。Agent 通过自动发现、安装对话框或手动定义写入数据库 `agents` 表。
 
 ## 概述
 
 `WelcomeOverlay` 是首次访问 ClawBench 时显示的欢迎遮罩，提供后端安装状态总览和安装入口：
 
-- **触发条件**：用户首次访问（`localStorage 'clawbench_welcome_dismissed'` 未设置）或通过 `clawbench-show-welcome` 自定义事件触发（`web/src/components/SettingsCategory.vue:270`）
+- **触发条件**：用户首次访问（`localStorage 'clawbench_welcome_dismissed'` 未设置）或通过 `clawbench-show-welcome` 自定义事件触发（`web/src/components/settings/SettingsCategory.vue`）
 - **关闭机制**：用户点击关闭后写入 `STORAGE_KEY`，之后不再显示
 - **数据源**：实时拉取 `GET /api/backends`（12 个后端规格）和 `GET /api/agents`（已注册 Agent）
 
@@ -45,8 +43,8 @@ sequenceDiagram
     participant H as handler
     participant S as service
 
-    F->>H: GET /api/agents/:id/install-cmd
-    H-->>F: 安装命令 (BackendSpec.InstallCmd)
+    F->>H: GET /api/backends
+    H-->>F: 后端规格列表 (含 BackendSpec.InstallCmd)
     F->>F: 展示命令 + 复制按钮
     Note over F: 用户在终端执行
     F->>H: POST /api/agents/rescan
@@ -68,12 +66,12 @@ sequenceDiagram
 - **手动刷新**：`POST /api/agents/rescan` 触发 `SyncDiscoverAgentsDB`（`cmd/server/main.go:708`）重新扫描 PATH 中的 CLI
 - **安装对话框**：`AgentInstallDialog` 组件打开后显示安装命令和复制按钮，引导用户在终端执行
 - **持久化关闭状态**：用户关闭后写入 `localStorage['clawbench_welcome_dismissed']`，下次不再自动显示
-- **事件触发重显**：`clawbench-show-welcome` 自定义事件（`SettingsCategory.vue:270`）允许设置页主动重新打开欢迎面板
+- **事件触发重显**：`clawbench-show-welcome` 自定义事件允许设置页主动重新打开欢迎面板
 
 ### 设计要点
 
 - **WelcomeOverlay 不是向导**：当前没有"分步创建 Agent"流程——Agent 创建走 `WelcomeOverlay`（检测/安装）→ `AgentInstallDialog`（执行 install_cmd）→ 自动发现的链路
-- **不存在的端点澄清**：以下端点在当前代码中**不存在**，如在历史文档/对话中遇到应视为过期：
+- **接口边界**：安装命令直接包含在 `GET /api/backends` 的返回值中，不存在单独的 `/api/agents/:id/install-cmd` 路由。以下 setup 端点也不存在：
   - `GET /api/setup/status`
   - `POST /api/setup/models`
   - `POST /api/setup/verify`
@@ -91,9 +89,9 @@ sequenceDiagram
 | 文件 | 关键符号 |
 |------|----------|
 | `web/src/components/WelcomeOverlay.vue` | 首次访问欢迎遮罩组件 |
-| `web/src/components/SettingsCategory.vue:270` | `clawbench-show-welcome` 事件触发 |
+| `web/src/components/settings/SettingsCategory.vue` | `clawbench-show-welcome` 事件触发 |
 | `web/src/components/AgentInstallDialog.vue` | 安装命令对话框 |
 | `internal/handler/handler.go` | `/api/backends`、`/api/agents`、`/api/agents/rescan` 路由 |
-| `internal/model/discovery.go:239` | `SyncDiscoverAgentsDB` 函数 |
+| `internal/model/discovery.go` | `SyncDiscoverAgentsDB` 函数 |
 | `internal/model/agent.go` | `BackendSpec.InstallCmd` 字段 |
-| `cmd/server/main.go:708` | 启动时调用 `SyncDiscoverAgentsDB` |
+| `cmd/server/main.go` | 启动时调用 `SyncDiscoverAgentsDB` |

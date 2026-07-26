@@ -31,24 +31,35 @@
   </Teleport>
 </template>
 
-<script setup>
-import { ref, watch, nextTick } from 'vue'
+<script setup lang="ts">
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog } from '@/composables/useDialog'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const { t } = useI18n()
 const dlg = useDialog()
 const inputVal = ref('')
-const inputRef = ref(null)
+const inputRef = ref<HTMLInputElement | null>(null)
+let unregisterBack: (() => void) | null = null
 
 watch(() => dlg.state.value.visible, async (v) => {
-  if (!v) return
+  if (!v) {
+    if (unregisterBack) { unregisterBack(); unregisterBack = null }
+    return
+  }
   inputVal.value = dlg.state.value.value ?? ''
   if (dlg.state.value.type === 'prompt') {
     await nextTick()
     inputRef.value?.focus()
     inputRef.value?.select()
   }
+  unregisterBack = registerBackHandler({
+    id: 'dialog-overlay',
+    canGoBack: () => dlg.state.value.visible,
+    goBack: () => handleCancel(),
+    priority: PRIORITY_OVERLAY + 1,
+  })
 })
 
 function handleConfirm() {
@@ -62,8 +73,13 @@ function handleConfirm() {
 }
 
 function handleCancel() {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
   dlg.resolve(dlg.state.value.type === 'prompt' ? null : false)
 }
+
+onBeforeUnmount(() => {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
+})
 </script>
 
 <style>
