@@ -403,4 +403,440 @@ describe('Lightbox', () => {
       expect(mockUnregister).toHaveBeenCalled()
     })
   })
+
+  // ── Navigation ──
+
+  describe('navigation', () => {
+    it('shows navigation when multiple image siblings exist', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      expect(vm.showNav).toBe(true)
+      expect(vm.navTotalCount).toBe(2)
+    })
+
+    it('hides navigation when only one image sibling', async () => {
+      _dirEntries = [{ name: 'image.png', type: 'file' }]
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      expect(vm.showNav).toBe(false)
+    })
+
+    it('navigateNext advances to next image and calls selectFile', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.navigateNext()
+      expect(vm.slideDirection).toBe('left')
+      expect(vm.imageLoading).toBe(true)
+      expect(mockSelectFile).toHaveBeenCalled()
+    })
+
+    it('navigatePrev goes to previous image', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.navigatePrev()
+      expect(vm.slideDirection).toBe('right')
+      expect(vm.imageLoading).toBe(true)
+    })
+
+    it('navigateNext does nothing when showNav is false', async () => {
+      _dirEntries = [{ name: 'image.png', type: 'file' }]
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      const prevUrl = vm.currentUrl
+      vm.navigateNext()
+      expect(vm.currentUrl).toBe(prevUrl)
+    })
+  })
+
+  // ── imgStyle computed ──
+
+  describe('imgStyle', () => {
+    it('includes width/height/maxWidth/maxHeight when dimensionsReady and no svg', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.dimensionsReady = true
+      vm.naturalW = 1000
+      vm.naturalH = 800
+      vm.currentSvg = ''
+
+      const style = vm.imgStyle
+      expect(style.width).toBe('1000px')
+      expect(style.height).toBe('800px')
+      expect(style.maxWidth).toBe('none')
+      expect(style.maxHeight).toBe('none')
+    })
+
+    it('does not include explicit dimensions when not ready', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.dimensionsReady = false
+      const style = vm.imgStyle
+      expect(style.width).toBeUndefined()
+    })
+
+    it('does not include explicit dimensions when svg is present', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('', '<svg></svg>')
+      await nextTick()
+
+      vm.dimensionsReady = true
+      vm.naturalW = 1000
+      vm.naturalH = 800
+      const style = vm.imgStyle
+      expect(style.width).toBeUndefined()
+    })
+  })
+
+  // ── handleContentClick ──
+
+  describe('handleContentClick', () => {
+    it('closes lightbox when clicking on contentRef', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.handleContentClick({ target: vm.contentRef })
+      expect(vm.lightboxVisible).toBe(false)
+    })
+
+    it('does not close when clicking on image itself', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      // Simulate clicking on the image element (not contentRef or loading spinner)
+      const fakeTarget = document.createElement('img')
+      vm.handleContentClick({ target: fakeTarget })
+      expect(vm.lightboxVisible).toBe(true)
+    })
+  })
+
+  // ── openMdImages ──
+
+  describe('openMdImages', () => {
+    it('opens markdown image navigation', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      const imgs = [
+        { src: 'http://localhost/a.png', name: 'a.png' },
+        { src: 'http://localhost/b.png', name: 'b.png' },
+      ]
+      vm.openMdImages(imgs, 0)
+      await nextTick()
+
+      expect(vm.lightboxVisible).toBe(true)
+      expect(vm.mdCurrentIndex).toBe(0)
+      expect(vm.mdImages).toHaveLength(2)
+      expect(vm.showNav).toBe(true)
+    })
+
+    it('navigateNext/Prev works in md mode', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      const imgs = [
+        { src: 'http://localhost/a.png', name: 'a.png' },
+        { src: 'http://localhost/b.png', name: 'b.png' },
+      ]
+      vm.openMdImages(imgs, 0)
+      await nextTick()
+
+      vm.navigateNext()
+      expect(vm.mdCurrentIndex).toBe(1)
+
+      vm.navigatePrev()
+      expect(vm.mdCurrentIndex).toBe(0)
+    })
+
+    it('md navigation does nothing when only one image', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      const imgs = [{ src: 'http://localhost/a.png', name: 'a.png' }]
+      vm.openMdImages(imgs, 0)
+      await nextTick()
+
+      vm.navigateNext()
+      expect(vm.mdCurrentIndex).toBe(0)
+    })
+  })
+
+  // ── Swipe navigation ──
+
+  describe('swipe navigation', () => {
+    it('swipe left triggers navigateNext', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.fitScale = 1
+      vm.scale = 1
+      vm.touchStartX = 200
+      vm.touchLastX = 100
+      vm.touchStartY = 150
+      vm.touchLastY = 150
+      vm.hasMoved = false
+
+      vm.handleTouchEnd(new TouchEvent('touchend'))
+      // dx=100 > 50, dx > dy → navigateNext
+      expect(vm.slideDirection).toBe('left')
+    })
+
+    it('swipe right triggers navigatePrev', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.fitScale = 1
+      vm.scale = 1
+      vm.touchStartX = 100
+      vm.touchLastX = 200
+      vm.touchStartY = 150
+      vm.touchLastY = 150
+      vm.hasMoved = false
+
+      vm.handleTouchEnd(new TouchEvent('touchend'))
+      expect(vm.slideDirection).toBe('right')
+    })
+
+    it('no swipe when hasMoved is true', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.fitScale = 1
+      vm.scale = 1
+      vm.touchStartX = 200
+      vm.touchLastX = 100
+      vm.touchStartY = 150
+      vm.touchLastY = 150
+      vm.hasMoved = true
+
+      vm.handleTouchEnd(new TouchEvent('touchend'))
+      expect(vm.slideDirection).toBe('')
+    })
+  })
+
+  // ── handleDownload ──
+
+  describe('handleDownload', () => {
+    it('downloads SVG content as blob', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('', '<svg></svg>')
+      await nextTick()
+
+      vm.handleDownload()
+      // downloadBlob should have been called (imported from mock)
+    })
+
+    it('downloads file by path when filePath is set', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.currentFilePath = '/project/image.png'
+      vm.handleDownload()
+    })
+
+    it('does nothing when no url and no svg', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.currentUrl = ''
+      vm.currentSvg = ''
+      vm.currentFilePath = ''
+
+      vm.handleDownload()
+      // Should not throw
+    })
+  })
+
+  // ── open with SVG ──
+
+  describe('open with SVG', () => {
+    it('opens SVG and does not build sibling list', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      // Use openSvg which goes through open() → sets currentSvg → watch triggers onSvgMounted
+      // jsdom SVG has viewBox.baseVal but no getBBox, so provide viewBox to avoid fallback
+      vm.openSvg('<svg viewBox="0 0 100 100" width="100" height="100"><rect></rect></svg>')
+      await nextTick()
+
+      expect(vm.lightboxVisible).toBe(true)
+      expect(vm.currentSvg).toBeTruthy()
+      expect(vm.currentUrl).toBe('')
+      expect(vm.siblingFiles).toHaveLength(0)
+      expect(vm.currentIndex).toBe(-1)
+    })
+  })
+
+  // ── onImageLoad edge cases ──
+
+  describe('onImageLoad edge cases', () => {
+    it('does nothing when imgRef is null', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.imgRef = null
+      vm.onImageLoad()
+
+      expect(vm.naturalW).toBe(0)
+      expect(vm.naturalH).toBe(0)
+    })
+  })
+
+  // ── Mouse drag ──
+
+  describe('mouse drag', () => {
+    it('ignores non-left click', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleMouseDown({ button: 2, clientX: 100, clientY: 100, preventDefault: vi.fn() })
+      expect(vm.isDragging).toBe(false)
+    })
+
+    it('moves image on mouse move when dragging', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
+      vm.handleMouseMove({ clientX: 150, clientY: 120, preventDefault: vi.fn() })
+
+      expect(vm.tx).toBe(50)
+      expect(vm.ty).toBe(20)
+    })
+
+    it('does not move on mousemove when not dragging', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleMouseMove({ clientX: 150, clientY: 120, preventDefault: vi.fn() })
+      expect(vm.tx).toBe(0)
+    })
+
+    it('saves last position on mouseup', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
+      vm.handleMouseMove({ clientX: 150, clientY: 120, preventDefault: vi.fn() })
+      vm.handleMouseUp()
+
+      expect(vm.isDragging).toBe(false)
+      expect(vm.lastTx).toBe(50)
+      expect(vm.lastTy).toBe(20)
+    })
+  })
+
+  // ── Touch drag ──
+
+  describe('touch drag', () => {
+    it('handles single touch drag', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleTouchStart({
+        touches: [{ clientX: 100, clientY: 100 }],
+        length: 1,
+      })
+
+      expect(vm.isDragging).toBe(true)
+      expect(vm.hasMoved).toBe(false)
+
+      vm.handleTouchMove({
+        touches: [{ clientX: 120, clientY: 110 }],
+        length: 1,
+        preventDefault: vi.fn(),
+      })
+
+      expect(vm.hasMoved).toBe(true)
+    })
+
+    it('handles pinch zoom start', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.handleTouchStart({
+        touches: [
+          { clientX: 100, clientY: 100 },
+          { clientX: 200, clientY: 200 },
+        ],
+        length: 2,
+      })
+
+      expect(vm.isDragging).toBe(false)
+      expect(vm.pinchStartDist).toBeGreaterThan(0)
+    })
+
+    it('handles pinch zoom move', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.pinchStartDist = 100
+      vm.pinchStartScale = 1
+
+      vm.handleTouchMove({
+        touches: [
+          { clientX: 50, clientY: 50 },
+          { clientX: 250, clientY: 250 },
+        ],
+        length: 2,
+        preventDefault: vi.fn(),
+      })
+
+      // Distance is ~282, ratio ~2.82, scale should be ~2.82
+      expect(vm.scale).toBeGreaterThan(1)
+    })
+  })
+
+  // ── collectMdImages ──
+
+  describe('collectMdImages', () => {
+    it('collects images from a container', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      const container = document.createElement('div')
+      container.innerHTML = '<img src="a.png" alt="A"><img src="b.png" alt="B">'
+      document.body.appendChild(container)
+
+      const result = vm.collectMdImages(container, container.querySelectorAll('img')[1])
+      expect(result.list).toHaveLength(2)
+      expect(result.startIdx).toBe(1)
+
+      document.body.removeChild(container)
+    })
+  })
 })

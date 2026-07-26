@@ -55,7 +55,8 @@ function saveToStorage() {
 }
 
 // Module-level watchers — run exactly once
-watch(() => store.state.projectRoot, () => {
+// Guard against store not being initialized (test environment)
+watch(() => store?.state?.projectRoot, () => {
   loadFromStorage()
 })
 

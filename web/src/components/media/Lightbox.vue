@@ -196,8 +196,8 @@ function onSvgMounted() {
             w = svg.viewBox.baseVal.width
             h = svg.viewBox.baseVal.height
         } else {
-            w = parseFloat(svg.getAttribute('width')) || svg.getBBox().width
-            h = parseFloat(svg.getAttribute('height')) || svg.getBBox().height
+            w = parseFloat(svg.getAttribute('width')) || (typeof svg.getBBox === 'function' ? svg.getBBox().width : 0)
+            h = parseFloat(svg.getAttribute('height')) || (typeof svg.getBBox === 'function' ? svg.getBBox().height : 0)
         }
         naturalW.value = w
         naturalH.value = h
