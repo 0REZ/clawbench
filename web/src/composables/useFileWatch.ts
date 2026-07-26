@@ -56,7 +56,7 @@ export function useFileWatch(options: UseFileWatchOptions) {
 
     eventSource.addEventListener('file_change', () => {
       if (!currentFile.value?.path) return
-      refreshCurrentFile()
+      refreshCurrentFile({ clearOnError: true, loadDir: true })
     })
 
     eventSource.onerror = () => {

@@ -52,8 +52,13 @@ export async function apiGet<T = unknown>(url: string, opts: ApiOptions = {}): P
     const { signal, cleanup } = createSignal(opts)
     try {
         const resp = await fetch(url, { headers: localeHeaders(), signal })
-        if (!resp.ok) throw new Error(await resp.text())
-        return resp.json()
+        const data = await resp.json().catch(() => ({})) as Record<string, unknown>
+        if (!resp.ok) {
+            const err = new Error(data.error ? String(data.error) : resp.statusText)
+            if (data.msgKey) (err as Error & { msgKey?: string }).msgKey = String(data.msgKey)
+            throw err
+        }
+        return data as T
     } finally {
         cleanup()
     }

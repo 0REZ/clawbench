@@ -369,6 +369,57 @@ func TestFileWatchSSE_DirChangeEvent(t *testing.T) {
 	assert.True(t, foundDirChange, "should receive dir_change when file is created in watched directory")
 }
 
+func TestFileWatchSSE_FileRemoveEvent(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	err := service.InitFileWatcher()
+	assert.NoError(t, err)
+	defer service.StopFileWatcher()
+
+	testFile := filepath.Join(env.ProjectDir, "deleteme.txt")
+	_ = os.WriteFile(testFile, []byte("will be deleted"), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	req := newRequest(t, http.MethodGet, "/api/file/watch?dir=.&file=deleteme.txt", nil)
+	req = req.WithContext(ctx)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		FileWatchSSE(w, req)
+		close(done)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+
+	// Delete the watched file
+	_ = os.Remove(testFile)
+
+	time.Sleep(500 * time.Millisecond)
+
+	cancel()
+	<-done
+
+	body := w.Body.String()
+	events := parseSSEEvents(body)
+
+	foundFileChange := false
+	for _, e := range events {
+		if e["event"] == "file_change" {
+			foundFileChange = true
+			var data map[string]string
+			_ = json.Unmarshal([]byte(e["data"]), &data)
+			assert.Equal(t, "file_change", data["type"])
+			assert.Contains(t, data["path"], "deleteme.txt")
+		}
+	}
+	assert.True(t, foundFileChange, "should receive file_change when watched file is deleted")
+}
+
 // ---------- FileWatchUpdate ----------
 
 func TestFileWatchUpdate_MethodNotAllowed(t *testing.T) {

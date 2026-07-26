@@ -47,6 +47,17 @@ export function useFileNavStack() {
     _pathStack.value = []
   }
 
+  function removePath(path: string) {
+    const stack = _pathStack.value
+    const idx = stack.lastIndexOf(path)
+    if (idx === -1) return
+    _pathStack.value = [...stack.slice(0, idx), ...stack.slice(idx + 1)]
+    // If the stack is now empty, close overlay
+    if (_pathStack.value.length === 0) {
+      _overlayOpen.value = false
+    }
+  }
+
   return {
     overlayOpen: _overlayOpen,
     currentFilePath: _currentFilePath as ComputedRef<string | null>,
@@ -54,5 +65,6 @@ export function useFileNavStack() {
     openFile,
     goBack,
     closeOverlay,
+    removePath,
   }
 }
