@@ -73,9 +73,19 @@ vi.mock('@/utils/lightbox.ts', () => ({
   },
 }))
 
+const mockUnregister = vi.fn()
+const mockRegisterBackHandler = vi.fn(() => mockUnregister)
+
+vi.mock('@/composables/useBackHandler', () => ({
+  registerBackHandler: (...args: any[]) => mockRegisterBackHandler(...args),
+  PRIORITY_OVERLAY: 1000,
+}))
+
 describe('Lightbox', () => {
   beforeEach(() => {
     mockSelectFile.mockClear()
+    mockRegisterBackHandler.mockClear()
+    mockUnregister.mockClear()
     mockStoreState.currentDir = '/project'
     mockStoreState.currentFile = { path: '/project/image.png', name: 'image.png' }
     _dirEntries = [
@@ -348,5 +358,49 @@ describe('Lightbox', () => {
     await nextTick()
     // Check via the reactive state, not DOM (Teleport makes DOM assertions unreliable)
     expect(vm.lightboxVisible).toBe(true)
+  })
+
+  // ── Back handler registration (edge swipe / Android back) ──
+
+  describe('back handler', () => {
+    it('registers back handler when opened', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      expect(mockRegisterBackHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'lightbox',
+          priority: 1000,
+        }),
+      )
+    })
+
+    it('back handler goBack closes the lightbox', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      const handler = mockRegisterBackHandler.mock.calls[0][0]
+      expect(handler.canGoBack()).toBe(true)
+      handler.goBack()
+      expect(vm.lightboxVisible).toBe(false)
+    })
+
+    it('unregisters back handler when closed', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      expect(mockRegisterBackHandler).toHaveBeenCalled()
+
+      vm.close()
+      await nextTick()
+
+      expect(mockUnregister).toHaveBeenCalled()
+    })
   })
 })

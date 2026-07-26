@@ -66,7 +66,9 @@ import { baseName, joinPath } from '@/utils/path.ts'
 import { getFileType } from '@/utils/fileType.ts'
 import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
 import { extractImageName } from '@/utils/lightbox.ts'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
+let unregisterBack = null
 const lightboxVisible = ref(false)
 const currentUrl = ref('')
 const currentSvg = ref('')
@@ -623,6 +625,21 @@ watch(currentSvg, (val) => {
     if (val) onSvgMounted()
 })
 
+// Register back handler when lightbox opens, unregister when it closes
+watch(lightboxVisible, (visible) => {
+    if (visible) {
+        unregisterBack = registerBackHandler({
+            id: 'lightbox',
+            canGoBack: () => lightboxVisible.value,
+            goBack: () => close(),
+            priority: PRIORITY_OVERLAY,
+        })
+    } else if (unregisterBack) {
+        unregisterBack()
+        unregisterBack = null
+    }
+})
+
 onMounted(() => {
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
@@ -658,6 +675,10 @@ onMounted(() => {
 onUnmounted(() => {
     document.removeEventListener('mousemove', handleMouseMove)
     document.removeEventListener('mouseup', handleMouseUp)
+    if (unregisterBack) {
+        unregisterBack()
+        unregisterBack = null
+    }
 })
 </script>
 
