@@ -104,6 +104,7 @@
       @show-agent-selector="handleShowAgentSelector"
       @delete-session="() => manager.deleteCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @open-user-msg-index="handleOpenUserMsgIndex"
+      @open-acp-sessions="$emit('open-acp-sessions')"
       @switch-model="handleSwitchModel"
       @switch-thinking-effort="handleSwitchThinkingEffort"
       @switch-mode="handleSwitchMode"
@@ -121,7 +122,8 @@
     :relatedFile="metadataModal.relatedFile"
     :messageId="metadataModal.messageId"
     :sessionId="metadataModal.sessionId"
-    :indexed="metadataModal.indexed"
+    :ftsIndexed="metadataModal.ftsIndexed"
+    :vecIndexed="metadataModal.vecIndexed"
     :formatDetailTime="render.formatDetailTime"
     @close="metadataDrawer.close()"
   />
@@ -150,6 +152,7 @@
 import { ref, computed, watch, onUnmounted, onMounted, inject, provide, toRef, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
+import { apiGet } from '@/utils/api'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import RagDetailDrawer from './RagDetailDrawer.vue'
@@ -193,7 +196,7 @@ const props = defineProps({
     currentFile: Object,
     currentDir: String,
 })
-const emit = defineEmits(['open', 'message', 'open-file', 'task-card-click'])
+const emit = defineEmits(['open', 'message', 'open-file', 'task-card-click', 'open-acp-sessions'])
 
 // ── Singletons ──
 const identity = useSessionIdentity()
@@ -217,7 +220,8 @@ const metadataModal = ref({
   relatedFile: '',
   messageId: null,
   sessionId: '',
-  indexed: false
+  ftsIndexed: false,
+  vecIndexed: false
 })
 const metadataDrawer = useTabDrawer('chat')
 const toast = useToast()
@@ -379,6 +383,7 @@ const stream = useChatStream({
   onToast: (msg, opts) => toast.show(msg, opts),
   onNotification: (title, opts) => notification.show(title, opts),
   onStreamEnd,
+  onReplayDone: () => { inputDisabled.value = false },
   onFileModified: (filePath) => {
     // Chat-driven file refresh: when AI's Write/Edit tool completes,
     // refresh the file preview if the modified file is currently being viewed.
@@ -828,11 +833,22 @@ function showMetadata(msg) {
     metadataModal.value.data = msg.metadata || {}
     metadataModal.value.backend = msg.backend || ''
     metadataModal.value.createdAt = msg.createdAt || ''
-    metadataModal.value.relatedFile = (msg.files && msg.files.length > 0) ? msg.files[0] : ''
+    metadataModal.value.relatedFile = (msg.files && msg.files.length > 0) ? msg.files[0].path || msg.files[0] : ''
     metadataModal.value.messageId = msg.id || null
     metadataModal.value.sessionId = msg.sessionId || ''
-    metadataModal.value.indexed = !!msg.indexed
+    metadataModal.value.ftsIndexed = false
+    metadataModal.value.vecIndexed = false
     metadataDrawer.open()
+
+    // Async: fetch FTS/Vec index status from RAG store
+    if (msg.id) {
+      apiGet(`/api/rag/message-index-status?id=${msg.id}`).then((data) => {
+        metadataModal.value.ftsIndexed = !!data.fts_indexed
+        metadataModal.value.vecIndexed = !!data.vec_indexed
+      }).catch(() => {
+        // RAG not configured or message not found — leave as false
+      })
+    }
 }
 
 // Wire up WS event handler for session_update

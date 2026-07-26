@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
@@ -333,7 +334,7 @@ func TestServeACPLoadSession_ExistingACPSessionHardDeleted(t *testing.T) {
 
 	agentID := "acp-load-delete"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Load", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Load", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -386,7 +387,7 @@ func TestServeACPLoadSession_LoadSessionFails_GenericError(t *testing.T) {
 
 	agentID := "acp-load-fail-generic"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Load Fail", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Load Fail", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -459,7 +460,7 @@ func TestServeACPLoadSession_SessionMetadataBeforeLoad(t *testing.T) {
 	agentID := "acp-load-metadata"
 	acpSessionID := "acp-sid-metadata-456"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Load Meta", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Load Meta", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -525,7 +526,7 @@ func TestServeACPSessions_LoadSessionOnlyNotListSessions(t *testing.T) {
 
 	agentID := "acp-load-only"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -547,7 +548,7 @@ func TestServeACPSessions_ListSessionsSuccess(t *testing.T) {
 
 	agentID := "acp-list-ok"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -592,7 +593,7 @@ func TestServeACPSessions_ListSessionsWithCursor(t *testing.T) {
 
 	agentID := "acp-list-cursor"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -628,7 +629,7 @@ func TestServeACPSessions_ListSessionsError(t *testing.T) {
 
 	agentID := "acp-list-err"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -660,7 +661,7 @@ func TestServeACPSessions_FilterExistingSessions(t *testing.T) {
 
 	agentID := "acp-list-filter"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -713,7 +714,7 @@ func TestServeACPLoadSession_SuccessWithReplay(t *testing.T) {
 	agentID := "acp-load-replay"
 	acpSessionID := "acp-sid-replay-001"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Replay", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Replay", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -772,14 +773,15 @@ func TestServeACPLoadSession_SuccessWithReplay(t *testing.T) {
 
 	sid := resp["sessionId"].(string)
 
-	// Verify messages were saved to chat_history
-	var msgCount int
-	err = service.UnsafeDBForTest().QueryRow(
-		"SELECT COUNT(*) FROM chat_history WHERE session_id = ?",
-		sid,
-	).Scan(&msgCount)
-	assert.NoError(t, err)
-	assert.Equal(t, 2, msgCount, "should have 2 replay messages (user + assistant)")
+	// Wait for async replay goroutine to complete (it sleeps 500ms + processing)
+	require.Eventually(t, func() bool {
+		var msgCount int
+		err := service.UnsafeDBForTest().QueryRow(
+			"SELECT COUNT(*) FROM chat_history WHERE session_id = ?",
+			sid,
+		).Scan(&msgCount)
+		return err == nil && msgCount == 2
+	}, 3*time.Second, 50*time.Millisecond, "should have 2 replay messages (user + assistant)")
 
 	// Verify title was set from first user message
 	var title string
@@ -798,7 +800,7 @@ func TestServeACPLoadSession_SuccessWithEmptyReplay(t *testing.T) {
 	agentID := "acp-load-empty-replay"
 	acpSessionID := "acp-sid-empty-replay"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Empty Replay", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Empty Replay", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -852,7 +854,7 @@ func TestServeACPLoadSession_SuccessNilClient(t *testing.T) {
 	agentID := "acp-load-nil-client"
 	acpSessionID := "acp-sid-nil-client"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Nil Client", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Nil Client", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -896,7 +898,7 @@ func TestServeACPLoadSession_ReplayWithTitleTruncation(t *testing.T) {
 	agentID := "acp-load-truncate"
 	acpSessionID := "acp-sid-truncate"
 	model.Agents = map[string]*model.Agent{
-		agentID: {ID: agentID, Name: "ACP Truncate", Backend: "acp-stdio", Transport: "acp-stdio", AcpCommand: "echo"},
+		agentID: {ID: agentID, Name: "ACP Truncate", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
 	}
 	model.AgentList = []*model.Agent{model.Agents[agentID]}
 
@@ -942,6 +944,16 @@ func TestServeACPLoadSession_ReplayWithTitleTruncation(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	sid := resp["sessionId"].(string)
+
+	// Wait for async replay goroutine to complete
+	require.Eventually(t, func() bool {
+		var title string
+		err := service.UnsafeDBForTest().QueryRow(
+			"SELECT title FROM chat_sessions WHERE id = ?",
+			sid,
+		).Scan(&title)
+		return err == nil && title != ""
+	}, 3*time.Second, 50*time.Millisecond, "title should be set after replay completes")
 
 	// Verify title was truncated
 	var title string

@@ -72,7 +72,7 @@ export interface UseChatSessionOptions {
   onExtractScheduledTasks: (msgs: Array<Record<string, unknown>>) => void
   onRenderUpdate: (forceFull: boolean) => void
   onScrollBottom: (force?: boolean) => void
-  onConnectStream: (sessionId: string) => void
+  onConnectStream: (sessionId: string, options?: { subscribeOnly?: boolean }) => void
   onDisconnectStream: () => void
   onOpen: () => void
   onStreamDone?: () => void
@@ -329,6 +329,10 @@ export function useChatSession(options: UseChatSessionOptions) {
               if (recoverData.running && !forceNotRunning) {
                 loading.value = true
                 onConnectStream(currentSessionId.value)
+              } else if (recoverData.replayPending && !forceNotRunning) {
+                loading.value = true
+                inputDisabled.value = true
+                onConnectStream(currentSessionId.value)
               } else {
                 loading.value = false
               }
@@ -498,6 +502,12 @@ export function useChatSession(options: UseChatSessionOptions) {
         loading.value = true
         onScrollBottom(forceScrollBottom)
         onConnectStream(currentSessionId.value)
+      } else if (data.replayPending && !forceNotRunning) {
+        // LoadSession replay is in progress — connect WS to receive replay_done event
+        loading.value = true
+        inputDisabled.value = true
+        onScrollBottom(forceScrollBottom)
+        onConnectStream(currentSessionId.value)
       } else {
         loading.value = false
         onScrollBottom(forceScrollBottom)
@@ -573,6 +583,9 @@ export function useChatSession(options: UseChatSessionOptions) {
     // Also bump loadHistorySeq so any in-flight loadHistory results are discarded
     // (switchSession takes priority over stale loadHistory responses)
     ++loadHistorySeq
+
+    // Track whether input should remain disabled after switch (replayPending case)
+    let keepInputDisabled = false
 
     // Mark switching state immediately so UI can show a fade/placeholder
     switching.value = true
@@ -683,6 +696,12 @@ export function useChatSession(options: UseChatSessionOptions) {
       if (data.running) {
         loading.value = true
         onConnectStream(sessionId)
+      } else if (data.replayPending) {
+        // LoadSession replay is in progress — connect WS to receive replay_done event
+        // Use subscribeOnly to avoid creating a phantom streaming message
+        loading.value = true
+        keepInputDisabled = true
+        onConnectStream(sessionId, { subscribeOnly: true })
       } else {
         loading.value = false
       }
@@ -701,7 +720,14 @@ export function useChatSession(options: UseChatSessionOptions) {
       // Always restore input — switchSession is the only place that locks it,
       // so it must always unlock regardless of success/failure/race.
       // If a newer switch started, it will set inputDisabled=true again immediately.
-      inputDisabled.value = false
+      // EXCEPTION: keep input disabled during replayPending — the user must not
+      // send messages before the replayed history is fully loaded from DB,
+      // otherwise their message could end up before the replayed messages in the
+      // chat list (DB auto-increment ordering race). Input will be re-enabled
+      // by the replay_done WS event handler (via onReplayDone callback).
+      if (!keepInputDisabled) {
+        inputDisabled.value = false
+      }
       switching.value = false
     }
   }

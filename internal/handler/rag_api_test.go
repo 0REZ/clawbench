@@ -215,6 +215,16 @@ func TestServeRAGSession_CrossProjectDenied(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+func TestServeRAGSession_RemoteNoProjectDenied(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/rag/session?id=some-session", nil)
+	// Default RemoteAddr is 192.0.2.1 (non-localhost)
+	w := callHandlerWithAuth(ServeRAGSession, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
 func TestServeRAGMessage_CrossProjectDenied(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
@@ -325,6 +335,130 @@ func TestServeRAGSession_LocalhostCrossProject(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// ---------- ServeRAGMessageIndexStatus ----------
+
+func TestServeRAGMessageIndexStatus_MethodNotAllowed(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodPost, "/api/rag/message-index-status?id=1", nil)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_MissingID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_NotFound(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id=99999", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_ReturnsFields(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Insert a message
+	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", "", "user", "hello", nil, false, "NewSession")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id="+fmt.Sprint(msgID), nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Contains(t, result, "fts_indexed")
+	assert.Contains(t, result, "vec_indexed")
+	// Message not yet indexed by RAG
+	assert.Equal(t, false, result["fts_indexed"])
+	assert.Equal(t, false, result["vec_indexed"])
+}
+
+func TestServeRAGMessageIndexStatus_CrossProjectDenied(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", "", "user", "hello", nil, false, "NewSession")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id="+fmt.Sprint(msgID), nil)
+	req = withProjectCookie(req, "/other/project/path")
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_InvalidID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id=abc", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_RemoteNoProjectDenied(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id=1", nil)
+	// Default RemoteAddr is 192.0.2.1 (non-localhost)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestServeRAGMessageIndexStatus_WithRAGStore(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	origStore := rag.GlobalStore
+	t.Cleanup(func() { rag.GlobalStore = origStore })
+	store := setupRAGStore(t)
+	rag.GlobalStore = store
+
+	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", "", "user", "hello", nil, false, "NewSession")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id="+fmt.Sprint(msgID), nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &result)
+	require.NoError(t, err)
+	assert.Contains(t, result, "fts_indexed")
+	assert.Contains(t, result, "vec_indexed")
+}
+
+func TestServeRAGMessageIndexStatus_LocalhostNoProject(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", "", "user", "hello", nil, false, "NewSession")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/message-index-status?id="+fmt.Sprint(msgID), nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := callHandlerWithAuth(ServeRAGMessageIndexStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 // ---------- ServeRAGStatus ----------
 
 func TestServeRAGStatus_MethodCheck(t *testing.T) {
@@ -352,6 +486,32 @@ func TestServeRAGStatus_ReturnsFields(t *testing.T) {
 	assert.Contains(t, result, "has_fts_data")
 	assert.Contains(t, result, "has_vec_data")
 	assert.Contains(t, result, "embedder_healthy")
+	assert.Contains(t, result, "total_messages")
+	assert.Contains(t, result, "indexed_messages")
+	assert.Contains(t, result, "total_chunks")
+	assert.Contains(t, result, "embedded_chunks")
+}
+
+func TestServeRAGStatus_ProgressCounts(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Insert some messages
+	_, err := service.AddChatMessage(env.ProjectDir, "claude", "", "user", "hello", nil, false, "NewSession")
+	require.NoError(t, err)
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", "", "user", "world", nil, false, "NewSession")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/status", nil)
+	w := callHandlerWithAuth(ServeRAGStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &result)
+	require.NoError(t, err)
+	// 2 messages inserted, none indexed yet
+	assert.Equal(t, float64(2), result["total_messages"])
+	assert.Equal(t, float64(0), result["indexed_messages"])
 }
 
 func TestServeRAGStatus_NilStore(t *testing.T) {
@@ -376,6 +536,36 @@ func TestServeRAGStatus_NilStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, false, result["available"])
 	assert.Equal(t, "none", result["mode"])
+	assert.Equal(t, float64(0), result["total_chunks"])
+	assert.Equal(t, float64(0), result["embedded_chunks"])
+}
+
+func TestServeRAGStatus_WithStore_HybridMode(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	origStore := rag.GlobalStore
+	origEmbedder := rag.GlobalEmbedder
+	t.Cleanup(func() {
+		rag.GlobalStore = origStore
+		rag.GlobalEmbedder = origEmbedder
+	})
+
+	store := setupRAGStore(t)
+	rag.GlobalStore = store
+	rag.GlobalEmbedder = setupWorkingMockEmbedder(t)
+
+	req := newRequest(t, http.MethodGet, "/api/rag/status", nil)
+	w := callHandlerWithAuth(ServeRAGStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &result)
+	require.NoError(t, err)
+	// With embedder healthy but no data, mode should be "none" (no vec data)
+	assert.Contains(t, result, "mode")
+	assert.Contains(t, result, "total_chunks")
+	assert.Contains(t, result, "embedded_chunks")
 }
 
 // ---------- ServeRAGSessionSearch ----------
