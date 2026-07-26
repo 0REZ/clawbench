@@ -141,6 +141,7 @@
 
       <RecentFilesDrawer
         :open="recentFilesDrawer.effectiveOpen.value"
+        :current-file-path="fileNav.overlayOpen.value ? currentFile?.path : null"
         @close="recentFilesDrawer.close()"
         @select-file="handleRecentFileSelect"
       />
