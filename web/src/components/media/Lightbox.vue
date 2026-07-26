@@ -30,17 +30,18 @@
         <img
           v-if="currentUrl && !currentSvg"
           v-show="!imageLoading"
+          ref="imgRef"
           :src="currentUrl"
           :style="imgStyle"
           draggable="false"
           @mousedown.prevent
-          @load="imageLoading = false"
+          @load="onImageLoad"
           @error="imageLoading = false"
         />
         <div v-if="imageLoading" class="lb-loading-spinner">
           <Loader :size="32" />
         </div>
-        <div v-if="currentSvg" :style="imgStyle" v-html="currentSvg" />
+        <div v-if="currentSvg" ref="svgContainerRef" :style="imgStyle" v-html="currentSvg" />
       </div>
       <div class="lightbox-bottom-bar">
         <template v-if="showNav">
@@ -59,7 +60,7 @@
 
 <script setup>
 import { RotateCcw, X, Loader, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
-import { ref, computed, provide, onMounted, onUnmounted } from 'vue'
+import { ref, computed, provide, watch, onMounted, onUnmounted } from 'vue'
 import { store } from '@/stores/app.ts'
 import { baseName, joinPath } from '@/utils/path.ts'
 import { getFileType } from '@/utils/fileType.ts'
@@ -79,6 +80,14 @@ const isDragging = ref(false)
 const dragStartX = ref(0)
 const dragStartY = ref(0)
 const contentRef = ref(null)
+const imgRef = ref(null)
+const svgContainerRef = ref(null)
+
+// Fit-to-screen: the initial scale that makes image/svg fully visible
+const fitScale = ref(1)
+const naturalW = ref(0)
+const naturalH = ref(0)
+const dimensionsReady = ref(false)
 
 // Directory-based navigation state
 const siblingFiles = ref([])
@@ -127,10 +136,92 @@ const currentFileName = computed(() => {
 })
 
 // Computed style for transform
-const imgStyle = computed(() => ({
-    transform: `translate(${tx.value}px, ${ty.value}px) scale(${scale.value})`,
-    transition: isDragging.value ? 'none' : 'transform 0.1s ease-out'
-}))
+const imgStyle = computed(() => {
+    const style = {
+        transform: `translate(${tx.value}px, ${ty.value}px) scale(${scale.value})`,
+        transition: isDragging.value ? 'none' : 'transform 0.1s ease-out'
+    }
+    // For images: once natural dimensions are known, set explicit width/height
+    // and disable CSS max-width/max-height so transform: scale() handles fitting.
+    // Before dimensions are ready, CSS max-width/max-height constrains as fallback.
+    // For SVGs: dimensions are set directly on the SVG element in onSvgMounted;
+    // the container div just needs the transform.
+    if (dimensionsReady.value && naturalW.value > 0 && naturalH.value > 0 && !currentSvg.value) {
+        style.width = naturalW.value + 'px'
+        style.height = naturalH.value + 'px'
+        style.maxWidth = 'none'
+        style.maxHeight = 'none'
+    }
+    return style
+})
+
+// Calculate fit-to-screen scale based on natural dimensions vs viewport
+function calcFitScale(naturalW, naturalH) {
+    if (!contentRef.value || naturalW <= 0 || naturalH <= 0) return 1
+    const vw = contentRef.value.clientWidth
+    const vh = contentRef.value.clientHeight
+    if (vw <= 0 || vh <= 0) return 1
+    // Leave padding for toolbar and bottom bar (each ~56px)
+    const padding = 56
+    const availH = vh - padding * 2
+    const s = Math.min(vw / naturalW, availH / naturalH, 1)
+    return s > 0 ? s : 1
+}
+
+function onImageLoad() {
+    imageLoading.value = false
+    const img = imgRef.value
+    if (!img) return
+    naturalW.value = img.naturalWidth
+    naturalH.value = img.naturalHeight
+    const s = calcFitScale(img.naturalWidth, img.naturalHeight)
+    fitScale.value = s
+    scale.value = s
+    dimensionsReady.value = true
+}
+
+function onSvgMounted() {
+    // SVG is rendered via v-html, measure after next repaint
+    requestAnimationFrame(() => {
+        const container = svgContainerRef.value
+        if (!container) return
+        const svg = container.querySelector('svg')
+        if (!svg) return
+
+        // Try viewBox first, fallback to width/height attributes or bounding box
+        let w, h
+        if (svg.viewBox?.baseVal && svg.viewBox.baseVal.width > 0) {
+            w = svg.viewBox.baseVal.width
+            h = svg.viewBox.baseVal.height
+        } else {
+            w = parseFloat(svg.getAttribute('width')) || svg.getBBox().width
+            h = parseFloat(svg.getAttribute('height')) || svg.getBBox().height
+        }
+        naturalW.value = w
+        naturalH.value = h
+
+        // For SVGs: set explicit width/height attributes to fit the viewport,
+        // keeping scale=1 as the baseline (fully visible).
+        // This handles SVGs with fixed pixel dimensions that CSS max-width
+        // alone may not properly constrain.
+        const vw = contentRef.value?.clientWidth || window.innerWidth
+        const vh = contentRef.value?.clientHeight || window.innerHeight
+        const padding = 56
+        const availH = vh - padding * 2
+        if (w > 0 && h > 0) {
+            const s = Math.min(vw / w, availH / h, 1)
+            if (s < 1) {
+                svg.setAttribute('width', Math.round(w * s) + 'px')
+                svg.setAttribute('height', Math.round(h * s) + 'px')
+                svg.style.maxWidth = 'none'
+                svg.style.maxHeight = 'none'
+            }
+        }
+        fitScale.value = 1
+        scale.value = 1
+        dimensionsReady.value = true
+    })
+}
 
 function getMediaType(filePath) {
     if (!filePath) return null
@@ -198,6 +289,10 @@ function navigateToIndex(newIdx, direction) {
     slideDirection.value = direction
 
     // Reset transform for new image
+    fitScale.value = 1
+    naturalW.value = 0
+    naturalH.value = 0
+    dimensionsReady.value = false
     scale.value = 1
     tx.value = 0
     ty.value = 0
@@ -224,6 +319,10 @@ function navigateMdImage(newIdx, direction) {
     slideDirection.value = direction
 
     // Reset transform for new image
+    fitScale.value = 1
+    naturalW.value = 0
+    naturalH.value = 0
+    dimensionsReady.value = false
     scale.value = 1
     tx.value = 0
     ty.value = 0
@@ -239,6 +338,10 @@ function open(url, svg = '') {
     currentUrl.value = svg ? '' : url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
     currentSvg.value = svg
     lightboxVisible.value = true
+    fitScale.value = 1
+    naturalW.value = 0
+    naturalH.value = 0
+    dimensionsReady.value = false
     scale.value = 1
     tx.value = 0
     ty.value = 0
@@ -277,6 +380,10 @@ function openMdImages(imgs, startIndex) {
     currentFilePath.value = ''
 
     lightboxVisible.value = true
+    fitScale.value = 1
+    naturalW.value = 0
+    naturalH.value = 0
+    dimensionsReady.value = false
     scale.value = 1
     tx.value = 0
     ty.value = 0
@@ -311,6 +418,10 @@ function close() {
 }
 
 function resetAndRefresh() {
+    fitScale.value = 1
+    naturalW.value = 0
+    naturalH.value = 0
+    dimensionsReady.value = false
     scale.value = 1
     tx.value = 0
     ty.value = 0
@@ -369,14 +480,14 @@ function handleContentClick(e) {
 function handleWheel(e) {
     const delta = e.deltaY > 0 ? 0.85 : 1.2
     const newScale = Math.min(Math.max(scale.value * delta, 0.1), 10)
-    if (newScale < 1 && scale.value >= 1) { tx.value = 0; ty.value = 0; lastTx.value = 0; lastTy.value = 0 }
+    const minScale = fitScale.value
+    if (newScale < minScale && scale.value >= minScale) { tx.value = 0; ty.value = 0; lastTx.value = 0; lastTy.value = 0 }
     scale.value = newScale
 }
 
 // Mouse events
 function handleMouseDown(e) {
     if (e.button !== 0) return // Only left click
-    if (scale.value <= 1) return
     e.preventDefault()
     isDragging.value = true
     dragStartX.value = e.clientX - lastTx.value
@@ -415,11 +526,9 @@ function handleTouchStart(e) {
         touchLastY.value = e.touches[0].clientY
         hasMoved.value = false
 
-        if (scale.value > 1) {
-            isDragging.value = true
-            dragStartX.value = e.touches[0].clientX - lastTx.value
-            dragStartY.value = e.touches[0].clientY - lastTy.value
-        }
+        isDragging.value = true
+        dragStartX.value = e.touches[0].clientX - lastTx.value
+        dragStartY.value = e.touches[0].clientY - lastTy.value
     }
 }
 
@@ -456,8 +565,8 @@ function handleTouchMove(e) {
 }
 
 function handleTouchEnd(_e) {
-    // Check for swipe navigation (only at scale 1)
-    if (scale.value === 1 && showNav.value && !hasMoved.value) {
+    // Check for swipe navigation (only at fit scale)
+    if (scale.value <= fitScale.value && showNav.value && !hasMoved.value) {
         const dx = touchStartX.value - touchLastX.value
         const dy = touchStartY.value - touchLastY.value
         const absDx = Math.abs(dx)
@@ -472,9 +581,9 @@ function handleTouchEnd(_e) {
         }
     }
 
-    // If zoomed out below 1, reset
-    if (scale.value < 1) {
-        scale.value = 1
+    // If zoomed out below fit scale, reset
+    if (scale.value < fitScale.value) {
+        scale.value = fitScale.value
         tx.value = 0
         ty.value = 0
         lastTx.value = 0
@@ -508,6 +617,11 @@ provide('openSvgLightbox', openSvg)
 provide('openMdImages', openMdImages)
 
 defineExpose({ open, openMdImages, openSvg })
+
+// When SVG content changes, recalculate fit scale
+watch(currentSvg, (val) => {
+    if (val) onSvgMounted()
+})
 
 onMounted(() => {
     document.addEventListener('mousemove', handleMouseMove)
@@ -715,6 +829,7 @@ onUnmounted(() => {
 .lightbox-content img {
     max-width: 100%;
     max-height: 100%;
+    display: block;
     transform-origin: center center;
     user-select: none;
     -webkit-user-drag: none;
@@ -725,6 +840,7 @@ onUnmounted(() => {
 .lightbox-content :deep(svg) {
     max-width: 100%;
     max-height: 100%;
+    display: block;
     transform-origin: center center;
     user-select: none;
     background: var(--bg-primary);
