@@ -79,10 +79,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { useAgents } from '@/composables/useAgents'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import { MonitorSmartphone, Smartphone, Loader2 } from 'lucide-vue-next'
 import IosInstallDrawer from './common/IosInstallDrawer.vue'
 import AgentInstallDialog from './AgentInstallDialog.vue'
@@ -116,6 +117,7 @@ const showIosSheet = ref(false)
 const selectedBackend = ref<BackendInfo | null>(null)
 const rescanning = ref(false)
 const loading = ref(true)
+let unregisterBack: (() => void) | null = null
 
 // Sort: installed first, not-installed last
 const sortedBackends = computed(() => {
@@ -199,6 +201,21 @@ function forceShow() {
   visible.value = true
 }
 
+// Register back handler when overlay opens, unregister on close
+watch(visible, (v) => {
+  if (v) {
+    unregisterBack = registerBackHandler({
+      id: 'welcome-overlay',
+      canGoBack: () => visible.value,
+      goBack: () => { visible.value = false },
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  }
+})
+
 onMounted(() => {
   loadBackends()
   window.addEventListener('clawbench-show-welcome', forceShow)
@@ -206,6 +223,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('clawbench-show-welcome', forceShow)
+  if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  }
 })
 </script>
 

@@ -25,20 +25,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const props = defineProps<{
   backendName: string
   installCmd: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
 }>()
 
 const { t } = useI18n()
 const copied = ref(false)
+let unregisterBack: (() => void) | null = null
+
+onMounted(() => {
+  unregisterBack = registerBackHandler({
+    id: 'agent-install-dialog',
+    canGoBack: () => true,
+    goBack: () => emit('close'),
+    priority: PRIORITY_OVERLAY,
+  })
+})
+
+onBeforeUnmount(() => {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
+})
 
 function copyCmd() {
   navigator.clipboard.writeText(props.installCmd)

@@ -34,8 +34,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const props = defineProps<{
   sourceName: string
@@ -51,10 +52,21 @@ const { t } = useI18n()
 const newName = ref('')
 const error = ref('')
 const nameInputRef = ref<HTMLInputElement | null>(null)
+let unregisterBack: (() => void) | null = null
 
 onMounted(() => {
   newName.value = props.sourceName ? `${props.sourceName} (${t('settings.items.agentCopy')})` : ''
   nextTick(() => nameInputRef.value?.focus())
+  unregisterBack = registerBackHandler({
+    id: 'copy-agent-dialog',
+    canGoBack: () => true,
+    goBack: () => handleClose(),
+    priority: PRIORITY_OVERLAY,
+  })
+})
+
+onBeforeUnmount(() => {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
 })
 
 function submit() {

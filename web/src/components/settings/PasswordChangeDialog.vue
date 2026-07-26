@@ -93,10 +93,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { apiPost } from '@/utils/api'
 import { Eye, EyeOff } from 'lucide-vue-next'
+import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 
 const emit = defineEmits<{
   close: []
@@ -118,6 +119,20 @@ const showConfirm = ref(false)
 
 const newPasswordRef = ref<HTMLInputElement | null>(null)
 const confirmPasswordRef = ref<HTMLInputElement | null>(null)
+let unregisterBack: (() => void) | null = null
+
+onMounted(() => {
+  unregisterBack = registerBackHandler({
+    id: 'password-change-dialog',
+    canGoBack: () => !submitting.value,
+    goBack: () => handleClose(),
+    priority: PRIORITY_OVERLAY,
+  })
+})
+
+onBeforeUnmount(() => {
+  if (unregisterBack) { unregisterBack(); unregisterBack = null }
+})
 
 function focusNew() {
   newPasswordRef.value?.focus()
