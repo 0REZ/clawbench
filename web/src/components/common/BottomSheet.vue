@@ -226,7 +226,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px;
+  padding: 0 6px;
   height: 36px;
   border-bottom: none;
   box-shadow: 0 1px 0 var(--border-color, #e5e5e5);
