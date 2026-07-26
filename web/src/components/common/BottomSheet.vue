@@ -274,6 +274,9 @@ defineExpose({
   color: var(--text-primary, #1a1a1a);
   flex-shrink: 0;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .bs-header-description {
