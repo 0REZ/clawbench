@@ -40,7 +40,7 @@ import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHand
 const { t } = useI18n()
 const dlg = useDialog()
 const inputVal = ref('')
-const inputRef = ref(null)
+const inputRef = ref<HTMLInputElement | null>(null)
 let unregisterBack: (() => void) | null = null
 
 watch(() => dlg.state.value.visible, async (v) => {

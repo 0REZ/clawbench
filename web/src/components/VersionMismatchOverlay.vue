@@ -31,7 +31,7 @@ import { normalizeVersion, isVersionedBuild, compareVersions, extractBaseVersion
 
 const STORAGE_KEY = 'clawbench_version_mismatch_skip'
 
-let unregisterBack = null
+let unregisterBack: (() => void) | null = null
 
 defineExpose({ show })
 
