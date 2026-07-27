@@ -488,8 +488,25 @@ func TestServeRAGStatus_ReturnsFields(t *testing.T) {
 	assert.Contains(t, result, "embedder_healthy")
 	assert.Contains(t, result, "total_messages")
 	assert.Contains(t, result, "indexed_messages")
-	assert.Contains(t, result, "total_chunks")
-	assert.Contains(t, result, "embedded_chunks")
+	assert.Contains(t, result, "embedded_messages")
+}
+
+func TestServeRAGStatus_VectorDisabled(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// RAG.VectorEnabled defaults to false in test ConfigInstance (vector disabled)
+	// FTS should still be reported as available when store has data
+	req := newRequest(t, http.MethodGet, "/api/rag/status", nil)
+	w := callHandlerWithAuth(ServeRAGStatus, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &result)
+	require.NoError(t, err)
+	// No FTS data in empty test store, but vec should also be false
+	assert.Equal(t, false, result["has_vec_data"])
+	assert.Equal(t, false, result["embedder_healthy"])
 }
 
 func TestServeRAGStatus_ProgressCounts(t *testing.T) {
@@ -536,8 +553,7 @@ func TestServeRAGStatus_NilStore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, false, result["available"])
 	assert.Equal(t, "none", result["mode"])
-	assert.Equal(t, float64(0), result["total_chunks"])
-	assert.Equal(t, float64(0), result["embedded_chunks"])
+	assert.Equal(t, float64(0), result["embedded_messages"])
 }
 
 func TestServeRAGStatus_WithStore_HybridMode(t *testing.T) {
@@ -564,8 +580,7 @@ func TestServeRAGStatus_WithStore_HybridMode(t *testing.T) {
 	require.NoError(t, err)
 	// With embedder healthy but no data, mode should be "none" (no vec data)
 	assert.Contains(t, result, "mode")
-	assert.Contains(t, result, "total_chunks")
-	assert.Contains(t, result, "embedded_chunks")
+	assert.Contains(t, result, "embedded_messages")
 }
 
 // ---------- ServeRAGSessionSearch ----------

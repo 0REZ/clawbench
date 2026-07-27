@@ -32,6 +32,20 @@ var dbRead *sql.DB
 // locked — WAL mode allows reads and writes to proceed concurrently.
 var writeMu sync.Mutex
 
+// WriteLock acquires the global write mutex.
+// Callers MUST call WriteUnlock after the write operation completes.
+// Use this for write transactions that span multiple SQL statements:
+//
+//	service.WriteLock()
+//	tx, err := db.Begin()
+//	// ... tx.Exec ...
+//	tx.Commit()
+//	service.WriteUnlock()
+func WriteLock() { writeMu.Lock() }
+
+// WriteUnlock releases the global write mutex.
+func WriteUnlock() { writeMu.Unlock() }
+
 // WriteExec executes a write statement on DB under the write mutex.
 // Use this for all INSERT/UPDATE/DELETE/DDL operations instead of DB.Exec directly.
 func WriteExec(query string, args ...any) (sql.Result, error) {
@@ -164,6 +178,22 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		return fmt.Errorf("failed to set busy_timeout: %w", err)
 	}
 
+	// Pre-migration: add columns that must exist before createTables runs
+	// (because createTables creates indexes referencing these columns).
+	// Only apply when the table already exists (upgrading from an older schema).
+	// chat_history.indexed — added for RAG indexing progress tracking
+	var chatHistoryExists int
+	_ = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chat_history'").Scan(&chatHistoryExists)
+	if chatHistoryExists > 0 {
+		var hasIndexed int
+		_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_history') WHERE name='indexed'").Scan(&hasIndexed)
+		if hasIndexed == 0 {
+			if _, err := WriteExec("ALTER TABLE chat_history ADD COLUMN indexed INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("failed to add indexed column: %w", err)
+			}
+		}
+	}
+
 	// Create tables with latest schema
 	_, err = WriteExec(`
 		CREATE TABLE IF NOT EXISTS chat_history (
@@ -256,6 +286,9 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		-- Without this, the unread subquery can only use the project_path prefix of idx_history_session,
 		-- requiring a full scan of all messages in the project to filter by role and streaming.
 		CREATE INDEX IF NOT EXISTS idx_history_unread ON chat_history(project_path, role, streaming, created_at);
+		-- Covering index for RAG indexing progress queries:
+		-- TotalMessageCount (WHERE streaming = 0) and IndexedMessageCount (WHERE indexed = 1 AND streaming = 0)
+		CREATE INDEX IF NOT EXISTS idx_history_indexing ON chat_history(streaming, indexed);
 
 		-- Tool call detail storage (input/output split from chat_history.content for performance)
 		CREATE TABLE IF NOT EXISTS chat_tool_calls (

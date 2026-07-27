@@ -49,12 +49,13 @@
         :max="entry.field.max"
         :step="entry.field.step"
         :needs-restart="entry.field.needsRestart"
-        :disabled="fieldsDisabled"
+        :disabled="isFieldDisabled(entry.field)"
         :force-close="activeKey !== null && activeKey !== entry.field.key"
         :default-value="entry.field.defaultValue"
         :display-format="entry.field.displayFormat"
         :display-transform="entry.field.displayTransform"
         :progress="resolveProgress(entry.field)"
+        :speed-label="resolveSpeedLabel(entry.field)"
         :no-divider="false"
         @update:model-value="(v: unknown) => setLocalValue(entry.field.key, v)"
         @edit-toggle="(open: boolean) => handleEditToggle(entry.field.key, open)"
@@ -140,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, inject, onMounted, onUnmounted, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight } from 'lucide-vue-next'
 import SettingsItem from './SettingsItem.vue'
@@ -195,20 +196,27 @@ const entryPicker = useTabDrawer('settings', { autoRestore: false })
 
 onMounted(() => {
   initSnapshot()
-
-  // Register unsaved-changes guard with panel-specific ID (C3 fix)
   registerGuard(`panel-${props.config.panelId}`, () => !hasChanges.value && !hasFailedSave.value)
-
-  // Start RAG status polling when the rag panel is visible
-  if (props.config.panelId === 'rag') {
-    startRagPolling()
-  }
 })
+
+// Start RAG status polling only when the RAG panel is both the active category
+// AND the settings tab is visible. Stop when either condition is false.
+const activeTab = inject<Ref<string>>('activeTab', ref('settings'))
+
+watch(
+  () => props.config.panelId === 'rag' && activeTab?.value === 'settings',
+  (shouldPoll: boolean) => {
+    if (shouldPoll) {
+      startRagPolling()
+    } else {
+      stopRagPolling()
+    }
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   unregisterGuard(`panel-${props.config.panelId}`)
-
-  // Stop RAG status polling when the rag panel is destroyed
   if (props.config.panelId === 'rag') {
     stopRagPolling()
   }
@@ -230,6 +238,15 @@ const fieldsDisabled = computed(() => {
   if (!props.config.enableKey) return false
   return !localValues[props.config.enableKey]
 })
+
+/** Check if a specific field should be disabled due to its disableUnless condition. */
+function isFieldDisabled(field: ItemSpec): boolean {
+  if (fieldsDisabled.value) return true
+  if (field.disableUnless) {
+    return !isDependsOnMet(field.disableUnless, (k) => localValues[k])
+  }
+  return false
+}
 
 function onEnableToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
@@ -336,9 +353,9 @@ function getRagStatusValue(key: string): unknown {
     case 'rag.status.mode':
       return t(`settings.items.ragMode_${s.mode}`)
     case 'rag.status.index_progress':
-      return t('settings.items.ragProgressFormat', { done: Math.min(s.indexed_messages, s.total_messages), total: s.total_messages })
+      return s.total_messages > 0 ? t('settings.items.ragProgressFormat', { done: Math.min(s.indexed_messages, s.total_messages), total: s.total_messages }) : '—'
     case 'rag.status.embed_progress':
-      return t('settings.items.ragProgressFormat', { done: Math.min(s.embedded_chunks, s.total_chunks), total: s.total_chunks })
+      return s.total_messages > 0 ? t('settings.items.ragProgressFormat', { done: Math.min(s.embedded_messages, s.total_messages), total: s.total_messages }) : '—'
     default:
       return ''
   }
@@ -348,11 +365,23 @@ function resolveProgress(field: ItemSpec): { value: number; max: number } | unde
   const s = ragStatus.value
   switch (field.key) {
     case 'rag.status.index_progress':
-      return { value: s.indexed_messages, max: Math.max(s.total_messages, 1) }
+      return s.total_messages > 0 ? { value: s.indexed_messages, max: s.total_messages } : undefined
     case 'rag.status.embed_progress':
-      return { value: s.embedded_chunks, max: Math.max(s.total_chunks, 1) }
+      return s.total_messages > 0 ? { value: s.embedded_messages, max: s.total_messages } : undefined
     default:
       return field.progress
+  }
+}
+
+function resolveSpeedLabel(field: ItemSpec): string | undefined {
+  const s = ragStatus.value
+  switch (field.key) {
+    case 'rag.status.index_progress':
+      return s.index_speed > 0 ? t('settings.items.ragSpeedFormat', { speed: s.index_speed.toFixed(2) }) : undefined
+    case 'rag.status.embed_progress':
+      return s.embed_speed > 0 ? t('settings.items.ragSpeedFormat', { speed: s.embed_speed.toFixed(2) }) : undefined
+    default:
+      return undefined
   }
 }
 

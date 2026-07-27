@@ -25,9 +25,17 @@ func setupSQLiteStore(t *testing.T) *Store {
 			t.Logf("Warning: gse segmenter not available: %v", err)
 		}
 	}
-	store, err := NewSQLiteStore(":memory:")
-	require.NoError(t, err, "NewSQLiteStore should succeed")
+	store, err := NewSQLiteStoreForTest(":memory:")
+	require.NoError(t, err, "NewSQLiteStoreForTest should succeed")
 	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+// setupSQLiteStoreWithDim creates an in-memory SQLite store with a pre-set embedding dimension (1024).
+func setupSQLiteStoreWithDim(t *testing.T) *Store {
+	t.Helper()
+	store := setupSQLiteStore(t)
+	store.SetEmbeddingDim(1024)
 	return store
 }
 
@@ -276,7 +284,7 @@ func TestSQLiteStore_SearchFTS_FiltersByProject(t *testing.T) {
 // ---------- SearchVector (vec0 KNN) ----------
 
 func TestStore_SearchVector_Basic(t *testing.T) {
-	store := setupSQLiteStore(t)
+	store := setupSQLiteStoreWithDim(t)
 	defer store.Close()
 
 	// Insert chunks with embeddings
@@ -299,7 +307,7 @@ func TestStore_SearchVector_Basic(t *testing.T) {
 }
 
 func TestStore_SearchVector_ProjectFilter(t *testing.T) {
-	store := setupSQLiteStore(t)
+	store := setupSQLiteStoreWithDim(t)
 	defer store.Close()
 
 	chunks := []Chunk{
@@ -317,7 +325,7 @@ func TestStore_SearchVector_ProjectFilter(t *testing.T) {
 }
 
 func TestStore_SearchVector_EmptyDB(t *testing.T) {
-	store := setupSQLiteStore(t)
+	store := setupSQLiteStoreWithDim(t)
 	defer store.Close()
 
 	hits, err := store.SearchVector(makeTestEmbedding(), 10, "", "", "", "", "", "", "")
@@ -326,7 +334,7 @@ func TestStore_SearchVector_EmptyDB(t *testing.T) {
 }
 
 func TestStore_SearchVector_ExcludeSessionID(t *testing.T) {
-	store := setupSQLiteStore(t)
+	store := setupSQLiteStoreWithDim(t)
 	defer store.Close()
 
 	chunks := []Chunk{
@@ -356,7 +364,7 @@ func TestStore_SearchVector_RejectsInvalidEmbedding(t *testing.T) {
 // ---------- HasVecData ----------
 
 func TestStore_HasVecData(t *testing.T) {
-	store := setupSQLiteStore(t)
+	store := setupSQLiteStoreWithDim(t)
 	defer store.Close()
 
 	assert.False(t, store.HasVecData(), "empty store should have no vec data")
@@ -381,6 +389,43 @@ func TestStore_HasVecData_NoEmbedding(t *testing.T) {
 	require.NoError(t, store.InsertChunks([]Chunk{chunk}))
 
 	assert.False(t, store.HasVecData(), "store with only non-embedded chunks should have no vec data")
+}
+
+// ---------- BatchUpdateEmbeddings ----------
+
+func TestStore_BatchUpdateEmbeddings(t *testing.T) {
+	store := setupSQLiteStoreWithDim(t)
+	defer store.Close()
+
+	// Insert chunks without embeddings
+	chunks := []Chunk{
+		{SessionID: "s1", MessageID: 1, ChunkText: "hello", ChunkTextSegmented: "hello", ChunkIndex: 0, TokenCount: 1, ProjectPath: testProjectPath, Backend: testBackendClaude, Role: testRoleAssistant, CreatedAt: time.Now().Truncate(time.Millisecond)},
+		{SessionID: "s1", MessageID: 2, ChunkText: "world", ChunkTextSegmented: "world", ChunkIndex: 0, TokenCount: 1, ProjectPath: testProjectPath, Backend: testBackendClaude, Role: testRoleAssistant, CreatedAt: time.Now().Truncate(time.Millisecond)},
+	}
+	require.NoError(t, store.InsertChunks(chunks))
+
+	// Get pending chunk IDs
+	pending, err := store.GetPendingEmbeddings(10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+
+	// Batch update
+	emb1 := makeTestEmbedding()
+	emb2 := makeTestEmbedding()
+	emb2[0] = 0.99 // slightly different
+	backfilled, err := store.BatchUpdateEmbeddings(pending, [][]float64{emb1, emb2})
+	require.NoError(t, err)
+	assert.Equal(t, 2, backfilled)
+	assert.True(t, store.HasVecData())
+}
+
+func TestStore_BatchUpdateEmbeddings_Empty(t *testing.T) {
+	store := setupSQLiteStoreWithDim(t)
+	defer store.Close()
+
+	backfilled, err := store.BatchUpdateEmbeddings(nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, backfilled)
 }
 
 // ---------- SearchHybrid ----------
@@ -749,14 +794,14 @@ func TestSQLiteStore_LoadEmbeddingDimFromDB_WithExistingData(t *testing.T) {
 	dbPath := dir + "/test_dim.db"
 
 	// First store: insert data
-	store1, err := NewSQLiteStore(dbPath)
+	store1, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	chunk := makeTestChunk(testSession1, 1, 0, "dim test")
 	require.NoError(t, store1.InsertChunks([]Chunk{chunk}))
 	_ = store1.Close()
 
 	// Second store: should load dim from existing data
-	store2, err := NewSQLiteStore(dbPath)
+	store2, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store2.Close() })
 
@@ -926,7 +971,7 @@ func TestSQLiteStore_NewSQLiteStore_TempFile(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/test.db"
 
-	store, err := NewSQLiteStore(dbPath)
+	store, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
@@ -993,7 +1038,7 @@ func TestSQLiteStore_NewSQLiteStore_SetsWALMode(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/test_wal.db"
 
-	store, err := NewSQLiteStore(dbPath)
+	store, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
@@ -1008,7 +1053,7 @@ func TestSQLiteStore_NewSQLiteStore_SetsBusyTimeout(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/test_busy.db"
 
-	store, err := NewSQLiteStore(dbPath)
+	store, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
@@ -1022,7 +1067,7 @@ func TestSQLiteStore_NewSQLiteStore_SetsBusyTimeout(t *testing.T) {
 func TestSQLiteStore_NewSQLiteStore_InvalidPath(t *testing.T) {
 	// Opening a database in a non-existent deeply nested path may fail
 	// depending on the driver. Test that the error is returned properly.
-	_, err := NewSQLiteStore("/nonexistent/deeply/nested/dir/test.db")
+	_, err := NewSQLiteStoreForTest("/nonexistent/deeply/nested/dir/test.db")
 	// modernc.org/sqlite creates the file, so this may not error on open
 	// but the important thing is that the function doesn't panic
 	_ = err
@@ -1161,7 +1206,7 @@ func TestSQLiteStore_MigrateExistingEmbeddings_ToVec0(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	// Step 3: Re-open the store (this triggers initSchema + migration)
-	store, err := NewSQLiteStore(dbPath)
+	store, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
@@ -1185,7 +1230,7 @@ func TestSQLiteStore_MigrateExistingEmbeddings_ToVec0(t *testing.T) {
 
 	// Step 7: Verify idempotency — re-opening the store should not duplicate
 	require.NoError(t, store.Close())
-	store2, err := NewSQLiteStore(dbPath)
+	store2, err := NewSQLiteStoreForTest(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store2.Close() })
 

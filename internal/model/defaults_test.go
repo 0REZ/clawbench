@@ -393,17 +393,32 @@ func TestApplyDefaults_RAGDefaults(t *testing.T) {
 	if cfg.RAG.ChunkOverlap != 64 {
 		t.Errorf("RAG.ChunkOverlap = %d, want 64", cfg.RAG.ChunkOverlap)
 	}
-	if cfg.RAG.PollInterval != "10s" {
-		t.Errorf("RAG.PollInterval = %q, want %q", cfg.RAG.PollInterval, "10s")
+	if cfg.RAG.PollInterval != "5s" {
+		t.Errorf("RAG.PollInterval = %q, want %q", cfg.RAG.PollInterval, "5s")
 	}
-	if cfg.RAG.BatchSize != 10 {
-		t.Errorf("RAG.BatchSize = %d, want 10", cfg.RAG.BatchSize)
+	if cfg.RAG.BatchSize != 50 {
+		t.Errorf("RAG.BatchSize = %d, want 50", cfg.RAG.BatchSize)
 	}
 	if cfg.RAG.SearchLimit != 20 {
 		t.Errorf("RAG.SearchLimit = %d, want 20", cfg.RAG.SearchLimit)
 	}
 	if cfg.RAG.RetentionDays != 90 {
 		t.Errorf("RAG.RetentionDays = %d, want 90", cfg.RAG.RetentionDays)
+	}
+	if !cfg.RAG.VectorEnabled {
+		t.Error("RAG.VectorEnabled should default to true when absent from config")
+	}
+}
+
+func TestApplyDefaults_RAGEnabledExplicitFalse(t *testing.T) {
+	setupTestBinDir(t)
+
+	cfg := Config{RAG: RAGConfig{VectorEnabled: false}}
+	presence := map[string]bool{"rag.vector_enabled": true}
+	ApplyDefaults(&cfg, presence)
+
+	if cfg.RAG.VectorEnabled {
+		t.Error("RAG.VectorEnabled should stay false when explicitly set to false")
 	}
 }
 

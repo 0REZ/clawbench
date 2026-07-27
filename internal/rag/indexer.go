@@ -86,6 +86,8 @@ func (idx *Indexer) Stop() {
 }
 
 // run is the main indexer loop.
+// Uses continuous mode: after each batch, if more work remains, immediately
+// processes the next batch instead of waiting for the poll interval.
 func (idx *Indexer) run() {
 	defer close(idx.doneCh)
 
@@ -111,14 +113,64 @@ func (idx *Indexer) run() {
 				return
 			default:
 			}
-			idx.indexBatch()
+			// After each batch, check if more work remains.
+			// If so, loop immediately instead of waiting for the next tick.
+			for {
+				hasMore := idx.indexBatch()
+				if !hasMore {
+					break
+				}
+				// Check stop signal between continuous batches
+				select {
+				case <-idx.stopCh:
+					return
+				default:
+				}
+			}
 		}
 	}
 }
 
+// embedSubBatchSize is the maximum number of texts per embedding API call.
+// Local models (e.g. Ollama bge-m3) process texts serially; a batch of N
+// texts takes ~N×single_latency. Keep small so each API call finishes well
+// within the HTTPClient timeout.
+const embedSubBatchSize = 5
+
+// embedInSubBatches calls EmbedBatch in smaller sub-batches to avoid timeouts.
+// Returns all embeddings in the same order as input texts. If a sub-batch fails,
+// its embeddings are nil (caller handles gracefully).
+func (idx *Indexer) embedInSubBatches(ctx context.Context, texts []string) [][]float64 {
+	results := make([][]float64, len(texts))
+	for i := 0; i < len(texts); i += embedSubBatchSize {
+		end := i + embedSubBatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		subBatch := texts[i:end]
+		embeddings, err := idx.embedder.EmbedBatch(ctx, subBatch)
+		if err != nil {
+			slog.Warn("rag: sub-batch embedding failed",
+				slog.Int("from", i), slog.Int("to", end),
+				slog.String("err", err.Error()))
+			// nil entries left in results — caller treats as no embedding
+			continue
+		}
+		for j, emb := range embeddings {
+			results[i+j] = emb
+		}
+		// Check context cancellation between sub-batches
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return results
+}
+
 // indexBatch processes one batch of unindexed messages and backfills embeddings.
-func (idx *Indexer) indexBatch() {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+// Returns true if more unindexed messages may remain (caller should loop).
+func (idx *Indexer) indexBatch() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	idx.mu.Lock()
@@ -129,10 +181,10 @@ func (idx *Indexer) indexBatch() {
 	idx.checkEmbedderHealth(ctx)
 
 	// Phase 1: Index new messages from SQLite
-	idx.indexNewMessages(ctx)
+	hasMore := idx.indexNewMessages(ctx)
 
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 
 	// Phase 2: Backfill embeddings for chunks that were indexed without them
@@ -140,8 +192,7 @@ func (idx *Indexer) indexBatch() {
 		idx.backfillEmbeddings(ctx)
 	}
 
-	// Phase 3: No FTS rebuild needed — FTS5 is synced on every INSERT/DELETE
-	// (unlike DuckDB which required periodic RebuildFTSIfDirty)
+	return hasMore
 }
 
 // checkEmbedderHealth checks embedding API availability and updates the healthy flag.
@@ -207,162 +258,163 @@ func (idx *Indexer) checkEmbedderHealth(ctx context.Context) {
 }
 
 // indexNewMessages indexes new (unindexed) messages from SQLite.
-func (idx *Indexer) indexNewMessages(ctx context.Context) {
+// Optimization: all messages in the batch are chunked first, then embeddings are
+// requested in a single EmbedBatch call, and all chunks are inserted together.
+// Returns true if more unindexed messages may remain.
+func (idx *Indexer) indexNewMessages(ctx context.Context) bool {
 	messages, err := service.GetUnindexedMessages(idx.cfg.BatchSize)
 	if err != nil {
 		slog.Error("rag: failed to fetch unindexed messages", slog.String("err", err.Error()))
-		return
+		return false
 	}
 	if len(messages) == 0 {
-		return
+		return false
 	}
-
-	totalRemaining, _ := service.UnindexedCount()
 
 	slog.Info(
 		"rag: indexing batch",
 		slog.Int("batch_size", len(messages)),
-		slog.Int("remaining", totalRemaining),
 		slog.Bool("embedder_healthy", idx.embedderHealthy),
 	)
 
 	batchStart := time.Now()
-	indexed := 0
-	skipped := 0
 
-	for _, msg := range messages {
-		msgStart := time.Now()
-		if err := idx.indexMessage(ctx, msg); err != nil {
-			slog.Error(
-				"rag: failed to index message",
-				slog.Int64("message_id", msg.ID),
-				slog.String("session_id", msg.SessionID),
-				slog.String("err", err.Error()),
-			)
-			continue
+	// Phase 1: Extract text and chunk all messages
+	allMsgChunks, allTexts := idx.chunkMessages(messages)
+
+	// Phase 2: Batch embedding in sub-batches to avoid timeouts
+	allEmbeddings := idx.batchEmbed(ctx, allTexts)
+
+	// Phase 3: Assign embeddings to chunks and collect results
+	allChunks, indexedIDs, skipped := idx.assignEmbeddings(allMsgChunks, allEmbeddings)
+
+	// Phase 4: Insert all chunks in a single transaction
+	if len(allChunks) > 0 {
+		if err := idx.store.InsertChunks(allChunks); err != nil {
+			slog.Error("rag: failed to insert chunks batch", slog.String("err", err.Error()))
 		}
+	}
 
-		if err := service.MarkMessageIndexed(msg.ID); err != nil {
-			slog.Error(
-				"rag: failed to mark message indexed",
-				slog.Int64("message_id", msg.ID),
-				slog.String("err", err.Error()),
-			)
-		}
-
-		text := ExtractTextFromContent(msg.Content, msg.Role)
-		if text == "" {
-			skipped++
-		} else {
-			indexed++
-			slog.Debug(
-				"rag: indexed message",
-				slog.Int64("message_id", msg.ID),
-				slog.String("session_id", msg.SessionID),
-				slog.String("role", msg.Role),
-				slog.Duration("elapsed", time.Since(msgStart)),
-			)
+	// Phase 5: Batch mark all indexed messages
+	if len(indexedIDs) > 0 {
+		if err := service.MarkMessagesIndexed(indexedIDs); err != nil {
+			slog.Error("rag: failed to batch mark messages indexed", slog.String("err", err.Error()))
 		}
 	}
 
 	slog.Info(
 		"rag: batch complete",
-		slog.Int("indexed", indexed),
+		slog.Int("messages", len(indexedIDs)),
+		slog.Int("chunks", len(allChunks)),
 		slog.Int("skipped", skipped),
 		slog.Duration("elapsed", time.Since(batchStart)),
-		slog.Int("remaining", func() int {
-			remaining, _ := service.UnindexedCount()
-			return remaining
-		}()),
 	)
+
+	// More work remains if we fetched a full batch
+	return len(messages) >= idx.cfg.BatchSize
 }
 
-// indexMessage processes a single message: extract text, chunk, (optionally) embed, store.
-func (idx *Indexer) indexMessage(ctx context.Context, msg service.UnindexedMessage) error {
-	text := ExtractTextFromContent(msg.Content, msg.Role)
-	if text == "" {
-		slog.Debug(
-			"rag: skipping message with no text content",
-			slog.Int64("message_id", msg.ID),
-			slog.String("role", msg.Role),
-		)
-		return nil
-	}
+// chunkMessages extracts text from messages and chunks them for indexing.
+type msgChunkResult struct {
+	msg    service.UnindexedMessage
+	text   string
+	chunks []Chunk
+}
 
-	textChunks := ChunkText(text, idx.cfg.ChunkSize, idx.cfg.ChunkOverlap)
-	if len(textChunks) == 0 {
-		return nil
-	}
+func (idx *Indexer) chunkMessages(messages []service.UnindexedMessage) ([]msgChunkResult, []string) {
+	results := make([]msgChunkResult, 0, len(messages))
+	var allTexts []string
 
-	maxChunks := 50
-	if len(textChunks) > maxChunks {
-		slog.Warn(
-			"rag: message produced too many chunks, truncating",
-			slog.Int64("message_id", msg.ID),
-			slog.Int("original", len(textChunks)),
-			slog.Int("truncated", maxChunks),
-		)
-		textChunks = textChunks[:maxChunks]
-	}
-
-	chunks := make([]Chunk, len(textChunks))
-	for i, tc := range textChunks {
-		chunks[i] = Chunk{
-			SessionID:          msg.SessionID,
-			MessageID:          msg.ID,
-			ChunkText:          tc.Text,
-			ChunkTextSegmented: SegmentText(tc.Text),
-			ChunkIndex:         tc.Index,
-			TokenCount:         tc.TokenCount,
-			ProjectPath:        msg.ProjectPath,
-			Backend:            msg.Backend,
-			Role:               msg.Role,
-			CreatedAt:          msg.CreatedAt,
-		}
-	}
-
-	if idx.embedderHealthy {
-		slog.Debug(
-			"rag: embedding message",
-			slog.Int64("message_id", msg.ID),
-			slog.Int("chunks", len(textChunks)),
-			slog.String("session_id", msg.SessionID),
-		)
-
-		texts := make([]string, len(textChunks))
-		for i, tc := range textChunks {
-			texts[i] = tc.Text
+	for _, msg := range messages {
+		text := ExtractTextFromContent(msg.Content, msg.Role)
+		if text == "" {
+			results = append(results, msgChunkResult{msg: msg})
+			continue
 		}
 
-		embeddings, err := idx.embedder.EmbedBatch(ctx, texts)
-		if err != nil {
-			slog.Warn(
-				"rag: embedding failed, storing text-only",
+		textChunks := ChunkText(text, idx.cfg.ChunkSize, idx.cfg.ChunkOverlap)
+		if len(textChunks) == 0 {
+			results = append(results, msgChunkResult{msg: msg, text: text})
+			continue
+		}
+
+		if len(textChunks) > 50 {
+			slog.Warn("rag: message produced too many chunks, truncating",
 				slog.Int64("message_id", msg.ID),
-				slog.String("err", err.Error()),
+				slog.Int("original", len(textChunks)),
 			)
-			for i := range chunks {
-				chunks[i].Embedding = nil
-				chunks[i].HasEmbedding = false
+			textChunks = textChunks[:50]
+		}
+
+		chunks := make([]Chunk, len(textChunks))
+		for i, tc := range textChunks {
+			chunks[i] = Chunk{
+				SessionID:          msg.SessionID,
+				MessageID:          msg.ID,
+				ChunkText:          tc.Text,
+				ChunkTextSegmented: SegmentText(tc.Text),
+				ChunkIndex:         tc.Index,
+				TokenCount:         tc.TokenCount,
+				ProjectPath:        msg.ProjectPath,
+				Backend:            msg.Backend,
+				Role:               msg.Role,
+				CreatedAt:          msg.CreatedAt,
+			}
+			allTexts = append(allTexts, tc.Text)
+		}
+
+		results = append(results, msgChunkResult{msg: msg, text: text, chunks: chunks})
+	}
+
+	return results, allTexts
+}
+
+// batchEmbed calls embedInSubBatches and returns nil if no embeddings were produced.
+func (idx *Indexer) batchEmbed(ctx context.Context, texts []string) [][]float64 {
+	if !idx.embedderHealthy || len(texts) == 0 {
+		return nil
+	}
+	allEmbeddings := idx.embedInSubBatches(ctx, texts)
+	for _, e := range allEmbeddings {
+		if e != nil {
+			return allEmbeddings
+		}
+	}
+	return nil
+}
+
+// assignEmbeddings distributes embeddings across message chunks and collects results.
+func (idx *Indexer) assignEmbeddings(msgChunks []msgChunkResult, allEmbeddings [][]float64) (allChunks []Chunk, indexedIDs []int64, skipped int) {
+	textIdx := 0
+	for i := range msgChunks {
+		mc := &msgChunks[i]
+		if mc.text == "" || len(mc.chunks) == 0 {
+			skipped++
+			indexedIDs = append(indexedIDs, mc.msg.ID)
+			continue
+		}
+
+		if allEmbeddings != nil {
+			for j := range mc.chunks {
+				if textIdx < len(allEmbeddings) && allEmbeddings[textIdx] != nil {
+					mc.chunks[j].Embedding = allEmbeddings[textIdx]
+					mc.chunks[j].HasEmbedding = true
+				}
+				textIdx++
 			}
 		} else {
-			for i := range chunks {
-				// Guard against EmbedBatch returning fewer results or nil entries (ISS-285/ISS-305)
-				if i < len(embeddings) && embeddings[i] != nil {
-					chunks[i].Embedding = embeddings[i]
-					chunks[i].HasEmbedding = true
-				} else {
-					chunks[i].Embedding = nil
-					chunks[i].HasEmbedding = false
-				}
-			}
+			textIdx += len(mc.chunks)
 		}
-	}
 
-	return idx.store.InsertChunks(chunks)
+		allChunks = append(allChunks, mc.chunks...)
+		indexedIDs = append(indexedIDs, mc.msg.ID)
+	}
+	return allChunks, indexedIDs, skipped
 }
 
 // backfillEmbeddings generates embeddings for chunks that were stored without them.
+// Processes in sub-batches: each sub-batch is embedded and committed independently,
+// so partial progress is preserved even if a later sub-batch times out.
 func (idx *Indexer) backfillEmbeddings(ctx context.Context) {
 	pending, err := idx.store.PendingEmbeddingCount()
 	if err != nil {
@@ -377,12 +429,12 @@ func (idx *Indexer) backfillEmbeddings(ctx context.Context) {
 
 	batchSize := idx.cfg.BatchSize
 	if batchSize <= 0 {
-		batchSize = 10
+		batchSize = 50
 	}
 
 	maxBackfill := batchSize
-	if maxBackfill > 50 {
-		maxBackfill = 50
+	if maxBackfill > 200 {
+		maxBackfill = 200
 	}
 
 	pendingChunks, err := idx.store.GetPendingEmbeddings(maxBackfill)
@@ -394,36 +446,42 @@ func (idx *Indexer) backfillEmbeddings(ctx context.Context) {
 		return
 	}
 
-	texts := make([]string, len(pendingChunks))
-	for i, p := range pendingChunks {
-		texts[i] = p.ChunkText
-	}
+	totalBackfilled := 0
+	// Process in embedSubBatchSize chunks, committing each to DB
+	for i := 0; i < len(pendingChunks); i += embedSubBatchSize {
+		if ctx.Err() != nil {
+			break
+		}
+		end := i + embedSubBatchSize
+		if end > len(pendingChunks) {
+			end = len(pendingChunks)
+		}
+		subBatch := pendingChunks[i:end]
 
-	embeddings, err := idx.embedder.EmbedBatch(ctx, texts)
-	if err != nil {
-		slog.Warn("rag: backfill embedding failed", slog.String("err", err.Error()))
-		return
-	}
+		texts := make([]string, len(subBatch))
+		for j, p := range subBatch {
+			texts[j] = p.ChunkText
+		}
 
-	backfilled := 0
-	for i, p := range pendingChunks {
-		if embeddings[i] == nil {
+		embeddings, err := idx.embedder.EmbedBatch(ctx, texts)
+		if err != nil {
+			slog.Warn("rag: backfill sub-batch embedding failed",
+				slog.Int("from", i), slog.Int("to", end),
+				slog.String("err", err.Error()))
 			continue
 		}
-		if err := idx.store.UpdateEmbedding(p.ID, embeddings[i]); err != nil {
-			slog.Error(
-				"rag: failed to backfill embedding",
-				slog.Int64("chunk_id", p.ID),
-				slog.String("err", err.Error()),
-			)
+
+		backfilled, err := idx.store.BatchUpdateEmbeddings(subBatch, embeddings)
+		if err != nil {
+			slog.Error("rag: batch update embeddings failed", slog.String("err", err.Error()))
 			continue
 		}
-		backfilled++
+		totalBackfilled += backfilled
 	}
 
 	slog.Info(
-		"rag: backfill complete",
-		slog.Int("backfilled", backfilled),
+		"rag: backfill pass complete",
+		slog.Int("backfilled", totalBackfilled),
 		slog.Int("total_pending", pending),
 	)
 }

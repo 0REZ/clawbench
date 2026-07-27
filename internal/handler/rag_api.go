@@ -30,7 +30,6 @@ func ServeRAGSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Query            string `json:"q"`
 		Limit            int    `json:"limit"`
-		ProjectPath      string `json:"project"`
 		Backend          string `json:"backend"`
 		Role             string `json:"role"`
 		SessionID        string `json:"session_id"`
@@ -47,15 +46,15 @@ func ServeRAGSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defaultLimit := 5
+	effectiveLimit := defaultLimit
 	if req.Limit > 0 {
-		defaultLimit = req.Limit
+		effectiveLimit = req.Limit
 	}
 
 	// Project isolation: use cookie-derived project path when set.
 	// Empty projectPath (CLI global search) searches across all projects.
 	params := rag.SearchParams{
 		Query:            req.Query,
-		Limit:            req.Limit,
 		ProjectPath:      projectPath,
 		Backend:          req.Backend,
 		Role:             req.Role,
@@ -66,7 +65,7 @@ func ServeRAGSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchPoolSize := model.ConfigInstance.RAG.SearchPoolSize
-	result, err := rag.RAGSearch(r.Context(), rag.GlobalStore, rag.GlobalEmbedder, params, defaultLimit, searchPoolSize)
+	result, err := rag.RAGSearch(r.Context(), rag.GlobalStore, rag.GlobalEmbedder, params, effectiveLimit, searchPoolSize)
 	if err != nil {
 		writeLocalizedErrorf(w, r, http.StatusServiceUnavailable, "RAGSearchFailed")
 		return
@@ -222,48 +221,42 @@ func ServeRAGStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// When vector embedding is disabled, report FTS-only mode
+	vectorEnabled := model.ConfigInstance.RAG.VectorEnabled
+
 	hasFTSData := rag.GlobalStore != nil && rag.GlobalStore.HasFTSData()
 	embedderHealthy := rag.EmbedderHealthy()
 
-	// Progress counters
-	totalMessages, err := service.TotalMessageCount()
+	// Progress counters — combined queries to reduce round trips
+	totalMessages, indexedMessages, err := service.MessageIndexCounts()
 	if err != nil {
-		slog.Warn("rag: failed to count total messages", slog.String("err", err.Error()))
+		slog.Warn("rag: failed to count messages", slog.String("err", err.Error()))
 	}
-	indexedMessages, err := service.IndexedMessageCount()
-	if err != nil {
-		slog.Warn("rag: failed to count indexed messages", slog.String("err", err.Error()))
-	}
-	var totalChunks, embeddedChunks int
+	var embeddedMessages int
 	if rag.GlobalStore != nil {
-		totalChunks, err = rag.GlobalStore.ChunkCount()
+		embeddedMessages, err = rag.GlobalStore.EmbeddedMessageCount()
 		if err != nil {
-			slog.Warn("rag: failed to count total chunks", slog.String("err", err.Error()))
-		}
-		embeddedChunks, err = rag.GlobalStore.EmbeddedChunkCount()
-		if err != nil {
-			slog.Warn("rag: failed to count embedded chunks", slog.String("err", err.Error()))
+			slog.Warn("rag: failed to count embedded messages", slog.String("err", err.Error()))
 		}
 	}
-	hasVecData := embeddedChunks > 0
+	hasVecData := embeddedMessages > 0 && vectorEnabled
 
 	mode := "none"
-	if embedderHealthy && hasVecData {
+	if vectorEnabled && embedderHealthy && hasVecData {
 		mode = "hybrid"
 	} else if hasFTSData {
 		mode = "fts"
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"available":        hasFTSData || hasVecData,
-		"mode":             mode,
-		"has_fts_data":     hasFTSData,
-		"has_vec_data":     hasVecData,
-		"embedder_healthy": embedderHealthy,
-		"total_messages":   totalMessages,
-		"indexed_messages": indexedMessages,
-		"total_chunks":     totalChunks,
-		"embedded_chunks":  embeddedChunks,
+		"available":         hasFTSData || hasVecData,
+		"mode":              mode,
+		"has_fts_data":      hasFTSData,
+		"has_vec_data":      hasVecData,
+		"embedder_healthy":  embedderHealthy,
+		"total_messages":    totalMessages,
+		"indexed_messages":  indexedMessages,
+		"embedded_messages": embeddedMessages,
 	})
 }
 

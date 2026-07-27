@@ -129,8 +129,9 @@ func (s SummarizeConfig) IsChatSummaryEnabled() bool {
 }
 
 // RAGConfig holds configuration for the RAG history memory system.
-// RAG is always enabled. When the embedding API is unavailable, falls back to BM25 full-text search.
+// FTS (full-text search) is always enabled. VectorEnabled controls vector embedding only.
 type RAGConfig struct {
+	VectorEnabled  bool   `yaml:"vector_enabled"`   // Enable vector embedding (default: true). FTS is always on.
 	BaseURL        string `yaml:"base_url"`         // OpenAI-compatible API base URL (default: "http://localhost:11434")
 	Model          string `yaml:"model"`            // Embedding model name (default: "bge-m3")
 	APIKey         string `yaml:"api_key"`          // API key for the embedding service (optional, for cloud providers)
@@ -138,8 +139,8 @@ type RAGConfig struct {
 	OllamaModel    string `yaml:"ollama_model"`     // Deprecated: use model
 	ChunkSize      int    `yaml:"chunk_size"`       // Chunk size in tokens (default: 512)
 	ChunkOverlap   int    `yaml:"chunk_overlap"`    // Overlap between chunks in tokens (default: 64)
-	PollInterval   string `yaml:"poll_interval"`    // Indexer poll interval (default: "10s")
-	BatchSize      int    `yaml:"batch_size"`       // Messages per indexer batch (default: 10)
+	PollInterval   string `yaml:"poll_interval"`    // Indexer poll interval (default: "5s")
+	BatchSize      int    `yaml:"batch_size"`       // Messages per indexer batch (default: 50)
 	SearchLimit    int    `yaml:"search_limit"`     // Default search result limit (default: 20)
 	SearchPoolSize int    `yaml:"search_pool_size"` // Candidates per search source before RRF fusion (default: 20)
 	RetentionDays  int    `yaml:"retention_days"`   // Soft-deleted data retention days (0=keep forever, default: 90)

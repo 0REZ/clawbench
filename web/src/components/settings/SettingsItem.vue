@@ -55,9 +55,10 @@
     <div v-if="description" class="settings-item__desc">{{ description }}</div>
     <!-- Info-type: show value as a full-width detail line below the label/desc -->
     <div v-if="type === 'info' && displayValue" class="settings-item__info-detail">{{ displayValue }}</div>
-    <!-- Progress bar for info-type items (hidden when 100%) -->
-    <div v-if="type === 'info' && progress && progress.value < progress.max && progress.max > 0" class="settings-item__progress">
-      <div class="settings-item__progress-bar" :style="{ width: Math.min((progress.value / progress.max) * 100, 100) + '%' }" />
+    <!-- Progress bar for info-type items -->
+    <div v-if="type === 'info' && progress && progress.max > 0" class="settings-item__progress">
+      <div class="settings-item__progress-bar" :class="{ 'settings-item__progress-bar--active': !disabled && progress.value < progress.max }" :style="{ width: Math.min((progress.value / progress.max) * 100, 100) + '%' }" />
+      <span v-if="speedLabel" class="settings-item__speed">{{ speedLabel }}</span>
     </div>
   </div>
   <!-- Inline editor (non-select types) -->
@@ -178,6 +179,8 @@ interface Props {
   displayTransform?: (value: unknown) => unknown
   /** Progress bar for info-type items: { value, max }. Bar hidden when value >= max. */
   progress?: { value: number; max: number }
+  /** Speed label shown next to progress (e.g. "2.5 条/秒"). Only shown when > 0. */
+  speedLabel?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -441,15 +444,45 @@ function confirmEdit() {
   height: 3px;
   background: var(--bg-tertiary);
   border-radius: 2px;
-  overflow: hidden;
-  margin-top: 4px;
+  overflow: visible;
+  margin-top: 8px;
+  position: relative;
 }
 
 .settings-item__progress-bar {
   height: 100%;
   background: var(--accent-color);
   border-radius: 2px;
-  transition: width 0.3s ease;
+  transition: width 0.5s ease;
+}
+
+.settings-item__progress-bar--active {
+  background-image: linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.15) 50%,
+    rgba(255, 255, 255, 0.15) 75%,
+    transparent 75%
+  );
+  background-size: 12px 12px;
+  animation: progress-stripe 0.8s linear infinite;
+}
+
+@keyframes progress-stripe {
+  0% { background-position: 0 0; }
+  100% { background-position: 12px 0; }
+}
+
+.settings-item__speed {
+  position: absolute;
+  right: 0;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* Section header */

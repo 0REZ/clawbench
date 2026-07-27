@@ -10,11 +10,12 @@ export interface RagStatus {
   embedder_healthy: boolean
   total_messages: number
   indexed_messages: number
-  total_chunks: number
-  embedded_chunks: number
+  embedded_messages: number
+  index_speed: number   // messages/sec (instantaneous)
+  embed_speed: number   // messages/sec (instantaneous)
 }
 
-const POLL_INTERVAL = 10_000
+const POLL_INTERVAL = 5_000
 
 const status = ref<RagStatus>({
   available: false,
@@ -24,26 +25,63 @@ const status = ref<RagStatus>({
   embedder_healthy: false,
   total_messages: 0,
   indexed_messages: 0,
-  total_chunks: 0,
-  embedded_chunks: 0,
+  embedded_messages: 0,
+  index_speed: 0,
+  embed_speed: 0,
 })
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let activeCount = 0
 let visibilityHandler: (() => void) | null = null
+
+// Speed tracking: previous values + timestamp for instantaneous rate
+let prevIndexed = 0
+let prevEmbedded = 0
+let prevFetchTime = 0
+// Persist last known speed so label doesn't flicker on zero-delta polls
+let lastIndexSpeed = 0
+let lastEmbedSpeed = 0
 
 async function fetchStatus(): Promise<void> {
   try {
     const data = await apiGet<RagStatus>('/api/rag/status')
-    status.value = data
+
+    // Compute instantaneous speed from delta since last fetch
+    const now = Date.now()
+    if (prevFetchTime > 0 && now > prevFetchTime) {
+      const elapsedSec = (now - prevFetchTime) / 1000
+      const iSpeed = Math.max(0, (data.indexed_messages - prevIndexed) / elapsedSec)
+      const eSpeed = Math.max(0, (data.embedded_messages - prevEmbedded) / elapsedSec)
+      // Update persisted speed only on positive delta; keep last known speed otherwise
+      if (iSpeed > 0) lastIndexSpeed = iSpeed
+      if (eSpeed > 0) lastEmbedSpeed = eSpeed
+      // Clear speed when indexing is complete
+      if (data.indexed_messages >= data.total_messages) lastIndexSpeed = 0
+      if (data.embedded_messages >= data.total_messages) lastEmbedSpeed = 0
+    }
+
+    prevIndexed = data.indexed_messages
+    prevEmbedded = data.embedded_messages
+    prevFetchTime = now
+
+    // Create new object instead of mutating API response
+    status.value = {
+      ...data,
+      index_speed: lastIndexSpeed,
+      embed_speed: lastEmbedSpeed,
+    }
   } catch (err) {
     appLog.w('RagStatus', 'Failed to fetch RAG status', err)
   }
 }
 
 function startPolling(): void {
-  activeCount++
-  if (pollTimer) return
+  if (pollTimer) return // already polling
+  // Reset speed tracking on fresh start
+  prevIndexed = 0
+  prevEmbedded = 0
+  prevFetchTime = 0
+  lastIndexSpeed = 0
+  lastEmbedSpeed = 0
   fetchStatus()
   pollTimer = setInterval(fetchStatus, POLL_INTERVAL)
 
@@ -55,7 +93,13 @@ function startPolling(): void {
           clearInterval(pollTimer)
           pollTimer = null
         }
-      } else if (activeCount > 0 && !pollTimer) {
+      } else if (!pollTimer) {
+        // Reset speed tracking after visibility change to avoid stale deltas
+        prevIndexed = 0
+        prevEmbedded = 0
+        prevFetchTime = 0
+        lastIndexSpeed = 0
+        lastEmbedSpeed = 0
         fetchStatus()
         pollTimer = setInterval(fetchStatus, POLL_INTERVAL)
       }
@@ -65,8 +109,6 @@ function startPolling(): void {
 }
 
 function stopPolling(): void {
-  activeCount = Math.max(0, activeCount - 1)
-  if (activeCount > 0) return
   if (pollTimer) {
     clearInterval(pollTimer)
     pollTimer = null
@@ -75,6 +117,16 @@ function stopPolling(): void {
     document.removeEventListener('visibilitychange', visibilityHandler)
     visibilityHandler = null
   }
+}
+
+/** @internal Reset all state — for tests only */
+export function _resetForTesting() {
+  prevIndexed = 0
+  prevEmbedded = 0
+  prevFetchTime = 0
+  lastIndexSpeed = 0
+  lastEmbedSpeed = 0
+  stopPolling()
 }
 
 export function useRagStatus() {

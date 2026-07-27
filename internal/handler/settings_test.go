@@ -1916,13 +1916,14 @@ func TestServeConfigPatch_RAGFields(t *testing.T) {
 	cfg := model.Config{}
 	model.ConfigInstance = cfg
 
-	body := `{"rag":{"base_url":"http://localhost:11434","model":"bge-m3","api_key":"valid-full-key","chunk_size":256,"search_limit":10,"search_pool_size":100,"retention_days":60}}`
+	body := `{"rag":{"vector_enabled":false,"base_url":"http://localhost:11434","model":"bge-m3","api_key":"valid-full-key","chunk_size":256,"search_limit":10,"search_pool_size":100,"retention_days":60}}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	withAuthCookie(req, model.SessionToken)
 	w := callHandler(ServeConfig, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, model.ConfigInstance.RAG.VectorEnabled)
 	assert.Equal(t, "http://localhost:11434", model.ConfigInstance.RAG.BaseURL)
 	assert.Equal(t, "bge-m3", model.ConfigInstance.RAG.Model)
 	assert.Equal(t, "valid-full-key", model.ConfigInstance.RAG.APIKey)
@@ -2616,4 +2617,23 @@ func TestServeConfig_Get_FRPFields(t *testing.T) {
 	// Token is returned in full (frontend uses type="password" for secure display)
 	assert.Equal(t, "long-secret-token-value-here", frp["token"])
 	assert.Equal(t, true, frp["auto_port"])
+}
+
+func TestTriggerRestart(t *testing.T) {
+	called := false
+	origRestartFunc := restartFunc
+	restartFunc = func() { called = true }
+	defer func() { restartFunc = origRestartFunc }()
+
+	TriggerRestart()
+	assert.True(t, called, "TriggerRestart should call the configured restartFunc")
+}
+
+func TestTriggerRestart_NilFunc(t *testing.T) {
+	origRestartFunc := restartFunc
+	restartFunc = nil
+	defer func() { restartFunc = origRestartFunc }()
+
+	// Should not panic when restartFunc is nil
+	TriggerRestart()
 }

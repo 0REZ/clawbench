@@ -75,6 +75,7 @@
       @resume-session="$emit('resume-session', $event)"
       @show-rag-detail="$emit('show-rag-detail', $event)"
       @remove-pending="$emit('remove-pending', $event)"
+      @fork-from-message="$emit('fork-from-message', $event)"
     />
     </div>
   </div>
@@ -875,7 +876,7 @@ defineExpose({
 .scroll-fab-dir {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
 }
 
 /* Direction swap transition (out-in) */
