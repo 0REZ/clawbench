@@ -8,11 +8,13 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type encoderFunc func(w io.Writer, m image.Image) error
@@ -272,5 +274,40 @@ func TestFileThumb(t *testing.T) {
 		bounds := thumb.Bounds()
 		assert.Equal(t, 50, bounds.Dx())
 		assert.Equal(t, 50, bounds.Dy())
+	})
+
+	t.Run("AbsolutePath_ReturnsJPEG", func(t *testing.T) {
+		env, teardown := setupTestEnv(t)
+		defer teardown()
+
+		// Create a PNG in an uploads subdirectory (mimics .clawbench/uploads/)
+		createTestPNG(t, env.ProjectDir, ".clawbench/uploads/photo.png", 100, 80)
+
+		// Request thumbnail using absolute path (as stored in DB by chat handler)
+		absPath := filepath.Join(env.ProjectDir, ".clawbench/uploads/photo.png")
+		req := newRequest(t, http.MethodGet, "/api/file/thumb?path="+absPath+"&w=50", nil)
+		withProjectCookie(req, env.ProjectDir)
+
+		w := callHandler(FileThumb, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "image/jpeg", w.Header().Get("Content-Type"))
+		assert.Greater(t, w.Body.Len(), 0)
+	})
+
+	t.Run("AbsolutePathOutsideProject_Returns403", func(t *testing.T) {
+		env, teardown := setupTestEnv(t)
+		defer teardown()
+
+		// Absolute path outside project — must work on all platforms including Windows.
+		// model.RootPaths is set to watchDir (a temp dir). Use a sibling path outside it.
+		outsidePath := filepath.Join(filepath.Dir(env.ProjectDir), "..", "outside-project", "file.txt")
+		absOutside, err := filepath.Abs(outsidePath)
+		require.NoError(t, err)
+
+		req := newRequest(t, http.MethodGet, "/api/file/thumb?path="+url.QueryEscape(absOutside), nil)
+		withProjectCookie(req, env.ProjectDir)
+
+		w := callHandler(FileThumb, req)
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }
