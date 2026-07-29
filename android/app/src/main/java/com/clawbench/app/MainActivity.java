@@ -1755,6 +1755,11 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
             super.onPageStarted(view, url, favicon);
+
+            // Inject global error listeners to capture uncaught JS exceptions
+            // and resource load failures (img/script/link 404s, etc.)
+            view.evaluateJavascript(JSErrorInjector.buildScript("AndroidNative"), null);
+
             if (LOGIN_HTML_URL.equals(url)) {
                 // Navigating to the login page — show it immediately.
                 // The login page IS the UI, not a transitional state.
@@ -2188,8 +2193,8 @@ public class MainActivity extends AppCompatActivity {
          * a new Activity (which would reload the WebView).
          */
         @JavascriptInterface
-        public void openInSandbox(int port, String protocol, String host, String path) {
-            AppLog.i(TAG, "openInSandbox: port=" + port + ", protocol=" + protocol + ", host=" + host + ", path=" + path);
+        public void openInSandbox(int port, String protocol, String host, String path, String sessionId) {
+            AppLog.i(TAG, "openInSandbox: port=" + port + ", protocol=" + protocol + ", host=" + host + ", path=" + path + ", sessionId=" + sessionId);
             activity.runOnUiThread(() -> {
                 String scheme = "https".equalsIgnoreCase(protocol) ? "https" : "http";
                 Intent intent = new Intent(activity, BrowserActivity.class);
@@ -2197,8 +2202,29 @@ public class MainActivity extends AppCompatActivity {
                 intent.putExtra("protocol", scheme);
                 intent.putExtra("host", host != null ? host : "");
                 intent.putExtra("path", path != null ? path : "");
+
+                // Pass session credentials securely via SharedPreferences (not Intent extras)
+                String sUrl = activity.prefs.getString(KEY_SERVER_URL, "");
+                String allCookies = null;
+                if (!sUrl.isEmpty()) {
+                    CookieManager.getInstance().flush();
+                    allCookies = CookieManager.getInstance().getCookie(sUrl);
+                }
+
+                // Write credentials to cross-process holder before launching
+                BrowserSessionCredentials.set(activity,
+                        sessionId != null ? sessionId : "",
+                        sUrl != null ? sUrl : "",
+                        allCookies != null ? allCookies : "");
+
                 activity.startActivity(intent);
             });
+        }
+
+        // Backward-compatible overload
+        @JavascriptInterface
+        public void openInSandbox(int port, String protocol, String host, String path) {
+            openInSandbox(port, protocol, host, path, null);
         }
 
         /**

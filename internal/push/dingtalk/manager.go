@@ -3,71 +3,31 @@ package dingtalk
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
+	"time"
 
 	"clawbench/internal/model"
+	"clawbench/internal/push/common"
 
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/client"
 )
 
-// DingtalkDB is the DB operations interface — injected from cmd/server to avoid import cycles.
-type DingtalkDB interface {
-	MergeConfigSubscribers(users []string)
-	GetSubscribers() ([]SubscriberInfo, error)
-	UpsertSubscriber(userID, conversationID, userName, source string) error
-	DeleteSubscriber(userID string) error
-}
-
-// SubscriberInfo is the subscriber data transferred across the interface boundary.
-type SubscriberInfo struct {
-	UserID         string
-	ConversationID string
-	UserName       string
-	Source         string
-}
-
-var db DingtalkDB
-
-// ConnectedClientChecker checks whether any client is currently connected.
-// Injected from cmd/server to avoid import cycles with the ws package.
-type ConnectedClientChecker interface {
-	HasConnectedClients() bool
-}
+var db common.PushDB
 
 // clientChecker is set once at startup via RegisterClientChecker before any
 // push events occur, then read-only. Safe for concurrent reads after initialization.
-var clientChecker ConnectedClientChecker
+var clientChecker common.ConnectedClientChecker
 
 // RegisterClientChecker sets the client checker (called from main.go).
-func RegisterClientChecker(c ConnectedClientChecker) { clientChecker = c }
-
-// SessionInfo carries session metadata across the interface boundary.
-type SessionInfo struct {
-	ID          string
-	Title       string
-	ProjectPath string
-	Backend     string
-	AgentID     string
-	Model       string
-}
-
-// SessionMessenger abstracts session operations needed by the DingTalk package.
-// Implemented in main.go to avoid import cycles (service → dingtalk → service).
-type SessionMessenger interface {
-	FindSessionsByPrefix(prefix string, runningOnly bool) ([]SessionInfo, error)
-	ListRecentSessions(limit int) ([]SessionInfo, error)
-	IsSessionRunning(sessionID string) bool
-	EnqueueMessage(sessionID, message string) error
-	ClearQueue(sessionID string)
-	SendMessageToSession(sessionID, message string) error
-}
+func RegisterClientChecker(c common.ConnectedClientChecker) { clientChecker = c }
 
 // sessionMessenger is set once at startup via RegisterSessionMessenger before Manager.Start(),
 // then read-only. Safe for concurrent reads after initialization.
-var sessionMessenger SessionMessenger
+var sessionMessenger common.SessionMessenger
 
 // RegisterSessionMessenger sets the session messenger (called from main.go).
-func RegisterSessionMessenger(m SessionMessenger) { sessionMessenger = m }
+func RegisterSessionMessenger(m common.SessionMessenger) { sessionMessenger = m }
 
 // SetDB sets the DB adapter (called from main.go after service.InitDB).
 // RegisterDBAdapter is the only way to set the DB adapter — see adapter.go.
@@ -75,11 +35,17 @@ func RegisterSessionMessenger(m SessionMessenger) { sessionMessenger = m }
 
 // Manager manages the DingTalk Stream connection and token.
 type Manager struct {
-	cfg       *model.DingTalkConfig
-	streamCli *client.StreamClient
-	cancel    context.CancelFunc
-	started   bool
-	startMu   sync.Mutex
+	cfg        *model.DingTalkConfig
+	streamCli  *client.StreamClient
+	cancel     context.CancelFunc
+	started    bool
+	startMu    sync.Mutex
+	httpClient *http.Client
+
+	// Per-instance token cache (C2 fix: avoids race during hot-reload credential change)
+	tokenMu     sync.RWMutex
+	cachedToken string
+	cachedExp   time.Time
 }
 
 var (
@@ -91,6 +57,14 @@ var (
 func NewManager(cfg *model.DingTalkConfig) *Manager {
 	return &Manager{
 		cfg: cfg,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:       10,
+				IdleConnTimeout:    90 * time.Second,
+				DisableCompression: false,
+			},
+		},
 	}
 }
 
@@ -219,7 +193,7 @@ func (m *Manager) Stop() {
 
 	// Invalidate cached token so a new Manager with different credentials
 	// won't reuse a stale token.
-	InvalidateToken()
+	m.invalidateToken()
 
 	m.started = false
 	slog.Info("dingtalk: manager stopped")

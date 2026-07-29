@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Bundle;
+import android.view.GestureDetector;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
@@ -21,23 +23,26 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URL;
-import java.security.SecureRandom;
+
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * Sandbox browser Activity for testing forwarded ports.
@@ -69,10 +74,23 @@ public class BrowserActivity extends AppCompatActivity {
     private WebView webView;
     private EditText urlBar;
     private ProgressBar progressBar;
+    private BrowserLogBuffer logBuffer;
+    private String mobileUserAgent;
+    private boolean desktopMode = false;
+    private BrowserSessionCredentials.Creds sessionCreds;
 
-    private int tunnelRetryCount = 0;
-    private static final int MAX_TUNNEL_RETRIES = 5;
-    private static final long TUNNEL_RETRY_DELAY_MS = 1000;
+    private View tunnelWaitingOverlay;
+    private TextView tunnelWaitingText;
+
+    /** Prevents multiple tunnel-wait threads from running simultaneously. */
+    private final AtomicBoolean tunnelWaitRunning = new AtomicBoolean(false);
+
+    /** Reference to the tunnel-wait thread so we can interrupt it on onNewIntent. */
+    private volatile Thread tunnelWaitThread = null;
+
+    private static final int MAX_TUNNEL_WAIT_MS = 30000;
+    private static final int TUNNEL_POLL_INTERVAL_MS = 500;
+    private static final int TUNNEL_CONNECT_TIMEOUT_MS = 300;
     private String pendingUrl = null;
 
     /** Target host:port for Host header rewriting (e.g. "192.168.100.1"). Empty if localhost. */
@@ -80,6 +98,114 @@ public class BrowserActivity extends AppCompatActivity {
 
     /** The local port that the SSH tunnel listens on. */
     private int localPort = 0;
+
+    /** Edge swipe threshold: 15% of screen width from either edge. */
+    private int edgeSwipeZonePx;
+
+    /** Minimum swipe distance in pixels to trigger navigation. */
+    private static final int MIN_SWIPE_DP = 80;
+
+    /** GestureDetector for edge swipe navigation. */
+    private GestureDetector edgeSwipeDetector;
+
+    /** SwipeRefreshLayout for pull-to-refresh. */
+    private SwipeRefreshLayout swipeRefreshLayout;
+
+    BrowserLogBuffer getLogBuffer() {
+        return logBuffer;
+    }
+
+    BrowserSessionCredentials.Creds getSessionCredentials() {
+        return sessionCreds;
+    }
+
+    /**
+     * Wait for the SSH tunnel port to become reachable, then load the URL in WebView.
+     * Shows the tunnel waiting overlay with a spinner while polling.
+     * If the port doesn't become reachable within MAX_TUNNEL_WAIT_MS, shows an error.
+     *
+     * This replaces the old pattern of immediately calling webView.loadUrl() and
+     * retrying on error — instead we proactively wait for the tunnel to be ready.
+     */
+    private void waitForTunnelAndLoad(String url) {
+        if (localPort <= 0) {
+            // No tunnel needed (shouldn't happen), just load directly
+            showWebViewAndLoad(url);
+            return;
+        }
+
+        // Interrupt any previous tunnel-wait thread
+        Thread prev = tunnelWaitThread;
+        if (prev != null && prev.isAlive()) {
+            prev.interrupt();
+        }
+
+        // Show overlay, hide WebView
+        tunnelWaitingOverlay.setVisibility(View.VISIBLE);
+        tunnelWaitingText.setText(R.string.browser_tunnel_waiting);
+        webView.setVisibility(View.GONE);
+
+        // Force-set the guard — we already interrupted the old thread above,
+        // so we own the right to start a new one. The old thread's finally
+        // will set false, but tunnelWaitThread already points to the new thread.
+        tunnelWaitRunning.set(true);
+
+        Thread t = new Thread(() -> {
+            int elapsed = 0;
+            try {
+                while (elapsed < MAX_TUNNEL_WAIT_MS) {
+                    if (Thread.interrupted()) return;
+                    if (testLocalPort(localPort)) {
+                        AppLog.i(TAG, "BrowserActivity: tunnel ready after " + elapsed + "ms, loading " + url);
+                        runOnUiThread(() -> showWebViewAndLoad(url));
+                        return;
+                    }
+                    Thread.sleep(TUNNEL_POLL_INTERVAL_MS);
+                    elapsed += TUNNEL_POLL_INTERVAL_MS;
+                }
+                // Timeout
+                AppLog.w(TAG, "BrowserActivity: tunnel wait timed out after " + elapsed + "ms for port " + localPort);
+                runOnUiThread(() -> {
+                    tunnelWaitingText.setText(R.string.browser_tunnel_failed);
+                    // Allow user to tap overlay to retry
+                    tunnelWaitingOverlay.setOnClickListener(v -> {
+                        tunnelWaitingOverlay.setClickable(false);
+                        waitForTunnelAndLoad(url);
+                    });
+                    tunnelWaitingOverlay.setClickable(true);
+                });
+            } catch (InterruptedException e) {
+                AppLog.i(TAG, "BrowserActivity: tunnel wait interrupted");
+            } finally {
+                tunnelWaitRunning.set(false);
+            }
+        }, "tunnel-wait");
+        tunnelWaitThread = t;
+        t.start();
+    }
+
+    /**
+     * Hide the waiting overlay, show the WebView, and load the URL.
+     */
+    private void showWebViewAndLoad(String url) {
+        tunnelWaitingOverlay.setVisibility(View.GONE);
+        webView.setVisibility(View.VISIBLE);
+        webView.loadUrl(url);
+    }
+
+    /**
+     * Test whether a local port is reachable (TCP connect succeeds).
+     * Uses a short 300ms timeout — localhost connections should be near-instant.
+     */
+    private boolean testLocalPort(int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress("127.0.0.1", port), TUNNEL_CONNECT_TIMEOUT_MS);
+            return true;
+        } catch (Exception e) {
+            AppLog.d(TAG, "testLocalPort: port " + port + " not reachable: " + e.getMessage());
+            return false;
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -90,9 +216,17 @@ public class BrowserActivity extends AppCompatActivity {
         webView = findViewById(R.id.browserWebView);
         urlBar = findViewById(R.id.urlBar);
         progressBar = findViewById(R.id.progressBar);
+        tunnelWaitingOverlay = findViewById(R.id.tunnelWaitingOverlay);
+        tunnelWaitingText = findViewById(R.id.tunnelWaitingText);
+        swipeRefreshLayout = findViewById(R.id.swipeRefreshLayout);
 
+        logBuffer = new BrowserLogBuffer(500);
+        sessionCreds = BrowserSessionCredentials.getAndClear(this);
         setupWebView();
         setupToolbar();
+        setupFindBar();
+        setupSwipeRefresh();
+        setupEdgeSwipe();
 
         // Load initial URL from Intent
         int port = getIntent().getIntExtra("port", 0);
@@ -121,9 +255,9 @@ public class BrowserActivity extends AppCompatActivity {
             String urlPath = (path != null && !path.isEmpty()) ? path : "/";
             String initialUrl = protocol + "://localhost:" + port + urlPath;
             pendingUrl = initialUrl;
-            AppLog.i(TAG, "BrowserActivity: loading " + initialUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
-            webView.loadUrl(initialUrl);
             urlBar.setText(initialUrl);
+            AppLog.i(TAG, "BrowserActivity: waiting for tunnel then loading " + initialUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
+            waitForTunnelAndLoad(initialUrl);
         }
     }
 
@@ -147,11 +281,17 @@ public class BrowserActivity extends AppCompatActivity {
         // Smooth scrolling
         webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
 
+        // Pinch zoom enabled but without on-screen zoom buttons
+        settings.setBuiltInZoomControls(true);
+        settings.setDisplayZoomControls(false);
+
         // Custom user agent to identify sandbox browser
         String ua = settings.getUserAgentString();
-        settings.setUserAgentString(ua + " ClawBench-Browser/1.0");
+        mobileUserAgent = ua + " ClawBench-Browser/1.0";
+        settings.setUserAgentString(mobileUserAgent);
 
-        // NO AndroidNative bridge — this is a clean browser environment
+        // Inject BrowserNative JS interface for error relay + log capture
+        webView.addJavascriptInterface(new BrowserJavascriptInterface(logBuffer), "BrowserNative");
 
         // WebView client with URL restriction and SSL handling
         webView.setWebViewClient(new SandboxWebViewClient());
@@ -162,17 +302,22 @@ public class BrowserActivity extends AppCompatActivity {
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
                 String tag = "WebView:" + consoleMessage.messageLevel();
                 String msg = consoleMessage.message() + " (" + consoleMessage.sourceId() + ":" + consoleMessage.lineNumber() + ")";
+                char level;
                 switch (consoleMessage.messageLevel()) {
                     case ERROR:
                         AppLog.e(tag, msg);
+                        level = 'E';
                         break;
                     case WARNING:
                         AppLog.w(tag, msg);
+                        level = 'W';
                         break;
                     default:
                         AppLog.d(tag, msg);
+                        level = 'D';
                         break;
                 }
+                logBuffer.add(level, tag, msg);
                 return true;
             }
 
@@ -189,26 +334,31 @@ public class BrowserActivity extends AppCompatActivity {
 
         // Accept third-party cookies
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+
+        // Find in page listener
+        webView.setFindListener((activeMatchOrdinal, numberOfMatches, isDoneCounting) -> {
+            TextView countView = findViewById(R.id.findResultCount);
+            if (isDoneCounting) {
+                if (numberOfMatches > 0) {
+                    countView.setText((activeMatchOrdinal + 1) + "/" + numberOfMatches);
+                    countView.setVisibility(View.VISIBLE);
+                } else {
+                    countView.setText(R.string.browser_find_no_results);
+                    countView.setVisibility(View.VISIBLE);
+                }
+            }
+        });
     }
 
     private void setupToolbar() {
-        // Back button: WebView history back, or navigate back to main app
-        findViewById(R.id.btnBack).setOnClickListener(v -> {
-            if (webView.canGoBack()) {
-                webView.goBack();
-            } else {
-                navigateBackToMain();
-            }
-        });
-
-        // Close button: truly finish the Activity (destroy WebView)
-        findViewById(R.id.btnClose).setOnClickListener(v -> finish());
+        // Home button: always navigate back to main app
+        findViewById(R.id.btnBack).setOnClickListener(v -> navigateBackToMain());
 
         // Refresh button
         findViewById(R.id.btnRefresh).setOnClickListener(v -> webView.reload());
 
-        // Clear data button
-        findViewById(R.id.btnClearData).setOnClickListener(v -> showClearDataDialog());
+        // Overflow menu button
+        findViewById(R.id.btnMore).setOnClickListener(v -> showOverflowMenu());
 
         // URL bar: navigate on Enter/Go
         urlBar.setOnEditorActionListener((v, actionId, event) -> {
@@ -226,6 +376,210 @@ public class BrowserActivity extends AppCompatActivity {
                 // (prevents stale URL display after navigation)
             }
         });
+    }
+
+    /**
+     * Show overflow popup menu with browser actions.
+     */
+    private void showOverflowMenu() {
+        android.widget.PopupMenu popup = new android.widget.PopupMenu(this, findViewById(R.id.btnMore));
+        popup.getMenuInflater().inflate(R.menu.browser_menu, popup.getMenu());
+
+        // Force icons to show in PopupMenu (hidden by default).
+        // Note: This reflection hack breaks on Android 14+ (API 34) due to
+        // restrictions on non-SDK interfaces. The try-catch ensures graceful
+        // fallback (icons simply won't show on those devices).
+        try {
+            java.lang.reflect.Field field = popup.getClass().getDeclaredField("mPopup");
+            field.setAccessible(true);
+            Object menuPopupHelper = field.get(popup);
+            Class<?> classPopupHelper = Class.forName(menuPopupHelper.getClass().getName());
+            java.lang.reflect.Method setForceShowIcon = classPopupHelper.getMethod("setForceShowIcon", boolean.class);
+            setForceShowIcon.invoke(menuPopupHelper, true);
+        } catch (Exception e) {
+            AppLog.w(TAG, "BrowserActivity: failed to force show menu icons", e);
+        }
+
+        // Update desktop mode checkbox state
+        popup.getMenu().findItem(R.id.action_desktop_mode).setChecked(desktopMode);
+        popup.setOnMenuItemClickListener(item -> {
+            int id = item.getItemId();
+            if (id == R.id.action_log) {
+                showLogBottomSheet();
+                return true;
+            } else if (id == R.id.action_page_back) {
+                if (webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    Toast.makeText(this, R.string.browser_no_history, Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            } else if (id == R.id.action_forward) {
+                if (webView.canGoForward()) {
+                    webView.goForward();
+                } else {
+                    Toast.makeText(this, R.string.browser_no_history, Toast.LENGTH_SHORT).show();
+                }
+                return true;
+            } else if (id == R.id.action_desktop_mode) {
+                toggleDesktopMode();
+                return true;
+            } else if (id == R.id.action_find) {
+                showFindBar();
+                return true;
+            } else if (id == R.id.action_clear_data) {
+                showClearDataDialog();
+                return true;
+            } else if (id == R.id.action_close) {
+                finish();
+                return true;
+            }
+            return false;
+        });
+        popup.show();
+    }
+
+    /**
+     * Show the find-in-page bar.
+     */
+    private void showFindBar() {
+        findViewById(R.id.findBar).setVisibility(View.VISIBLE);
+        EditText findInput = findViewById(R.id.findInput);
+        findInput.setText("");
+        findInput.requestFocus();
+        findViewById(R.id.findResultCount).setVisibility(View.GONE);
+    }
+
+    /**
+     * Set up the find-in-page bar listeners.
+     */
+    private void setupFindBar() {
+        EditText findInput = findViewById(R.id.findInput);
+        findInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                executeFind();
+                return true;
+            }
+            return false;
+        });
+
+        findViewById(R.id.btnFindNext).setOnClickListener(v -> webView.findNext(true));
+        findViewById(R.id.btnFindPrev).setOnClickListener(v -> webView.findNext(false));
+        findViewById(R.id.btnFindClose).setOnClickListener(v -> clearFind());
+    }
+
+    private void executeFind() {
+        String query = ((EditText) findViewById(R.id.findInput)).getText().toString();
+        webView.findAllAsync(query);
+    }
+
+    private void clearFind() {
+        webView.clearMatches();
+        findViewById(R.id.findBar).setVisibility(View.GONE);
+        findViewById(R.id.findResultCount).setVisibility(View.GONE);
+    }
+
+    /**
+     * Set up SwipeRefreshLayout for pull-to-refresh.
+     * Only enable when WebView is scrolled to the top.
+     */
+    private void setupSwipeRefresh() {
+        // Flat sharp style: no rounded corners on refresh indicator
+        swipeRefreshLayout.setProgressBackgroundColorSchemeColor(
+                ContextCompat.getColor(this, R.color.browser_toolbar_bg));
+        swipeRefreshLayout.setColorSchemeColors(
+                ContextCompat.getColor(this, R.color.browser_icon_tint));
+        swipeRefreshLayout.setOnRefreshListener(() -> webView.reload());
+
+        // Only allow pull-to-refresh when WebView is at the top
+        webView.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) ->
+                swipeRefreshLayout.setEnabled(scrollY == 0));
+    }
+
+    /**
+     * Set up edge swipe gesture detection for back/forward navigation.
+     * Left edge right-swipe → goBack, right edge left-swipe → goForward.
+     */
+    private void setupEdgeSwipe() {
+        float density = getResources().getDisplayMetrics().density;
+        edgeSwipeZonePx = (int) (getResources().getDisplayMetrics().widthPixels * 0.15);
+        int minSwipePx = (int) (MIN_SWIPE_DP * density);
+
+        int finalMinSwipePx = minSwipePx;
+        edgeSwipeDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
+                if (e1 == null || e2 == null) return false;
+                float startX = e1.getX();
+                float dx = e2.getX() - e1.getX();
+                float dy = Math.abs(e2.getY() - e1.getY());
+
+                // Horizontal swipe must be dominant
+                if (Math.abs(dx) < finalMinSwipePx || Math.abs(dx) < dy * 1.5f) return false;
+
+                // Left edge: swipe right → go back
+                if (startX < edgeSwipeZonePx && dx > 0) {
+                    if (webView.canGoBack()) {
+                        webView.goBack();
+                        return true;
+                    }
+                }
+                // Right edge: swipe left → go forward
+                else if (startX > (getResources().getDisplayMetrics().widthPixels - edgeSwipeZonePx) && dx < 0) {
+                    if (webView.canGoForward()) {
+                        webView.goForward();
+                        return true;
+                    }
+                }
+                return false;
+            }
+        });
+    }
+
+    /**
+     * Intercept touch events on WebView for edge swipe gestures.
+     * SwipeRefreshLayout handles vertical pull-to-refresh automatically.
+     */
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        // Only check edge swipe if touch starts in edge zone
+        if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+            float x = ev.getX();
+            if (x < edgeSwipeZonePx || x > (getResources().getDisplayMetrics().widthPixels - edgeSwipeZonePx)) {
+                edgeSwipeDetector.onTouchEvent(ev);
+            }
+        } else {
+            edgeSwipeDetector.onTouchEvent(ev);
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    /**
+     * Toggle desktop mode by switching user agent and viewport settings.
+     */
+    private void toggleDesktopMode() {
+        desktopMode = !desktopMode;
+        WebSettings settings = webView.getSettings();
+        if (desktopMode) {
+            // Desktop user agent
+            String desktopUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            settings.setUserAgentString(desktopUA);
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(false);
+        } else {
+            settings.setUserAgentString(mobileUserAgent);
+            settings.setUseWideViewPort(true);
+            settings.setLoadWithOverviewMode(true);
+        }
+        webView.reload();
+    }
+
+    /**
+     * Show the console log bottom sheet dialog.
+     */
+    private void showLogBottomSheet() {
+        LogBottomSheet sheet = LogBottomSheet.newInstance();
+        sheet.show(getSupportFragmentManager(), "log_bottom_sheet");
     }
 
     /**
@@ -247,7 +601,12 @@ public class BrowserActivity extends AppCompatActivity {
             String host = uri.getHost();
 
             if ("localhost".equals(host) || "127.0.0.1".equals(host)) {
-                webView.loadUrl(input);
+                // Update localPort if user navigated to a different port
+                int uriPort = uri.getPort();
+                if (uriPort > 0) {
+                    localPort = uriPort;
+                }
+                waitForTunnelAndLoad(input);
             } else {
                 // External URL: open in system browser, not in sandbox
                 startActivity(new Intent(Intent.ACTION_VIEW, uri));
@@ -317,11 +676,8 @@ public class BrowserActivity extends AppCompatActivity {
     }
 
     /**
-     * Navigate back to MainActivity instead of destroying this Activity.
-     * Since BrowserActivity runs in a separate task (taskAffinity="" + :browser process),
-     * moveTaskToBack would push the whole task to background with no way back.
-     * Starting MainActivity brings the main app to the foreground while this
-     * Activity stays alive in the background, preserving the WebView state.
+     * Handle hardware back button: first go back in WebView history,
+     * then navigate back to the main app when no more history.
      */
     @Override
     public void onBackPressed() {
@@ -339,19 +695,26 @@ public class BrowserActivity extends AppCompatActivity {
      * This preserves the exact UI state the user had before opening the sandbox.
      */
     private void navigateBackToMain() {
-        // Move this task (BrowserActivity) to background first
+        navigateBackToMain(null);
+    }
+
+    /**
+     * Navigate back to the main app, optionally jumping to a specific session.
+     * Uses an explicit intent with FLAG_ACTIVITY_SINGLE_TOP so onNewIntent()
+     * dispatches the session_id via handleNotificationIntent().
+     * BrowserActivity is moved to background (not finished) to preserve WebView state.
+     */
+    void navigateBackToMain(String sessionId) {
         moveTaskToBack(true);
-        // Bring the main app's task to the foreground
         try {
-            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
-            for (android.app.ActivityManager.AppTask appTask : am.getAppTasks()) {
-                android.content.ComponentName comp = appTask.getTaskInfo().topActivity;
-                if (comp != null && comp.getPackageName().equals(getPackageName())
-                        && !getClass().getName().equals(comp.getClassName())) {
-                    appTask.moveToFront();
-                    break;
-                }
+            Intent intent = new Intent(this, MainActivity.class);
+            intent.setAction(Intent.ACTION_MAIN);
+            intent.addCategory(Intent.CATEGORY_LAUNCHER);
+            intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (sessionId != null && !sessionId.isEmpty()) {
+                intent.putExtra("session_id", sessionId);
             }
+            startActivity(intent);
         } catch (Exception e) {
             AppLog.w(TAG, "BrowserActivity: failed to bring main task to front", e);
         }
@@ -361,6 +724,17 @@ public class BrowserActivity extends AppCompatActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+
+        // Refresh session credentials if provided
+        try {
+            BrowserSessionCredentials.Creds newCreds = BrowserSessionCredentials.getAndClear(this);
+            if (newCreds != null) {
+                sessionCreds = newCreds;
+            }
+        } catch (Exception e) {
+            // May fail in test environments with Unsafe-allocated Activities
+            AppLog.w(TAG, "BrowserActivity: failed to read session credentials", e);
+        }
 
         int port = intent.getIntExtra("port", 0);
         String protocol = intent.getStringExtra("protocol");
@@ -372,9 +746,9 @@ public class BrowserActivity extends AppCompatActivity {
         String urlPath = (path != null && !path.isEmpty()) ? path : "/";
         String newUrl = protocol + "://localhost:" + port + urlPath;
 
-        // If reopening the same URL, just bring to foreground without reloading
-        if (newUrl.equals(pendingUrl)) {
-            AppLog.i(TAG, "BrowserActivity: onNewIntent same URL, skip reload: " + newUrl);
+        // If reopening the same URL and WebView is already visible, skip reload
+        if (newUrl.equals(pendingUrl) && webView.getVisibility() == View.VISIBLE) {
+            AppLog.i(TAG, "BrowserActivity: onNewIntent same URL and WebView visible, skip reload: " + newUrl);
             return;
         }
 
@@ -398,17 +772,22 @@ public class BrowserActivity extends AppCompatActivity {
             targetHost = hostPart;
         }
 
-        tunnelRetryCount = 0;
         pendingUrl = newUrl;
-        AppLog.i(TAG, "BrowserActivity: onNewIntent loading " + newUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
-        webView.loadUrl(newUrl);
         urlBar.setText(newUrl);
+        AppLog.i(TAG, "BrowserActivity: onNewIntent waiting for tunnel then loading " + newUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
+        waitForTunnelAndLoad(newUrl);
     }
 
     @Override
     protected void onDestroy() {
-        // Do NOT clear data here — it should persist across sessions.
-        // Only release WebView resources.
+        // Interrupt tunnel-wait thread to prevent leaks and post-after-destroy crashes
+        Thread t = tunnelWaitThread;
+        if (t != null && t.isAlive()) {
+            t.interrupt();
+        }
+        // Do NOT clear browsing data here — it should persist across sessions.
+        // Only release WebView resources and clear session credentials.
+        BrowserSessionCredentials.clear(this);
         webView.loadUrl("about:blank");
         webView.destroy();
         super.onDestroy();
@@ -417,6 +796,13 @@ public class BrowserActivity extends AppCompatActivity {
     // --- WebView Client ---
 
     private class SandboxWebViewClient extends WebViewClient {
+
+        @Override
+        public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            super.onPageStarted(view, url, favicon);
+            // Inject global error listeners for uncaught JS exceptions and resource load failures
+            view.evaluateJavascript(JSErrorInjector.buildScript("BrowserNative"), null);
+        }
 
         /**
          * Intercept requests to localhost:localPort and rewrite the Host header
@@ -443,16 +829,8 @@ public class BrowserActivity extends AppCompatActivity {
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
                 // Trust all certs for localhost (SSH tunnel is plaintext, self-signed HTTPS)
-                if (conn instanceof HttpsURLConnection && ("localhost".equals(host) || "127.0.0.1".equals(host))) {
-                    HttpsURLConnection httpsConn = (HttpsURLConnection) conn;
-                    SSLContext sc = SSLContext.getInstance("TLS");
-                    sc.init(null, new TrustManager[]{new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                        public void checkClientTrusted(X509Certificate[] certs, String authType) {}
-                        public void checkServerTrusted(X509Certificate[] certs, String authType) {}
-                    }}, new SecureRandom());
-                    httpsConn.setSSLSocketFactory(sc.getSocketFactory());
-                    httpsConn.setHostnameVerifier((hostname, session) -> true);
+                if (conn instanceof HttpsURLConnection) {
+                    SSLHelper.setupTrustAll((HttpsURLConnection) conn, host);
                 }
 
                 // Set method
@@ -482,16 +860,20 @@ public class BrowserActivity extends AppCompatActivity {
 
                 // Log error response body preview for diagnostics
                 if (statusCode >= 400) {
+                    InputStream errStream = null;
                     try {
-                        InputStream errStream = conn.getErrorStream();
+                        errStream = conn.getErrorStream();
                         if (errStream != null) {
                             byte[] preview = new byte[Math.min(256, errStream.available() > 0 ? errStream.available() : 256)];
                             int read = errStream.read(preview);
                             if (read > 0) {
                                 AppLog.w(TAG, "BrowserActivity: error response body: " + new String(preview, 0, read, "UTF-8"));
                             }
+                            errStream.close();
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                        if (errStream != null) try { errStream.close(); } catch (Exception ignored2) {}
+                    }
                 }
 
                 // Collect response headers
@@ -502,9 +884,15 @@ public class BrowserActivity extends AppCompatActivity {
                     }
                 }
 
-                InputStream inputStream = conn.getErrorStream();
-                if (inputStream == null) {
-                    inputStream = conn.getInputStream();
+                InputStream inputStream;
+                try {
+                    inputStream = conn.getErrorStream();
+                    if (inputStream == null) {
+                        inputStream = conn.getInputStream();
+                    }
+                } catch (Exception e) {
+                    AppLog.w(TAG, "BrowserActivity: failed to get response stream for " + uri, e);
+                    return super.shouldInterceptRequest(view, request);
                 }
 
                 // Determine MIME type
@@ -552,6 +940,8 @@ public class BrowserActivity extends AppCompatActivity {
         public void onPageFinished(WebView view, String url) {
             // Update URL bar to reflect actual page URL
             urlBar.setText(url);
+            // Stop pull-to-refresh spinner
+            swipeRefreshLayout.setRefreshing(false);
         }
 
         @Override
@@ -581,14 +971,10 @@ public class BrowserActivity extends AppCompatActivity {
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             super.onReceivedError(view, request, error);
+            swipeRefreshLayout.setRefreshing(false);
             if (request.isForMainFrame()) {
-                if (tunnelRetryCount < MAX_TUNNEL_RETRIES && pendingUrl != null) {
-                    tunnelRetryCount++;
-                    AppLog.i(TAG, "BrowserActivity: page load failed (attempt " + tunnelRetryCount + "/" + MAX_TUNNEL_RETRIES + "), retrying in " + TUNNEL_RETRY_DELAY_MS + "ms");
-                    webView.postDelayed(() -> webView.loadUrl(pendingUrl), TUNNEL_RETRY_DELAY_MS);
-                } else {
-                    Toast.makeText(BrowserActivity.this, R.string.error_connection_failed, Toast.LENGTH_SHORT).show();
-                }
+                AppLog.w(TAG, "BrowserActivity: page load failed for " + request.getUrl());
+                Toast.makeText(BrowserActivity.this, R.string.error_connection_failed, Toast.LENGTH_SHORT).show();
             }
         }
     }
