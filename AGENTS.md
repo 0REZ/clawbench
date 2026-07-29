@@ -52,6 +52,7 @@ npm test                             # Vitest 前端测试
 | `internal/terminal/` | Web 终端：PTY 会话、环形缓冲回放、多标签 |
 | `internal/ws/` | WebSocket 事件通道，StreamHub 会话级扇出，Manager 广播+重连缓冲回放 |
 | `internal/ssh/` | SSH 隧道服务器 |
+| `internal/push/` | IM 机器人推送：`common/`（共享接口+会话命令）、`dingtalk/`（钉钉 Stream API）、`feishu/`（飞书 Lark SDK WebSocket+互动卡片） |
 | `internal/proxy/` | HTTP 反向代理+端口转发 |
 | `internal/symbol/` | 基于 tree-sitter 的代码符号提取（纯 Go，无 CGO） |
 | `internal/summarize/` | 文本摘要 |
