@@ -1,6 +1,6 @@
 // Diff rendering utilities
 
-import { hljs } from './globals.ts'
+import { highlightCode } from './globals.ts'
 import { escapeHtml } from './html.ts'
 import { getFileType } from './fileType.ts'
 
@@ -12,7 +12,7 @@ export function detectLang(filePath: string): string {
 export function highlightLine(line: string, lang: string): string {
     if (!line) return ''
     try {
-        return hljs.highlight(line, { language: lang, ignoreIllegals: true }).value
+        return highlightCode(line, lang)
     } catch {
         return escapeHtml(line)
     }

@@ -215,7 +215,7 @@ describe('DiffDrawer', () => {
       method: 'POST',
       body: JSON.stringify({ path: '/test/file.txt', content: 'old content' }),
     }))
-    expect(mockToastShow).toHaveBeenCalledWith('Undone', { type: 'success' })
+    expect(mockToastShow).toHaveBeenCalledWith('Undone', { icon: '✅', type: 'success' })
 
     diffOldContent.value = null
     diffOldFilePath.value = null
@@ -234,7 +234,7 @@ describe('DiffDrawer', () => {
     await undoBtn.trigger('click')
     await nextTick()
 
-    expect(mockToastShow).toHaveBeenCalledWith('Undo failed', { type: 'error' })
+    expect(mockToastShow).toHaveBeenCalledWith('Undo failed', { icon: '❌', type: 'error' })
 
     diffOldContent.value = null
     diffOldFilePath.value = null

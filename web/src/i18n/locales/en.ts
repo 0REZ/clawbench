@@ -109,6 +109,8 @@ export default {
     upload: 'Upload',
     download: 'Download',
     loadAvg: 'Load',
+    disconnected: 'Connection Lost',
+    reconnecting: 'Reconnecting...',
   },
   chat: {
     title: 'AI Chat',

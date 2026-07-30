@@ -1,4 +1,4 @@
-import { marked, katex, mermaid, DOMPurify } from '@/utils/globals.ts'
+import { marked, katex, DOMPurify } from '@/utils/globals.ts'
 import { escapeHtml } from '@/utils/html.ts'
 import { injectTableRowAttrs } from '@/utils/tableRowExpand.ts'
 import { annotateCodeBlockHeaders, annotateTableBlockHeaders } from '@/composables/useCodeBlockHeader.ts'
@@ -189,37 +189,19 @@ export function renderMarkdownHtml(content: string, options: MarkdownRenderOptio
     return renderMarkdown(content, options).html
 }
 
-/**
- * 在DOM元素中渲染Mermaid图表
- */
-export async function renderMermaidInElement(
+// Re-export for backward compatibility — dynamic import to avoid
+// pulling mermaid into the initial chunk. Includes DOM existence check
+// to skip the import entirely when no mermaid blocks are present.
+export function renderMermaidInElement(
     el: HTMLElement,
     prefix: string = 'mermaid',
     specificBlocks?: NodeList
 ): Promise<void> {
-    const blocks = specificBlocks || el.querySelectorAll('pre.mermaid:not([data-rendered])')
-    if (blocks.length === 0) return
-
-    const renderPromises = Array.from(blocks).map(async (block, index) => {
-        (block as HTMLElement).setAttribute('data-rendered', '1')
-        const id = `${prefix}-${Date.now()}-${index}`
-        const source = block.textContent?.trim() || ''
-        const container = document.createElement('div')
-        container.className = 'mermaid'
-        container.id = id
-
-        try {
-            const result = await mermaid.render(id, source)
-            container.innerHTML = result.svg
-            container.dataset.mermaid = source
-            ;(block as Element).replaceWith(container)
-        } catch (err: unknown) {
-            container.innerHTML = `<pre style="padding:12px;background:var(--code-bg);border-radius:6px;font-size:13px;overflow-x:auto;">Mermaid Error: ${escapeHtml((err as { message?: string })?.message || String(err))}</pre>`
-            ;(block as Element).replaceWith(container)
-        }
-    })
-
-    await Promise.all(renderPromises)
+    // Skip dynamic import if no mermaid blocks exist (avoids loading 608KB chunk)
+    if (!specificBlocks && el.querySelectorAll('pre.mermaid:not([data-rendered])').length === 0) {
+        return Promise.resolve()
+    }
+    return import('@/utils/mermaid.ts').then(m => m.renderMermaidInElement(el, prefix, specificBlocks))
 }
 
 /**

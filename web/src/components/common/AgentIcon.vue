@@ -1,5 +1,5 @@
 <template>
-    <svg v-if="processedSvg" class="agent-icon-svg" :class="{ 'agent-icon-bg': svgData!.needsBg }" :style="style" :viewBox="svgData!.viewBox" role="img" :aria-label="name || backend" v-html="processedSvg" />
+    <svg v-if="processedSvg" class="agent-icon-svg" :class="[svgData!.needsBg ? 'agent-icon-bg' : '', svgData!.monoCssClass]" :style="svgStyle" :viewBox="svgData!.viewBox" role="img" :aria-label="name || backend" v-html="processedSvg" />
     <span v-else class="agent-icon-initial" :style="initialStyle">{{ initial }}</span>
 </template>
 
@@ -9,8 +9,8 @@ import { getAgentSvg } from '@/utils/agentIcons'
 
 // Per-instance unique suffix to avoid SVG gradient ID collisions when
 // multiple AgentIcon instances render on the same page. Without this,
-// url(#ai-cb-g) in one <svg> can resolve to a <defs> in a different <svg>,
-// causing wrong colors/shapes (especially visible for CodeBuddy, Copilot, Codex).
+// gradient URLs in one <svg> can resolve to a <defs> in a different <svg>,
+// causing wrong colors/shapes.
 const uid = `_${Math.random().toString(36).slice(2, 8)}`
 
 const props = withDefaults(defineProps<{
@@ -23,15 +23,24 @@ const props = withDefaults(defineProps<{
 
 const svgData = computed(() => getAgentSvg(props.backend))
 
-// Replace all `ai-` prefixed IDs in defs and references (id="ai-...", url(#ai-...", href="#ai-...")
+// Replace all ID references (id="...", url(#...", href="#...") in SVG content
+// that match known gradient ID patterns (lobe-icons-* or ai-* prefixes)
 // with unique-per-instance versions to prevent cross-SVG gradient collisions.
 const processedSvg = computed(() => {
     const data = svgData.value
     if (!data) return null
-    return data.svg.replace(/(id="ai-|url\(#ai-|href="#ai-)([^")]+)/g, `$1$2${uid}`)
+    // Two-step replacement to handle different ID boundary characters:
+    // 1. id="..." and href="#..." — ID ends at quote ("')
+    // 2. url(#...) — ID ends at closing paren )
+    // Must be separate because [^"]+ would greedily include ')' inside url(#...),
+    // causing mismatch between defs id= and url(# references.
+    let s = data.svg
+    s = s.replace(/(id="|href="#)(lobe-icons-[^"]+|ai-[^"]+)(["'])/g, `$1$2${uid}$3`)
+    s = s.replace(/(url\(#)(lobe-icons-[^)]+|ai-[^)]+)(\))/g, `$1$2${uid}$3`)
+    return s
 })
 
-const style = computed(() => ({
+const svgStyle = computed(() => ({
     width: `${props.size}px`,
     height: `${props.size}px`,
 }))
@@ -57,8 +66,9 @@ const initialStyle = computed(() => ({
     line-height: 1;
 }
 
-/* Contrasting background for icons with dark/light fills that would be
-   invisible on same-colored backgrounds (opencode, codex, mimo, pi) */
+/* Contrasting background for monochrome icons that would be
+   invisible on same-colored backgrounds. Uses --bg-tertiary which
+   automatically adapts: light=#e9ecef, dark=#21262d */
 .agent-icon-bg {
     border-radius: 20%;
     background: var(--bg-tertiary);

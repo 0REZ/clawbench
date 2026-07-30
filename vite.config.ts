@@ -163,6 +163,14 @@ export default defineConfig({
     assetsDir: '.',
     rollupOptions: {
       input: resolve(__dirname, 'web/index.html'),
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-i18n'],
+          'vendor-pdf': ['pdfjs-dist'],
+          'vendor-diff': ['diff'],
+          'vendor-purify': ['dompurify'],
+        },
+      },
     },
   },
   resolve: {

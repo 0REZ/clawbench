@@ -53,7 +53,7 @@
 
     <!-- Server info + resources popup (both Web and APP mode) -->
     <PopupMenu v-model:show="resourcesMenuOpen" :target-element="serverBtnRef" :max-width="320" :max-height="440" :menu-items-count="10" anchor="right">
-      <SystemResourcesPanel ref="resourcesPanelRef" :show-logout="isAppMode" @logout="handleLogout" />
+      <SystemResourcesPanel ref="resourcesPanelRef" :show-logout="isAppMode" :ws-status="wsStatus" @logout="handleLogout" />
     </PopupMenu>
   </header>
   </Teleport>

@@ -13,8 +13,28 @@ const mermaidRender = vi.fn()
 vi.mock('@/utils/globals', () => ({
   marked: { parse: (...args: any[]) => mockMarkedParse(...args) },
   katex: { renderToString: (...args: any[]) => mockKatexRenderToString(...args) },
-  mermaid: { render: (...args: any[]) => mermaidRender(...args) },
   DOMPurify: { sanitize: (...args: any[]) => mockDOMPurifySanitize(...args) },
+  highlightCode: (code: string, _lang: string) => code,
+}))
+
+vi.mock('@/utils/mermaid', () => ({
+  renderMermaidInElement: vi.fn(async (el: HTMLElement, prefix = 'mermaid', specificBlocks?: NodeList) => {
+    const blocks = specificBlocks || el.querySelectorAll('pre.mermaid:not([data-rendered])')
+    for (const block of Array.from(blocks)) {
+      (block as HTMLElement).setAttribute('data-rendered', '1')
+      const container = document.createElement('div')
+      container.className = 'mermaid'
+      container.id = `${prefix}-0`
+      try {
+        await mermaidRender((block as HTMLElement).textContent, container)
+      } catch {
+        container.innerHTML = `<pre>Mermaid Error</pre>`
+      }
+      ;(block as Element).replaceWith(container)
+    }
+  }),
+  initMermaid: vi.fn(),
+  reRenderMermaid: vi.fn(),
 }))
 
 vi.mock('@/utils/html', () => ({

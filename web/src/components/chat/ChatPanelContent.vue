@@ -85,7 +85,6 @@
       :chatRunning="identity.runningSessions.value.size > 0"
       :currentModelId="identity.currentModelId.value"
       :currentModelName="identity.currentModelName.value"
-      :currentThinkingEffort="identity.currentThinkingEffort.value"
       :currentModeName="identity.currentModeName.value"
       :currentTransport="identity.currentTransport.value"
       :currentAgentId="identity.currentAgentId.value"
@@ -950,6 +949,13 @@ function handleCtrlArrowSessionSwitch(e) {
   }
 }
 
+// Desktop: Ctrl+Delete to archive current session
+function handleDeleteKey(e) {
+  if (!props.active) return
+  if (e.key !== 'Delete' || !(e.ctrlKey || e.metaKey)) return
+  inputBarRef.value?.handleDelete()
+}
+
 // Start one-time session load when component mounts
 onMounted(() => {
     // Request notification permission on mount
@@ -961,6 +967,7 @@ onMounted(() => {
     document.addEventListener('visibilitychange', session.handleVisibilityChange)
     window.addEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.addEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.addEventListener('keydown', handleDeleteKey)
 })
 
 // Cleanup preview URLs on unmount
@@ -974,6 +981,7 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', session.handleVisibilityChange)
     window.removeEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.removeEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.removeEventListener('keydown', handleDeleteKey)
     notification.closeAll()
 })
 </script>

@@ -2,13 +2,15 @@
   <span
     ref="wrapperRef"
     class="hm-wrapper"
-    :class="{ 'hm-scrolling': isScrolling }"
+    :class="{ 'hm-draggable': isOverflow, 'hm-dragging': isDragging }"
     :title="title || text"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @lostpointercapture="onPointerUp"
+    @wheel="onWheel"
   >
-    <span class="hm-inner">
-      <span ref="textRef" class="hm-text"><slot /></span>
-      <span v-if="isScrolling" class="hm-text hm-text-copy"><slot /></span>
-    </span>
+    <span ref="textRef" class="hm-text"><slot /></span>
   </span>
 </template>
 
@@ -22,7 +24,13 @@ const props = defineProps({
 
 const wrapperRef = ref(null)
 const textRef = ref(null)
-const isScrolling = ref(false)
+const isOverflow = ref(false)
+const isDragging = ref(false)
+const scrollOffset = ref(0)
+
+// Pointer drag tracking (not reactive, internal only)
+let pointerStartX = 0
+let scrollStartOffset = 0
 
 let ro = null
 
@@ -30,8 +38,64 @@ function checkOverflow() {
   if (!wrapperRef.value || !textRef.value) return
   const wrapperWidth = wrapperRef.value.offsetWidth
   const textWidth = textRef.value.offsetWidth
-  // Only enable marquee when single copy of text overflows
-  isScrolling.value = textWidth > wrapperWidth - 8 // subtract padding-left
+  isOverflow.value = textWidth > wrapperWidth - 8
+  if (!isOverflow.value) {
+    scrollOffset.value = 0
+    applyScroll()
+  }
+}
+
+function applyScroll() {
+  if (!textRef.value) return
+  textRef.value.style.transform = `translateX(${scrollOffset.value}px)`
+}
+
+function getMaxScroll() {
+  if (!wrapperRef.value || !textRef.value) return 0
+  return textRef.value.offsetWidth - wrapperRef.value.offsetWidth + 8
+}
+
+function clampOffset(offset) {
+  const max = getMaxScroll()
+  if (max <= 0) return 0
+  return Math.max(-max, Math.min(0, offset))
+}
+
+function onPointerDown(e) {
+  if (!isOverflow.value) return
+  isDragging.value = true
+  pointerStartX = e.clientX
+  scrollStartOffset = scrollOffset.value
+  wrapperRef.value?.setPointerCapture?.(e.pointerId)
+}
+
+function onPointerMove(e) {
+  if (!isDragging.value) return
+  const dx = e.clientX - pointerStartX
+  scrollOffset.value = clampOffset(scrollStartOffset + dx)
+  applyScroll()
+}
+
+function onPointerUp(e) {
+  if (!isDragging.value) return
+  isDragging.value = false
+  wrapperRef.value?.releasePointerCapture?.(e.pointerId)
+}
+
+function normalizeWheelDelta(e) {
+  let delta = e.deltaX !== 0 ? e.deltaX : e.deltaY
+  if (e.deltaMode === 1) delta *= 40 // line mode → approx pixel
+  if (e.deltaMode === 2) delta *= 800 // page mode
+  return delta
+}
+
+function onWheel(e) {
+  if (!isOverflow.value) return
+  const delta = normalizeWheelDelta(e)
+  if (delta === 0) return
+  e.preventDefault()
+  scrollOffset.value = clampOffset(scrollOffset.value - delta)
+  applyScroll()
 }
 
 onMounted(() => {
@@ -48,8 +112,12 @@ onBeforeUnmount(() => {
 // Re-check when text changes
 watch(() => props.text, async () => {
   await nextTick()
+  scrollOffset.value = 0
+  applyScroll()
   checkOverflow()
 })
+
+defineExpose({ checkOverflow, isOverflow, isDragging, scrollOffset, getMaxScroll, clampOffset, normalizeWheelDelta, onPointerDown, onPointerMove, onPointerUp, onWheel })
 </script>
 
 <style>
@@ -61,12 +129,8 @@ watch(() => props.text, async () => {
   padding-left: 8px;
   width: 100%;
   max-width: 100%;
-}
-
-.hm-inner {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
+  user-select: none;
+  touch-action: pan-x;
 }
 
 .hm-text {
@@ -75,25 +139,15 @@ watch(() => props.text, async () => {
   flex-shrink: 0;
 }
 
-/* Scrolling state: animate the inner track */
-.hm-wrapper.hm-scrolling .hm-inner {
-  animation: hm-marquee 8s linear infinite;
+.hm-wrapper.hm-draggable .hm-text {
+  will-change: transform;
 }
 
-.hm-wrapper.hm-scrolling:hover .hm-inner {
-  animation-play-state: paused;
+.hm-wrapper.hm-draggable {
+  cursor: grab;
 }
 
-.hm-text-copy {
-  padding-left: 3em; /* gap between copies */
-}
-
-@keyframes hm-marquee {
-  0% {
-    transform: translateX(0);
-  }
-  100% {
-    transform: translateX(-50%);
-  }
+.hm-wrapper.hm-dragging {
+  cursor: grabbing;
 }
 </style>

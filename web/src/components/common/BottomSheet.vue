@@ -3,9 +3,12 @@
     <div
       v-if="everOpened"
       v-show="open || leaving"
+      ref="overlayRef"
       class="bs-overlay"
       :class="{ 'bs-leaving': leaving, 'bs-instant': instant, 'bs-transparent-overlay': transparentOverlay, 'bs-overlay-fullscreen': fullscreen }"
+      tabindex="-1"
       @click.self="handleClose"
+      @keydown.escape="handleEscapeKey"
     >
       <div class="bs-panel" :class="{ 'bs-leaving': leaving, 'bs-instant': instant, 'bs-compact': compact, 'bs-auto': auto, 'bs-handle-only': handleOnly }">
         <!-- Header -->
@@ -29,7 +32,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import { appLog } from '@/utils/appLog'
 
@@ -53,6 +56,7 @@ const emit = defineEmits(['close'])
 
 const leaving = ref(false)
 const everOpened = ref(false)
+const overlayRef = ref(null)
 let leaveTimer = null
 
 // ── Back handler: edge-swipe / Android back closes the topmost drawer ──
@@ -68,6 +72,10 @@ watch(() => props.open, (val) => {
   if (val) {
     everOpened.value = true
     leaving.value = false
+    // Auto-focus overlay so Escape key works immediately
+    nextTick(() => {
+      overlayRef.value?.focus()
+    })
     // Register back handler so edge-swipe / Android back closes this drawer
     if (!props.closeGuard && !unregisterBack) {
       registerDrawerBackHandler()
@@ -116,6 +124,14 @@ onBeforeUnmount(() => {
   }
 })
 
+function handleEscapeKey(e) {
+  // Don't close if focus is inside an input/textarea/contenteditable —
+  // let the native Escape behavior (blur/IME cancel) happen first
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return
+  handleClose()
+}
+
 function handleClose() {
   if (props.closeGuard) return
   if (leaving.value) return
@@ -151,6 +167,7 @@ defineExpose({
   align-items: flex-end;
   overflow: hidden;
   animation: bs-fadeIn 0.2s ease;
+  outline: none;
 }
 
 .bs-overlay.bs-leaving {

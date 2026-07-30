@@ -4,13 +4,17 @@
  * IMPORTANT: This function is in a separate .ts file (not .vue) because
  * the generated HTML contains literal <script> and </script> tags that
  * would confuse the Vue SFC compiler's HTML parser.
+ *
+ * The redoc standalone bundle (~1MB) is loaded dynamically so it is
+ * split into a separate chunk and only fetched when the user actually
+ * opens an OpenAPI preview.
  */
 
-import redocStandalone from 'redoc/bundles/redoc.standalone.js?raw'
-
 /** Construct the full srcdoc HTML for ReDoc */
-export function buildRedocSrcdoc(specJson: string, scrollbarThumb: string = '#c1c1c1', scrollbarTrack: string = 'transparent'): string {
+export async function buildRedocSrcdoc(specJson: string, scrollbarThumb: string = '#c1c1c1', scrollbarTrack: string = 'transparent'): Promise<string> {
   if (!specJson) return ''
+
+  const { default: redocStandalone } = await import('redoc/bundles/redoc.standalone.js?raw')
 
   return `<!DOCTYPE html>
 <html><head>

@@ -30,7 +30,7 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
-function mountPanel(props?: { showLogout?: boolean }) {
+function mountPanel(props?: { showLogout?: boolean; wsStatus?: string }) {
   return mount(SystemResourcesPanel, {
     props,
     global: {
@@ -45,6 +45,8 @@ function mountPanel(props?: { showLogout?: boolean }) {
         CloudUpload: true,
         Server: true,
         LogOut: true,
+        WifiOff: true,
+        LoaderCircle: true,
       },
     },
   })
@@ -165,5 +167,35 @@ describe('SystemResourcesPanel', () => {
     const wrapper = mountPanel({ showLogout: true })
     await wrapper.find('.logout-btn').trigger('click')
     expect(wrapper.emitted('logout')).toBeTruthy()
+  })
+
+  // ── Connection status ──
+
+  it('shows resource rows when connected', () => {
+    const wrapper = mountPanel({ wsStatus: 'connected' })
+    expect(wrapper.find('.resource-row').exists()).toBe(true)
+    expect(wrapper.find('.connection-status').exists()).toBe(false)
+  })
+
+  it('hides resource rows and shows disconnected status when wsStatus is disconnected', () => {
+    const wrapper = mountPanel({ wsStatus: 'disconnected' })
+    expect(wrapper.find('.resource-row').exists()).toBe(false)
+    expect(wrapper.find('.connection-status').exists()).toBe(true)
+    expect(wrapper.text()).toContain('systemResources.disconnected')
+    expect(wrapper.find('.status-disconnected').exists()).toBe(true)
+  })
+
+  it('hides resource rows and shows reconnecting status when wsStatus is reconnecting', () => {
+    const wrapper = mountPanel({ wsStatus: 'reconnecting' })
+    expect(wrapper.find('.resource-row').exists()).toBe(false)
+    expect(wrapper.find('.connection-status').exists()).toBe(true)
+    expect(wrapper.text()).toContain('systemResources.reconnecting')
+    expect(wrapper.find('.status-reconnecting').exists()).toBe(true)
+  })
+
+  it('still shows server info header when disconnected', () => {
+    const wrapper = mountPanel({ wsStatus: 'disconnected' })
+    expect(wrapper.find('.server-info-header').exists()).toBe(true)
+    expect(wrapper.find('.server-info-address').exists()).toBe(true)
   })
 })

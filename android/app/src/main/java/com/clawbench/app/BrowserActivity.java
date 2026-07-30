@@ -31,18 +31,15 @@ import androidx.core.content.ContextCompat;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import java.io.InputStream;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.URL;
 
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import javax.net.ssl.HttpsURLConnection;
+
 
 /**
  * Sandbox browser Activity for testing forwarded ports.
@@ -92,9 +89,6 @@ public class BrowserActivity extends AppCompatActivity {
     private static final int TUNNEL_POLL_INTERVAL_MS = 500;
     private static final int TUNNEL_CONNECT_TIMEOUT_MS = 300;
     private String pendingUrl = null;
-
-    /** Target host:port for Host header rewriting (e.g. "192.168.100.1"). Empty if localhost. */
-    private String targetHost = "";
 
     /** The local port that the SSH tunnel listens on. */
     private int localPort = 0;
@@ -234,23 +228,6 @@ public class BrowserActivity extends AppCompatActivity {
         String host = getIntent().getStringExtra("host");
         String path = getIntent().getStringExtra("path");
         localPort = port;
-        // Build targetHost for Host header rewriting: strip default ports per HTTP spec
-        if (host != null && !host.isEmpty()) {
-            // Strip default port from host:port for Host header
-            String hostPart = host;
-            if (host.contains(":")) {
-                String[] parts = host.split(":", 2);
-                try {
-                    int targetPort = Integer.parseInt(parts[1]);
-                    boolean isDefault = ("http".equals(protocol) && targetPort == 80) ||
-                            ("https".equals(protocol) && targetPort == 443);
-                    hostPart = isDefault ? parts[0] : host;
-                } catch (NumberFormatException e) {
-                    hostPart = host;
-                }
-            }
-            targetHost = hostPart;
-        }
         if (port > 0 && protocol != null) {
             String urlPath = (path != null && !path.isEmpty()) ? path : "/";
             String initialUrl = protocol + "://localhost:" + port + urlPath;
@@ -754,24 +731,6 @@ public class BrowserActivity extends AppCompatActivity {
 
         localPort = port;
 
-        // Reset and recalculate targetHost
-        targetHost = "";
-        if (host != null && !host.isEmpty()) {
-            String hostPart = host;
-            if (host.contains(":")) {
-                String[] parts = host.split(":", 2);
-                try {
-                    int targetPort = Integer.parseInt(parts[1]);
-                    boolean isDefault = ("http".equals(protocol) && targetPort == 80) ||
-                            ("https".equals(protocol) && targetPort == 443);
-                    hostPart = isDefault ? parts[0] : host;
-                } catch (NumberFormatException e) {
-                    hostPart = host;
-                }
-            }
-            targetHost = hostPart;
-        }
-
         pendingUrl = newUrl;
         urlBar.setText(newUrl);
         AppLog.i(TAG, "BrowserActivity: onNewIntent waiting for tunnel then loading " + newUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
@@ -804,122 +763,12 @@ public class BrowserActivity extends AppCompatActivity {
             view.evaluateJavascript(JSErrorInjector.buildScript("BrowserNative"), null);
         }
 
-        /**
-         * Intercept requests to localhost:localPort and rewrite the Host header
-         * when forwarding to a non-localhost target (e.g. 192.168.100.1).
-         *
-         * Without this, the browser sends "Host: localhost:port" which the target
-         * server doesn't recognize, causing 404 errors on virtual-host-based servers.
-         *
-         * When targetHost is empty (forwarding to localhost itself), we skip
-         * interception and let WebView handle the request normally via the SSH tunnel.
-         */
-        @Override
-        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            Uri uri = request.getUrl();
-            String host = uri.getHost();
-
-            // Only intercept localhost requests when we have a target host to rewrite to
-            if (targetHost.isEmpty() || !("localhost".equals(host) || "127.0.0.1".equals(host))) {
-                return super.shouldInterceptRequest(view, request);
-            }
-
-            try {
-                URL url = new URL(uri.toString());
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-                // Trust all certs for localhost (SSH tunnel is plaintext, self-signed HTTPS)
-                if (conn instanceof HttpsURLConnection) {
-                    SSLHelper.setupTrustAll((HttpsURLConnection) conn, host);
-                }
-
-                // Set method
-                String method = request.getMethod();
-                conn.setRequestMethod(method);
-
-                // Rewrite Host header to the target host (default port already stripped)
-                conn.setRequestProperty("Host", targetHost);
-
-                AppLog.i(TAG, "BrowserActivity: intercept " + method + " " + uri + " → Host: " + targetHost);
-
-                // Copy other request headers (except Host which we already set)
-                Map<String, String> reqHeaders = request.getRequestHeaders();
-                for (Map.Entry<String, String> entry : reqHeaders.entrySet()) {
-                    String key = entry.getKey();
-                    if ("Host".equalsIgnoreCase(key)) continue;  // already set
-                    conn.setRequestProperty(key, entry.getValue());
-                }
-
-                // Get response
-                int statusCode = conn.getResponseCode();
-                String reason = conn.getResponseMessage();
-                String contentType = conn.getContentType();
-                String encoding = conn.getContentEncoding();
-
-                AppLog.i(TAG, "BrowserActivity: response " + statusCode + " " + reason + " contentType=" + contentType);
-
-                // Log error response body preview for diagnostics
-                if (statusCode >= 400) {
-                    InputStream errStream = null;
-                    try {
-                        errStream = conn.getErrorStream();
-                        if (errStream != null) {
-                            byte[] preview = new byte[Math.min(256, errStream.available() > 0 ? errStream.available() : 256)];
-                            int read = errStream.read(preview);
-                            if (read > 0) {
-                                AppLog.w(TAG, "BrowserActivity: error response body: " + new String(preview, 0, read, "UTF-8"));
-                            }
-                            errStream.close();
-                        }
-                    } catch (Exception ignored) {
-                        if (errStream != null) try { errStream.close(); } catch (Exception ignored2) {}
-                    }
-                }
-
-                // Collect response headers
-                Map<String, String> respHeaders = new HashMap<>();
-                for (Map.Entry<String, List<String>> entry : conn.getHeaderFields().entrySet()) {
-                    if (entry.getKey() != null && !entry.getValue().isEmpty()) {
-                        respHeaders.put(entry.getKey(), entry.getValue().get(0));
-                    }
-                }
-
-                InputStream inputStream;
-                try {
-                    inputStream = conn.getErrorStream();
-                    if (inputStream == null) {
-                        inputStream = conn.getInputStream();
-                    }
-                } catch (Exception e) {
-                    AppLog.w(TAG, "BrowserActivity: failed to get response stream for " + uri, e);
-                    return super.shouldInterceptRequest(view, request);
-                }
-
-                // Determine MIME type
-                String mime = contentType;
-                if (mime == null || mime.isEmpty()) {
-                    mime = "application/octet-stream";
-                } else {
-                    int semiIdx = mime.indexOf(';');
-                    if (semiIdx > 0) {
-                        mime = mime.substring(0, semiIdx).trim();
-                    }
-                }
-
-                return new WebResourceResponse(
-                        mime,
-                        encoding != null ? encoding : "utf-8",
-                        statusCode,
-                        reason != null ? reason : "OK",
-                        respHeaders,
-                        inputStream
-                );
-
-            } catch (Exception e) {
-                AppLog.w(TAG, "BrowserActivity: shouldInterceptRequest failed for " + uri, e);
-                return super.shouldInterceptRequest(view, request);
-            }
-        }
+        // NOTE: We do NOT override shouldInterceptRequest. Previously, we intercepted
+        // localhost requests to rewrite the Host header for non-localhost targets, but
+        // this broke redirect pages because WebView does not auto-follow 3xx responses
+        // returned from shouldInterceptRequest. The Go ReverseProxy on the server side
+        // now handles Host header rewriting and Location header rewriting for 3xx
+        // redirects, so Android-side interception is no longer needed.
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {

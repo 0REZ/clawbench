@@ -9,87 +9,96 @@
       </button>
     </div>
     <div class="header-divider"></div>
-    <!-- Load Average -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <Activity :size="13" class="resource-icon" />
-        <span class="resource-label">{{ t('systemResources.loadAvg') }}</span>
-        <span class="resource-value">{{ resources.load.load1.toFixed(2) }}</span>
-      </div>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: loadBarPercent + '%' }" :class="getBarClass(loadBarPercent)"></div>
-      </div>
+    <!-- Connection error / reconnecting state -->
+    <div v-if="wsDisconnected" class="connection-status">
+      <LoaderCircle v-if="wsStatus === 'reconnecting'" :size="28" class="connection-status-icon status-reconnecting" />
+      <WifiOff v-else :size="28" class="connection-status-icon status-disconnected" />
+      <span class="connection-status-text">{{ wsStatus === 'reconnecting' ? t('systemResources.reconnecting') : t('systemResources.disconnected') }}</span>
     </div>
-    <!-- CPU -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <Cpu :size="13" class="resource-icon" />
-        <span class="resource-label">{{ t('systemResources.cpu') }}</span>
-        <span class="resource-value">{{ cpuPercent }}%</span>
+    <!-- Resource rows (only when connected) -->
+    <template v-else>
+      <!-- Load Average -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <Activity :size="13" class="resource-icon" />
+          <span class="resource-label">{{ t('systemResources.loadAvg') }}</span>
+          <span class="resource-value">{{ resources.load.load1.toFixed(2) }}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: loadBarPercent + '%' }" :class="getBarClass(loadBarPercent)"></div>
+        </div>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: cpuBarWidth + '%' }" :class="getBarClass(resources.cpu.percent)"></div>
+      <!-- CPU -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <Cpu :size="13" class="resource-icon" />
+          <span class="resource-label">{{ t('systemResources.cpu') }}</span>
+          <span class="resource-value">{{ cpuPercent }}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: cpuBarWidth + '%' }" :class="getBarClass(resources.cpu.percent)"></div>
+        </div>
       </div>
-    </div>
-    <!-- Memory -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <MemoryStick :size="13" class="resource-icon" />
-        <span class="resource-label">{{ t('systemResources.memory') }}</span>
-        <span class="resource-value">{{ formatBytes(resources.memory.used) }} / {{ formatBytes(resources.memory.total) }}</span>
+      <!-- Memory -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <MemoryStick :size="13" class="resource-icon" />
+          <span class="resource-label">{{ t('systemResources.memory') }}</span>
+          <span class="resource-value">{{ formatBytes(resources.memory.used) }} / {{ formatBytes(resources.memory.total) }}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: resources.memory.percent.toFixed(1) + '%' }" :class="getBarClass(resources.memory.percent)"></div>
+        </div>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: resources.memory.percent.toFixed(1) + '%' }" :class="getBarClass(resources.memory.percent)"></div>
+      <!-- Disk -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <Database :size="13" class="resource-icon" />
+          <span class="resource-label">{{ t('systemResources.disk') }}</span>
+          <span class="resource-value">{{ formatBytes(resources.disk.used) }} / {{ formatBytes(resources.disk.total) }}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" :style="{ width: resources.disk.percent.toFixed(1) + '%' }" :class="getBarClass(resources.disk.percent)"></div>
+        </div>
       </div>
-    </div>
-    <!-- Disk -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <Database :size="13" class="resource-icon" />
-        <span class="resource-label">{{ t('systemResources.disk') }}</span>
-        <span class="resource-value">{{ formatBytes(resources.disk.used) }} / {{ formatBytes(resources.disk.total) }}</span>
+      <!-- Disk Read -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <HardDriveDownload :size="13" class="resource-icon disk-read" />
+          <span class="resource-label">{{ t('systemResources.diskRead') }}</span>
+          <span class="resource-value">{{ formatRate(resources.disk_io.read_rate) }}</span>
+        </div>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: resources.disk.percent.toFixed(1) + '%' }" :class="getBarClass(resources.disk.percent)"></div>
+      <!-- Disk Write -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <HardDriveUpload :size="13" class="resource-icon disk-write" />
+          <span class="resource-label">{{ t('systemResources.diskWrite') }}</span>
+          <span class="resource-value">{{ formatRate(resources.disk_io.write_rate) }}</span>
+        </div>
       </div>
-    </div>
-    <!-- Disk Read -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <HardDriveDownload :size="13" class="resource-icon disk-read" />
-        <span class="resource-label">{{ t('systemResources.diskRead') }}</span>
-        <span class="resource-value">{{ formatRate(resources.disk_io.read_rate) }}</span>
+      <!-- Network Up -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <CloudUpload :size="13" class="resource-icon net-up" />
+          <span class="resource-label">{{ t('systemResources.upload') }}</span>
+          <span class="resource-value">{{ formatRate(resources.network.upload_rate) }}</span>
+        </div>
       </div>
-    </div>
-    <!-- Disk Write -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <HardDriveUpload :size="13" class="resource-icon disk-write" />
-        <span class="resource-label">{{ t('systemResources.diskWrite') }}</span>
-        <span class="resource-value">{{ formatRate(resources.disk_io.write_rate) }}</span>
+      <!-- Network Down -->
+      <div class="resource-row">
+        <div class="resource-header">
+          <CloudDownload :size="13" class="resource-icon net-down" />
+          <span class="resource-label">{{ t('systemResources.download') }}</span>
+          <span class="resource-value">{{ formatRate(resources.network.download_rate) }}</span>
+        </div>
       </div>
-    </div>
-    <!-- Network Up -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <CloudUpload :size="13" class="resource-icon net-up" />
-        <span class="resource-label">{{ t('systemResources.upload') }}</span>
-        <span class="resource-value">{{ formatRate(resources.network.upload_rate) }}</span>
-      </div>
-    </div>
-    <!-- Network Down -->
-    <div class="resource-row">
-      <div class="resource-header">
-        <CloudDownload :size="13" class="resource-icon net-down" />
-        <span class="resource-label">{{ t('systemResources.download') }}</span>
-        <span class="resource-value">{{ formatRate(resources.network.download_rate) }}</span>
-      </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { Cpu, Activity, MemoryStick, Database, HardDriveDownload, HardDriveUpload, CloudDownload, CloudUpload, Server, LogOut } from 'lucide-vue-next'
+import { Cpu, Activity, MemoryStick, Database, HardDriveDownload, HardDriveUpload, CloudDownload, CloudUpload, Server, LogOut, WifiOff, LoaderCircle } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSystemResources } from '@/composables/useSystemResources'
@@ -97,9 +106,12 @@ import { useSystemResources } from '@/composables/useSystemResources'
 const { t } = useI18n()
 const { resources, startPolling, stopPolling } = useSystemResources()
 
-defineProps({
+const props = defineProps({
     showLogout: { type: Boolean, default: false },
+    wsStatus: { type: String, default: 'connected' },
 })
+
+const wsDisconnected = computed(() => props.wsStatus === 'disconnected' || props.wsStatus === 'reconnecting')
 
 defineEmits(['logout'])
 
@@ -271,5 +283,37 @@ defineExpose({ startPolling, stopPolling })
 
 .bar-critical {
   background: var(--color-red, #ef4444);
+}
+
+.connection-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 0 8px;
+}
+
+.connection-status-icon {
+  flex-shrink: 0;
+}
+
+.connection-status-icon.status-disconnected {
+  color: var(--color-red, #ef4444);
+}
+
+.connection-status-icon.status-reconnecting {
+  color: var(--color-yellow, #eab308);
+  animation: reconnect-spin 1s linear infinite;
+}
+
+.connection-status-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+@keyframes reconnect-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

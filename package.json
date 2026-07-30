@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@intlify/unplugin-vue-i18n": "^6.0.8",
+    "@lobehub/icons-static-svg": "^1.94.0",
     "@vue-office/docx": "^1.6.3",
     "@vue-office/excel": "^1.7.14",
     "@vue-office/pptx": "^1.0.1",
@@ -36,8 +37,8 @@
     "redoc": "^2.5.3",
     "vue": "^3.5.35",
     "vue-demi": "^0.14.10",
-    "vue-i18n": "^11.4.0",
-    "vuedraggable": "^4.1.0"
+    "vue-draggable-plus": "^0.6.1",
+    "vue-i18n": "^11.4.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",

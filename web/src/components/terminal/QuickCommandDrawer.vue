@@ -10,14 +10,12 @@
 
     <div class="qc-content">
       <div v-if="commands.length > 0" class="qc-list">
-        <draggable
+        <VueDraggable
           v-model="localCommands"
           handle=".drag-handle"
-          item-key="id"
           @end="onDragEnd"
         >
-          <template #item="{ element: cmd }">
-            <div class="qc-item-wrapper">
+            <div v-for="cmd in localCommands" :key="cmd.id" class="qc-item-wrapper">
               <div class="qc-row" :class="{ 'qc-hidden': cmd.hidden }">
                 <span class="drag-handle">≡</span>
                 <span class="qc-label">
@@ -40,8 +38,7 @@
                 <button class="qc-confirm-btn cancel" @click="deleteConfirmId = null">{{ t('common.cancel') }}</button>
               </div>
             </div>
-          </template>
-        </draggable>
+        </VueDraggable>
       </div>
       <div v-else class="qc-empty">
         <ZapIcon :size="32" class="qc-empty-icon" />
@@ -62,7 +59,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import draggable from 'vuedraggable'
+import { VueDraggable } from 'vue-draggable-plus'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import QuickCommandEditModal from './QuickCommandEditModal.vue'
 import { ZapIcon, PencilIcon, Trash2Icon, PlusIcon, EyeOffIcon } from 'lucide-vue-next'

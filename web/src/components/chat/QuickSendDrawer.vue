@@ -10,14 +10,12 @@
 
     <div class="qs-content">
       <div v-if="items.length > 0" class="qs-list">
-        <draggable
+        <VueDraggable
           v-model="localItems"
           handle=".qs-drag-handle"
-          item-key="id"
           @end="onDragEnd"
         >
-          <template #item="{ element: item }">
-            <div class="qs-item-wrapper">
+            <div v-for="item in localItems" :key="item.id" class="qs-item-wrapper">
               <div class="qs-row">
                 <span class="qs-drag-handle">≡</span>
                 <span class="qs-label">{{ item.label }}</span>
@@ -36,8 +34,7 @@
                 <button class="qs-confirm-btn cancel" @click="deleteConfirmId = null">{{ t('common.cancel') }}</button>
               </div>
             </div>
-          </template>
-        </draggable>
+        </VueDraggable>
       </div>
       <div v-else class="qs-empty">
         <SendIcon :size="32" class="qs-empty-icon" />
@@ -58,7 +55,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import draggable from 'vuedraggable'
+import { VueDraggable } from 'vue-draggable-plus'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import QuickSendEditModal from './QuickSendEditModal.vue'
 import { Send as SendIcon, PencilIcon, Trash2Icon, PlusIcon } from 'lucide-vue-next'

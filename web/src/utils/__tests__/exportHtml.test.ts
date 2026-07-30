@@ -1,11 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 // Mock mermaid - must use hoisted factory without referencing outer variables
-vi.mock('@/utils/globals.ts', () => ({
-  mermaid: {
-    initialize: vi.fn(),
-    render: vi.fn(),
-  },
+const mockMermaid = {
+  initialize: vi.fn(),
+  render: vi.fn(),
+}
+vi.mock('@/utils/lazyMermaid.ts', () => ({
+  getMermaid: () => Promise.resolve(mockMermaid),
 }))
 
 // Mock fetch for inlineImages
@@ -13,13 +14,12 @@ const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
 import { exportRenderedHtml } from '@/utils/exportHtml.ts'
-import { mermaid } from '@/utils/globals.ts'
 
 describe('exportRenderedHtml', () => {
   beforeEach(() => {
     mockFetch.mockReset()
-    ;(mermaid.initialize as ReturnType<typeof vi.fn>).mockReset()
-    ;(mermaid.render as ReturnType<typeof vi.fn>).mockReset()
+    mockMermaid.initialize.mockReset()
+    mockMermaid.render.mockReset()
     // Default: batch-base64 returns empty results
     mockFetch.mockResolvedValue({
       ok: true,
@@ -604,7 +604,7 @@ describe('exportRenderedHtml', () => {
   })
 
   it('handles Mermaid dual-theme rendering', async () => {
-    ;(mermaid.render as ReturnType<typeof vi.fn>).mockResolvedValue({ svg: '<svg>opposite</svg>' })
+    mockMermaid.render.mockResolvedValue({ svg: '<svg>opposite</svg>' })
 
     const el = createElement('<div class="mermaid" data-mermaid="graph TD; A-->B"><svg>current</svg></div>')
     const result = await exportRenderedHtml({
@@ -614,13 +614,13 @@ describe('exportRenderedHtml', () => {
     })
     el.remove()
 
-    expect(mermaid.initialize).toHaveBeenCalled()
-    expect(mermaid.render).toHaveBeenCalled()
+    expect(mockMermaid.initialize).toHaveBeenCalled()
+    expect(mockMermaid.render).toHaveBeenCalled()
     expect(result.html).toContain('mermaid-dual')
   })
 
   it('handles Mermaid render failure gracefully', async () => {
-    ;(mermaid.render as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Render failed'))
+    mockMermaid.render.mockRejectedValue(new Error('Render failed'))
 
     const el = createElement('<div class="mermaid" data-mermaid="graph TD; A-->B"><svg>current</svg></div>')
     const result = await exportRenderedHtml({
@@ -647,7 +647,7 @@ describe('exportRenderedHtml', () => {
 
   it('handles dark theme as current theme', async () => {
     document.documentElement.setAttribute('data-theme', 'dark')
-    ;(mermaid.render as ReturnType<typeof vi.fn>).mockResolvedValue({ svg: '<svg>light</svg>' })
+    mockMermaid.render.mockResolvedValue({ svg: '<svg>light</svg>' })
 
     const el = createElement('<div class="mermaid" data-mermaid="graph TD"><svg>dark</svg></div>')
     const result = await exportRenderedHtml({
@@ -715,7 +715,7 @@ describe('exportRenderedHtml', () => {
   })
 
   it('strips scripts and iframes from opposite-theme Mermaid SVG', async () => {
-    ;(mermaid.render as ReturnType<typeof vi.fn>).mockResolvedValue({
+    mockMermaid.render.mockResolvedValue({
       svg: '<svg><script>alert(1)</script><iframe src="x"></iframe>diagram</svg>',
     })
 

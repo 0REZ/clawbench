@@ -328,9 +328,9 @@ export function useChatRender(options: { messages: { value: Array<Record<string,
     // would produce errors. Defer to post-streaming forceFullRender.
     if (forceFullRender) {
       lastRenderedCount = messages.value.length
-      nextTick(() => {
+      nextTick(async () => {
         const el = document.getElementById('aiChatMessages')
-        if (el) renderMermaidInElement(el, 'chat-mermaid')
+        if (el) await renderMermaidInElement(el, 'chat-mermaid')
       })
     } else {
       const startIdx = lastRenderedCount

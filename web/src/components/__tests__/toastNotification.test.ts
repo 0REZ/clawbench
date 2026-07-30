@@ -77,7 +77,7 @@ describe('ToastNotification', () => {
     mountToast(toast)
 
     expect(document.querySelector('.toast-icon')).toBeTruthy()
-    expect(document.querySelector('.toast-icon')!.textContent).toBe('✓')
+    expect(document.querySelector('.toast-icon')!.textContent).toBe('✅')
   })
 
   it('hides icon when icon value is falsy', () => {

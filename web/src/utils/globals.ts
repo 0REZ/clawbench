@@ -1,8 +1,7 @@
 import 'katex/dist/katex.min.css'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
+import { hljs, highlightCode } from '@/utils/highlight.ts'
 import katex from 'katex'
 import DOMPurify from 'dompurify'
-import mermaid from 'mermaid'
 
-export { marked, hljs, katex, DOMPurify, mermaid }
+export { marked, hljs, highlightCode, katex, DOMPurify }

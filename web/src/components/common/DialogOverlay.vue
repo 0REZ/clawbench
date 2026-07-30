@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="dlg">
-      <div v-if="dlg.state.value.visible" class="dlg-overlay" :style="{ zIndex: 3000 }" @click.self="handleCancel">
+      <div v-if="dlg.state.value.visible" ref="overlayRef" class="dlg-overlay" :style="{ zIndex: 3000 }" tabindex="-1" @click.self="handleCancel" @keydown.escape="handleCancel" @keydown.enter="handleKeyEnter">
         <div class="dlg-box">
           <div v-if="dlg.state.value.title" class="dlg-title">{{ dlg.state.value.title }}</div>
           <div class="dlg-msg">{{ dlg.state.value.message }}</div>
@@ -41,6 +41,7 @@ const { t } = useI18n()
 const dlg = useDialog()
 const inputVal = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
+const overlayRef = ref<HTMLElement | null>(null)
 let unregisterBack: (() => void) | null = null
 
 watch(() => dlg.state.value.visible, async (v) => {
@@ -49,10 +50,12 @@ watch(() => dlg.state.value.visible, async (v) => {
     return
   }
   inputVal.value = dlg.state.value.value ?? ''
+  await nextTick()
   if (dlg.state.value.type === 'prompt') {
-    await nextTick()
     inputRef.value?.focus()
     inputRef.value?.select()
+  } else {
+    overlayRef.value?.focus()
   }
   unregisterBack = registerBackHandler({
     id: 'dialog-overlay',
@@ -77,6 +80,13 @@ function handleCancel() {
   dlg.resolve(dlg.state.value.type === 'prompt' ? null : false)
 }
 
+function handleKeyEnter() {
+  // Prompt type: let the input handle Enter itself
+  if (dlg.state.value.type === 'prompt') return
+  // Confirm/alert: Enter triggers confirm
+  handleConfirm()
+}
+
 onBeforeUnmount(() => {
   if (unregisterBack) { unregisterBack(); unregisterBack = null }
 })
@@ -92,6 +102,7 @@ onBeforeUnmount(() => {
   justify-content: center;
   z-index: 3000;
   padding: 0 20px;
+  outline: none;
 }
 
 .dlg-box {

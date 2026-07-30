@@ -1,4 +1,4 @@
-import { marked, hljs } from '@/utils/globals.ts'
+import { marked, highlightCode } from '@/utils/globals.ts'
 import { slugify } from '@/utils/toc.ts'
 import { escapeHtml } from '@/utils/html.ts'
 
@@ -51,12 +51,9 @@ export function configureMarkedRenderer(): void {
                 if (lang === 'mermaid') {
                     return '<pre class="mermaid">' + escapeHtml(code) + '</pre>'
                 }
-                if (lang && hljs.getLanguage(lang)) {
-                    const highlighted = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
-                    return '<pre><code class="language-' + lang + '">' + highlighted + '</code></pre>'
-                }
+                const highlighted = highlightCode(code, lang || '')
                 const langClass = lang ? ' class="language-' + lang + '"' : ''
-                return '<pre><code' + langClass + '>' + escapeHtml(code) + '</code></pre>'
+                return '<pre><code' + langClass + '>' + highlighted + '</code></pre>'
             },
         },
     })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, watchEffect } from 'vue'
 import { getFileIconUrl, getFolderIconUrl } from '@/utils/materialIcons'
 
 const props = withDefaults(defineProps<{
@@ -17,11 +17,19 @@ const props = withDefaults(defineProps<{
   isDirOpen: false,
 })
 
-const iconSrc = computed(() => {
-  if (props.isDir) {
-    return getFolderIconUrl(props.path, props.isDirOpen)
+const iconSrc = ref('')
+
+watchEffect(async () => {
+  const currentPath = props.path
+  const currentIsDir = props.isDir
+  const currentIsDirOpen = props.isDirOpen
+  const url = currentIsDir
+    ? await getFolderIconUrl(currentPath, currentIsDirOpen)
+    : await getFileIconUrl(currentPath)
+  // Only update if props haven't changed while we were awaiting
+  if (props.path === currentPath && props.isDir === currentIsDir) {
+    iconSrc.value = url
   }
-  return getFileIconUrl(props.path)
 })
 
 const sizeStyle = computed(() => ({

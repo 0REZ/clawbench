@@ -280,7 +280,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick, defineAsyncComponent } from 'vue'
 import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
@@ -294,7 +294,7 @@ import ChatPanelContent from './components/chat/ChatPanelContent.vue'
 import FileManagerContent from './components/file/FileManagerContent.vue'
 import GitHistoryContent from './components/git/GitHistoryContent.vue'
 import ProxyPanelContent from './components/proxy/ProxyPanelContent.vue'
-import TerminalPanelContent from './components/terminal/TerminalPanelContent.vue'
+const TerminalPanelContent = defineAsyncComponent(() => import('./components/terminal/TerminalPanelContent.vue'))
 import ProjectDialog from './components/ProjectDialog.vue'
 import LoginView from './components/LoginView.vue'
 import WelcomeOverlay from './components/WelcomeOverlay.vue'
@@ -340,13 +340,13 @@ import { useEdgeSwipeBack, useFeatureBackHandler, PRIORITY_OVERLAY } from './com
 import { handleBackNavigation, requestExitConfirm } from './composables/useBackHandler'
 import { store, loadBrowseDir } from './stores/app.ts'
 import { setPendingCommitNavigation } from './composables/useCommitNavigation.ts'
-import { initMermaid, reRenderMermaid } from './utils/mermaid.ts'
 import { getFileType } from './utils/fileType.ts'
 import { formatBadgeCount } from './utils/format.ts'
 import 'highlight.js/styles/github.css'
 import 'highlight.js/styles/github-dark.css'
 import './assets/hljs-light-override.css'
 import './assets/annotation-buttons.css'
+import './assets/mono-icon-colors.css'
 import './assets/chat-actions.css'
 
 const isAuthenticated = ref(null)
@@ -815,11 +815,12 @@ function registerAppEventListeners() {
   window.addEventListener('clawbench-open-session', handleOpenSession)
   window.addEventListener('clawbench-open-task', handleOpenTask)
   document.addEventListener('click', handleOverflowOutsideClick)
-  window.addEventListener('clawbench-theme-change', (e) => {
+  window.addEventListener('clawbench-theme-change', async (e) => {
       const resolved = e.detail
       theme.value = resolved
-      initMermaid()
-      reRenderMermaid()
+      const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
+      await initMermaid()
+      await reRenderMermaid()
   })
   window.addEventListener('clawbench-showhidden-change', (e) => {
       showHidden.value = e.detail
@@ -848,7 +849,6 @@ async function initializeApp() {
 
   // 2. Infrastructure — global events, rendering, config
   initGlobalEvents()
-  initMermaid()
   loadTasks()
   loadConfig()
   registerAppEventListeners()
@@ -1370,12 +1370,13 @@ function scrollToLine(line, lineEnd) {
 
 
 
-function applyTheme(t) {
+async function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t)
     setSetting('theme', t)
     document.documentElement.setAttribute('data-hljs-theme', t)
-    initMermaid()
-    reRenderMermaid()
+    const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
+    await initMermaid()
+    await reRenderMermaid()
 }
 
 /** Dismiss the native splash overlay in APP mode. */

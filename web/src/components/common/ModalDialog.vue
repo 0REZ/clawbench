@@ -93,6 +93,7 @@ defineExpose({
   justify-content: center;
   padding: 44px 20px 48px;
   animation: modal-fadeIn 0.2s ease;
+  outline: none;
 }
 
 .modal-overlay.modal-leaving {

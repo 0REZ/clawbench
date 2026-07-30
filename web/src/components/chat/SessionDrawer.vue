@@ -51,6 +51,7 @@
             @touchmove="onTouchMove"
           >
             <span class="model-item-indicator" :class="{ active: m.id === currentModelId }"></span>
+            <ProviderIcon :model-name="m.name || m.id" :size="16" />
             <span class="model-item-name">{{ m.name }}</span>
             <span v-if="m.id === defaultModelId" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
             <button v-if="m.id !== defaultModelId" class="set-default-btn" @click.stop="setDefaultModel(m)" :title="t('chat.sessionSetting.setAsDefault')">
@@ -196,6 +197,7 @@ import { useI18n } from 'vue-i18n'
 import { RefreshCw, Star, Cpu, Brain, Compass, Cable } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
+import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useAgents, restoreOriginalModels, populateACPStateFromCache, invalidateACPStateCache } from '@/composables/useAgents'
 import { useSessionIdentity, clearModeState, clearCommandState, clearThinkingEffortState } from '@/composables/useSessionIdentity'
 import { apiPost } from '@/utils/api'
