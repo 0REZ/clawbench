@@ -323,3 +323,192 @@ func TestReverseProxy_Serve_ServerClosed(t *testing.T) {
 		t.Fatal("Serve should return after server is closed")
 	}
 }
+
+func TestReverseProxy_RewritesLocationHeader(t *testing.T) {
+	// Backend that returns a 302 redirect with absolute Location pointing to itself
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			// Redirect to an absolute URL using the backend's own address
+			w.Header().Set("Location", "http://"+r.Host+"/login")
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	rp, err := NewReverseProxy("127.0.0.1", 0, backend.Listener.Addr().String(), "http")
+	assert.NoError(t, err)
+	defer rp.Close()
+
+	go rp.Serve()
+	addr := rp.Addr()
+	time.Sleep(50 * time.Millisecond)
+
+	// Use a client that does NOT auto-follow redirects
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("http://" + addr + "/redirect")
+	assert.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusFound, resp.StatusCode)
+	loc := resp.Header.Get("Location")
+	assert.Contains(t, loc, "127.0.0.1:", "Location should be rewritten to proxy address")
+	assert.NotContains(t, loc, backend.Listener.Addr().String(), "Location should NOT contain the backend's original address")
+}
+
+func TestReverseProxy_RewritesLocationWithDefaultPort(t *testing.T) {
+	// Simulate a real 80-port scenario: the backend generates Location with
+	// hostname-only (no port), as port 80 is default for HTTP.
+	// We create a backend on a random port but have it emit Location with
+	// the same bare IP as the targetURL.Host (minus default port).
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/old" {
+			// r.Host is the targetHost we set via Director, e.g. "192.168.1.1" (default port stripped)
+			// Simulate a backend that generates Location using just the hostname
+			w.Header().Set("Location", "http://"+r.Host+"/new")
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	// Use a fake target address that simulates a LAN IP on port 80
+	// We need to actually reach the backend, so we use its real address
+	// but test the Location rewriting by examining what the backend sends
+	// vs. what the proxy rewrites.
+	backendAddr := backend.Listener.Addr().String()
+	rp, err := NewReverseProxy("127.0.0.1", 0, backendAddr, "http")
+	assert.NoError(t, err)
+	defer rp.Close()
+
+	go rp.Serve()
+	addr := rp.Addr()
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("http://" + addr + "/old")
+	assert.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusMovedPermanently, resp.StatusCode)
+	loc := resp.Header.Get("Location")
+	// The Location should be rewritten to the proxy address since the backend
+	// generates Location using the same host we set in the Host header
+	assert.Contains(t, loc, "127.0.0.1:", "Location should be rewritten to proxy address")
+}
+
+func TestReverseProxy_PreservesNonTargetLocation(t *testing.T) {
+	// Backend redirects to an external site — should NOT be rewritten
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://example.com/oauth/callback")
+		w.WriteHeader(http.StatusSeeOther)
+	}))
+	defer backend.Close()
+
+	rp, err := NewReverseProxy("127.0.0.1", 0, backend.Listener.Addr().String(), "http")
+	assert.NoError(t, err)
+	defer rp.Close()
+
+	go rp.Serve()
+	addr := rp.Addr()
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("http://" + addr + "/auth")
+	assert.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	loc := resp.Header.Get("Location")
+	assert.Equal(t, "https://example.com/oauth/callback", loc, "External Location should NOT be rewritten")
+}
+
+func TestReverseProxy_PreservesRelativeLocation(t *testing.T) {
+	// Relative redirect — should NOT be rewritten
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/login")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer backend.Close()
+
+	rp, err := NewReverseProxy("127.0.0.1", 0, backend.Listener.Addr().String(), "http")
+	assert.NoError(t, err)
+	defer rp.Close()
+
+	go rp.Serve()
+	addr := rp.Addr()
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("http://" + addr + "/old")
+	assert.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	loc := resp.Header.Get("Location")
+	assert.Equal(t, "/login", loc, "Relative Location should NOT be rewritten")
+}
+
+func TestHostMatches(t *testing.T) {
+	tests := []struct {
+		locHost      string
+		targetHost   string
+		targetScheme string
+		want         bool
+	}{
+		{"192.168.1.1:8080", "192.168.1.1:8080", "http", true},
+		{"192.168.1.1", "192.168.1.1", "http", true},
+		{"192.168.1.1:80", "192.168.1.1", "http", true},     // default port matches bare host
+		{"192.168.1.1", "192.168.1.1:80", "http", true},     // bare host matches default port
+		{"192.168.1.1:443", "192.168.1.1", "https", true},   // default HTTPS port
+		{"192.168.1.1", "192.168.1.1:443", "https", true},   // bare host matches default HTTPS port
+		{"192.168.1.1:8080", "192.168.1.1:9090", "http", false}, // different ports
+		{"example.com", "other.com", "http", false},          // different hosts
+		{"192.168.1.1:80", "192.168.1.1", "https", false},   // port 80 not default for https
+		{"192.168.1.1:443", "192.168.1.1", "http", false},   // port 443 not default for http
+		{"192.168.1.1:80", "192.168.1.1:443", "http", false}, // different default ports
+	}
+	for _, tt := range tests {
+		got := hostMatches(tt.locHost, tt.targetHost, tt.targetScheme)
+		assert.Equal(t, tt.want, got, "hostMatches(%q, %q, %q)", tt.locHost, tt.targetHost, tt.targetScheme)
+	}
+}
+
+func TestRewriteLocation(t *testing.T) {
+	targetURL, _ := url.Parse("http://192.168.1.1:8080")
+	listenAddr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:54321")
+
+	tests := []struct {
+		location string
+		want     string
+	}{
+		{"http://192.168.1.1:8080/path", "http://127.0.0.1:54321/path"},
+		{"http://192.168.1.1:8080/path?q=1#frag", "http://127.0.0.1:54321/path?q=1#frag"},
+		{"/relative", "/relative"},
+		{"https://example.com/path", "https://example.com/path"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := rewriteLocation(tt.location, targetURL, listenAddr)
+		assert.Equal(t, tt.want, got, "rewriteLocation(%q)", tt.location)
+	}
+}

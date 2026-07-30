@@ -81,6 +81,23 @@ func NewReverseProxy(listenHost string, listenPort int, targetAddr string, proto
 		req.URL.Host = targetURL.Host
 	}
 
+	// Rewrite Location headers in 3xx responses from the target host back to
+	// the proxy's listen address. Without this, backends return
+	// "Location: http://192.168.100.1:8080/path" which clients cannot reach
+	// when accessing through the reverse proxy on localhost.
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		loc := resp.Header.Get("Location")
+		if loc == "" || resp.StatusCode < 300 || resp.StatusCode >= 400 {
+			return nil
+		}
+		rewritten := rewriteLocation(loc, targetURL, rp.listener.Addr())
+		if rewritten != loc {
+			slog.Debug("reverse proxy rewriting Location", slog.String("from", loc), slog.String("to", rewritten))
+			resp.Header.Set("Location", rewritten)
+		}
+		return nil
+	}
+
 	rp.proxy = proxy
 	rp.server = &http.Server{
 		Handler: proxy,
@@ -142,8 +159,83 @@ func stripDefaultPort(hostPort, scheme string) string {
 	if err != nil {
 		return hostPort // no port, return as-is
 	}
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+	if port == defaultPort(scheme) {
 		return h
 	}
 	return hostPort
+}
+
+// rewriteLocation rewrites a redirect Location header from the target host to
+// the proxy's listen address. It handles both absolute URLs
+// (e.g. "http://192.168.100.1:8080/path") and same-host variants with/without
+// default ports. Relative Locations and external URLs are left unchanged
+// (no open-redirect risk).
+func rewriteLocation(location string, targetURL *url.URL, listenAddr net.Addr) string {
+	if location == "" {
+		return location
+	}
+	// Relative redirect (e.g. "/path" or "path") — no rewriting needed
+	if !strings.HasPrefix(location, "http://") && !strings.HasPrefix(location, "https://") {
+		return location
+	}
+
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return location
+	}
+
+	// Check if Location points to the target host
+	targetHost := targetURL.Host // e.g. "192.168.100.1:8080" or "192.168.100.1"
+	locHost := parsed.Host
+	if !hostMatches(locHost, targetHost, targetURL.Scheme) {
+		return location // Not pointing to our target — leave as-is
+	}
+
+	// Replace host with proxy listen address
+	listenHost, listenPort, _ := net.SplitHostPort(listenAddr.String())
+	parsed.Scheme = "http" // Proxy always serves HTTP on localhost
+	parsed.Host = net.JoinHostPort(listenHost, listenPort)
+	return parsed.String()
+}
+
+// hostMatches checks whether a Location header's host matches the target host,
+// accounting for default port differences (e.g. "192.168.100.1" matches
+// "192.168.100.1:80" for HTTP, and vice versa).
+func hostMatches(locHost, targetHost, targetScheme string) bool {
+	if locHost == targetHost {
+		return true
+	}
+	// Compare bare hostnames (IP addresses) — if they differ, no match
+	locBare, locPort, locErr := net.SplitHostPort(locHost)
+	if locErr != nil {
+		locBare = locHost // no port present
+		locPort = defaultPort(targetScheme)
+	}
+	targetBare, targetPort, targetErr := net.SplitHostPort(targetHost)
+	if targetErr != nil {
+		targetBare = targetHost
+		targetPort = defaultPort(targetScheme)
+	}
+	if locBare != targetBare {
+		return false
+	}
+	// Same bare host — check if ports are equivalent (default ports match bare host)
+	locPortIsDefault := locPort == defaultPort(targetScheme)
+	targetPortIsDefault := targetPort == defaultPort(targetScheme)
+	if locPortIsDefault && targetPortIsDefault {
+		return true
+	}
+	return locPort == targetPort
+}
+
+// defaultPort returns the default port for a given scheme.
+func defaultPort(scheme string) string {
+	switch scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }
