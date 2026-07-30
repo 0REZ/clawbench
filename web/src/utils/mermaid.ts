@@ -1,8 +1,19 @@
 // Mermaid diagram utilities
-import { getMermaid } from './globals.ts'
+import { getMermaid } from './lazyMermaid.ts'
 
-// Initialize Mermaid (called once on app startup)
+let _initialized = false
+
+/**
+ * Initialize Mermaid — only initializes if mermaid has already been loaded.
+ * On first app load, this is a no-op. Mermaid is initialized lazily when
+ * renderMermaidInElement() is first called.
+ *
+ * This is called from App.vue onMounted and on theme change.
+ * On theme change, mermaid is already loaded so this re-initializes with
+ * the new theme. On first load, mermaid hasn't been loaded yet so we skip.
+ */
 export async function initMermaid(): Promise<void> {
+    if (!_initialized) return
     const mermaid = await getMermaid()
     mermaid.initialize({
         startOnLoad: false,
@@ -12,8 +23,60 @@ export async function initMermaid(): Promise<void> {
     })
 }
 
+/** Ensure mermaid is initialized (called lazily on first render) */
+async function ensureInit(): Promise<void> {
+    if (_initialized) return
+    _initialized = true
+    const mermaid = await getMermaid()
+    mermaid.initialize({
+        startOnLoad: false,
+        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
+        securityLevel: 'loose',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    })
+}
+
+/**
+ * Render mermaid blocks in a DOM element.
+ * Lazy-loads and initializes mermaid on first call.
+ */
+export async function renderMermaidInElement(
+    el: HTMLElement,
+    prefix: string = 'mermaid',
+    specificBlocks?: NodeList
+): Promise<void> {
+    const blocks = specificBlocks || el.querySelectorAll('pre.mermaid:not([data-rendered])')
+    if (blocks.length === 0) return
+
+    await ensureInit()
+    const mermaid = await getMermaid()
+
+    const renderPromises = Array.from(blocks).map(async (block, index) => {
+        (block as HTMLElement).setAttribute('data-rendered', '1')
+        const id = `${prefix}-${Date.now()}-${index}`
+        const source = block.textContent?.trim() || ''
+        const container = document.createElement('div')
+        container.className = 'mermaid'
+        container.id = id
+
+        try {
+            const result = await mermaid.render(id, source)
+            container.innerHTML = result.svg
+            container.dataset.mermaid = source
+            ;(block as Element).replaceWith(container)
+        } catch (err: unknown) {
+            const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            container.innerHTML = `<pre style="padding:12px;background:var(--code-bg);border-radius:6px;font-size:13px;overflow-x:auto;">Mermaid Error: ${escapeHtml((err as { message?: string })?.message || String(err))}</pre>`
+            ;(block as Element).replaceWith(container)
+        }
+    })
+
+    await Promise.all(renderPromises)
+}
+
 // Re-render all rendered mermaid diagrams on the page (called after theme switch)
 export async function reRenderMermaid(): Promise<void> {
+    if (!_initialized) return
     const mermaid = await getMermaid()
     document.querySelectorAll<HTMLDivElement>('div.mermaid[data-mermaid]').forEach(container => {
         const source = container.dataset.mermaid

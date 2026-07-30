@@ -208,7 +208,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { Download, Code2, AlertTriangle, Share2 } from 'lucide-vue-next'
@@ -217,7 +217,7 @@ import ImagePreview from '@/components/media/ImagePreview.vue'
 import PdfPreview from '@/components/media/PdfPreview.vue'
 import AudioPreview from '@/components/media/AudioPreview.vue'
 import VideoPreview from '@/components/media/VideoPreview.vue'
-import OfficePreview from '@/components/media/OfficePreview.vue'
+const OfficePreview = defineAsyncComponent(() => import('@/components/media/OfficePreview.vue'))
 import MarkdownPreview from './MarkdownPreview.vue'
 import CodePreview from './CodePreview.vue'
 import OpenApiPreview from './OpenApiPreview.vue'

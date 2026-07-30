@@ -166,8 +166,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-vue': ['vue', 'vue-i18n'],
-          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'],
-          'vendor-office': ['@vue-office/docx', '@vue-office/excel', '@vue-office/pptx'],
           'vendor-pdf': ['pdfjs-dist'],
           'vendor-diff': ['diff'],
         },

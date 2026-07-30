@@ -297,7 +297,11 @@ async function doRender(f: { content: string; path?: string; error?: boolean }) 
         verifyFilePaths(uniquePaths, el.querySelector('.markdown-content') || el)
     }
 
-    await renderMermaidInElement(el.querySelector('.markdown-content') || el, 'md-preview')
+    // Only load mermaid if there are actual mermaid blocks to render
+    const mermaidTarget = el.querySelector('.markdown-content') || el
+    if (mermaidTarget.querySelectorAll('pre.mermaid:not([data-rendered])').length > 0) {
+        await renderMermaidInElement(mermaidTarget, 'md-preview')
+    }
 
     // Update last block list cache and compute marker positions after rendering completes
     if (renderId === currentRenderId) {
@@ -328,7 +332,10 @@ watch(() => props.viewMode, async (mode) => {
     await nextTick()
     const el = bodyRef.value
     if (!el) return
-    await renderMermaidInElement(el.querySelector('.markdown-content') || el, 'md-preview')
+    const mermaidTarget = el.querySelector('.markdown-content') || el
+    if (mermaidTarget.querySelectorAll('pre.mermaid:not([data-rendered])').length > 0) {
+        await renderMermaidInElement(mermaidTarget, 'md-preview')
+    }
 })
 
 // Watch for marker changes and recompute positions

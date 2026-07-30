@@ -13,7 +13,7 @@
  * 9. Assemble complete HTML document
  */
 
-import { getMermaid } from './globals.ts'
+import { getMermaid } from './lazyMermaid.ts'
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
