@@ -7,10 +7,11 @@ let _initPromise: Promise<void> | null = null
 
 /** Build mermaid initialize config for current theme */
 function mermaidConfig() {
+    const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' as const : 'default' as const
     return {
         startOnLoad: false,
-        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
-        securityLevel: 'loose',
+        theme,
+        securityLevel: 'loose' as const,
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     }
 }

@@ -826,7 +826,7 @@ func TestAccumulateBlock_ContentReplayAccumulated(t *testing.T) {
 
 	// Accumulated replay: starts with first paragraph + extends it
 	AccumulateBlock(&blocks, StreamEvent{
-		Type: "content",
+		Type:    "content",
 		Content: "I'll start by reading all the source files. Now let me read the test files.",
 	})
 
@@ -933,7 +933,7 @@ func TestAccumulateBlock_ContentReplayAccumulatedPreservesNonReplayedText(t *tes
 	})
 	// Accumulated replay: only covers first two paragraphs
 	AccumulateBlock(&blocks, StreamEvent{
-		Type: "content",
+		Type:    "content",
 		Content: "I'll start by reading all the source files. Now let me read the test files.",
 	})
 
