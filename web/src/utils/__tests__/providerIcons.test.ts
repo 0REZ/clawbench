@@ -172,13 +172,42 @@ describe('providerIcons', () => {
             expect(inner).not.toContain('<svg')
         })
 
-        it('preserves currentColor fills (color is controlled via CSS)', () => {
+        it('preserves currentColor fills on child elements (color via CSS)', () => {
             const svg = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M0 0"/></svg>'
             const inner = extractSvgInner(svg)
             expect(inner).toContain('fill="currentColor"')
         })
 
-        it('does not modify explicit fills', () => {
+        it('propagates currentColor from <svg> tag to child elements without fill', () => {
+            const svg = '<svg fill="currentColor" viewBox="0 0 24 24"><path d="M0 0"/><circle cx="5" cy="5" r="3"/></svg>'
+            const inner = extractSvgInner(svg)
+            // <path> and <circle> should gain fill="currentColor" since they had none
+            expect(inner).toContain('<path fill="currentColor"')
+            expect(inner).toContain('<circle fill="currentColor"')
+        })
+
+        it('does not add currentColor to elements that already have fill', () => {
+            const svg = '<svg fill="currentColor" viewBox="0 0 24 24"><path fill="#412991" d="M0 0"/></svg>'
+            const inner = extractSvgInner(svg)
+            expect(inner).toContain('fill="#412991"')
+            expect(inner).not.toContain('fill="currentColor"')
+        })
+
+        it('propagates currentColor to <g> and <defs> container elements', () => {
+            const svg = '<svg fill="currentColor" viewBox="0 0 24 24"><g id="layer1"><path d="M0 0"/></g></svg>'
+            const inner = extractSvgInner(svg)
+            expect(inner).toContain('<g fill="currentColor"')
+        })
+
+        it('removes <title> elements to avoid aria-label conflict', () => {
+            const svg = '<svg viewBox="0 0 24 24"><title>OpenAI</title><path d="M0 0"/></svg>'
+            const inner = extractSvgInner(svg)
+            expect(inner).not.toContain('<title>')
+            expect(inner).not.toContain('OpenAI')
+            expect(inner).toContain('<path')
+        })
+
+        it('does not modify explicit fills when no currentColor on svg tag', () => {
             const svg = '<svg viewBox="0 0 24 24"><path fill="#412991" d="M0 0"/></svg>'
             const inner = extractSvgInner(svg)
             expect(inner).toContain('fill="#412991"')

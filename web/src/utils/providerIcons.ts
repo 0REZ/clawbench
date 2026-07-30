@@ -92,9 +92,10 @@ const providerIconMap: Record<string, ProviderIconData> = {
 
     // LLM providers — monochrome icons
     // Dark-colored ones need needsBg + monoCssClass for theme-aware visibility
+    // Bright-colored ones (Anthropic, Groq) only need monoCssClass, no background
     openai: { raw: openaiIcon, needsBg: true, monoCssClass: 'mono-openai' },
-    anthropic: { raw: anthropicIcon, needsBg: true, monoCssClass: 'mono-anthropic' },
-    groq: { raw: groqIcon, needsBg: true, monoCssClass: 'mono-groq' },
+    anthropic: { raw: anthropicIcon, monoCssClass: 'mono-anthropic' },
+    groq: { raw: groqIcon, monoCssClass: 'mono-groq' },
     xai: { raw: xaiIcon, needsBg: true, monoCssClass: 'mono-xai' },
 
     // CLI backend tools — color icons
@@ -247,6 +248,9 @@ export function getProviderIcon(providerId: string): ProviderIconData | null {
  * If the <svg> tag has fill="currentColor", propagates it to child elements
  * that don't have their own fill attribute — so `currentColor` still works
  * when rendered as v-html inside a Vue-controlled <svg> wrapper.
+ *
+ * Covers shape elements (<path>, <circle>, etc.) and container elements
+ * (<g>, <defs>) that may use fill="currentColor" as group-level defaults.
  */
 export function extractSvgInner(rawSvg: string): string {
     const svgTagMatch = rawSvg.match(/<svg[^>]*>([\s\S]*)<\/svg>/)
@@ -258,13 +262,16 @@ export function extractSvgInner(rawSvg: string): string {
 
     if (svgHasCurrentColorFill) {
         // Propagate fill="currentColor" to child elements that inherit it.
-        // For <path>, <circle>, <rect>, <ellipse>, <polygon>, <polyline> —
-        // add fill="currentColor" if they don't already have a fill attribute.
-        inner = inner.replace(/<(path|circle|rect|ellipse|polygon|polyline)([^>]*)>/g, (match, tag, attrs) => {
+        // Shape elements and group/def containers that may set group-level fill.
+        inner = inner.replace(/<(path|circle|rect|ellipse|polygon|polyline|g|defs)([^>]*)>/g, (match, tag, attrs) => {
             if (/fill="/.test(attrs)) return match
             return `<${tag} fill="currentColor"${attrs}>`
         })
     }
+
+    // Remove <title> elements from inner content — the Vue-controlled <svg>
+    // already has aria-label for accessibility, so <title> creates conflict.
+    inner = inner.replace(/<title>[^<]*<\/title>/g, '')
 
     return inner
 }
