@@ -298,7 +298,7 @@ async function doRender(f: { content: string; path?: string; error?: boolean }) 
     }
 
     // Only load mermaid if there are actual mermaid blocks to render
-    const mermaidTarget = el.querySelector('.markdown-content') || el
+    const mermaidTarget = el.querySelector('.markdown-content') as HTMLElement || el
     if (mermaidTarget.querySelectorAll('pre.mermaid:not([data-rendered])').length > 0) {
         await renderMermaidInElement(mermaidTarget, 'md-preview')
     }
@@ -332,7 +332,7 @@ watch(() => props.viewMode, async (mode) => {
     await nextTick()
     const el = bodyRef.value
     if (!el) return
-    const mermaidTarget = el.querySelector('.markdown-content') || el
+    const mermaidTarget = el.querySelector('.markdown-content') as HTMLElement || el
     if (mermaidTarget.querySelectorAll('pre.mermaid:not([data-rendered])').length > 0) {
         await renderMermaidInElement(mermaidTarget, 'md-preview')
     }

@@ -950,6 +950,16 @@ function handleCtrlArrowSessionSwitch(e) {
   }
 }
 
+// Desktop: Delete to archive current session
+function handleDeleteKey(e) {
+  if (!props.active) return
+  if (e.key !== 'Delete') return
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  if (e.target?.closest?.('.terminal-panel')) return
+  inputBarRef.value?.handleDelete()
+}
+
 // Start one-time session load when component mounts
 onMounted(() => {
     // Request notification permission on mount
@@ -961,6 +971,7 @@ onMounted(() => {
     document.addEventListener('visibilitychange', session.handleVisibilityChange)
     window.addEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.addEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.addEventListener('keydown', handleDeleteKey)
 })
 
 // Cleanup preview URLs on unmount
@@ -974,6 +985,7 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', session.handleVisibilityChange)
     window.removeEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.removeEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.removeEventListener('keydown', handleDeleteKey)
     notification.closeAll()
 })
 </script>

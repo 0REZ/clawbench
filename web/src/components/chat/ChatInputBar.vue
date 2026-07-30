@@ -974,6 +974,7 @@ defineExpose({
   onQuickSendTouchEnd,
   cancelQuickSendPress,
   quickSendPressingId,
+  handleDelete,
 })
 </script>
 

@@ -371,7 +371,7 @@ describe('useLocalhostAnnotation', () => {
       const event = createClickEvent(anchor)
       handleLocalhostUrlClick(event)
       await vi.waitFor(() => {
-        expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.sshDisabled', { type: 'info' })
+        expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.sshDisabled', { icon: 'ℹ️', type: 'info' })
       })
     })
 
@@ -412,7 +412,7 @@ describe('useLocalhostAnnotation', () => {
       const btn = document.createElement('button')
       const result = await openLocalhostUrl(btn, 3000, 'http')
       expect(result).toBe(false)
-      expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.sshDisabled', { type: 'info' })
+      expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.sshDisabled', { icon: 'ℹ️', type: 'info' })
     })
 
     it('openLocalhostUrl shows error toast on failure', async () => {
@@ -420,7 +420,7 @@ describe('useLocalhostAnnotation', () => {
       const btn = document.createElement('button')
       const result = await openLocalhostUrl(btn, 3000, 'http')
       expect(result).toBe(true)
-      expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.openFailed', { type: 'error' })
+      expect(mockToastShow).toHaveBeenCalledWith('chat.localhost.openFailed', { icon: '❌', type: 'error' })
       expect(btn.classList.contains('loading')).toBe(false)
     })
 

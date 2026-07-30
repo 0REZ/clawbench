@@ -290,8 +290,8 @@ describe('settingsFieldMap', () => {
     expect(cfg.entrySelector).toBeDefined()
     expect(cfg.entrySelector!.key).toBe('push_mode')
     expect(cfg.entrySelector!.type).toBe('select')
-    expect(cfg.entrySelector!.options!.length).toBe(3)
-    expect(cfg.entrySelector!.options!.map(o => o.value)).toEqual(['native', 'dingtalk', 'disabled'])
+    expect(cfg.entrySelector!.options!.length).toBe(4)
+    expect(cfg.entrySelector!.options!.map(o => o.value)).toEqual(['native', 'dingtalk', 'feishu', 'disabled'])
     expect(cfg.commonFields.length).toBe(0)
 
     const dingtalkSub = cfg.optionSubFields!.find(osf => osf.when === 'dingtalk')
@@ -299,9 +299,15 @@ describe('settingsFieldMap', () => {
     expect(dingtalkSub!.fields.length).toBe(3)
     expect(dingtalkSub!.fields.map(f => f.key)).toEqual(['dingtalk.app_key', 'dingtalk.app_secret', 'dingtalk.agent_id'])
 
-    expect(cfg.requiredFields).toEqual(['dingtalk.app_key', 'dingtalk.app_secret', 'dingtalk.agent_id'])
+    const feishuSub = cfg.optionSubFields!.find(osf => osf.when === 'feishu')
+    expect(feishuSub).toBeDefined()
+    expect(feishuSub!.fields.length).toBe(2)
+    expect(feishuSub!.fields.map(f => f.key)).toEqual(['feishu.app_id', 'feishu.app_secret'])
+
+    expect(cfg.requiredFields).toEqual(['dingtalk.app_key', 'dingtalk.app_secret', 'dingtalk.agent_id', 'feishu.app_id', 'feishu.app_secret'])
     expect(typeof cfg.hasConnectivityTest).toBe('function')
     expect((cfg.hasConnectivityTest as Function)({ push_mode: 'dingtalk' })).toBe(true)
+    expect((cfg.hasConnectivityTest as Function)({ push_mode: 'feishu' })).toBe(true)
     expect((cfg.hasConnectivityTest as Function)({ push_mode: 'native' })).toBe(false)
     expect((cfg.hasConnectivityTest as Function)({ push_mode: 'disabled' })).toBe(false)
     expect(cfg.getTestCategories).toBeDefined()

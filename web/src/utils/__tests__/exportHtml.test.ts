@@ -5,12 +5,8 @@ const mockMermaid = {
   initialize: vi.fn(),
   render: vi.fn(),
 }
-vi.mock('@/utils/globals.ts', () => ({
+vi.mock('@/utils/lazyMermaid.ts', () => ({
   getMermaid: () => Promise.resolve(mockMermaid),
-  hljs: { highlight: vi.fn(), highlightAuto: vi.fn() },
-  marked: { parse: vi.fn() },
-  katex: {},
-  DOMPurify: { sanitize: (s: string) => s },
 }))
 
 // Mock fetch for inlineImages
