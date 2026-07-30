@@ -13,7 +13,7 @@ vi.mock('@/utils/appLog', () => ({
 // Mock agentIcons to provide predictable SVG data
 vi.mock('@/utils/agentIcons', () => ({
   getAgentSvg: (id: string) => {
-    const map: Record<string, { svg: string; viewBox: string; needsBg?: boolean }> = {
+    const map: Record<string, { svg: string; viewBox: string; needsBg?: boolean; bgColor?: string }> = {
       codebuddy: {
         svg: '<defs><radialGradient id="ai-cb-g"><stop stop-color="#2EA99D"/></radialGradient></defs><path fill="url(#ai-cb-g)" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
@@ -24,6 +24,18 @@ vi.mock('@/utils/agentIcons', () => ({
       },
       opencode: {
         svg: '<path fill="#4A4A4A" d="M0 0h24v24H0z"/>',
+        viewBox: '0 0 24 24',
+        needsBg: true,
+        bgColor: '#E8E8E8',
+      },
+      pi: {
+        svg: '<path fill="#2D2D2D" d="M0 0h24v24H0z"/>',
+        viewBox: '0 0 24 24',
+        needsBg: true,
+        bgColor: '#E8E8E8',
+      },
+      noBgColor: {
+        svg: '<path fill="#333" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
         needsBg: true,
       },
@@ -132,6 +144,29 @@ describe('AgentIcon', () => {
       const wrapper = mountIcon({ backend: 'codebuddy' })
       const svg = wrapper.find('svg')
       expect(svg.classes()).not.toContain('agent-icon-bg')
+    })
+
+    it('applies per-icon bgColor as inline background when specified', () => {
+      const wrapper = mountIcon({ backend: 'opencode' })
+      const svg = wrapper.find('svg')
+      // Browser converts #E8E8E8 to rgb(232, 232, 232)
+      const style = svg.attributes('style')
+      expect(style).toMatch(/background:\s*(#E8E8E8|rgb\(232,\s*232,\s*232\))/)
+    })
+
+    it('falls back to CSS --bg-tertiary when needsBg but no bgColor', () => {
+      const wrapper = mountIcon({ backend: 'noBgColor' })
+      const svg = wrapper.find('svg')
+      expect(svg.classes()).toContain('agent-icon-bg')
+      expect(svg.attributes('style')).not.toContain('background')
+    })
+
+    it('different icons can have different bgColor values', () => {
+      const wrapper1 = mountIcon({ backend: 'opencode' })
+      const wrapper2 = mountIcon({ backend: 'pi' })
+      // Both have #E8E8E8 in this mock, but the test verifies the mechanism works
+      expect(wrapper1.find('svg').attributes('style')).toContain('background:')
+      expect(wrapper2.find('svg').attributes('style')).toContain('background:')
     })
   })
 

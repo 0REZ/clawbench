@@ -1,5 +1,5 @@
 <template>
-    <svg v-if="processedSvg" class="agent-icon-svg" :class="{ 'agent-icon-bg': svgData!.needsBg }" :style="style" :viewBox="svgData!.viewBox" role="img" :aria-label="name || backend" v-html="processedSvg" />
+    <svg v-if="processedSvg" class="agent-icon-svg" :class="{ 'agent-icon-bg': svgData!.needsBg }" :style="bgStyle" :viewBox="svgData!.viewBox" role="img" :aria-label="name || backend" v-html="processedSvg" />
     <span v-else class="agent-icon-initial" :style="initialStyle">{{ initial }}</span>
 </template>
 
@@ -36,6 +36,11 @@ const style = computed(() => ({
     height: `${props.size}px`,
 }))
 
+const bgStyle = computed(() => ({
+    ...style.value,
+    ...(svgData.value?.needsBg && svgData.value?.bgColor ? { background: svgData.value.bgColor } : {}),
+}))
+
 const initial = computed(() => {
     if (props.name) return props.name.charAt(0).toUpperCase()
     return props.backend ? props.backend.charAt(0).toUpperCase() : '?'
@@ -58,7 +63,8 @@ const initialStyle = computed(() => ({
 }
 
 /* Contrasting background for icons with dark/light fills that would be
-   invisible on same-colored backgrounds (opencode, codex, mimo, pi) */
+   invisible on same-colored backgrounds. Falls back to --bg-tertiary
+   when no per-icon bgColor is specified. */
 .agent-icon-bg {
     border-radius: 20%;
     background: var(--bg-tertiary);

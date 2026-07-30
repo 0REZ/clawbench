@@ -32,10 +32,13 @@ describe('agentIcons', () => {
             }
         })
 
-        it('backends needing background have needsBg flag', () => {
+        it('backends needing background have needsBg flag and bgColor', () => {
             const needsBg = ['opencode', 'codex', 'mimo', 'pi']
             for (const id of needsBg) {
-                expect(getAgentSvg(id)!.needsBg, `backend "${id}" should have needsBg=true`).toBe(true)
+                const data = getAgentSvg(id)!
+                expect(data.needsBg, `backend "${id}" should have needsBg=true`).toBe(true)
+                expect(data.bgColor, `backend "${id}" should have bgColor`).toBeTruthy()
+                expect(data.bgColor, `backend "${id}" bgColor should be a hex color`).toMatch(/^#[0-9A-Fa-f]{6}$/)
             }
         })
 
