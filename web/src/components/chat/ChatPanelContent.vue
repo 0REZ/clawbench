@@ -950,13 +950,10 @@ function handleCtrlArrowSessionSwitch(e) {
   }
 }
 
-// Desktop: Delete to archive current session
+// Desktop: Ctrl+Delete to archive current session
 function handleDeleteKey(e) {
   if (!props.active) return
-  if (e.key !== 'Delete') return
-  const tag = e.target?.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return
-  if (e.target?.closest?.('.terminal-panel')) return
+  if (e.key !== 'Delete' || !(e.ctrlKey || e.metaKey)) return
   inputBarRef.value?.handleDelete()
 }
 
