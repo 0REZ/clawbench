@@ -144,9 +144,8 @@ public class WebViewLifecycleTest {
     public void browserActivity_onNewIntent_loadsNewUrl() throws Exception {
         initFragmentController();
         android.webkit.WebView mockWebView = mock(android.webkit.WebView.class);
+        when(mockWebView.getVisibility()).thenReturn(View.INVISIBLE);
         setField(browserActivity, "webView", mockWebView);
-        // Set a pre-existing targetHost to verify it gets reset when host is empty
-        setField(browserActivity, "targetHost", "old.host.com");
         // Ensure pendingUrl is null so the same-URL early-return doesn't trigger
         setField(browserActivity, "pendingUrl", null);
 
@@ -159,24 +158,20 @@ public class WebViewLifecycleTest {
         when(intent.getIntExtra("port", 0)).thenReturn(8080);
         when(intent.getStringExtra("protocol")).thenReturn("http");
         when(intent.getStringExtra("host")).thenReturn("");
+        when(intent.getStringExtra("path")).thenReturn(null);
 
         invokeMethod(browserActivity, "onNewIntent", android.content.Intent.class, intent);
 
-        // onNewIntent now calls waitForTunnelAndLoad() which spawns a background
-        // thread to poll the local port. When localPort > 0, it tests port reachability
-        // then calls showWebViewAndLoad(). Since testLocalPort() will succeed against
-        // a real port or fail fast in unit tests, we verify the URL fields directly.
         // Verify pendingUrl and localPort were set correctly
         assert "http://localhost:8080/".equals(getField(browserActivity.getClass(), "pendingUrl").get(browserActivity));
         assert 8080 == getField(browserActivity.getClass(), "localPort").getInt(browserActivity);
-        // targetHost should be reset to empty when host is empty
-        assert "".equals(getField(browserActivity.getClass(), "targetHost").get(browserActivity));
     }
 
     @Test
-    public void browserActivity_onNewIntent_withHost_setsTargetHost() throws Exception {
+    public void browserActivity_onNewIntent_withHost_setsUrlFields() throws Exception {
         initFragmentController();
         android.webkit.WebView mockWebView = mock(android.webkit.WebView.class);
+        when(mockWebView.getVisibility()).thenReturn(View.INVISIBLE);
         setField(browserActivity, "webView", mockWebView);
         setField(browserActivity, "pendingUrl", null);
 
@@ -187,18 +182,20 @@ public class WebViewLifecycleTest {
         when(intent.getIntExtra("port", 0)).thenReturn(9090);
         when(intent.getStringExtra("protocol")).thenReturn("https");
         when(intent.getStringExtra("host")).thenReturn("192.168.1.1");
+        when(intent.getStringExtra("path")).thenReturn(null);
 
         invokeMethod(browserActivity, "onNewIntent", android.content.Intent.class, intent);
 
-        // Verify pendingUrl was set and targetHost was computed
+        // Verify pendingUrl was set
         assert "https://localhost:9090/".equals(getField(browserActivity.getClass(), "pendingUrl").get(browserActivity));
-        assert "192.168.1.1".equals(getField(browserActivity.getClass(), "targetHost").get(browserActivity));
+        assert 9090 == getField(browserActivity.getClass(), "localPort").getInt(browserActivity);
     }
 
     @Test
-    public void browserActivity_onNewIntent_stripsDefaultPort() throws Exception {
+    public void browserActivity_onNewIntent_withCustomPath() throws Exception {
         initFragmentController();
         android.webkit.WebView mockWebView = mock(android.webkit.WebView.class);
+        when(mockWebView.getVisibility()).thenReturn(View.INVISIBLE);
         setField(browserActivity, "webView", mockWebView);
         setField(browserActivity, "pendingUrl", null);
 
@@ -209,11 +206,13 @@ public class WebViewLifecycleTest {
         when(intent.getIntExtra("port", 0)).thenReturn(8080);
         when(intent.getStringExtra("protocol")).thenReturn("http");
         when(intent.getStringExtra("host")).thenReturn("example.com:80");
+        when(intent.getStringExtra("path")).thenReturn("/dashboard");
 
         invokeMethod(browserActivity, "onNewIntent", android.content.Intent.class, intent);
 
-        // Port 80 is default for http, so targetHost should be just "example.com"
-        assert "example.com".equals(getField(browserActivity.getClass(), "targetHost").get(browserActivity));
+        // Custom path should appear in the URL
+        assert "http://localhost:8080/dashboard".equals(getField(browserActivity.getClass(), "pendingUrl").get(browserActivity));
+        assert 8080 == getField(browserActivity.getClass(), "localPort").getInt(browserActivity);
     }
 
     // --- Helper methods ---
