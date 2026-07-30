@@ -142,6 +142,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppMode } from '@/composables/useAppMode'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { useServerList } from '@/composables/useServerList'
+import { useDialog } from '@/composables/useDialog'
 import { formatServerHost } from '@/utils/url'
 import { Server, X, Plus, MonitorSmartphone, Smartphone, ChevronRight } from 'lucide-vue-next'
 import IosInstallDrawer from './common/IosInstallDrawer.vue'
@@ -149,6 +150,7 @@ import { downloadByUrl } from '@/utils/download'
 
 const { t } = useI18n()
 const { isAppMode } = useAppMode()
+const dialog = useDialog()
 const pwaInstall = usePwaInstall()
 const emit = defineEmits(['loginSuccess'])
 
@@ -189,8 +191,8 @@ function selectServer(srv) {
   }
 }
 
-function deleteServer(url) {
-  if (!confirm(t('login.deleteServer'))) return
+async function deleteServer(url) {
+  if (!await dialog.confirm(t('login.deleteServer'), { dangerous: true })) return
   removeServer(url)
 }
 
