@@ -239,7 +239,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
 import { baseName } from '@/utils/path.ts'
@@ -252,7 +252,7 @@ import FileIcon from '@/components/common/FileIcon.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
-import QuickSendDrawer from '@/components/chat/QuickSendDrawer.vue'
+const QuickSendDrawer = defineAsyncComponent(() => import('@/components/chat/QuickSendDrawer.vue'))
 import SessionDrawer from '@/components/chat/SessionDrawer.vue'
 import { createStopButtonMachine } from '@/utils/stopButtonMachine.ts'
 import { useDialog } from '@/composables/useDialog.ts'

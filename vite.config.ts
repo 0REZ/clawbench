@@ -168,6 +168,7 @@ export default defineConfig({
           'vendor-vue': ['vue', 'vue-i18n'],
           'vendor-pdf': ['pdfjs-dist'],
           'vendor-diff': ['diff'],
+          'vendor-purify': ['dompurify'],
         },
       },
     },

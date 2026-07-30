@@ -21,8 +21,8 @@ const PUBLIC_DIR = join(PROJECT_ROOT, 'public')
 
 // ─── Thresholds ────────────────────────────────────────────────────────────────
 
-/** Max index chunk size in bytes (original was ~9.4MB, target < 2.5MB) */
-const INDEX_CHUNK_MAX_BYTES = 2_500_000
+/** Max index chunk size in bytes (original was ~9.4MB, after optimization < 2.1MB) */
+const INDEX_CHUNK_MAX_BYTES = 2_100_000
 
 /** Chunks that should NOT be eagerly loaded (not in modulepreload) */
 const LAZY_CHUNKS = [
@@ -43,6 +43,7 @@ const EXPECTED_SPLIT_CHUNKS = [
     'vendor-vue',
     'vendor-pdf',
     'vendor-diff',
+    'vendor-purify',
 ]
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -159,8 +160,8 @@ describe('Build output verification (Issue #328)', () => {
                 }
             }
 
-            // Threshold: index (2.5MB) + vendor-vue (~170KB) + vendor-diff (~20KB) = ~2.7MB
-            const firstScreenThreshold = 3_000_000
+            // Threshold: index (2.1MB) + vendor-vue (~170KB) + vendor-purify (~28KB) + vendor-diff (~4KB) = ~2.3MB
+            const firstScreenThreshold = 2_400_000
 
             console.log(`  First-screen JS payload:`)
             for (const d of details) console.log(`    ${d}`)

@@ -11,15 +11,15 @@
         </div>
       </div>
       <div v-if="localSelected.length > 0" class="kcf-selected-grid">
-        <draggable v-model="localSelected" item-key="id" class="kcf-draggable" :animation="200" ghost-class="kcf-ghost" chosen-class="kcf-chosen" drag-class="kcf-drag" @end="onDragEnd">
-          <template #item="{ element }">
+        <VueDraggable v-model="localSelected" class="kcf-draggable" :animation="200" ghost-class="kcf-ghost" chosen-class="kcf-chosen" drag-class="kcf-drag" @end="onDragEnd">
             <button
+              v-for="element in localSelected"
+              :key="element.id"
               class="kcf-chip kcf-chip-selected"
             >
               <span class="kcf-chip-label">{{ element.label }}</span>
             </button>
-          </template>
-        </draggable>
+        </VueDraggable>
       </div>
       <div v-else class="kcf-empty-hint">{{ t('terminal.keyConfigEmpty') }}</div>
     </div>
@@ -52,7 +52,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import draggable from 'vuedraggable'
+import { VueDraggable } from 'vue-draggable-plus'
 import { getDef, getAllDefs, getGroups, getDefaultIds, type KeyDef, type ConfigType } from '@/utils/terminalKeyDefs'
 
 const props = defineProps<{
