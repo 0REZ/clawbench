@@ -190,9 +190,19 @@ export function renderMarkdownHtml(content: string, options: MarkdownRenderOptio
 }
 
 // Re-export for backward compatibility — dynamic import to avoid
-// pulling mermaid into the initial chunk
-export const renderMermaidInElement = (...args: Parameters<typeof import('@/utils/mermaid.ts').renderMermaidInElement>) =>
-    import('@/utils/mermaid.ts').then(m => m.renderMermaidInElement(...args))
+// pulling mermaid into the initial chunk. Includes DOM existence check
+// to skip the import entirely when no mermaid blocks are present.
+export function renderMermaidInElement(
+    el: HTMLElement,
+    prefix: string = 'mermaid',
+    specificBlocks?: NodeList
+): Promise<void> {
+    // Skip dynamic import if no mermaid blocks exist (avoids loading 608KB chunk)
+    if (!specificBlocks && el.querySelectorAll('pre.mermaid:not([data-rendered])').length === 0) {
+        return Promise.resolve()
+    }
+    return import('@/utils/mermaid.ts').then(m => m.renderMermaidInElement(el, prefix, specificBlocks))
+}
 
 /**
  * 组合式函数：Markdown渲染器

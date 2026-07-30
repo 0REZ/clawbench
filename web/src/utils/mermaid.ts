@@ -1,39 +1,45 @@
 // Mermaid diagram utilities
 import { getMermaid } from './lazyMermaid.ts'
+import { appLog } from '@/utils/appLog'
 
 let _initialized = false
+let _initPromise: Promise<void> | null = null
+
+/** Build mermaid initialize config for current theme */
+function mermaidConfig() {
+    return {
+        startOnLoad: false,
+        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
+        securityLevel: 'loose',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    }
+}
 
 /**
  * Initialize Mermaid — only initializes if mermaid has already been loaded.
  * On first app load, this is a no-op. Mermaid is initialized lazily when
  * renderMermaidInElement() is first called.
  *
- * This is called from App.vue onMounted and on theme change.
+ * This is called from App.vue on theme change.
  * On theme change, mermaid is already loaded so this re-initializes with
  * the new theme. On first load, mermaid hasn't been loaded yet so we skip.
  */
 export async function initMermaid(): Promise<void> {
     if (!_initialized) return
     const mermaid = await getMermaid()
-    mermaid.initialize({
-        startOnLoad: false,
-        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
-        securityLevel: 'loose',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    })
+    mermaid.initialize(mermaidConfig())
 }
 
 /** Ensure mermaid is initialized (called lazily on first render) */
 async function ensureInit(): Promise<void> {
     if (_initialized) return
-    _initialized = true
-    const mermaid = await getMermaid()
-    mermaid.initialize({
-        startOnLoad: false,
-        theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
-        securityLevel: 'loose',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    })
+    if (_initPromise) return _initPromise
+    _initPromise = (async () => {
+        const mermaid = await getMermaid()
+        mermaid.initialize(mermaidConfig())
+        _initialized = true
+    })()
+    return _initPromise
 }
 
 /**
@@ -86,6 +92,8 @@ export async function reRenderMermaid(): Promise<void> {
         mermaid.render(id, source).then(result => {
             container.innerHTML = result.svg
             container.id = id
-        }).catch(() => {})
+        }).catch(err => {
+            appLog.w('Mermaid', 'Re-render failed', err)
+        })
     })
 }

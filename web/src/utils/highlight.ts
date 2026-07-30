@@ -42,13 +42,12 @@ import fsharp from 'highlight.js/lib/languages/fsharp'
 import groovy from 'highlight.js/lib/languages/groovy'
 
 // --- Tier 3: Web & markup ---
-import html from 'highlight.js/lib/languages/xml'
+import xmlLang from 'highlight.js/lib/languages/xml'
 import css from 'highlight.js/lib/languages/css'
 import scss from 'highlight.js/lib/languages/scss'
 import less from 'highlight.js/lib/languages/less'
 import json from 'highlight.js/lib/languages/json'
 import yaml from 'highlight.js/lib/languages/yaml'
-import xml from 'highlight.js/lib/languages/xml'
 import markdown from 'highlight.js/lib/languages/markdown'
 import graphql from 'highlight.js/lib/languages/graphql'
 import handlebars from 'highlight.js/lib/languages/handlebars'
@@ -105,13 +104,13 @@ const languages: Record<string, typeof javascript> = {
     ocaml,
     fsharp,
     groovy,
-    html,
+    html: xmlLang,
     css,
     scss,
     less,
     json,
     yaml,
-    xml,
+    xml: xmlLang,
     markdown,
     graphql,
     handlebars,
@@ -138,9 +137,6 @@ for (const [name, lang] of Object.entries(languages)) {
     hljs.registerLanguage(name, lang)
 }
 
-/** Set of registered language names for quick lookup */
-const registeredLangs = new Set(Object.keys(languages))
-
 /**
  * Highlight code with a specific language.
  * Falls back to plain text (no highlighting) for unregistered languages.
@@ -162,4 +158,3 @@ function escapeHtml(text: string): string {
 }
 
 export { hljs }
-export { registeredLangs }

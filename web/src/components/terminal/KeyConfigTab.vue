@@ -88,7 +88,7 @@ function toggleSelect(id: string) {
 }
 
 function onDragEnd() {
-  // localSelected is already updated by vuedraggable v-model
+  // localSelected is already updated by VueDraggable v-model
 }
 
 function resetToDefault() {

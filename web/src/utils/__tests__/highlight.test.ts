@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hljs, highlightCode, registeredLangs } from '@/utils/highlight'
+import { hljs, highlightCode } from '@/utils/highlight'
 
 describe('highlightCode', () => {
     it('highlights JavaScript code', () => {
@@ -65,61 +65,62 @@ describe('highlightCode', () => {
     })
 })
 
-describe('registeredLangs', () => {
+describe('hljs.getLanguage', () => {
     it('includes core languages', () => {
-        expect(registeredLangs.has('javascript')).toBe(true)
-        expect(registeredLangs.has('typescript')).toBe(true)
-        expect(registeredLangs.has('python')).toBe(true)
-        expect(registeredLangs.has('go')).toBe(true)
-        expect(registeredLangs.has('rust')).toBe(true)
-        expect(registeredLangs.has('java')).toBe(true)
-        expect(registeredLangs.has('cpp')).toBe(true)
+        expect(hljs.getLanguage('javascript')).toBeTruthy()
+        expect(hljs.getLanguage('typescript')).toBeTruthy()
+        expect(hljs.getLanguage('python')).toBeTruthy()
+        expect(hljs.getLanguage('go')).toBeTruthy()
+        expect(hljs.getLanguage('rust')).toBeTruthy()
+        expect(hljs.getLanguage('java')).toBeTruthy()
+        expect(hljs.getLanguage('cpp')).toBeTruthy()
     })
 
     it('includes web languages', () => {
-        expect(registeredLangs.has('html')).toBe(true)
-        expect(registeredLangs.has('css')).toBe(true)
-        expect(registeredLangs.has('json')).toBe(true)
-        expect(registeredLangs.has('yaml')).toBe(true)
-        expect(registeredLangs.has('xml')).toBe(true)
-        expect(registeredLangs.has('markdown')).toBe(true)
+        expect(hljs.getLanguage('html')).toBeTruthy()
+        expect(hljs.getLanguage('css')).toBeTruthy()
+        expect(hljs.getLanguage('json')).toBeTruthy()
+        expect(hljs.getLanguage('yaml')).toBeTruthy()
+        expect(hljs.getLanguage('xml')).toBeTruthy()
+        expect(hljs.getLanguage('markdown')).toBeTruthy()
     })
 
     it('includes scripting languages', () => {
-        expect(registeredLangs.has('bash')).toBe(true)
-        expect(registeredLangs.has('shell')).toBe(true)
-        expect(registeredLangs.has('sql')).toBe(true)
-        expect(registeredLangs.has('dockerfile')).toBe(true)
-        expect(registeredLangs.has('diff')).toBe(true)
-    })
-
-    it('does not include obscure languages', () => {
-        expect(registeredLangs.has('brainfuck')).toBe(false)
-        expect(registeredLangs.has('abnf')).toBe(false)
-    })
-
-    it('has approximately 50+ languages registered', () => {
-        expect(registeredLangs.size).toBeGreaterThanOrEqual(50)
-    })
-})
-
-describe('hljs.getLanguage', () => {
-    it('works for registered languages', () => {
-        expect(hljs.getLanguage('javascript')).toBeTruthy()
-        expect(hljs.getLanguage('python')).toBeTruthy()
-        expect(hljs.getLanguage('go')).toBeTruthy()
+        expect(hljs.getLanguage('bash')).toBeTruthy()
+        expect(hljs.getLanguage('shell')).toBeTruthy()
+        expect(hljs.getLanguage('sql')).toBeTruthy()
+        expect(hljs.getLanguage('dockerfile')).toBeTruthy()
+        expect(hljs.getLanguage('diff')).toBeTruthy()
     })
 
     it('returns undefined for unregistered languages', () => {
         expect(hljs.getLanguage('brainfuck')).toBeUndefined()
+        expect(hljs.getLanguage('abnf')).toBeUndefined()
     })
 
-    it('resolves language aliases via hljs.getLanguage', () => {
+    it('resolves language aliases', () => {
         expect(hljs.getLanguage('ts')).toBeTruthy()
         expect(hljs.getLanguage('js')).toBeTruthy()
         expect(hljs.getLanguage('py')).toBeTruthy()
         expect(hljs.getLanguage('sh')).toBeTruthy()
         expect(hljs.getLanguage('toml')).toBeTruthy()
         expect(hljs.getLanguage('ini')).toBeTruthy()
+    })
+
+    it('has approximately 50+ languages registered', () => {
+        // Count registered languages by checking a representative sample
+        const sampleLanguages = [
+            'javascript', 'typescript', 'python', 'go', 'rust', 'java', 'c', 'cpp',
+            'csharp', 'ruby', 'php', 'swift', 'kotlin', 'scala', 'objectivec',
+            'bash', 'shell', 'perl', 'lua', 'dart', 'r', 'elixir', 'erlang',
+            'haskell', 'clojure', 'ocaml', 'fsharp', 'groovy',
+            'html', 'css', 'scss', 'less', 'json', 'yaml', 'xml', 'markdown',
+            'graphql', 'handlebars',
+            'sql', 'diff', 'dockerfile', 'makefile', 'ini', 'nginx', 'protobuf',
+            'cmake', 'gradle',
+            'glsl', 'latex', 'matlab', 'powershell', 'vim', 'wasm', 'verilog', 'vhdl',
+        ]
+        const registered = sampleLanguages.filter(l => hljs.getLanguage(l))
+        expect(registered.length).toBeGreaterThanOrEqual(50)
     })
 })

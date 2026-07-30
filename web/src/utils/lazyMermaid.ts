@@ -7,11 +7,15 @@
  */
 
 let _mermaid: typeof import('mermaid').default | null = null
+let _mermaidPending: Promise<typeof import('mermaid').default> | null = null
 
 export async function getMermaid() {
-    if (!_mermaid) {
-        const mod = await import('mermaid')
+    if (_mermaid) return _mermaid
+    if (_mermaidPending) return _mermaidPending
+    _mermaidPending = import('mermaid').then(mod => {
         _mermaid = mod.default
-    }
-    return _mermaid
+        _mermaidPending = null
+        return _mermaid
+    })
+    return _mermaidPending
 }

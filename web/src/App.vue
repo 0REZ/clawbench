@@ -818,8 +818,8 @@ function registerAppEventListeners() {
       const resolved = e.detail
       theme.value = resolved
       const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
-      initMermaid()
-      reRenderMermaid()
+      await initMermaid()
+      await reRenderMermaid()
   })
   window.addEventListener('clawbench-showhidden-change', (e) => {
       showHidden.value = e.detail
@@ -1374,8 +1374,8 @@ async function applyTheme(t) {
     setSetting('theme', t)
     document.documentElement.setAttribute('data-hljs-theme', t)
     const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
-    initMermaid()
-    reRenderMermaid()
+    await initMermaid()
+    await reRenderMermaid()
 }
 
 /** Dismiss the native splash overlay in APP mode. */

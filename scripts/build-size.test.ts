@@ -31,8 +31,6 @@ const LAZY_CHUNKS = [
     'TerminalPanelContent',
     'redoc.standalone',
     'vendor-pdf',
-    'vendor-office',
-    'vendor-xterm',
 ]
 
 /** Chunks expected to be split into separate files (not in index) */

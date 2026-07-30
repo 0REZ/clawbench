@@ -330,10 +330,7 @@ export function useChatRender(options: { messages: { value: Array<Record<string,
       lastRenderedCount = messages.value.length
       nextTick(async () => {
         const el = document.getElementById('aiChatMessages')
-        // Only load mermaid if there are actual mermaid blocks to render
-        if (el && el.querySelectorAll('pre.mermaid:not([data-rendered])').length > 0) {
-          await renderMermaidInElement(el, 'chat-mermaid')
-        }
+        if (el) await renderMermaidInElement(el, 'chat-mermaid')
       })
     } else {
       const startIdx = lastRenderedCount
