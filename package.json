@@ -36,8 +36,8 @@
     "redoc": "^2.5.3",
     "vue": "^3.5.35",
     "vue-demi": "^0.14.10",
-    "vue-i18n": "^11.4.0",
-    "vuedraggable": "^4.1.0"
+    "vue-draggable-plus": "^0.6.1",
+    "vue-i18n": "^11.4.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
