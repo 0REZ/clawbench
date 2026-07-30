@@ -512,3 +512,21 @@ func TestRewriteLocation(t *testing.T) {
 		assert.Equal(t, tt.want, got, "rewriteLocation(%q)", tt.location)
 	}
 }
+
+func TestRewriteLocation_CrossScheme(t *testing.T) {
+	// Target is HTTP on port 80, but backend redirects to HTTPS on port 443
+	targetURL, _ := url.Parse("http://192.168.1.1:80")
+	listenAddr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:54321")
+
+	// Cross-scheme redirect: http→https, same host, default ports
+	got := rewriteLocation("https://192.168.1.1:443/secure", targetURL, listenAddr)
+	assert.Equal(t, "http://127.0.0.1:54321/secure", got, "Cross-scheme redirect should be rewritten")
+}
+
+func TestRewriteLocation_HTTPSTarget(t *testing.T) {
+	targetURL, _ := url.Parse("https://192.168.1.1:8443")
+	listenAddr, _ := net.ResolveTCPAddr("tcp", "127.0.0.1:54321")
+
+	got := rewriteLocation("https://192.168.1.1:8443/secure", targetURL, listenAddr)
+	assert.Equal(t, "http://127.0.0.1:54321/secure", got, "HTTPS target Location should be rewritten with http scheme")
+}

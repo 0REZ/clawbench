@@ -184,10 +184,17 @@ func rewriteLocation(location string, targetURL *url.URL, listenAddr net.Addr) s
 		return location
 	}
 
-	// Check if Location points to the target host
+	// Check if Location points to the target host.
+	// Try matching with both the target's scheme and the Location's own scheme
+	// to handle cross-scheme redirects (e.g. target is http://host:80 but
+	// Location is https://host:443/). If neither scheme produces a port match
+	// but the bare hostnames are the same, still rewrite — the target host
+	// is the same machine, just a different scheme/port.
 	targetHost := targetURL.Host // e.g. "192.168.100.1:8080" or "192.168.100.1"
 	locHost := parsed.Host
-	if !hostMatches(locHost, targetHost, targetURL.Scheme) {
+	if !hostMatches(locHost, targetHost, targetURL.Scheme) &&
+		!hostMatches(locHost, targetHost, parsed.Scheme) &&
+		!sameBareHost(locHost, targetHost) {
 		return location // Not pointing to our target — leave as-is
 	}
 
@@ -238,4 +245,19 @@ func defaultPort(scheme string) string {
 	default:
 		return ""
 	}
+}
+
+// sameBareHost checks whether two host:port strings share the same bare hostname,
+// ignoring any port differences. This is used for cross-scheme redirect matching
+// where the same device may redirect from HTTP to HTTPS on a different port.
+func sameBareHost(a, b string) bool {
+	aBare, _, aErr := net.SplitHostPort(a)
+	if aErr != nil {
+		aBare = a
+	}
+	bBare, _, bErr := net.SplitHostPort(b)
+	if bErr != nil {
+		bBare = b
+	}
+	return aBare == bBare
 }

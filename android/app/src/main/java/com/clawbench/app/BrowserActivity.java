@@ -90,9 +90,6 @@ public class BrowserActivity extends AppCompatActivity {
     private static final int TUNNEL_CONNECT_TIMEOUT_MS = 300;
     private String pendingUrl = null;
 
-    /** Target host:port for Host header rewriting (e.g. "192.168.100.1"). Empty if localhost. */
-    private String targetHost = "";
-
     /** The local port that the SSH tunnel listens on. */
     private int localPort = 0;
 
@@ -231,23 +228,6 @@ public class BrowserActivity extends AppCompatActivity {
         String host = getIntent().getStringExtra("host");
         String path = getIntent().getStringExtra("path");
         localPort = port;
-        // Build targetHost for Host header rewriting: strip default ports per HTTP spec
-        if (host != null && !host.isEmpty()) {
-            // Strip default port from host:port for Host header
-            String hostPart = host;
-            if (host.contains(":")) {
-                String[] parts = host.split(":", 2);
-                try {
-                    int targetPort = Integer.parseInt(parts[1]);
-                    boolean isDefault = ("http".equals(protocol) && targetPort == 80) ||
-                            ("https".equals(protocol) && targetPort == 443);
-                    hostPart = isDefault ? parts[0] : host;
-                } catch (NumberFormatException e) {
-                    hostPart = host;
-                }
-            }
-            targetHost = hostPart;
-        }
         if (port > 0 && protocol != null) {
             String urlPath = (path != null && !path.isEmpty()) ? path : "/";
             String initialUrl = protocol + "://localhost:" + port + urlPath;
@@ -751,24 +731,6 @@ public class BrowserActivity extends AppCompatActivity {
 
         localPort = port;
 
-        // Reset and recalculate targetHost
-        targetHost = "";
-        if (host != null && !host.isEmpty()) {
-            String hostPart = host;
-            if (host.contains(":")) {
-                String[] parts = host.split(":", 2);
-                try {
-                    int targetPort = Integer.parseInt(parts[1]);
-                    boolean isDefault = ("http".equals(protocol) && targetPort == 80) ||
-                            ("https".equals(protocol) && targetPort == 443);
-                    hostPart = isDefault ? parts[0] : host;
-                } catch (NumberFormatException e) {
-                    hostPart = host;
-                }
-            }
-            targetHost = hostPart;
-        }
-
         pendingUrl = newUrl;
         urlBar.setText(newUrl);
         AppLog.i(TAG, "BrowserActivity: onNewIntent waiting for tunnel then loading " + newUrl + " (tunnel target: " + (host != null && !host.isEmpty() ? host : "localhost") + ":" + port + ")");
@@ -801,29 +763,12 @@ public class BrowserActivity extends AppCompatActivity {
             view.evaluateJavascript(JSErrorInjector.buildScript("BrowserNative"), null);
         }
 
-        /**
-         * Intercept requests to localhost:localPort and rewrite the Host header
-         * when forwarding to a non-localhost target (e.g. 192.168.100.1).
-         *
-         * Without this, the browser sends "Host: localhost:port" which the target
-         * server doesn't recognize, causing 404 errors on virtual-host-based servers.
-         *
-         * When targetHost is empty (forwarding to localhost itself), we skip
-         * interception and let WebView handle the request normally via the SSH tunnel.
-         *
-         * When targetHost is set, the Go reverse proxy on the server side already
-         * rewrites the Host header and Location headers in 3xx redirects, so we
-         * no longer need to intercept here. Previously, intercepting caused
-         * redirect pages to break because WebView does not auto-follow 3xx
-         * responses returned from shouldInterceptRequest, and manual redirect
-         * following broke relative URL resolution in the page.
-         */
-        @Override
-        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            // No interception needed — Go reverse proxy handles Host header rewriting
-            // and Location header rewriting for 3xx redirects.
-            return super.shouldInterceptRequest(view, request);
-        }
+        // NOTE: We do NOT override shouldInterceptRequest. Previously, we intercepted
+        // localhost requests to rewrite the Host header for non-localhost targets, but
+        // this broke redirect pages because WebView does not auto-follow 3xx responses
+        // returned from shouldInterceptRequest. The Go ReverseProxy on the server side
+        // now handles Host header rewriting and Location header rewriting for 3xx
+        // redirects, so Android-side interception is no longer needed.
 
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
