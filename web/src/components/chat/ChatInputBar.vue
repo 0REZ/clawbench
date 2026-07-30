@@ -210,20 +210,12 @@
         </div>
       </PopupMenu>
     </div>
-    <!-- Session info bar (model + mode + thinking + transport) -->
-    <div class="chat-session-info" v-if="currentModelName || showModeInfo || showThinkingInfo || showTransportInfo || showUsageInfo">
+    <!-- Session info bar (model + mode) -->
+    <div class="chat-session-info" v-if="currentModelName || showModeInfo || showUsageInfo">
       <span class="session-info-model" @click.stop="openSettingsDrawer('model')"><Cpu :size="11" />{{ currentModelName }}</span>
       <template v-if="showModeInfo">
         <span class="session-info-divider"></span>
         <span class="session-info-mode" :class="{ 'session-info-mode-auto': autoApprove }" @click.stop="onModeClick" v-long-press="onModeLongPress" @mousedown.stop="onModeMouseDown" @mouseup.stop="onModeMouseUp"><Compass :size="11" />{{ currentModeName }}</span>
-      </template>
-      <template v-if="showThinkingInfo">
-        <span class="session-info-divider"></span>
-        <span class="session-info-thinking" @click.stop="openSettingsDrawer('thinking')"><Brain :size="11" />{{ currentThinkingEffortName }}</span>
-      </template>
-      <template v-if="showTransportInfo">
-        <span class="session-info-divider"></span>
-        <span class="session-info-transport" @click.stop="openSettingsDrawer('transport')"><Cable :size="11" />{{ currentTransport === 'acp-stdio' ? 'ACP' : 'CLI' }}</span>
       </template>
       <template v-if="showUsageInfo">
         <span class="session-info-divider"></span>
@@ -241,7 +233,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Brain, Cable, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
+import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
 import { baseName } from '@/utils/path.ts'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { isThumbableExt } from '@/utils/fileManager.ts'
@@ -263,12 +255,12 @@ import { useAgents } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
-const { availableCommands, availableModes, availableThinkingEfforts, currentThinkingEffortName, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextCost, contextCurrency } = useSessionIdentity()
-const { supportsDualTransport, hasThinkingEffortLevels, hasPreferredMode, agentCanResume } = useAgents()
+const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextCost, contextCurrency } = useSessionIdentity()
+const { supportsDualTransport, hasPreferredMode, agentCanResume } = useAgents()
 const toast = useToast()
 
 // isACP: true when the current agent supports ACP (has acpCommand).
-// Used for mode chips, thinking effort chips — these are ACP features
+// Used for mode chips — these are ACP features
 // that apply regardless of the current session's transport mode.
 const isACP = computed(() => supportsDualTransport(props.currentAgentId || ''))
 
@@ -281,8 +273,6 @@ const isACPTransport = computed(() => {
 })
 
 const showModeInfo = computed(() => isACP.value && (availableModes.value.length > 0 || hasPreferredMode(props.currentAgentId || '')))
-const showThinkingInfo = computed(() => isACP.value && (availableThinkingEfforts.value.length > 0 || hasThinkingEffortLevels(props.currentAgentId || '')))
-const showTransportInfo = computed(() => supportsDualTransport(props.currentAgentId || '') || !isACP.value)
 const showResumeBtn = computed(() => isACPTransport.value && !!props.currentAgentId && agentCanResume(props.currentAgentId))
 
 function onModeClick() {
@@ -400,7 +390,6 @@ const props = defineProps({
   chatRunning: Boolean,
   currentModelId: String,
   currentModelName: String,
-  currentThinkingEffort: String,
   currentModeName: String,
   currentTransport: String,
   currentAgentId: String,
@@ -989,7 +978,7 @@ defineExpose({
   box-shadow: inset 0 1px 0 var(--border-color, #e5e5e5);
 }
 
-/* Session info bar (model + mode + thinking + transport, below input box) */
+/* Session info bar (model + mode, below input box) */
 .chat-session-info {
   display: flex;
   align-items: center;
@@ -1005,9 +994,7 @@ defineExpose({
 }
 
 .session-info-model,
-.session-info-mode,
-.session-info-thinking,
-.session-info-transport {
+.session-info-mode {
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -1021,9 +1008,7 @@ defineExpose({
   -webkit-user-select: none;
 }
 
-.session-info-model:active,
-.session-info-thinking:active,
-.session-info-transport:active {
+.session-info-model:active {
   color: var(--accent-color, #0066cc);
 }
 
@@ -1041,8 +1026,6 @@ defineExpose({
 
 .session-info-model svg,
 .session-info-mode svg,
-.session-info-thinking svg,
-.session-info-transport svg,
 .session-info-usage svg {
   flex-shrink: 0;
 }

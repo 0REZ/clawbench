@@ -207,8 +207,6 @@ vi.mock('@/composables/useChatKeyboard', () => ({
 // Mock useSessionIdentity
 const mockAvailableCommands = ref([])
 const mockAvailableModes = ref([])
-const mockAvailableThinkingEfforts = ref([])
-const mockCurrentThinkingEffortName = ref('')
 const mockSessionTransport = ref('')
 const mockAutoApprove = ref(false)
 const mockToggleAutoApprove = vi.fn()
@@ -222,8 +220,6 @@ vi.mock('@/composables/useSessionIdentity', () => ({
   useSessionIdentity: () => ({
     availableCommands: mockAvailableCommands,
     availableModes: mockAvailableModes,
-    availableThinkingEfforts: mockAvailableThinkingEfforts,
-    currentThinkingEffortName: mockCurrentThinkingEffortName,
     currentTransport: mockSessionTransport,
     autoApprove: mockAutoApprove,
     toggleAutoApprove: mockToggleAutoApprove,
@@ -254,8 +250,6 @@ vi.mock('@/composables/useAgents', () => ({
     getAgentDefaultModelName: () => '',
     agentHeaderTitle: () => '',
     syncModelFromAgent: vi.fn(),
-    getAgentThinkingEffortLevels: () => [],
-    hasThinkingEffortLevels: () => false,
     getEffectiveThinkingEffort: () => '',
     getEffectiveModeId: () => '',
     updateAgentField: vi.fn(),
@@ -327,8 +321,6 @@ const stubs = {
   MessageSquare: true,
   Cpu: true,
   Compass: true,
-  Brain: true,
-  Cable: true,
   Activity: true,
 }
 
@@ -698,16 +690,6 @@ describe('ChatInputBar', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.chat-session-info').exists()).toBe(true)
     expect(wrapper.find('.session-info-model').exists()).toBe(true)
-  })
-
-  it('session info bar renders transport info even without model name', async () => {
-    const wrapper = mountBar({ currentModelName: '' })
-    await wrapper.vm.$nextTick()
-    // showTransportInfo is true when !isACP (which is true when supportsDualTransport returns false)
-    // So the session info bar renders even without model name
-    expect(wrapper.find('.chat-session-info').exists()).toBe(true)
-    // Transport info should be shown
-    expect(wrapper.find('.session-info-transport').exists()).toBe(true)
   })
 
   it('textarea focus and blur events', async () => {

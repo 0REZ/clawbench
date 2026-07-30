@@ -85,7 +85,6 @@
       :chatRunning="identity.runningSessions.value.size > 0"
       :currentModelId="identity.currentModelId.value"
       :currentModelName="identity.currentModelName.value"
-      :currentThinkingEffort="identity.currentThinkingEffort.value"
       :currentModeName="identity.currentModeName.value"
       :currentTransport="identity.currentTransport.value"
       :currentAgentId="identity.currentAgentId.value"
