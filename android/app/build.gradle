@@ -19,6 +19,21 @@ def autoVersionName() {
     }
 }
 
+/**
+ * Auto-generate versionCode when not provided via -PversionCode.
+ * Uses `git rev-list --count HEAD` (total commit count) for a monotonically
+ * increasing integer, matching the strategy used by build.sh and CI.
+ */
+def autoVersionCode() {
+    if (project.hasProperty('versionCode')) return project.property('versionCode').toInteger()
+    try {
+        def code = 'git rev-list --count HEAD'.execute([], rootDir).text.trim()
+        return code ? code.toInteger() : 1
+    } catch (Exception e) {
+        return 1
+    }
+}
+
 android {
     namespace 'com.clawbench.app'
     compileSdk 36
@@ -27,7 +42,7 @@ android {
         applicationId "com.clawbench.app"
         minSdk 24
         targetSdk 34
-        versionCode (project.hasProperty('versionCode') ? project.property('versionCode').toInteger() : 1)
+        versionCode autoVersionCode()
         versionName autoVersionName()
 
     }
