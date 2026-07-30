@@ -32,13 +32,27 @@ describe('agentIcons', () => {
             }
         })
 
-        it('backends needing background have needsBg flag and bgColor', () => {
-            const needsBg = ['opencode', 'codex', 'mimo', 'pi']
+        it('backends needing background have needsBg flag (background via CSS --bg-tertiary)', () => {
+            const needsBg = ['opencode', 'mimo', 'pi']
             for (const id of needsBg) {
                 const data = getAgentSvg(id)!
                 expect(data.needsBg, `backend "${id}" should have needsBg=true`).toBe(true)
-                expect(data.bgColor, `backend "${id}" should have bgColor`).toBeTruthy()
-                expect(data.bgColor, `backend "${id}" bgColor should be a hex color`).toMatch(/^#[0-9A-Fa-f]{6}$/)
+            }
+        })
+
+        it('monochrome backends have monoCssClass for theme-aware color', () => {
+            const monochrome = ['opencode', 'pi', 'mimo', 'cline']
+            for (const id of monochrome) {
+                const data = getAgentSvg(id)!
+                expect(data.monoCssClass, `backend "${id}" should have monoCssClass`).toBeTruthy()
+            }
+        })
+
+        it('color backends do not have monoCssClass', () => {
+            const color = ['claude', 'codebuddy', 'copilot', 'qoder', 'kimi', 'deepseek']
+            for (const id of color) {
+                const data = getAgentSvg(id)!
+                expect(data.monoCssClass, `backend "${id}" should not have monoCssClass`).toBeFalsy()
             }
         })
 
@@ -50,11 +64,14 @@ describe('agentIcons', () => {
             }
         })
 
-        it('gradient SVGs contain url(#ai- references', () => {
+        it('gradient SVGs contain gradient URL references', () => {
             const gradientBackends = ['codebuddy', 'codex', 'copilot']
             for (const id of gradientBackends) {
                 const data = getAgentSvg(id)!
-                expect(data.svg, `backend "${id}" should reference gradient defs`).toContain('url(#ai-')
+                // Gradient IDs now come from lobe-icons npm package (lobe-icons-* prefix)
+                // or from inline fallbacks (ai-* prefix)
+                const hasGradient = data.svg.includes('url(#lobe-icons-') || data.svg.includes('url(#ai-')
+                expect(hasGradient, `backend "${id}" should reference gradient defs`).toBe(true)
             }
         })
     })

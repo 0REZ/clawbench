@@ -13,7 +13,7 @@ vi.mock('@/utils/appLog', () => ({
 // Mock agentIcons to provide predictable SVG data
 vi.mock('@/utils/agentIcons', () => ({
   getAgentSvg: (id: string) => {
-    const map: Record<string, { svg: string; viewBox: string; needsBg?: boolean; bgColor?: string }> = {
+    const map: Record<string, { svg: string; viewBox: string; needsBg?: boolean; monoCssClass?: string }> = {
       codebuddy: {
         svg: '<defs><radialGradient id="ai-cb-g"><stop stop-color="#2EA99D"/></radialGradient></defs><path fill="url(#ai-cb-g)" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
@@ -22,17 +22,21 @@ vi.mock('@/utils/agentIcons', () => ({
         svg: '<path fill="#D97757" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
       },
+      lobeicons: {
+        svg: '<defs><radialGradient id="lobe-icons-grad-0"><stop stop-color="#2EA99D"/></radialGradient></defs><path fill="url(#lobe-icons-grad-0)" d="M0 0h24v24H0z"/>',
+        viewBox: '0 0 24 24',
+      },
       opencode: {
-        svg: '<path fill="#4A4A4A" d="M0 0h24v24H0z"/>',
+        svg: '<path fill="currentColor" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
         needsBg: true,
-        bgColor: '#E8E8E8',
+        monoCssClass: 'mono-opencode',
       },
       pi: {
-        svg: '<path fill="#2D2D2D" d="M0 0h24v24H0z"/>',
+        svg: '<path fill="currentColor" d="M0 0h24v24H0z"/>',
         viewBox: '0 0 24 24',
         needsBg: true,
-        bgColor: '#E8E8E8',
+        monoCssClass: 'mono-pi',
       },
       noBgColor: {
         svg: '<path fill="#333" d="M0 0h24v24H0z"/>',
@@ -92,6 +96,22 @@ describe('AgentIcon', () => {
       expect(svgHtml).toMatch(/url\(#ai-cb-g_[a-z0-9]+\)/)
     })
 
+    it('adds unique suffix to lobe-icons- prefixed id and url(#...) references', () => {
+      const wrapper = mountIcon({ backend: 'lobeicons' })
+      const svgHtml = wrapper.find('svg').html()
+
+      // Should contain id="lobe-icons-grad-0_" with a suffix
+      expect(svgHtml).toMatch(/id="lobe-icons-grad-0_[a-z0-9]+"/)
+      // Should contain url(#lobe-icons-grad-0_) with the same suffix —
+      // url(#...) references must use same suffix as defs id= to keep gradients working
+      expect(svgHtml).toMatch(/url\(#lobe-icons-grad-0_[a-z0-9]+\)/)
+
+      // Verify id= and url(# have the same suffix (gradient reference integrity)
+      const idMatch = svgHtml.match(/id="lobe-icons-grad-0_([a-z0-9]+)"/)
+      const urlMatch = svgHtml.match(/url\(#lobe-icons-grad-0_([a-z0-9]+)\)/)
+      expect(idMatch![1]).toBe(urlMatch![1])
+    })
+
     it('generates different suffixes for different instances', () => {
       const wrapper1 = mountIcon({ backend: 'codebuddy' })
       const wrapper2 = mountIcon({ backend: 'codebuddy' })
@@ -133,7 +153,7 @@ describe('AgentIcon', () => {
     })
   })
 
-  describe('background for low-contrast icons', () => {
+  describe('background and mono class for low-contrast icons', () => {
     it('adds bg class when needsBg is true', () => {
       const wrapper = mountIcon({ backend: 'opencode' })
       const svg = wrapper.find('svg')
@@ -146,12 +166,11 @@ describe('AgentIcon', () => {
       expect(svg.classes()).not.toContain('agent-icon-bg')
     })
 
-    it('applies per-icon bgColor as inline background when specified', () => {
+    it('background is CSS-driven (no inline bgColor), uses --bg-tertiary', () => {
       const wrapper = mountIcon({ backend: 'opencode' })
       const svg = wrapper.find('svg')
-      // Browser converts #E8E8E8 to rgb(232, 232, 232)
-      const style = svg.attributes('style')
-      expect(style).toMatch(/background:\s*(#E8E8E8|rgb\(232,\s*232,\s*232\))/)
+      // bgColor is no longer inline — background comes from .agent-icon-bg CSS class
+      expect(svg.attributes('style')).not.toContain('background')
     })
 
     it('falls back to CSS --bg-tertiary when needsBg but no bgColor', () => {
@@ -161,12 +180,18 @@ describe('AgentIcon', () => {
       expect(svg.attributes('style')).not.toContain('background')
     })
 
-    it('different icons can have different bgColor values', () => {
-      const wrapper1 = mountIcon({ backend: 'opencode' })
-      const wrapper2 = mountIcon({ backend: 'pi' })
-      // Both have #E8E8E8 in this mock, but the test verifies the mechanism works
-      expect(wrapper1.find('svg').attributes('style')).toContain('background:')
-      expect(wrapper2.find('svg').attributes('style')).toContain('background:')
+    it('adds monoCssClass when provided', () => {
+      const wrapper = mountIcon({ backend: 'opencode' })
+      const svg = wrapper.find('svg')
+      expect(svg.classes()).toContain('mono-opencode')
+    })
+
+    it('does not add monoCssClass when not provided', () => {
+      const wrapper = mountIcon({ backend: 'codebuddy' })
+      const svg = wrapper.find('svg')
+      // No mono-* classes on color icons
+      const monoClasses = svg.classes().filter(c => c.startsWith('mono-'))
+      expect(monoClasses).toHaveLength(0)
     })
   })
 
