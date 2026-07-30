@@ -775,3 +775,175 @@ func TestMergeConsecutiveThinkingBlocks_TwoBlocks(t *testing.T) {
 	assert.Len(t, result, 1)
 	assert.Equal(t, "ab", result[0].Text)
 }
+
+func TestAccumulateBlock_ContentReplayExact(t *testing.T) {
+	// ACP sub-agent sends incremental chunks, then tool calls, then an exact
+	// replay of the same paragraph. The replay should be deduplicated.
+	blocks := []model.ContentBlock{}
+
+	// Incremental chunks coalesce into one text block
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading"})
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: " all the source files"})
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: " and checking for existing tests."})
+	assert.Len(t, blocks, 1)
+	assert.Equal(t, "I'll start by reading all the source files and checking for existing tests.", blocks[0].Text)
+
+	// Tool call creates a boundary
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Read", ID: "t1", Input: `{}`, Done: true},
+	})
+	assert.Len(t, blocks, 2)
+
+	// Exact replay: same text after tool_use — should be skipped
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading all the source files and checking for existing tests."})
+	assert.Len(t, blocks, 2, "exact replay should not create a new block")
+	assert.Equal(t, "I'll start by reading all the source files and checking for existing tests.", blocks[0].Text)
+}
+
+func TestAccumulateBlock_ContentReplayAccumulated(t *testing.T) {
+	// Accumulated replay: the replay text extends the original paragraph.
+	// The original block should be replaced and duplicate text blocks removed.
+	blocks := []model.ContentBlock{}
+
+	// First paragraph via incremental chunks
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading all the source files."})
+
+	// Tool call
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Read", ID: "t1", Input: `{}`, Done: true},
+	})
+
+	// Second paragraph (should NOT match replay — different text)
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Now let me read the test files."})
+
+	// Another tool call
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Glob", ID: "t2", Input: `{}`, Done: true},
+	})
+
+	// Accumulated replay: starts with first paragraph + extends it
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "content",
+		Content: "I'll start by reading all the source files. Now let me read the test files.",
+	})
+
+	// The first text block should be replaced with the accumulated text,
+	// and the duplicate second text block should be removed.
+	assert.Len(t, blocks, 3, "should have: text, tool_use, tool_use")
+	assert.Equal(t, "text", blocks[0].Type)
+	assert.Equal(t, "I'll start by reading all the source files. Now let me read the test files.", blocks[0].Text)
+	assert.Equal(t, "tool_use", blocks[1].Type)
+	assert.Equal(t, "tool_use", blocks[2].Type)
+}
+
+func TestAccumulateBlock_ContentNoReplayForShortPrefix(t *testing.T) {
+	// Short text blocks (< 11 chars) should not be matched as replay prefixes
+	// to avoid false positives from common paragraph starts like "Now".
+	blocks := []model.ContentBlock{}
+
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Now"})
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Bash", ID: "t1", Input: `{}`, Done: true},
+	})
+	// "Now let me check" starts with "Now" but "Now" is too short for replay detection
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Now let me check"})
+
+	assert.Len(t, blocks, 3, "short prefix should not trigger replay dedup")
+	assert.Equal(t, "Now", blocks[0].Text)
+	assert.Equal(t, "tool_use", blocks[1].Type)
+	assert.Equal(t, "Now let me check", blocks[2].Text)
+}
+
+func TestAccumulateBlock_ContentNoReplayForUnrelatedText(t *testing.T) {
+	// Text after tool_use that doesn't match any previous text block
+	// should create a new block normally.
+	blocks := []model.ContentBlock{}
+
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Let me check the configuration files for errors."})
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Read", ID: "t1", Input: `{}`, Done: true},
+	})
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "The configuration looks correct."})
+
+	assert.Len(t, blocks, 3)
+	assert.Equal(t, "Let me check the configuration files for errors.", blocks[0].Text)
+	assert.Equal(t, "tool_use", blocks[1].Type)
+	assert.Equal(t, "The configuration looks correct.", blocks[2].Text)
+}
+
+func TestAccumulateBlock_ContentNoReplayForSharedPrefixButNotAdjacent(t *testing.T) {
+	// Two unrelated paragraphs sharing a long common prefix, separated by tool_use.
+	// The second paragraph should NOT be treated as a replay because the first
+	// text block is NOT immediately followed by a tool_use (there's a second
+	// text block between them).
+	blocks := []model.ContentBlock{}
+
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading all the source files and checking for errors in the main module."})
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Read", ID: "t1", Input: `{}`, Done: true},
+	})
+	// This text block is between the first text and the tool_use of the second paragraph
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Some intermediate analysis here."})
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Bash", ID: "t2", Input: `{}`, Done: true},
+	})
+	// This shares a prefix with the first text block, but the first block
+	// is NOT immediately followed by a tool_use (it's followed by another text),
+	// so it should NOT be treated as a replay.
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading all the source files and checking for errors in the test module."})
+
+	assert.Len(t, blocks, 5, "should not deduplicate — first text block not adjacent to a tool_use boundary")
+	assert.Equal(t, "I'll start by reading all the source files and checking for errors in the main module.", blocks[0].Text)
+	assert.Equal(t, "Some intermediate analysis here.", blocks[2].Text)
+	assert.Equal(t, "I'll start by reading all the source files and checking for errors in the test module.", blocks[4].Text)
+}
+
+func TestAccumulateBlock_ContentReplayAccumulatedPreservesNonReplayedText(t *testing.T) {
+	// Accumulated replay that covers some but not all intermediate text blocks.
+	// Text blocks NOT covered by the replay should be preserved.
+	blocks := []model.ContentBlock{}
+
+	// First paragraph
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "I'll start by reading all the source files."})
+	// Tool call
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Read", ID: "t1", Input: `{}`, Done: true},
+	})
+	// Second paragraph (will be in the replay)
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "Now let me read the test files."})
+	// Another tool call
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Glob", ID: "t2", Input: `{}`, Done: true},
+	})
+	// Third paragraph (NOT in the replay — should be preserved)
+	AccumulateBlock(&blocks, StreamEvent{Type: "content", Content: "The tests look comprehensive."})
+	// Yet another tool call
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "tool_use",
+		Tool: &ToolCall{Name: "Bash", ID: "t3", Input: `{}`, Done: true},
+	})
+	// Accumulated replay: only covers first two paragraphs
+	AccumulateBlock(&blocks, StreamEvent{
+		Type: "content",
+		Content: "I'll start by reading all the source files. Now let me read the test files.",
+	})
+
+	// The first text block should be replaced, the second removed (in replay),
+	// but the third text block should be preserved.
+	assert.Len(t, blocks, 5, "should have: text, tool_use, tool_use, text, tool_use")
+	assert.Equal(t, "I'll start by reading all the source files. Now let me read the test files.", blocks[0].Text)
+	assert.Equal(t, "tool_use", blocks[1].Type) // t1
+	assert.Equal(t, "tool_use", blocks[2].Type) // t2
+	assert.Equal(t, "text", blocks[3].Type)
+	assert.Equal(t, "The tests look comprehensive.", blocks[3].Text)
+	assert.Equal(t, "tool_use", blocks[4].Type) // t3
+}
