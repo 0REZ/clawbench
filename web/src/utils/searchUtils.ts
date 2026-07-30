@@ -6,7 +6,7 @@
 
 import { escapeHtml } from '@/utils/html.ts'
 import { getFileType } from '@/utils/fileType.ts'
-import { hljs } from '@/utils/globals.ts'
+import { highlightCode } from '@/utils/globals.ts'
 
 /** Block-level HTML tags used to find ancestor containers in rendered mode */
 export const BLOCK_TAGS = new Set([
@@ -32,7 +32,7 @@ export function highlightText(text: string, q: string): string {
  */
 export function highlightLineSyntax(line: string, lang: string): string {
   try {
-    let h = hljs.highlight(line, { language: lang, ignoreIllegals: true }).value
+    let h = highlightCode(line, lang)
     h = h.replace(/^<span class="line">/, '').replace(/<\/span>\s*$/, '')
     return h
   } catch {

@@ -13,7 +13,7 @@
  * 9. Assemble complete HTML document
  */
 
-import { mermaid } from './globals.ts'
+import { getMermaid } from './globals.ts'
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -282,6 +282,8 @@ async function renderDualThemeMermaid(clone: HTMLElement): Promise<void> {
 
     const mermaidBlocks = Array.from(clone.querySelectorAll('div.mermaid'))
     if (mermaidBlocks.length === 0) return
+
+    const mermaid = await getMermaid()
 
     // Re-initialize mermaid with the opposite theme for rendering
     // Keep securityLevel:'loose' so ER diagrams etc. can use <foreignObject>

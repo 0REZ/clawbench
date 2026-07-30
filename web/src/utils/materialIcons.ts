@@ -2,25 +2,25 @@
  * Material Icon Theme integration.
  * Resolves file/folder paths to per-file-type SVG icon URLs
  * using the vscode-material-icon-theme package.
+ *
+ * Icons are loaded lazily (not eager) to reduce initial bundle size.
+ * Each icon URL is fetched on first access and cached.
  */
 
 import { generateManifest } from 'material-icon-theme'
+import { appLog } from '@/utils/appLog'
 
-// Build icon URL map from copied SVGs via Vite's import.meta.glob
+// Lazy-load icon modules — Vite splits each SVG into its own chunk
 const iconModules = import.meta.glob<string>('../assets/material-icons/*.svg', {
-  eager: true,
   query: '?url',
   import: 'default',
 })
 
-// Map: iconName (without .svg) → Vite content-hashed URL
-const iconUrlMap = new Map<string, string>()
-for (const [path, url] of Object.entries(iconModules)) {
-  // path is like "../assets/material-icons/go.svg"
-  const fileName = path.split('/').pop()!
-  const iconName = fileName.replace(/\.svg$/, '')
-  iconUrlMap.set(iconName, url)
-}
+// Cache: iconName → resolved URL (populated on first access)
+const iconUrlCache = new Map<string, string>()
+
+// Pending loads: iconName → Promise<string> (dedup concurrent loads)
+const iconUrlPending = new Map<string, Promise<string>>()
 
 // Generate manifest once at module init
 const manifest = generateManifest()
@@ -101,28 +101,52 @@ export function getFolderIconName(name: string, open = false): string {
 }
 
 /**
- * Get the Vite asset URL for an icon by name.
+ * Get the Vite asset URL for an icon by name (lazy-loaded and cached).
  * Returns undefined if the icon SVG is not available.
  */
-export function getIconUrl(iconName: string): string | undefined {
-  return iconUrlMap.get(iconName)
+export async function getIconUrl(iconName: string): Promise<string | undefined> {
+  // Check cache first
+  const cached = iconUrlCache.get(iconName)
+  if (cached) return cached
+
+  // Dedup concurrent loads
+  const pending = iconUrlPending.get(iconName)
+  if (pending) return pending
+
+  // Find the matching module path
+  const modulePath = `../assets/material-icons/${iconName}.svg`
+  const loader = iconModules[modulePath]
+  if (!loader) return undefined
+
+  const loadPromise = loader().then((url) => {
+    iconUrlCache.set(iconName, url)
+    iconUrlPending.delete(iconName)
+    return url
+  }).catch((err) => {
+    iconUrlPending.delete(iconName)
+    appLog.w('MaterialIcons', `Failed to load icon: ${iconName}`, err)
+    return ''
+  })
+
+  iconUrlPending.set(iconName, loadPromise)
+  return loadPromise
 }
 
 /**
- * Get the full URL for a file's icon.
+ * Get the full URL for a file's icon (async).
  * Combines icon name resolution with URL lookup.
  * Falls back to the default file icon URL.
  */
-export function getFileIconUrl(path: string): string {
+export async function getFileIconUrl(path: string): Promise<string> {
   const iconName = getFileIconName(path)
-  return getIconUrl(iconName) || getIconUrl(DEFAULT_FILE_ICON) || ''
+  return (await getIconUrl(iconName)) || (await getIconUrl(DEFAULT_FILE_ICON)) || ''
 }
 
 /**
- * Get the full URL for a folder's icon.
+ * Get the full URL for a folder's icon (async).
  * Falls back to the default folder icon URL.
  */
-export function getFolderIconUrl(name: string, open = false): string {
+export async function getFolderIconUrl(name: string, open = false): Promise<string> {
   const iconName = getFolderIconName(name, open)
-  return getIconUrl(iconName) || getIconUrl(open ? DEFAULT_FOLDER_OPEN_ICON : DEFAULT_FOLDER_ICON) || ''
+  return (await getIconUrl(iconName)) || (await getIconUrl(open ? DEFAULT_FOLDER_OPEN_ICON : DEFAULT_FOLDER_ICON)) || ''
 }

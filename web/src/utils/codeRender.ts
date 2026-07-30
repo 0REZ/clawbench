@@ -11,7 +11,7 @@
  *   </div>
  */
 
-import { hljs } from '@/utils/globals.ts'
+import { highlightCode } from '@/utils/globals.ts'
 import { escapeHtml } from '@/utils/html.ts'
 import type { CodeDiffMarkerInfo } from '@/composables/useMarkdownDiff.ts'
 
@@ -151,7 +151,7 @@ export function renderCodeLines(
             h = applyFlashToLine(rawLine, lineRanges, flashCls, lang)
         } else {
             try {
-                h = hljs.highlight(rawLine, { language: lang, ignoreIllegals: true }).value
+                h = highlightCode(rawLine, lang)
             } catch {
                 h = escapeHtml(rawLine)
             }
@@ -193,7 +193,7 @@ function applyFlashToLine(
             result += `<span class="${flashCls}">${escapeHtml(seg.text)}</span>`
         } else {
             try {
-                result += hljs.highlight(seg.text, { language: lang, ignoreIllegals: true }).value
+                result += highlightCode(seg.text, lang)
             } catch {
                 result += escapeHtml(seg.text)
             }

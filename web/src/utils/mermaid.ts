@@ -1,8 +1,9 @@
 // Mermaid diagram utilities
-import { mermaid } from './globals.ts'
+import { getMermaid } from './globals.ts'
 
-// Initialize Mermaid
-export function initMermaid(): void {
+// Initialize Mermaid (called once on app startup)
+export async function initMermaid(): Promise<void> {
+    const mermaid = await getMermaid()
     mermaid.initialize({
         startOnLoad: false,
         theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
@@ -12,7 +13,8 @@ export function initMermaid(): void {
 }
 
 // Re-render all rendered mermaid diagrams on the page (called after theme switch)
-export function reRenderMermaid(): void {
+export async function reRenderMermaid(): Promise<void> {
+    const mermaid = await getMermaid()
     document.querySelectorAll<HTMLDivElement>('div.mermaid[data-mermaid]').forEach(container => {
         const source = container.dataset.mermaid
         if (!source) return

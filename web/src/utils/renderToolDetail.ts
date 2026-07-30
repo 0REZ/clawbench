@@ -2,7 +2,7 @@
 // All backends normalize tool names and input field names in their parsers,
 // so we can assume canonical field names here: file_path, command, old_string, etc.
 
-import { hljs } from './globals.ts'
+import { highlightCode } from './globals.ts'
 import { escapeHtml } from './html.ts'
 import { detectLang, highlightLine } from './diff.ts'
 import { resolveFilePath, fileOpenButtonHtml } from '@/composables/useFilePathAnnotation.ts'
@@ -144,7 +144,7 @@ function renderBashTerminal(input: ToolInput): string {
   // Highlight command as bash
   if (command) {
     try {
-      html += hljs.highlight(command, { language: 'bash', ignoreIllegals: true }).value
+      html += highlightCode(command, 'bash')
     } catch {
       html += escapeHtml(command)
     }
@@ -344,7 +344,7 @@ function renderGrepSearch(input: ToolInput): string {
   html += '<div class="grep-pattern-row">'
   html += `<span class="grep-label">${escapeHtml(gt('tool.grep.pattern'))}</span>`
   try {
-    html += `<span class="grep-pattern-text">${hljs.highlight(pattern, { language: 'bash', ignoreIllegals: true }).value}</span>`
+    html += `<span class="grep-pattern-text">${highlightCode(pattern, 'bash')}</span>`
   } catch {
     html += `<span class="grep-pattern-text">${escapeHtml(pattern)}</span>`
   }
@@ -1018,7 +1018,7 @@ function renderMonitor(input: ToolInput): string {
     html += '<div class="monitor-command-body">'
     html += '<span class="bash-prompt">$</span>'
     try {
-      html += hljs.highlight(command, { language: 'bash', ignoreIllegals: true }).value
+      html += highlightCode(command, 'bash')
     } catch {
       html += escapeHtml(command)
     }
@@ -1087,7 +1087,7 @@ function renderGit(input: ToolInput): string {
   html += '<span class="bash-prompt">$</span>'
   const fullCmd = `git ${command} ${typeof args === 'string' ? args : JSON.stringify(args)}`.trim()
   try {
-    html += hljs.highlight(fullCmd, { language: 'bash', ignoreIllegals: true }).value
+    html += highlightCode(fullCmd, 'bash')
   } catch {
     html += escapeHtml(fullCmd)
   }
@@ -1143,7 +1143,7 @@ function renderNotebookEdit(input: ToolInput): string {
 function renderJsonFallback(input: unknown): string {
   if (!input || (typeof input === 'object' && !Array.isArray(input) && Object.keys(input as Record<string, unknown>).length === 0)) {
     try {
-      const highlighted = hljs.highlight('{}', { language: 'json' }).value
+      const highlighted = highlightCode('{}', 'json')
       return `<div class="tool-json-body tool-content-wrap word-wrap">${toolContentHeaderHtml('.tool-json-body code')}<code>${highlighted}</code></div>`
     } catch {
       return '<div class="tool-json-body tool-content-wrap word-wrap"><code>{}</code></div>'
@@ -1151,7 +1151,7 @@ function renderJsonFallback(input: unknown): string {
   }
   try {
     const json = JSON.stringify(input, null, 2)
-    const highlighted = hljs.highlight(json, { language: 'json' }).value
+    const highlighted = highlightCode(json, 'json')
     return `<div class="tool-json-body tool-content-wrap word-wrap">${toolContentHeaderHtml('.tool-json-body code')}<code>${highlighted}</code></div>`
   } catch {
     return `<div class="tool-json-body tool-content-wrap word-wrap">${toolContentHeaderHtml('.tool-json-body code')}<code>${escapeHtml(JSON.stringify(input, null, 2))}</code></div>`

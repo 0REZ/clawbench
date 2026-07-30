@@ -1,4 +1,4 @@
-import { marked, katex, mermaid, DOMPurify } from '@/utils/globals.ts'
+import { marked, katex, DOMPurify, getMermaid } from '@/utils/globals.ts'
 import { escapeHtml } from '@/utils/html.ts'
 import { injectTableRowAttrs } from '@/utils/tableRowExpand.ts'
 import { annotateCodeBlockHeaders, annotateTableBlockHeaders } from '@/composables/useCodeBlockHeader.ts'
@@ -199,6 +199,8 @@ export async function renderMermaidInElement(
 ): Promise<void> {
     const blocks = specificBlocks || el.querySelectorAll('pre.mermaid:not([data-rendered])')
     if (blocks.length === 0) return
+
+    const mermaid = await getMermaid()
 
     const renderPromises = Array.from(blocks).map(async (block, index) => {
         (block as HTMLElement).setAttribute('data-rendered', '1')

@@ -163,6 +163,15 @@ export default defineConfig({
     assetsDir: '.',
     rollupOptions: {
       input: resolve(__dirname, 'web/index.html'),
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-i18n'],
+          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'],
+          'vendor-office': ['@vue-office/docx', '@vue-office/excel', '@vue-office/pptx'],
+          'vendor-pdf': ['pdfjs-dist'],
+          'vendor-diff': ['diff'],
+        },
+      },
     },
   },
   resolve: {

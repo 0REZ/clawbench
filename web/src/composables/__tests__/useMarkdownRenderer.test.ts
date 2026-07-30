@@ -13,8 +13,9 @@ const mermaidRender = vi.fn()
 vi.mock('@/utils/globals', () => ({
   marked: { parse: (...args: any[]) => mockMarkedParse(...args) },
   katex: { renderToString: (...args: any[]) => mockKatexRenderToString(...args) },
-  mermaid: { render: (...args: any[]) => mermaidRender(...args) },
+  getMermaid: () => Promise.resolve({ render: (...args: any[]) => mermaidRender(...args) }),
   DOMPurify: { sanitize: (...args: any[]) => mockDOMPurifySanitize(...args) },
+  highlightCode: (code: string, _lang: string) => code,
 }))
 
 vi.mock('@/utils/html', () => ({

@@ -16,7 +16,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText as FileTextIcon } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
-import { hljs } from '@/utils/globals.ts'
+import { highlightCode } from '@/utils/globals.ts'
 import { escapeHtml } from '@/utils/html.ts'
 
 const props = defineProps<{
@@ -34,7 +34,7 @@ const { t } = useI18n()
 const highlightedHtml = computed(() => {
   if (!props.outputText) return ''
   try {
-    return hljs.highlight(props.outputText, { language: 'bash', ignoreIllegals: true }).value
+    return highlightCode(props.outputText, 'bash')
   } catch {
     return escapeHtml(props.outputText)
   }
