@@ -35,9 +35,13 @@ async function ensureInit(): Promise<void> {
     if (_initialized) return
     if (_initPromise) return _initPromise
     _initPromise = (async () => {
-        const mermaid = await getMermaid()
-        mermaid.initialize(mermaidConfig())
-        _initialized = true
+        try {
+            const mermaid = await getMermaid()
+            mermaid.initialize(mermaidConfig())
+            _initialized = true
+        } finally {
+            if (!_initialized) _initPromise = null
+        }
     })()
     return _initPromise
 }

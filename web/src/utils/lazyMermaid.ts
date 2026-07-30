@@ -16,6 +16,9 @@ export async function getMermaid() {
         _mermaid = mod.default
         _mermaidPending = null
         return _mermaid
+    }).catch(err => {
+        _mermaidPending = null
+        throw err
     })
     return _mermaidPending
 }
