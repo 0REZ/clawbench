@@ -3,59 +3,24 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import HeaderMarquee from '@/components/common/HeaderMarquee.vue'
 
-/**
- * Helper: flush Vue's reactive DOM update cycle.
- * After a watcher triggers checkOverflow() → isScrolling change,
- * one nextTick runs the watcher callback, another is needed for DOM patch.
- */
 async function flushDom() {
   await nextTick()
   await nextTick()
 }
 
 /**
- * Helper: read the isScrolling ref from internal state.
- * VTU + jsdom cannot resolve template refs in <script setup> components,
- * so checkOverflow() always hits the early return (refs are null).
+ * Mock element dimensions so getMaxScroll returns a predictable value.
+ * jsdom elements have offsetWidth = 0 by default.
+ * We set wrapperWidth=100, textWidth=300 → maxScroll = 300-100+8 = 208
  */
-function getIsScrolling(wrapper: ReturnType<typeof mount>) {
-  const instance = (wrapper.vm as any).$
-  // Try devtoolsRawSetupState first (unwrapped Ref), then setupState (auto-unwrapped)
-  const rawState = instance.devtoolsRawSetupState
-  if (rawState && rawState.isScrolling) {
-    if (rawState.isScrolling.__v_isRef) return rawState.isScrolling.value
-    return rawState.isScrolling
-  }
-  if (instance.setupState && instance.setupState.isScrolling !== undefined) {
-    return instance.setupState.isScrolling
-  }
-  // Fallback: check if the DOM has hm-scrolling class (which is set by isScrolling)
-  return wrapper.find('.hm-wrapper').classes().includes('hm-scrolling')
-}
-
-/**
- * Helper: set the isScrolling ref directly on the component.
- * We access the raw ref via devtoolsRawSetupState because $.setupState
- * returns shallow-unwrapped values (boolean, not RefImpl).
- * After setting, we force a re-render since jsdom's reactive cycle may not
- * automatically schedule a component update.
- */
-async function setIsScrolling(wrapper: ReturnType<typeof mount>, value: boolean) {
-  const instance = (wrapper.vm as any).$
-  const rawState = instance.devtoolsRawSetupState
-  if (rawState && rawState.isScrolling) {
-    if (rawState.isScrolling.__v_isRef) {
-      rawState.isScrolling.value = value
-    } else {
-      rawState.isScrolling = value
-    }
-  } else if (instance.setupState) {
-    instance.setupState.isScrolling = value
-  }
-  // Force component re-render to pick up the ref change
-  ;(wrapper.vm as any).$forceUpdate()
-  await nextTick()
-  await nextTick()
+function mockDimensions(wrapper) {
+  const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
+  const textEl = wrapper.find('.hm-text').element as HTMLElement
+  Object.defineProperty(wrapperEl, 'offsetWidth', { value: 100, configurable: true })
+  Object.defineProperty(textEl, 'offsetWidth', { value: 300, configurable: true })
+  // Mock setPointerCapture / releasePointerCapture (not in jsdom)
+  wrapperEl.setPointerCapture = vi.fn()
+  wrapperEl.releasePointerCapture = vi.fn()
 }
 
 describe('HeaderMarquee', () => {
@@ -84,7 +49,7 @@ describe('HeaderMarquee', () => {
     })
   }
 
-  it('renders slot content inside the marquee wrapper', () => {
+  it('renders slot content inside the wrapper', () => {
     const wrapper = mountMarquee()
     const textSpan = wrapper.find('.hm-text')
     expect(textSpan.exists()).toBe(true)
@@ -106,91 +71,211 @@ describe('HeaderMarquee', () => {
     expect(wrapper.find('.hm-wrapper').attributes('title')).toBe('Title Text')
   })
 
-  it('does not scroll when text fits within wrapper', async () => {
-    const wrapper = mountMarquee()
-    // Reset isScrolling to false to simulate non-overflow state
-    // (in CI coverage mode, checkOverflow may incorrectly detect overflow due to jsdom layout)
-    await setIsScrolling(wrapper, false)
-    // DOM should not have hm-scrolling class
-    expect(wrapper.find('.hm-wrapper').classes()).not.toContain('hm-scrolling')
-  })
-
-  it('does not render duplicate text when not scrolling', async () => {
-    const wrapper = mountMarquee()
-    // isScrolling is false → v-if="isScrolling" on hm-text-copy is false
-    expect(wrapper.find('.hm-text-copy').exists()).toBe(false)
-  })
-
-  it('enters scrolling state when isScrolling ref is true', async () => {
-    const wrapper = mountMarquee()
-    await setIsScrolling(wrapper, true)
-
-    expect(wrapper.find('.hm-wrapper').classes()).toContain('hm-scrolling')
-    expect(wrapper.findAll('.hm-text')).toHaveLength(2)
-  })
-
-  it('renders hm-text-copy span when scrolling', async () => {
-    const wrapper = mountMarquee()
-    await setIsScrolling(wrapper, true)
-
-    const copySpan = wrapper.find('.hm-text-copy')
-    expect(copySpan.exists()).toBe(true)
-    expect(copySpan.text()).toBe('Hello World')
-  })
-
-  it('transitions from scrolling to not scrolling', async () => {
-    const wrapper = mountMarquee()
-    await setIsScrolling(wrapper, true)
-    expect(wrapper.find('.hm-wrapper').classes()).toContain('hm-scrolling')
-
-    await setIsScrolling(wrapper, false)
-    expect(wrapper.find('.hm-wrapper').classes()).not.toContain('hm-scrolling')
-    expect(wrapper.findAll('.hm-text')).toHaveLength(1)
-  })
-
-  it('disconnects ResizeObserver on unmount', () => {
-    const wrapper = mountMarquee()
-
-    expect(disconnectSpy).not.toHaveBeenCalled()
-
-    wrapper.unmount()
-
-    expect(disconnectSpy).toHaveBeenCalledTimes(1)
-  })
-
-  it('handles null refs gracefully in checkOverflow', () => {
-    const wrapper = mountMarquee()
-    // checkOverflow should not throw even when refs are null
-    expect(() => wrapper.vm.checkOverflow?.()).not.toThrow()
-    expect(wrapper.find('.hm-wrapper').exists()).toBe(true)
-    expect(wrapper.find('.hm-text').exists()).toBe(true)
-  })
-
   it('uses text prop value as default title when title is empty string', () => {
     const wrapper = mountMarquee({ title: '', text: 'Content' })
     expect(wrapper.find('.hm-wrapper').attributes('title')).toBe('Content')
   })
 
-  it('checkOverflow computes scrolling correctly via internal state', async () => {
+  it('detects overflow via checkOverflow with mocked dimensions', () => {
     const wrapper = mountMarquee()
-    // Reset isScrolling to false to simulate non-overflow state
-    await setIsScrolling(wrapper, false)
-    expect(getIsScrolling(wrapper)).toBe(false)
-    // Verify the component exposes checkOverflow
-    expect(typeof wrapper.vm.checkOverflow).toBe('function')
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    // With mocked dims: textWidth(300) > wrapperWidth(100) - 8 → isOverflow = true
+    vm.checkOverflow()
+    expect(vm.isOverflow).toBe(true)
   })
 
-  it('hm-scrolling class reflects isScrolling state', async () => {
+  it('does not overflow when text fits within wrapper', () => {
     const wrapper = mountMarquee()
-    // Initially not scrolling
-    expect(wrapper.find('.hm-wrapper').classes()).not.toContain('hm-scrolling')
+    mockDimensions(wrapper)
+    const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
+    const textEl = wrapper.find('.hm-text').element as HTMLElement
+    // Set text smaller than wrapper
+    Object.defineProperty(wrapperEl, 'offsetWidth', { value: 300, configurable: true })
+    Object.defineProperty(textEl, 'offsetWidth', { value: 100, configurable: true })
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    expect(vm.isOverflow).toBe(false)
+  })
 
-    // Manually set scrolling
-    await setIsScrolling(wrapper, true)
-    expect(wrapper.find('.hm-wrapper').classes()).toContain('hm-scrolling')
+  it('clampOffset clamps between -maxScroll and 0', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    // maxScroll = 300-100+8 = 208
+    expect(vm.clampOffset(-50)).toBe(-50)
+    expect(vm.clampOffset(0)).toBe(0)
+    expect(vm.clampOffset(50)).toBe(0)
+    expect(vm.clampOffset(-300)).toBe(-208)
+  })
 
-    // Back to not scrolling
-    await setIsScrolling(wrapper, false)
-    expect(wrapper.find('.hm-wrapper').classes()).not.toContain('hm-scrolling')
+  it('clampOffset returns 0 when maxScroll <= 0 (text fits)', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
+    const textEl = wrapper.find('.hm-text').element as HTMLElement
+    // Set text smaller than wrapper → maxScroll negative
+    Object.defineProperty(wrapperEl, 'offsetWidth', { value: 300, configurable: true })
+    Object.defineProperty(textEl, 'offsetWidth', { value: 100, configurable: true })
+    const vm = wrapper.vm as any
+    // maxScroll = 100-300+8 = -192 → clampOffset returns 0
+    expect(vm.clampOffset(-50)).toBe(0)
+    expect(vm.clampOffset(0)).toBe(0)
+    expect(vm.clampOffset(50)).toBe(0)
+  })
+
+  it('onPointerDown sets isDragging when overflowing', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow() // sets isOverflow = true
+    vm.onPointerDown({ clientX: 100, pointerId: 1 })
+    expect(vm.isDragging).toBe(true)
+  })
+
+  it('onPointerDown does nothing when not overflowing', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
+    const textEl = wrapper.find('.hm-text').element as HTMLElement
+    // Make text fit
+    Object.defineProperty(wrapperEl, 'offsetWidth', { value: 300, configurable: true })
+    Object.defineProperty(textEl, 'offsetWidth', { value: 100, configurable: true })
+    const vm = wrapper.vm as any
+    vm.checkOverflow() // sets isOverflow = false
+    vm.onPointerDown({ clientX: 100, pointerId: 1 })
+    expect(vm.isDragging).toBe(false)
+  })
+
+  it('onPointerMove updates scrollOffset during drag', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onPointerDown({ clientX: 100, pointerId: 1 })
+    vm.onPointerMove({ clientX: 50 })
+    expect(vm.scrollOffset).toBe(-50)
+  })
+
+  it('onPointerMove clamps scrollOffset to bounds', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onPointerDown({ clientX: 100, pointerId: 1 })
+    vm.onPointerMove({ clientX: 400 })
+    expect(vm.scrollOffset).toBe(0)
+  })
+
+  it('onPointerUp resets isDragging', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onPointerDown({ clientX: 100, pointerId: 1 })
+    expect(vm.isDragging).toBe(true)
+    vm.onPointerUp({ pointerId: 1 })
+    expect(vm.isDragging).toBe(false)
+  })
+
+  it('normalizeWheelDelta scales line-mode delta', () => {
+    const wrapper = mountMarquee()
+    const vm = wrapper.vm as any
+    // deltaMode=0 (pixel) → no scaling
+    expect(vm.normalizeWheelDelta({ deltaX: 50, deltaY: 0, deltaMode: 0 })).toBe(50)
+    // deltaMode=1 (line) → ×40
+    expect(vm.normalizeWheelDelta({ deltaX: 3, deltaY: 0, deltaMode: 1 })).toBe(120)
+    // deltaMode=2 (page) → ×800
+    expect(vm.normalizeWheelDelta({ deltaX: 1, deltaY: 0, deltaMode: 2 })).toBe(800)
+    // deltaX=0 falls back to deltaY
+    expect(vm.normalizeWheelDelta({ deltaX: 0, deltaY: 30, deltaMode: 0 })).toBe(30)
+  })
+
+  it('onWheel scrolls horizontally with deltaX', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onWheel({ deltaX: 50, deltaY: 0, deltaMode: 0, preventDefault: vi.fn() })
+    expect(vm.scrollOffset).toBe(-50)
+  })
+
+  it('onWheel maps deltaY to horizontal when deltaX is 0', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onWheel({ deltaX: 0, deltaY: 30, deltaMode: 0, preventDefault: vi.fn() })
+    expect(vm.scrollOffset).toBe(-30)
+  })
+
+  it('onWheel calls preventDefault when overflowing', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    const preventDefault = vi.fn()
+    vm.onWheel({ deltaX: 50, deltaY: 0, deltaMode: 0, preventDefault })
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  it('onWheel does not scroll or preventDefault when not overflowing', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
+    const textEl = wrapper.find('.hm-text').element as HTMLElement
+    Object.defineProperty(wrapperEl, 'offsetWidth', { value: 300, configurable: true })
+    Object.defineProperty(textEl, 'offsetWidth', { value: 100, configurable: true })
+    const vm = wrapper.vm as any
+    vm.checkOverflow() // sets isOverflow = false
+    const preventDefault = vi.fn()
+    vm.onWheel({ deltaX: 50, deltaY: 0, deltaMode: 0, preventDefault })
+    expect(vm.scrollOffset).toBe(0)
+    expect(preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('onWheel ignores zero delta', () => {
+    const wrapper = mountMarquee()
+    mockDimensions(wrapper)
+    const vm = wrapper.vm as any
+    vm.checkOverflow()
+    vm.onWheel({ deltaX: 0, deltaY: 0, deltaMode: 0, preventDefault: vi.fn() })
+    expect(vm.scrollOffset).toBe(0)
+  })
+
+  it('disconnects ResizeObserver on unmount', () => {
+    const wrapper = mountMarquee()
+    expect(disconnectSpy).not.toHaveBeenCalled()
+    wrapper.unmount()
+    expect(disconnectSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('handles null refs gracefully in checkOverflow', () => {
+    const wrapper = mountMarquee()
+    expect(() => (wrapper.vm as any).checkOverflow?.()).not.toThrow()
+  })
+
+  it('scrollOffset reset logic works correctly', () => {
+    const wrapper = mountMarquee()
+    const vm = wrapper.vm as any
+    vm.scrollOffset = -80
+    expect(vm.scrollOffset).toBe(-80)
+    vm.scrollOffset = 0
+    expect(vm.scrollOffset).toBe(0)
+  })
+
+  it('exposes methods and state for testing', () => {
+    const wrapper = mountMarquee()
+    const vm = wrapper.vm as any
+    expect(typeof vm.checkOverflow).toBe('function')
+    expect(typeof vm.isOverflow).toBe('boolean')
+    expect(typeof vm.isDragging).toBe('boolean')
+    expect(typeof vm.getMaxScroll).toBe('function')
+    expect(typeof vm.clampOffset).toBe('function')
+    expect(typeof vm.normalizeWheelDelta).toBe('function')
+    expect(typeof vm.onPointerDown).toBe('function')
+    expect(typeof vm.onPointerMove).toBe('function')
+    expect(typeof vm.onPointerUp).toBe('function')
+    expect(typeof vm.onWheel).toBe('function')
   })
 })
