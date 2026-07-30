@@ -121,7 +121,7 @@ const items = computed<AgentItem[]>(() => {
       key: 'preferred_model',
       label: t('settings.items.agentPreferredModel'),
       type: 'select',
-      options: a.models.map((m: { name: string; id: string }) => ({ label: m.name || m.id, value: m.id })),
+      options: a.models.map((m: { name: string; id: string }) => ({ label: m.name || m.id, value: m.id, modelName: m.name || m.id })),
       patchField: 'preferred_model',
     })
   }

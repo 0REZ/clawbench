@@ -40,6 +40,7 @@
         <span class="settings-item__value">{{ displayValue }}</span>
       </template>
       <template v-else-if="type === 'select' || type === 'number' || type === 'text'">
+        <ProviderIcon v-if="selectedOptionModelName" :model-name="selectedOptionModelName" :size="14" />
         <span class="settings-item__value">{{ displayValue }}</span>
       </template>
       <template v-else-if="type === 'textarea'">
@@ -144,6 +145,7 @@
       :class="{ 'settings-item__option--active': modelValue === opt.value }"
       @click="selectOption(opt.value)"
     >
+      <ProviderIcon v-if="opt.modelName" :model-name="opt.modelName" :size="14" />
       <span class="settings-item__option-label">{{ opt.label }}</span>
       <span v-if="modelValue === opt.value" class="settings-item__option-check">✓</span>
     </div>
@@ -155,6 +157,7 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
+import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 
 const { t } = useI18n()
@@ -164,7 +167,7 @@ interface Props {
   description?: string
   type: 'switch' | 'select' | 'number' | 'text' | 'slider' | 'action' | 'info' | 'header' | 'password' | 'textarea'
   modelValue?: unknown
-  options?: { label: string; value: unknown }[]
+  options?: { label: string; value: unknown; modelName?: string }[]
   min?: number
   max?: number
   step?: number
@@ -260,6 +263,13 @@ const displayValue = computed(() => {
     return String(v)
   }
   return props.placeholder
+})
+
+/** modelName of the currently selected option (for ProviderIcon rendering). */
+const selectedOptionModelName = computed(() => {
+  if (props.type !== 'select' || !props.options?.length) return null
+  const opt = props.options.find(o => o.value === props.modelValue)
+  return opt?.modelName ?? null
 })
 
 function onSwitchChange(e: Event) {

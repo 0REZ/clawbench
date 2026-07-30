@@ -20,6 +20,7 @@
     "vue-tsc": "^2.2.12"
   },
   "dependencies": {
+    "@lobehub/icons-static-svg": "^1.94.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "diff": "^9.0.0",
     "qrcode": "^1.5.4",

@@ -212,7 +212,7 @@
     </div>
     <!-- Session info bar (model + mode) -->
     <div class="chat-session-info" v-if="currentModelName || showModeInfo || showUsageInfo">
-      <span class="session-info-model" @click.stop="openSettingsDrawer('model')"><Cpu :size="11" />{{ currentModelName }}</span>
+      <span class="session-info-model" @click.stop="openSettingsDrawer('model')"><ProviderIcon :model-name="currentModelName || ''" :size="11" />{{ currentModelName }}</span>
       <template v-if="showModeInfo">
         <span class="session-info-divider"></span>
         <span class="session-info-mode" :class="{ 'session-info-mode-auto': autoApprove }" @click.stop="onModeClick" v-long-press="onModeLongPress" @mousedown.stop="onModeMouseDown" @mouseup.stop="onModeMouseUp"><Compass :size="11" />{{ currentModeName }}</span>
@@ -233,7 +233,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Cpu, Compass, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
+import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
 import { baseName } from '@/utils/path.ts'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { isThumbableExt } from '@/utils/fileManager.ts'
@@ -241,6 +241,7 @@ import { isImageFile } from '@/utils/fileAttachmentUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import { buildPathThumbUrl } from '@/utils/fileIcon.ts'
 import FileIcon from '@/components/common/FileIcon.vue'
+import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'

@@ -37,7 +37,7 @@
             <span class="agent-welcome-specialty">{{ currentAgent.specialty }}</span>
             <div class="agent-welcome-tags">
               <span class="agent-welcome-tag agent-welcome-backend">{{ currentAgent.backend }}</span>
-              <span v-if="currentAgent.model" class="agent-welcome-tag agent-welcome-model">{{ currentAgent.model }}</span>
+              <span v-if="currentAgent.model" class="agent-welcome-tag agent-welcome-model"><ProviderIcon :model-name="currentAgent.model" :size="11" />{{ currentAgent.model }}</span>
             </div>
           </div>
         </div>
@@ -133,6 +133,7 @@ import { useI18n } from 'vue-i18n'
 import { ChevronUp, ChevronsUp, ArrowUp, ChevronsDown, ArrowDown, Bot, Settings } from 'lucide-vue-next'
 import ChatMessageItem from './ChatMessageItem.vue'
 import AgentIcon from '@/components/common/AgentIcon.vue'
+import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import UserMsgIndexDrawer from './UserMsgIndexDrawer.vue'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 import { useDoubleClickCopy } from '@/composables/useDoubleClickCopy.ts'
