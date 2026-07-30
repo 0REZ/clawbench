@@ -12,6 +12,9 @@ async function flushDom() {
  * Mock element dimensions so getMaxScroll returns a predictable value.
  * jsdom elements have offsetWidth = 0 by default.
  * We set wrapperWidth=100, textWidth=300 → maxScroll = 300-100+8 = 208
+ *
+ * Vue 3.5+ hoists template refs, breaking VTU ref binding ("Missing ref owner context").
+ * We bypass this by directly assigning wrapperRef/textRef after mount.
  */
 function mockDimensions(wrapper) {
   const wrapperEl = wrapper.find('.hm-wrapper').element as HTMLElement
@@ -21,6 +24,10 @@ function mockDimensions(wrapper) {
   // Mock setPointerCapture / releasePointerCapture (not in jsdom)
   wrapperEl.setPointerCapture = vi.fn()
   wrapperEl.releasePointerCapture = vi.fn()
+  // Fix Vue 3.5 ref hoisting — manually bind refs
+  const vm = wrapper.vm as any
+  vm.wrapperRef = wrapperEl
+  vm.textRef = textEl
 }
 
 describe('HeaderMarquee', () => {

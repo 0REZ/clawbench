@@ -477,15 +477,15 @@ func TestHostMatches(t *testing.T) {
 	}{
 		{"192.168.1.1:8080", "192.168.1.1:8080", "http", true},
 		{"192.168.1.1", "192.168.1.1", "http", true},
-		{"192.168.1.1:80", "192.168.1.1", "http", true},     // default port matches bare host
-		{"192.168.1.1", "192.168.1.1:80", "http", true},     // bare host matches default port
-		{"192.168.1.1:443", "192.168.1.1", "https", true},   // default HTTPS port
-		{"192.168.1.1", "192.168.1.1:443", "https", true},   // bare host matches default HTTPS port
+		{"192.168.1.1:80", "192.168.1.1", "http", true},         // default port matches bare host
+		{"192.168.1.1", "192.168.1.1:80", "http", true},         // bare host matches default port
+		{"192.168.1.1:443", "192.168.1.1", "https", true},       // default HTTPS port
+		{"192.168.1.1", "192.168.1.1:443", "https", true},       // bare host matches default HTTPS port
 		{"192.168.1.1:8080", "192.168.1.1:9090", "http", false}, // different ports
-		{"example.com", "other.com", "http", false},          // different hosts
-		{"192.168.1.1:80", "192.168.1.1", "https", false},   // port 80 not default for https
-		{"192.168.1.1:443", "192.168.1.1", "http", false},   // port 443 not default for http
-		{"192.168.1.1:80", "192.168.1.1:443", "http", false}, // different default ports
+		{"example.com", "other.com", "http", false},             // different hosts
+		{"192.168.1.1:80", "192.168.1.1", "https", false},       // port 80 not default for https
+		{"192.168.1.1:443", "192.168.1.1", "http", false},       // port 443 not default for http
+		{"192.168.1.1:80", "192.168.1.1:443", "http", false},    // different default ports
 	}
 	for _, tt := range tests {
 		got := hostMatches(tt.locHost, tt.targetHost, tt.targetScheme)
