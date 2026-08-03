@@ -495,14 +495,18 @@ func TestServeSessions_MethodNotAllowed(t *testing.T) {
 }
 
 // ============================================================================
-// DeleteSession additional tests
+// ArchiveSession additional tests
 // ============================================================================
 
-func TestDeleteSession_SoftDelete(t *testing.T) {
+func TestArchiveSession_SoftDelete(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
-	sessionID, err := service.CreateSession(env.ProjectDir, "codebuddy", "to soft-delete", "", "", "default", "chat")
+	sessionID, err := service.CreateSession(env.ProjectDir, "codebuddy", "to archive", "", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Add a message so the session has content and triggers soft-archive (not hard-delete)
+	_, err = service.AddChatMessage(env.ProjectDir, "codebuddy", sessionID, "user", "hello", nil, false, "")
 	require.NoError(t, err)
 
 	// Verify session appears in list
@@ -510,21 +514,22 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
 
-	// Delete the session
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	// Archive the session
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 
 	var result map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
 	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, false, result["destroyed"], "session with messages should be soft-archived, not destroyed")
 
-	// Verify session no longer appears in list (soft-deleted)
+	// Verify session no longer appears in active list (archived)
 	sessions, err = service.GetSessions(env.ProjectDir, "")
 	require.NoError(t, err)
-	assert.Empty(t, sessions, "soft-deleted session should not appear in session list")
+	assert.Empty(t, sessions, "archived session should not appear in session list")
 
 	// Verify totalCount decreased
 	count, err := service.GetSessionCount(env.ProjectDir)
@@ -532,7 +537,7 @@ func TestDeleteSession_SoftDelete(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
-func TestDeleteSession_SessionCountInResponse(t *testing.T) {
+func TestArchiveSession_SessionCountInResponse(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
@@ -548,10 +553,10 @@ func TestDeleteSession_SessionCountInResponse(t *testing.T) {
 	sessionID := sessions[0].ID
 
 	// Delete one session
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 
 	var result map[string]interface{}
@@ -562,7 +567,7 @@ func TestDeleteSession_SessionCountInResponse(t *testing.T) {
 	assert.Equal(t, float64(2), sessionCount, "sessionCount should decrease after deletion")
 }
 
-func TestDeleteSession_DefaultBackendParam(t *testing.T) {
+func TestArchiveSession_DefaultBackendParam(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
@@ -570,28 +575,28 @@ func TestDeleteSession_DefaultBackendParam(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete without backend query param — should default to "codebuddy"
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 }
 
-func TestDeleteSession_NonExistentSession(t *testing.T) {
+func TestArchiveSession_NonExistentSession(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
 	// Deleting a session that doesn't exist should not crash
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id=nonexistent-session-id", nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id=nonexistent-session-id", nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
-	// The handler calls service.DeleteSession which does a SQL UPDATE that affects 0 rows,
+	w := callHandler(ArchiveSession, req)
+	// The handler calls service.ArchiveSession which does a SQL UPDATE that affects 0 rows,
 	// but still returns nil error, so it returns 200 with ok=true
 	assertOK(t, w)
 }
 
-func TestDeleteSession_SessionFromCookie(t *testing.T) {
+func TestArchiveSession_SessionFromCookie(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
@@ -599,11 +604,11 @@ func TestDeleteSession_SessionFromCookie(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete using session_id from cookie instead of query param
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete", nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive", nil)
 	withProjectCookie(req, env.ProjectDir)
 	withSessionCookie(req, sessionID)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 
 	var result map[string]interface{}

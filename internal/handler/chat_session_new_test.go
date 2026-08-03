@@ -84,13 +84,13 @@ func TestServeSessions_Get_NoPendingApprovalsReturnsFalse(t *testing.T) {
 	assert.False(t, result.Sessions[0].PendingApproval)
 }
 
-// ── DeleteSession: ACP connection close on ACP-transport sessions ──────────
+// ── ArchiveSession: ACP connection close on ACP-transport sessions ──────────
 
-func TestDeleteSession_ClosesACPConnForACPTransport(t *testing.T) {
+func TestArchiveSession_ClosesACPConnForACPTransport(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
-	// Register an ACP-capable agent so DeleteSession's model.Agents lookup hits the
+	// Register an ACP-capable agent so ArchiveSession's model.Agents lookup hits the
 	// "acp-stdio" branch.
 	origAgents := model.Agents
 	t.Cleanup(func() { model.Agents = origAgents })
@@ -113,27 +113,27 @@ func TestDeleteSession_ClosesACPConnForACPTransport(t *testing.T) {
 	conn.SetClientForTest(client)
 	conn.SetSessionMappingForTest(sessionID, "acp-session-mapped")
 	mgr.SetConnForTest(sessionID, conn)
-	// Don't defer cleanup — DeleteSession should close it.
+	// Don't defer cleanup — ArchiveSession should close it.
 
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 
-	// After delete, the ACP connection for this session should be gone.
+	// After archiving, the ACP connection for this session should be gone.
 	// CloseConn runs in a goroutine, so wait briefly for it to complete.
-	assert.Eventually(t, func() bool { return mgr.GetConn(sessionID) == nil }, 2*time.Second, 10*time.Millisecond, "ACP connection should be closed by DeleteSession")
+	assert.Eventually(t, func() bool { return mgr.GetConn(sessionID) == nil }, 2*time.Second, 10*time.Millisecond, "ACP connection should be closed by ArchiveSession")
 }
 
-func TestDeleteSession_SkipsACPCloseForCLITransport(t *testing.T) {
+func TestArchiveSession_SkipsACPCloseForCLITransport(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
 	origAgents := model.Agents
 	t.Cleanup(func() { model.Agents = origAgents })
 
-	// CLI-transport agent — DeleteSession should NOT attempt CloseConn
+	// CLI-transport agent — ArchiveSession should NOT attempt CloseConn
 	model.Agents = map[string]*model.Agent{
 		"cli-agent": {
 			ID:        "cli-agent",
@@ -153,15 +153,15 @@ func TestDeleteSession_SkipsACPCloseForCLITransport(t *testing.T) {
 	mgr.SetConnForTest(sessionID, conn)
 	t.Cleanup(func() { mgr.CloseConn(sessionID) })
 
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 	// Connection may still exist since transport=cli skips the close path
 }
 
-func TestDeleteSession_UnknownAgentSkipsACPClose(t *testing.T) {
+func TestArchiveSession_UnknownAgentSkipsACPClose(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
@@ -174,14 +174,126 @@ func TestDeleteSession_UnknownAgentSkipsACPClose(t *testing.T) {
 	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "unknown-agent-session", "unknown-agent-id", "", "default", "chat")
 	require.NoError(t, err)
 
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 }
 
 // ── ServeAISessionUpdate (PATCH /api/ai/session/update) ────────────────────
+
+// ── ArchiveSession: empty session → hard-delete ─────────────────────────────
+
+func TestArchiveSession_EmptySessionHardDeletes(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Create a session with no messages
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "empty-session", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Verify it has zero finalized messages
+	assert.Equal(t, 0, service.GetFinalizedMessageCount(sessionID))
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, true, result["destroyed"], "empty session should be hard-deleted (destroyed=true)")
+
+	// Session should be physically gone — session count should be 0
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "hard-deleted session should not count toward session total")
+}
+
+func TestArchiveSession_SessionWithMessagesSoftDeletes(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "has-messages", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Add a message so it's not empty
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "hello", nil, false, "")
+	require.NoError(t, err)
+	assert.Equal(t, 1, service.GetFinalizedMessageCount(sessionID))
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, false, result["destroyed"], "session with messages should be soft-archived (destroyed=false)")
+
+	// Session should still exist (archived=1), not hard-deleted — messages still accessible
+	assert.Equal(t, 1, service.GetChatMessageCount(sessionID))
+}
+
+func TestArchiveSession_RunningSessionCancelledBeforeArchive(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "running-archive", "claude", "", "default", "chat")
+	require.NoError(t, err)
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "hello", nil, false, "")
+	require.NoError(t, err)
+
+	// Mark the session as running — archive must cancel it (force-clear) first.
+	service.SetSessionRunning(sessionID, true)
+	t.Cleanup(func() { service.SetSessionRunning(sessionID, false) })
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, false, result["destroyed"])
+	assert.False(t, service.IsSessionRunning(sessionID), "running state should be cleared after archive")
+}
+
+func TestDestroySession_RunningSessionCancelledBeforeDestroy(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "running-destroy", "claude", "", "default", "chat")
+	require.NoError(t, err)
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "hello", nil, false, "")
+	require.NoError(t, err)
+
+	service.SetSessionRunning(sessionID, true)
+	t.Cleanup(func() { service.SetSessionRunning(sessionID, false) })
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/destroy?session_id="+sessionID, nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(DestroySession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, true, result["destroyed"])
+
+	// Session and its messages are physically gone.
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
 
 func TestServeAISessionUpdate_InvalidJSON(t *testing.T) {
 	_, teardown := setupTestEnv(t)

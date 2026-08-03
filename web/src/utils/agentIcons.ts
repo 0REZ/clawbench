@@ -19,11 +19,12 @@ import kimiIcon from '@lobehub/icons-static-svg/icons/kimi-color.svg?raw'
 import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?raw'
 import qoderIcon from '@lobehub/icons-static-svg/icons/qoder-color.svg?raw'
 import mimoIcon from '@lobehub/icons-static-svg/icons/xiaomimimo.svg?raw'
+import antigravityIcon from '@lobehub/icons-static-svg/icons/antigravity-color.svg?raw'
 
 // Monochrome icons (fill="currentColor" — inherit CSS `color`, theme-aware)
-import clineIcon from '@lobehub/icons-static-svg/icons/cline.svg?raw'
 import opencodeIcon from '@lobehub/icons-static-svg/icons/opencode.svg?raw'
 import piIcon from '@lobehub/icons-static-svg/icons/pi.svg?raw'
+import grokIcon from '@lobehub/icons-static-svg/icons/grok.svg?raw'
 
 import { extractSvgInner, extractViewBox } from '@/utils/providerIcons'
 
@@ -47,10 +48,11 @@ const agentSvgMap: Record<string, AgentSvgData> = {
     deepseek: { svg: extractSvgInner(deepseekIcon), viewBox: extractViewBox(deepseekIcon) },
 
     // Monochrome icons (currentColor — CSS `color` controls theme adaptation)
-    cline: { svg: extractSvgInner(clineIcon), viewBox: extractViewBox(clineIcon), monoCssClass: 'mono-cline' },
     opencode: { svg: extractSvgInner(opencodeIcon), viewBox: extractViewBox(opencodeIcon), needsBg: true, monoCssClass: 'mono-opencode' },
     pi: { svg: extractSvgInner(piIcon), viewBox: extractViewBox(piIcon), needsBg: true, monoCssClass: 'mono-pi' },
     mimo: { svg: extractSvgInner(mimoIcon), viewBox: extractViewBox(mimoIcon), needsBg: true, monoCssClass: 'mono-mimo' },
+    grok: { svg: extractSvgInner(grokIcon), viewBox: extractViewBox(grokIcon), needsBg: true, monoCssClass: 'mono-grok' },
+    antigravity: { svg: extractSvgInner(antigravityIcon), viewBox: extractViewBox(antigravityIcon) },
 
     // VeCLI not in lobe-icons — kept as inline fallback (explicit fill colors)
     vecli: {

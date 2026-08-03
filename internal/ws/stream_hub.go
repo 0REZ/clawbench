@@ -9,13 +9,31 @@ import (
 	"clawbench/internal/ai"
 )
 
+// ContextStateUsage represents the persisted usage state for a session,
+// used as a DB fallback when no live ACP connection is available.
+// Embeds ai.UsageState for compile-time parity with service.UsageStatePersist
+// — both must serialize identical JSON shapes for DB/WS consistency.
+type ContextStateUsage = ai.UsageState
+
+// GetContextStateUsageFunc is a function that retrieves persisted usage state
+// for a session. Injected by the service layer to avoid circular imports.
+type GetContextStateUsageFunc func(sessionID string) *ContextStateUsage
+
 // StreamHub manages session-scoped streaming event fan-out via WebSocket.
 // It replaces the single-consumer SSE channel with multi-client WS delivery.
 // Clients subscribe to specific sessions to receive their streaming events.
 type StreamHub struct {
-	mu          sync.RWMutex
-	subscribers map[string]map[string]struct{} // sessionID -> set of clientIDs
-	mgr         *Manager
+	mu                sync.RWMutex
+	subscribers       map[string]map[string]struct{} // sessionID -> set of clientIDs
+	mgr               *Manager
+	getContextUsageFn GetContextStateUsageFunc // injected by service layer
+}
+
+// SetGetContextStateUsageFunc injects a function that retrieves persisted usage
+// state from DB. Called by the service layer during initialization to avoid
+// circular imports.
+func (h *StreamHub) SetGetContextStateUsageFunc(fn GetContextStateUsageFunc) {
+	h.getContextUsageFn = fn
 }
 
 // NewStreamHub creates a StreamHub associated with the given Manager.
@@ -24,6 +42,11 @@ func NewStreamHub(mgr *Manager) *StreamHub {
 		subscribers: make(map[string]map[string]struct{}),
 		mgr:         mgr,
 	}
+}
+
+// Manager returns the Manager associated with this StreamHub.
+func (h *StreamHub) Manager() *Manager {
+	return h.mgr
 }
 
 // Subscribe adds a client as a subscriber to a session's streaming events.
@@ -137,8 +160,6 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	switch event.Type {
 	case "thinking_done", "done", "replay_done":
 		return map[string]any{}
-	case "resume_split":
-		return nil
 	}
 
 	switch event.Type {
@@ -252,6 +273,9 @@ func attachToolMeta(payload map[string]any, meta *ai.ToolCallMeta) {
 	if meta.FilePath != "" {
 		payload["file_path"] = meta.FilePath
 	}
+	if meta.DurationMs > 0 {
+		payload["duration_ms"] = meta.DurationMs
+	}
 }
 
 func userMessagePayload(event ai.StreamEvent) any {
@@ -325,9 +349,15 @@ func (h *StreamHub) EmitACPStateEvents(clientID, sessionID string) {
 	s := ai.GetACPConnManager().GetCachedStateByClawbenchSID(sessionID)
 	if s.Mode != nil || s.Config != nil || s.Effort != nil || len(s.Commands) > 0 || s.ModelList != nil || s.Plan != nil || s.Usage != nil {
 		h.emitACPState(clientID, sessionID, s)
-	} else if ou := ai.GetACPConnManager().GetOrphanedUsageState(sessionID); ou != nil {
-		h.emitStateEvent(clientID, sessionID, "usage_update", ou)
-		slog.Debug("streamhub: re-emitted orphaned usage on subscribe", "session_id", sessionID, "client_id", clientID)
+	} else if h.getContextUsageFn != nil {
+		// No live ACP connection — fall back to DB for usage only.
+		// Mode/thinking effort are not restored from DB here because agents
+		// re-emit them on reconnect; only usage (cumulative tokens/cost)
+		// needs DB persistence to survive server restarts.
+		if usage := h.getContextUsageFn(sessionID); usage != nil {
+			h.emitStateEvent(clientID, sessionID, "usage_update", usage)
+			slog.Debug("streamhub: re-emitted DB usage on subscribe", "session_id", sessionID, "client_id", clientID)
+		}
 	}
 }
 
@@ -359,43 +389,6 @@ func (h *StreamHub) emitACPState(clientID, sessionID string, s ai.ACPCachedState
 // EmitStreamStartEvent sends a stream_start chat_stream event with the streaming message ID.
 func (h *StreamHub) EmitStreamStartEvent(clientID, sessionID string, messageID int64) {
 	h.emitStateEvent(clientID, sessionID, "stream_start", map[string]int64{"message_id": messageID})
-}
-
-// EmitResumeSplitEvent sends a resume_split chat_stream event to all subscribers.
-// The message_id is injected from the caller since it's only available after
-// handleResumeSplit creates the new streaming message.
-func (h *StreamHub) EmitResumeSplitEvent(sessionID string, messageID int64) {
-	h.mu.RLock()
-	subs, ok := h.subscribers[sessionID]
-	if !ok || len(subs) == 0 {
-		h.mu.RUnlock()
-		return
-	}
-	clientIDs := make([]string, 0, len(subs))
-	for id := range subs {
-		clientIDs = append(clientIDs, id)
-	}
-	h.mu.RUnlock()
-
-	payload := map[string]any{}
-	if messageID > 0 {
-		payload["message_id"] = messageID
-	}
-
-	msg := ServerMessage{
-		Type:  MessageTypeEvent,
-		ID:    GenerateEventID(),
-		Event: "chat_stream",
-		Data: ChatStreamData{
-			SessionID: sessionID,
-			EventType: "resume_split",
-			Payload:   payload,
-		},
-	}
-
-	for _, clientID := range clientIDs {
-		h.mgr.SendToClient(clientID, msg)
-	}
 }
 
 // emitStateEvent sends a single chat_stream state event to a specific client.

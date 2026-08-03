@@ -54,12 +54,21 @@
     </div>
     <!-- Inline description (always visible below label row) -->
     <div v-if="description" class="settings-item__desc">{{ description }}</div>
-    <!-- Info-type: show value as a full-width detail line below the label/desc -->
-    <div v-if="type === 'info' && displayValue" class="settings-item__info-detail">{{ displayValue }}</div>
-    <!-- Progress bar for info-type items -->
+    <!-- Info-type: detail line with action icons (quantity on left, icons on right) -->
+    <div v-if="type === 'info' && displayValue" class="settings-item__info-row">
+      <span class="settings-item__info-detail">{{ displayValue }}</span>
+      <span v-if="refreshable" class="settings-item__refresh" :class="{ 'settings-item__refresh--active': refreshing }" @click.stop="emit('refresh')">
+        <RefreshCw :size="12" />
+      </span>
+      <span v-if="rebuildable" class="settings-item__rebuild" :class="{ 'settings-item__rebuild--active': rebuilding }" :title="rebuildTitle" @click.stop="emit('rebuild')">
+        <RotateCcw :size="12" />
+      </span>
+    </div>
+    <!-- Progress bar for info-type items (only when data exists) -->
     <div v-if="type === 'info' && progress && progress.max > 0" class="settings-item__progress">
-      <div class="settings-item__progress-bar" :class="{ 'settings-item__progress-bar--active': !disabled && progress.value < progress.max }" :style="{ width: Math.min((progress.value / progress.max) * 100, 100) + '%' }" />
-      <span v-if="speedLabel" class="settings-item__speed">{{ speedLabel }}</span>
+      <div class="settings-item__progress-track">
+        <div class="settings-item__progress-bar" :class="{ 'settings-item__progress-bar--active': !disabled && progress.value < progress.max }" :style="{ width: Math.min((progress.value / progress.max) * 100, 100) + '%' }" />
+      </div>
     </div>
   </div>
   <!-- Inline editor (non-select types) -->
@@ -155,7 +164,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Eye, EyeOff } from 'lucide-vue-next'
+import { Eye, EyeOff, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
@@ -182,8 +191,16 @@ interface Props {
   displayTransform?: (value: unknown) => unknown
   /** Progress bar for info-type items: { value, max }. Bar hidden when value >= max. */
   progress?: { value: number; max: number }
-  /** Speed label shown next to progress (e.g. "2.5 条/秒"). Only shown when > 0. */
-  speedLabel?: string
+  /** Show a refresh icon inside the progress bar area */
+  refreshable?: boolean
+  /** Refresh animation state */
+  refreshing?: boolean
+  /** Show a rebuild icon inside the progress bar area */
+  rebuildable?: boolean
+  /** Rebuild animation state */
+  rebuilding?: boolean
+  /** Tooltip text for rebuild icon */
+  rebuildTitle?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -207,6 +224,8 @@ const emit = defineEmits<{
   click: []
   editToggle: [open: boolean]
   discard: []
+  refresh: []
+  rebuild: []
 }>()
 
 const editing = ref(false)
@@ -438,24 +457,34 @@ function confirmEdit() {
   white-space: nowrap;
 }
 
-/* Info-type: full-width detail line below the label row */
-.settings-item__info-detail {
+/* Info-type: detail row with quantity text and action icons */
+.settings-item__info-row {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-item__info-detail {
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
   color: var(--text-secondary);
   word-break: break-all;
   line-height: 1.4;
-  margin-top: 0;
 }
 
-/* Progress bar for info-type items */
+/* Progress bar for info-type items (rendered via parent, not in info-row) */
 .settings-item__progress {
   width: 100%;
+  margin-top: 8px;
+}
+
+.settings-item__progress-track {
   height: 3px;
   background: var(--bg-tertiary);
   border-radius: 2px;
   overflow: visible;
-  margin-top: 8px;
   position: relative;
 }
 
@@ -485,14 +514,55 @@ function confirmEdit() {
   100% { background-position: 12px 0; }
 }
 
-.settings-item__speed {
-  position: absolute;
-  right: 0;
-  bottom: 6px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
+/* Refresh icon in info row */
+.settings-item__refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  margin: -6px 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+
+.settings-item__refresh:hover {
+  color: var(--accent-color);
+}
+
+.settings-item__refresh--active {
+  animation: spin 0.8s linear infinite;
   pointer-events: none;
+  color: var(--accent-color);
+}
+
+/* Rebuild icon beside progress bar */
+.settings-item__rebuild {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  margin: -6px 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+
+.settings-item__rebuild:hover {
+  color: var(--accent-color);
+}
+
+.settings-item__rebuild--active {
+  animation: spin 0.8s linear infinite;
+  pointer-events: none;
+  color: var(--accent-color);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Section header */

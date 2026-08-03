@@ -68,6 +68,15 @@ export function useChatStream(options: UseChatStreamOptions) {
   const PERMISSION_STREAM_TIMEOUT_MS = 300000 // 5 min when permission approval is pending (user deciding)
   const TOOL_USE_TIMEOUT_MS = 30000 // 30 seconds without 'done' event = mark as done
 
+  // Subagent (task/Agent) tool calls run for minutes inside a child session whose
+  // inner events aren't forwarded over ACP, so the outer call legitimately exceeds
+  // TOOL_USE_TIMEOUT_MS. Don't kill their spinner with the 30s fallback, otherwise a
+  // long-running subagent looks like it already finished.
+  const SUBAGENT_TOOL_NAMES = new Set(['task', 'agent'])
+  function isSubagentToolName(name?: string): boolean {
+    return !!name && SUBAGENT_TOOL_NAMES.has(name.toLowerCase())
+  }
+
   const { onEvent, sendWsMessage, connected } = useGlobalEvents()
 
   function debouncedRender() {
@@ -206,29 +215,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         break
       }
 
-      case 'resume_split': {
-        if (sessionChanged()) return
-        const sm = findStreamingMsg(messages.value)
-        if (!sm) return
-        resetStreamTimeout()
-        // Finalize Phase 1 message
-        delete sm.streaming
-        // Create Phase 2 streaming message
-        const phase2: ChatMessage = {
-          role: 'assistant',
-          id: (payload.message_id as number) || `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          content: '',
-          blocks: [],
-          streaming: true,
-          createdAt: new Date().toISOString(),
-          backend: currentBackend.value
-        }
-        messages.value.push(phase2)
-        thinkingBlockCounter = 0
-        onRenderNeeded()
-        debouncedRender()
-        break
-      }
+
 
       case 'content': {
         if (sessionChanged()) return
@@ -300,6 +287,7 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.summary !== undefined) existing.summary = data.summary
             if (data.display_name !== undefined) existing.display_name = data.display_name
             if (data.file_path !== undefined) existing.file_path = data.file_path
+            if (data.duration_ms !== undefined) existing.duration_ms = data.duration_ms
           } else {
             const newBlock: ContentBlock = {
               type: 'tool_use', name: data.name!, id: data.id!, done: true,
@@ -311,6 +299,7 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.summary) newBlock.summary = data.summary
             if (data.display_name) newBlock.display_name = data.display_name
             if (data.file_path) newBlock.file_path = data.file_path
+            if (data.duration_ms !== undefined) newBlock.duration_ms = data.duration_ms
             blocks.push(newBlock)
           }
           const timer = toolUseTimeouts.get(data.id!)
@@ -344,7 +333,7 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.display_name) newBlock.display_name = data.display_name
             if (data.file_path) newBlock.file_path = data.file_path
             blocks.push(newBlock)
-            if (data.name !== 'PermissionApproval') {
+            if (data.name !== 'PermissionApproval' && !isSubagentToolName(data.name)) {
               const timer = setTimeout(() => {
                 if (!newBlock.done) {
                   appLog.w(TAG, `tool_use block ${data.id} timed out without 'done', marking as done`)
@@ -378,6 +367,7 @@ export function useChatStream(options: UseChatStreamOptions) {
           if (data.name) existing.name = data.name
           if (data.status !== undefined) existing.status = data.status
           existing.done = true
+          if (data.duration_ms !== undefined) existing.duration_ms = data.duration_ms
         }
         const timer = toolUseTimeouts.get(data.id!)
         if (timer) { clearTimeout(timer); toolUseTimeouts.delete(data.id!) }

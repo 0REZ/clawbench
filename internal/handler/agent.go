@@ -190,6 +190,7 @@ func serveAgentsDuplicate(w http.ResponseWriter, r *http.Request) {
 			clone.ThinkingEffortLevels = spec.ThinkingEffortLevels
 		}
 	}
+	clone.SupportsCLI = model.BackendSupportsCLI(clone.Backend)
 
 	writeJSON(w, http.StatusOK, clone)
 }
@@ -393,9 +394,10 @@ func serveAgentsPatch(w http.ResponseWriter, r *http.Request) { //nolint:gocogni
 		transport, _ := v.(string)
 		spec := model.FindSpecByBackend(agent.Backend)
 		hasACP := spec != nil && spec.AcpCommand != ""
+		hasCLI := agent.SupportsCLI
 		oldTransport := agent.Transport
 		switch {
-		case transport == "cli":
+		case transport == "cli" && hasCLI:
 			agent.Transport = "cli"
 		case transport == "acp-stdio" && hasACP:
 			agent.Transport = "acp-stdio"
@@ -729,7 +731,7 @@ func ServeACPSessions(w http.ResponseWriter, r *http.Request) {
 	// Filter out ACP sessions that already exist in ClawBench's session manager.
 	// Each loaded ACP session has source_session_id = "acp:{acpSessionId}".
 	// Active sessions: user already has this conversation — don't show it.
-	// Soft-deleted sessions: will be hard-deleted and recreated on load,
+	// Archived sessions: will be hard-deleted and recreated on load,
 	// so also don't show them to avoid confusion.
 	if len(sessions) > 0 {
 		acpSessionIDs := make([]string, len(sessions))
@@ -754,7 +756,7 @@ func ServeACPSessions(w http.ResponseWriter, r *http.Request) {
 
 // findExistingACPSessions returns a set of source_session_id values
 // (formatted as "acp:{acpSessionId}") for ACP sessions that already
-// exist in ClawBench's session manager (active or soft-deleted).
+// exist in ClawBench's session manager (active or archived).
 // This is used to filter out already-loaded sessions from the ACP
 // session list displayed in the @resume drawer.
 func findExistingACPSessions(acpSessionIDs []string) map[string]bool {

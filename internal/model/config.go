@@ -56,7 +56,9 @@ type Config struct {
 		SystemPromptInterval int `yaml:"system_prompt_interval"` // Re-inject system prompt every N assistant turns (0=never, default: 10)
 	} `yaml:"chat"`
 	Session struct {
-		MaxCount int `yaml:"max_count"` // Maximum number of chat sessions per project (default: 10)
+		MaxCount                int  `yaml:"max_count"`                 // Maximum number of chat sessions per project (default: 10)
+		ArchiveRetentionEnabled bool `yaml:"archive_retention_enabled"` // Enable auto-purge of archived sessions after retention period (default: false)
+		ArchiveRetentionDays    int  `yaml:"archive_retention_days"`    // Days to keep archived sessions before auto-purge (0=keep forever, default: 30)
 	} `yaml:"session"`
 	RecentProjects struct {
 		MaxCount int `yaml:"max_count"` // Maximum number of recent projects to keep (default: 10)
@@ -152,7 +154,7 @@ type RAGConfig struct {
 	BatchSize      int    `yaml:"batch_size"`       // Messages per indexer batch (default: 50)
 	SearchLimit    int    `yaml:"search_limit"`     // Default search result limit (default: 20)
 	SearchPoolSize int    `yaml:"search_pool_size"` // Candidates per search source before RRF fusion (default: 20)
-	RetentionDays  int    `yaml:"retention_days"`   // Soft-deleted data retention days (0=keep forever, default: 90)
+	RetentionDays  int    `yaml:"retention_days"`   // Archived data retention days (0=keep forever, default: 90)
 }
 
 // PiperConfig holds configuration for the Piper TTS engine.

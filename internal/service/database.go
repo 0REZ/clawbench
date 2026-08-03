@@ -194,6 +194,20 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		}
 	}
 
+	// Pre-migration: rename chat_sessions.deleted to archived.
+	// Session "delete" is actually an archive; the column name
+	// should reflect that. Must run before createTables because its indexes
+	// reference the archived column. SQLite RENAME COLUMN also rewrites any
+	// index definitions referencing the old column name.
+	var hasSessionDeleted int
+	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_sessions') WHERE name='deleted'").Scan(&hasSessionDeleted)
+	if hasSessionDeleted > 0 {
+		if _, err := WriteExec("ALTER TABLE chat_sessions RENAME COLUMN deleted TO archived"); err != nil {
+			return fmt.Errorf("failed to rename chat_sessions.deleted to archived: %w", err)
+		}
+		slog.Info("renamed chat_sessions.deleted column to archived")
+	}
+
 	// Create tables with latest schema
 	_, err = WriteExec(`
 		CREATE TABLE IF NOT EXISTS chat_history (
@@ -218,7 +232,7 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			model TEXT DEFAULT '',
 			external_session_id TEXT DEFAULT '',
 			session_type TEXT NOT NULL DEFAULT 'chat',
-			deleted INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
 			last_read_at DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -274,7 +288,7 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		CREATE INDEX IF NOT EXISTS idx_raw_responses_session ON ai_raw_responses(session_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_raw_responses_message ON ai_raw_responses(message_id);
 		CREATE INDEX IF NOT EXISTS idx_executions_session ON task_executions(session_id);
-		CREATE INDEX IF NOT EXISTS idx_sessions_type ON chat_sessions(session_type, project_path, deleted);
+		CREATE INDEX IF NOT EXISTS idx_sessions_type ON chat_sessions(session_type, project_path, archived);
 
 		-- Covering index for session-based queries (GetChatMessageCount, GetAssistantMessageCount,
 		-- unread subquery, GetChatHistoryPaged) — avoids full table scan through large content rows.
@@ -302,15 +316,29 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			status TEXT NOT NULL DEFAULT '',
 			done INTEGER NOT NULL DEFAULT 0,
 			summary TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(tool_id, message_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON chat_tool_calls(message_id);
 		CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON chat_tool_calls(session_id, created_at DESC);
+
+		-- Thinking block detail storage (text split from chat_history.content for performance)
+		CREATE TABLE IF NOT EXISTS chat_thinking (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id INTEGER NOT NULL REFERENCES chat_history(id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL,
+			think_id TEXT NOT NULL,
+			text TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(think_id, message_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_thinking_message ON chat_thinking(message_id);
+		CREATE INDEX IF NOT EXISTS idx_thinking_session ON chat_thinking(session_id, created_at DESC);
 		-- Covering index for session list ORDER BY + cursor pagination:
-		-- WHERE session_type = 'chat' AND project_path = ? AND deleted = 0 ORDER BY updated_at DESC, id DESC
+		-- WHERE session_type = 'chat' AND project_path = ? AND archived = 0 ORDER BY updated_at DESC, id DESC
 		-- Without this, idx_sessions_type covers WHERE but requires a filesort for ORDER BY.
-		CREATE INDEX IF NOT EXISTS idx_sessions_order ON chat_sessions(session_type, project_path, deleted, updated_at DESC, id DESC);
+		CREATE INDEX IF NOT EXISTS idx_sessions_order ON chat_sessions(session_type, project_path, archived, updated_at DESC, id DESC);
 
 		CREATE TABLE IF NOT EXISTS summaries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -417,6 +445,30 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_feishu_user ON feishu_subscribers(user_id);
+
+		-- Cluster cache: stores precomputed cluster results for quick-send suggestions
+		CREATE TABLE IF NOT EXISTS message_clusters_cache (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			representative TEXT NOT NULL,
+			variants TEXT NOT NULL,
+			total_count INTEGER NOT NULL,
+			representative_count INTEGER NOT NULL,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+
+		-- Cluster meta: single-row (id=1) tracking computation state
+		CREATE TABLE IF NOT EXISTS message_clusters_meta (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			mode TEXT NOT NULL DEFAULT '',
+			progress TEXT NOT NULL DEFAULT 'idle',
+			phase TEXT NOT NULL DEFAULT '',
+			msg_count INTEGER NOT NULL DEFAULT 0,
+			cluster_count INTEGER NOT NULL DEFAULT 0,
+			elapsed_ms INTEGER NOT NULL DEFAULT 0,
+			error_msg TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
@@ -478,6 +530,15 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		}
 	}
 
+	// Migrate: add context_state column for persisting session context info (mode, thinking, usage)
+	var hasContextState int
+	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_sessions') WHERE name='context_state'").Scan(&hasContextState)
+	if hasContextState == 0 {
+		if _, err := WriteExec("ALTER TABLE chat_sessions ADD COLUMN context_state TEXT DEFAULT ''"); err != nil {
+			return fmt.Errorf("failed to add context_state column: %w", err)
+		}
+	}
+
 	// Migrate: add host column to forwarded_ports for custom target host
 	var hasForwardedPortHost int
 	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('forwarded_ports') WHERE name='host'").Scan(&hasForwardedPortHost)
@@ -511,7 +572,7 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 	}
 
 	// Migrate: drop deleted column from chat_history.
-	// Soft-delete is handled at the session level (chat_sessions.deleted),
+	// Archival is handled at the session level (chat_sessions.archived),
 	// so chat_history.deleted is redundant. Removing it simplifies queries
 	// and eliminates the need to restore messages when restoring a session.
 	var hasHistoryDeleted int
@@ -690,16 +751,6 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		}
 	}
 
-	// Migrate: add ACP cached usage state column to agents table for persistent
-	// storage of agent-level usage state (best-effort fallback for session switch).
-	var hasCachedUsage int
-	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='acp_cached_usage_state'").Scan(&hasCachedUsage)
-	if hasCachedUsage == 0 {
-		if _, err := WriteExec("ALTER TABLE agents ADD COLUMN acp_cached_usage_state TEXT NOT NULL DEFAULT ''"); err != nil {
-			return fmt.Errorf("failed to add acp_cached_usage_state column: %w", err)
-		}
-	}
-
 	// Migrate: add is_default column to recent_projects for server-side default project.
 	var hasIsDefault int
 	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('recent_projects') WHERE name='is_default'").Scan(&hasIsDefault)
@@ -731,6 +782,15 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		slog.Info("dropped source column from agents table")
 	}
 
+	// Migrate: add duration_ms column to chat_tool_calls for per-tool execution time.
+	var hasToolCallDuration int
+	_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_tool_calls') WHERE name='duration_ms'").Scan(&hasToolCallDuration)
+	if hasToolCallDuration == 0 {
+		if _, err := WriteExec("ALTER TABLE chat_tool_calls ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("failed to add duration_ms column to chat_tool_calls: %w", err)
+		}
+	}
+
 	// Migrate: extract metadata from chat_history.content into chat_metadata table.
 	// This is a one-time migration for existing data; new messages are saved
 	// to chat_metadata automatically via SaveMetadata().
@@ -745,6 +805,10 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 	// Migrate: extract tool_use input/output from chat_history.content into
 	// chat_tool_calls table and rewrite content to slim format (no input/output).
 	MigrateToolCallsFromContent()
+
+	// Migrate: extract thinking text from chat_history.content into chat_thinking
+	// and rewrite content to slim format (think_id instead of text).
+	MigrateThinkingFromContent()
 
 	return nil
 }
@@ -980,7 +1044,11 @@ func MigrateToolCallsFromContent() {
 	slog.Info("migrating tool_use input/output from chat_history to chat_tool_calls", slog.Int("rows", needed))
 
 	batchSize := 200
-	offset := 0
+	// Keyset cursor pagination: rows are slimmed (and thus removed from the
+	// matching set) as they are processed, so a fixed OFFSET would drift ahead
+	// and permanently skip rows. Cursor by id guarantees each row is visited
+	// exactly once.
+	lastID := int64(0)
 	migrated := 0
 	failed := 0
 
@@ -997,9 +1065,10 @@ func MigrateToolCallsFromContent() {
 			    WHERE tc.message_id = h.id
 			    LIMIT 1
 			  )
+			  AND h.id > ?
 			ORDER BY h.id
-			LIMIT ? OFFSET ?`,
-			batchSize, offset,
+			LIMIT ?`,
+			lastID, batchSize,
 		)
 		if err != nil {
 			slog.Error("tool_use migration: query failed", slog.String("err", err.Error()))
@@ -1032,9 +1101,13 @@ func MigrateToolCallsFromContent() {
 					slog.Int64("id", r.ID),
 					slog.String("err", err.Error()))
 				failed++
-				continue
+			} else {
+				migrated++
 			}
-			migrated++
+			// Advance the cursor for every visited row so a row that cannot be
+			// migrated (e.g. a literal "tool_use"/"input" in a text block, or a
+			// persistent DB error) is visited only once.
+			lastID = r.ID
 		}
 
 		slog.Info("tool_use migration progress",
@@ -1046,7 +1119,6 @@ func MigrateToolCallsFromContent() {
 		if len(batch) < batchSize {
 			break
 		}
-		offset += batchSize
 	}
 
 	slog.Info("tool_use migration complete",
@@ -1090,7 +1162,7 @@ func migrateToolCallsForRow(msgID int64, sessionID, content string) error {
 
 			// Upsert to chat_tool_calls
 			inputJSON, _ := json.Marshal(b.Input)
-			if err := UpsertToolCall(msgID, sessionID, b.ID, b.Name, inputJSON, b.Output, b.Status, b.Summary, b.Done); err != nil {
+			if err := UpsertToolCall(msgID, sessionID, b.ID, b.Name, inputJSON, b.Output, b.Status, b.Summary, b.Done, b.DurationMs); err != nil {
 				// Log but continue — don't block the whole migration
 				slog.Warn("tool_use migration: upsert failed",
 					slog.String("toolID", b.ID),
@@ -1104,7 +1176,7 @@ func migrateToolCallsForRow(msgID int64, sessionID, content string) error {
 			b.DisplayName = meta.DisplayName
 			b.FilePath = meta.FilePath
 			inputJSON, _ := json.Marshal(b.Input)
-			_ = UpsertToolCall(msgID, sessionID, b.ID, b.Name, inputJSON, b.Output, b.Status, b.Summary, b.Done)
+			_ = UpsertToolCall(msgID, sessionID, b.ID, b.Name, inputJSON, b.Output, b.Status, b.Summary, b.Done, b.DurationMs)
 		}
 	}
 
@@ -1126,6 +1198,54 @@ func migrateToolCallsForRow(msgID int64, sessionID, content string) error {
 
 	_, err = WriteExec("UPDATE chat_history SET content = ? WHERE id = ?", string(newContent), msgID)
 	return err
+}
+
+// UserMessageStat represents a distinct user message text and its occurrence count.
+type UserMessageStat struct {
+	Text  string `json:"text"`
+	Count int    `json:"count"`
+}
+
+// GetUserMessageStats returns distinct non-empty user messages across all sessions
+// (including archived), grouped by content and ordered by recency + frequency.
+// Messages are filtered to exclude: streaming messages, empty content, long content
+// (>200 chars), file-attached messages, slash/@-prefixed commands, and messages
+// already in quick-send (matched by label OR command).
+// limit caps the number of distinct message types returned (default 500 when limit <= 0).
+// Results are ordered by the latest occurrence timestamp descending (recent first),
+// so clustering prioritizes recent data. The O(n²) comparison in clustering makes
+// large limits impractical — 500 types ≈ 125K comparisons, completes in seconds.
+func GetUserMessageStats(limit int) ([]UserMessageStat, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := dbRead.Query(`
+		SELECT content, COUNT(*) AS cnt
+		FROM chat_history
+		WHERE role = 'user'
+		  AND streaming = 0
+		  AND content != ''
+		  AND LENGTH(content) <= 200
+		  AND (files IS NULL OR files = '')
+		  AND NOT (content LIKE '/%' OR content LIKE '@%')
+		  AND content NOT IN (SELECT label FROM chat_quick_send UNION SELECT command FROM chat_quick_send)
+		GROUP BY content
+		ORDER BY MAX(created_at) DESC, cnt DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stats []UserMessageStat
+	for rows.Next() {
+		var s UserMessageStat
+		if err := rows.Scan(&s.Text, &s.Count); err != nil {
+			return nil, err
+		}
+		stats = append(stats, s)
+	}
+	return stats, nil
 }
 
 // CloseDB closes both write and read database connections.
@@ -1400,6 +1520,153 @@ func DeleteChatQuickSend(id int64) error {
 // ReorderChatQuickSend updates sort_order for all items based on the given ID order.
 func ReorderChatQuickSend(ids []int64) error {
 	return ChatQuickSendHelpers.reorder(ids)
+}
+
+// ClusterCacheEntry represents a row in message_clusters_cache.
+type ClusterCacheEntry struct {
+	ID                  int64  `json:"id"`
+	Representative      string `json:"representative"`
+	Variants            string `json:"variants"` // JSON array stored as string
+	TotalCount          int    `json:"total_count"`
+	RepresentativeCount int    `json:"representative_count"`
+	SortOrder           int    `json:"sort_order"`
+}
+
+// SaveClusterCache deletes old cache and meta rows, inserts new entries,
+// and writes a meta row with progress="done". Uses WriteLock + transaction.
+func SaveClusterCache(entries []ClusterCacheEntry, mode string) error {
+	tx, err := WriteBegin()
+	if err != nil {
+		return err
+	}
+	defer writeMu.Unlock()
+
+	if _, err := tx.Exec("DELETE FROM message_clusters_cache"); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM message_clusters_meta"); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	for _, e := range entries {
+		if _, err := tx.Exec(
+			"INSERT INTO message_clusters_cache (representative, variants, total_count, representative_count, sort_order) VALUES (?, ?, ?, ?, ?)",
+			e.Representative, e.Variants, e.TotalCount, e.RepresentativeCount, e.SortOrder,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO message_clusters_meta (id, mode, progress, msg_count, cluster_count, elapsed_ms) VALUES (1, ?, 'done', ?, ?, 0)",
+		mode, 0, len(entries),
+	); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// GetClusterCache returns all cache entries ordered by sort_order,
+// along with the mode and updated_at from the meta row.
+func GetClusterCache() ([]ClusterCacheEntry, string, time.Time, error) {
+	rows, err := dbRead.Query("SELECT id, representative, variants, total_count, representative_count, sort_order FROM message_clusters_cache ORDER BY sort_order")
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var entries []ClusterCacheEntry
+	for rows.Next() {
+		var e ClusterCacheEntry
+		if err := rows.Scan(&e.ID, &e.Representative, &e.Variants, &e.TotalCount, &e.RepresentativeCount, &e.SortOrder); err != nil {
+			return nil, "", time.Time{}, err
+		}
+		entries = append(entries, e)
+	}
+
+	var mode string
+	var updatedAt time.Time
+	err = dbRead.QueryRow("SELECT mode, updated_at FROM message_clusters_meta WHERE id = 1").Scan(&mode, &updatedAt)
+	if err != nil {
+		// No meta row → return empty mode and zero time
+		return entries, "", time.Time{}, nil
+	}
+	return entries, mode, updatedAt, nil
+}
+
+// SaveClusterMeta inserts or replaces the meta row with computation progress info.
+// If mode is empty string, the previous mode value is preserved (useful during
+// computing phases when the final mode is not yet known).
+// If phase is empty string, the previous phase value is preserved.
+func SaveClusterMeta(progress, mode string, msgCount, clusterCount, elapsedMs int, phase ...string) error {
+	p := ""
+	if len(phase) > 0 {
+		p = phase[0]
+	}
+	_, err := WriteExec(
+		"INSERT OR REPLACE INTO message_clusters_meta (id, mode, progress, phase, msg_count, cluster_count, elapsed_ms, error_msg, updated_at) "+
+			"VALUES (1, COALESCE(NULLIF(?, ''), (SELECT mode FROM message_clusters_meta WHERE id = 1), ''), ?, COALESCE(NULLIF(?, ''), (SELECT phase FROM message_clusters_meta WHERE id = 1), ''), ?, ?, ?, '', CURRENT_TIMESTAMP)",
+		mode, progress, p, msgCount, clusterCount, elapsedMs,
+	)
+	return err
+}
+
+// SaveClusterMetaError inserts or replaces the meta row with error info.
+func SaveClusterMetaError(progress, phase, errMsg string) error {
+	// Preserve existing mode from the meta row
+	var mode string
+	_ = dbRead.QueryRow("SELECT mode FROM message_clusters_meta WHERE id = 1").Scan(&mode)
+
+	_, err := WriteExec(
+		"INSERT OR REPLACE INTO message_clusters_meta (id, mode, progress, phase, msg_count, cluster_count, elapsed_ms, error_msg, updated_at) VALUES (1, ?, ?, ?, 0, 0, 0, ?, CURRENT_TIMESTAMP)",
+		mode, progress, phase, errMsg,
+	)
+	return err
+}
+
+// ClusterMeta is the persisted message-clusters computation metadata row.
+type ClusterMeta struct {
+	Mode         string
+	UpdatedAt    time.Time
+	Progress     string
+	Phase        string
+	MsgCount     int
+	ClusterCount int
+	ElapsedMs    int
+	ErrorMsg     string
+}
+
+// GetClusterMeta returns the meta row values. If no row exists, returns defaults.
+func GetClusterMeta() ClusterMeta {
+	var m ClusterMeta
+	err := dbRead.QueryRow(
+		"SELECT mode, updated_at, progress, phase, msg_count, cluster_count, elapsed_ms, error_msg FROM message_clusters_meta WHERE id = 1",
+	).Scan(&m.Mode, &m.UpdatedAt, &m.Progress, &m.Phase, &m.MsgCount, &m.ClusterCount, &m.ElapsedMs, &m.ErrorMsg)
+	if err != nil {
+		return ClusterMeta{Progress: "idle"}
+	}
+	return m
+}
+
+// GetQuickSendCommands returns all command strings from chat_quick_send ordered by sort_order.
+func GetQuickSendCommands() []string {
+	rows, err := dbRead.Query("SELECT command FROM chat_quick_send ORDER BY sort_order")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = rows.Close() }()
+
+	var commands []string
+	for rows.Next() {
+		var cmd string
+		if err := rows.Scan(&cmd); err != nil {
+			return nil
+		}
+		commands = append(commands, cmd)
+	}
+	return commands
 }
 
 // KeyConfigItem represents a terminal key/symbol configuration entry.

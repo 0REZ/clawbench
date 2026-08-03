@@ -33,8 +33,8 @@
           <RotateCcw :size="14" />
         </button>
         <button class="chat-action-btn chat-action-btn-archive" :class="{ disabled: !currentSessionId }"
-          @click="handleDelete"
-          :title="currentSessionId ? t('chat.actions.deleteCurrentSession') : t('chat.actions.noSessionToDelete')">
+          @click="handleArchive"
+          :title="currentSessionId ? t('chat.actions.archiveCurrentSession') : t('chat.actions.noSessionToArchive')">
           <Archive :size="14" />
         </button>
       </div>
@@ -56,6 +56,13 @@
         <Upload :size="24" :stroke-width="1.5" />
         <span>{{ t('chat.attach.dropToUpload') }}</span>
       </div>
+      <!-- Paste overlay (brief feedback when pasting files from clipboard) -->
+      <Transition name="paste-fade">
+        <div v-if="isPasteOver" class="paste-overlay">
+          <ClipboardPaste :size="24" :stroke-width="1.5" />
+          <span>{{ t('chat.attach.pasteToUpload') }}</span>
+        </div>
+      </Transition>
       <!-- Attachment tags (horizontal scrollable cards — only quote + attached file refs) -->
       <div v-if="quoteData || attachedFiles.length > 0" class="chat-attachment-tags">
         <!-- Quote selection card -->
@@ -65,15 +72,8 @@
           <span v-if="quoteData.startLine" class="attachment-filesize">L{{ quoteData.startLine }}</span>
           <button class="attachment-close-btn" @click.stop="$emit('remove-quote')" :title="t('common.remove')">×</button>
         </span>
-        <!-- Attached file reference cards -->
-        <span v-for="(fileEntry, idx) in attachedFiles" :key="'att-' + fileEntry.path" class="chat-file-attachment attachment-ref" :class="{ 'attachment-image-only': isImageFile(fileEntry.path) && (isThumbableExt(fileEntry.path) || thumbErrors.has(fileEntry.path)) }" @click="$emit('file-tag-click', fileEntry.path)" :title="t('chat.attach.openFile')">
-          <img v-if="isImageFile(fileEntry.path) && isThumbableExt(fileEntry.path) && !thumbErrors.has(fileEntry.path)"
-            class="attachment-thumb-img"
-            :src="attachmentThumbUrl(fileEntry.path)" loading="lazy" @error="onThumbError(fileEntry.path)" />
-          <FileIcon v-if="!isImageFile(fileEntry.path)" :path="fileEntry.path" :is-dir="fileEntry.isDir" :size="22" class="attachment-file-icon" />
-          <span v-if="!isImageFile(fileEntry.path)" class="attachment-filename">{{ getFileName(fileEntry.path) }}</span>
-          <button class="attachment-close-btn" @click.stop="$emit('remove-attached', idx)" :title="t('common.remove')">×</button>
-        </span>
+        <!-- Attached file reference cards (shared component) -->
+        <AttachmentTags :files="attachedFiles" @file-click="$emit('file-tag-click', $event)" @remove="handleRemoveAttached" />
       </div>
       <!-- Input row: attach + clear + textarea + stop + send -->
       <div class="chat-input-row">
@@ -92,6 +92,7 @@
           :placeholder="dynamicPlaceholder"
           rows="1"
           @keydown="onTextareaKeydown"
+          @paste="onPaste"
           @focus="onTextareaFocus"
           @blur="onTextareaBlur"
           ></textarea>
@@ -226,6 +227,13 @@
           </span>
         </span>
       </template>
+      <template v-if="showCompactBtn">
+        <span class="session-info-divider"></span>
+        <button class="session-info-compact" :disabled="inputDisabled" @click.stop="handleCompact" :title="t('chat.sessionInfo.compact')" :aria-label="t('chat.sessionInfo.compact')">
+          <Minimize2 :size="11" />
+          {{ t('chat.sessionInfo.compact') }}
+        </button>
+      </template>
     </div>
   </div>
 </template>
@@ -233,17 +241,13 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, RotateCcw } from 'lucide-vue-next'
-import { baseName } from '@/utils/path.ts'
+import { MessageSquare, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, RotateCcw, ClipboardPaste, Minimize2 } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
-import { isThumbableExt } from '@/utils/fileManager.ts'
-import { isImageFile } from '@/utils/fileAttachmentUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
-import { buildPathThumbUrl } from '@/utils/fileIcon.ts'
-import FileIcon from '@/components/common/FileIcon.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
+import AttachmentTags from '@/components/chat/AttachmentTags.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 const QuickSendDrawer = defineAsyncComponent(() => import('@/components/chat/QuickSendDrawer.vue'))
 import SessionDrawer from '@/components/chat/SessionDrawer.vue'
@@ -254,16 +258,18 @@ import { useChatKeyboard } from '@/composables/useChatKeyboard'
 import { useSessionIdentity } from '@/composables/useSessionIdentity'
 import { useAgents } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast'
+import { useFileUpload } from '@/composables/useFileUpload'
 
 const { t } = useI18n()
 const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextCost, contextCurrency } = useSessionIdentity()
-const { supportsDualTransport, hasPreferredMode, agentCanResume } = useAgents()
+const { supportsACP, hasPreferredMode, agentCanResume } = useAgents()
 const toast = useToast()
+const { uploadAndAttach } = useFileUpload()
 
 // isACP: true when the current agent supports ACP (has acpCommand).
 // Used for mode chips — these are ACP features
 // that apply regardless of the current session's transport mode.
-const isACP = computed(() => supportsDualTransport(props.currentAgentId || ''))
+const isACP = computed(() => supportsACP(props.currentAgentId || ''))
 
 // isACPTransport: true when the current session is using ACP transport.
 // Slash commands are only available in ACP transport mode — even if the
@@ -315,7 +321,7 @@ function doToggleAutoApprove() {
     type: next ? 'success' : 'info',
   })
 }
-const showUsageInfo = computed(() => contextSize.value > 0)
+const showUsageInfo = computed(() => isACPTransport.value || contextSize.value > 0)
 const usagePct = computed(() => contextSize.value > 0 ? Math.round((contextUsed.value / contextSize.value) * 100) : 0)
 const usageColor = computed(() => {
   const pct = usagePct.value
@@ -324,6 +330,8 @@ const usageColor = computed(() => {
   if (pct >= 75) return '#eab308'
   return '#22c55e'
 })
+const hasCompactCommand = computed(() => availableCommands.value.some(cmd => cmd.name === '/compact' || cmd.name === 'compact'))
+const showCompactBtn = computed(() => usagePct.value >= 75 && hasCompactCommand.value && isACPTransport.value)
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
 const { items: quickSendItems, fetchItems } = quickSendStore
@@ -411,7 +419,8 @@ const emit = defineEmits([
   'toggle-auto-speech',
   'create-session',
   'show-agent-selector',
-  'delete-session',
+  'archive-session',
+  'destroy-session',
   'open-user-msg-index',
   'open-acp-sessions',
   'switch-model',
@@ -425,6 +434,8 @@ const rootRef = ref(null)
 const textareaRef = ref(null)
 const isDragOver = ref(false)
 const dragCounter = ref(0)
+const isPasteOver = ref(false)
+let pasteOverlayTimer = 0
 const attachDrawer = useTabDrawer('chat')
 const attachDrawerRef = ref(null)
 const attachMenuRef = ref(null) // kept for ref stability, no longer used for PopupMenu
@@ -648,15 +659,17 @@ function handleCreateClick(e) {
   emit('show-agent-selector')
 }
 
-async function handleDelete() {
+async function handleArchive() {
   if (!props.currentSessionId) return
-  if (await dialog.confirm(t('chat.delete.confirm'), { dangerous: true })) {
-    emit('delete-session')
+  const confirmed = await dialog.confirm(t('chat.archive.confirm'), {
+    dangerous: true,
+    extraText: t('chat.archive.destroyBtn'),
+    extraPrimedText: t('chat.archive.destroyBtnPrimed'),
+    onExtraAction: () => emit('destroy-session'),
+  })
+  if (confirmed) {
+    emit('archive-session')
   }
-}
-
-function getFileName(path) {
-  return baseName(path)
 }
 
 function truncateQuoteText(text, maxLen) {
@@ -664,25 +677,6 @@ function truncateQuoteText(text, maxLen) {
   const oneLine = text.replace(/\n/g, ' ')
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen) + '...' : oneLine
 }
-
-/** Alias for the shared thumb URL builder. */
-const attachmentThumbUrl = buildPathThumbUrl
-
-// Track thumbnail load errors so fallback icon is shown
-// Must replace the Set (not mutate in-place) to trigger Vue reactivity
-const thumbErrors = ref(new Set())
-function onThumbError(path) {
-  const next = new Set(thumbErrors.value)
-  next.add(path)
-  thumbErrors.value = next
-}
-
-// Clear thumb errors when all attachments are removed
-watch(() => props.attachedFiles.length, (attLen) => {
-  if (attLen === 0 && thumbErrors.value.size > 0) {
-    thumbErrors.value = new Set()
-  }
-})
 
 function autoResizeTextarea() {
   const el = textareaRef.value
@@ -749,18 +743,42 @@ function onDrop(e) {
   isDragOver.value = false
   const files = Array.from(e.dataTransfer?.files || [])
   if (files.length > 0) {
-    // Open the drawer and delegate upload to it.
-    // Retry until the drawer ref is available (may take a few ticks
-    // if the BottomSheet enter transition hasn't mounted yet).
-    if (!attachDrawer.isOpen.value) attachDrawer.open()
-    const tryDrop = () => {
-      if (attachDrawerRef.value?.handleFileDrop) {
-        attachDrawerRef.value.handleFileDrop(files)
+    uploadAndAttach(files)
+  }
+}
+
+function onPaste(e) {
+  const items = e.clipboardData?.items
+  if (!items) return
+
+  const files = []
+  for (const item of items) {
+    if (item.kind === 'file') {
+      const raw = item.getAsFile()
+      if (!raw) continue
+      // Clipboard images (e.g. screenshots) may have no name or empty name.
+      // Backend requires non-empty extension, so give a default name with extension.
+      if (!raw.name || raw.name === '' || !raw.name.includes('.')) {
+        const ext = raw.type === 'image/png' ? '.png'
+          : raw.type === 'image/jpeg' ? '.jpg'
+          : raw.type === 'image/webp' ? '.webp'
+          : raw.type === 'image/gif' ? '.gif'
+          : raw.type === 'image/bmp' ? '.bmp'
+          : '.png'
+        files.push(new File([raw], `clipboard_${Date.now()}${ext}`, { type: raw.type }))
       } else {
-        nextTick(tryDrop)
+        files.push(raw)
       }
     }
-    nextTick(tryDrop)
+  }
+
+  if (files.length > 0) {
+    e.preventDefault()
+    uploadAndAttach(files)
+    // Show brief paste overlay feedback
+    clearTimeout(pasteOverlayTimer)
+    isPasteOver.value = true
+    pasteOverlayTimer = setTimeout(() => { isPasteOver.value = false }, 1500)
   }
 }
 
@@ -902,6 +920,10 @@ function toggleQuickMenu() {
   showQuickMenu.value = !showQuickMenu.value
 }
 
+function handleCompact() {
+  emit('send', '/compact')
+}
+
 function handleSwitchModel(model) {
   emit('switch-model', model)
 }
@@ -936,6 +958,7 @@ onBeforeUnmount(() => {
     clearTimeout(quickSendPressTimer)
     quickSendPressTimer = null
   }
+  clearTimeout(pasteOverlayTimer)
 
   stopPlaceholderRotation()
 })
@@ -964,7 +987,7 @@ defineExpose({
   onQuickSendTouchEnd,
   cancelQuickSendPress,
   quickSendPressingId,
-  handleDelete,
+  handleArchive,
 })
 </script>
 
@@ -1044,6 +1067,39 @@ defineExpose({
   gap: 3px;
   flex-shrink: 0;
   cursor: pointer;
+}
+
+.session-info-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--text-muted, #999);
+  font-size: 11px;
+  line-height: 1.4;
+  transition: color 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.session-info-compact:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.session-info-compact:active:not(:disabled) {
+  color: var(--accent-color, #0066cc);
+}
+
+@media (hover: hover) {
+  .session-info-compact:hover:not(:disabled) {
+    color: var(--accent-color, #0066cc);
+  }
 }
 
 .usage-bar {
@@ -1286,6 +1342,31 @@ defineExpose({
   font-weight: 500;
   border-radius: 20px;
   pointer-events: none;
+}
+
+.paste-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--success-color, #22c55e) 8%, var(--bg-primary, #fff));
+  color: var(--success-color, #22c55e);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 20px;
+  pointer-events: none;
+}
+
+.paste-fade-enter-active,
+.paste-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.paste-fade-enter-from,
+.paste-fade-leave-to {
+  opacity: 0;
 }
 
 /* Attach button (inside input row) */

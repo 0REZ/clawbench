@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { getAgentSvg } from '@/utils/agentIcons'
 
 const ALL_BACKENDS = [
-    'claude', 'codebuddy', 'opencode', 'codex', 'cline',
-    'copilot', 'qoder', 'kimi', 'mimo', 'pi', 'deepseek', 'vecli',
+    'claude', 'codebuddy', 'opencode', 'codex',
+    'copilot', 'qoder', 'kimi', 'mimo', 'pi', 'deepseek', 'vecli', 'grok', 'antigravity',
 ]
 
 describe('agentIcons', () => {
     describe('getAgentSvg', () => {
-        it('returns SVG data for all 12 backends', () => {
+        it('returns SVG data for all 13 backends', () => {
             for (const id of ALL_BACKENDS) {
                 const data = getAgentSvg(id)
                 expect(data, `backend "${id}" should have SVG data`).not.toBeNull()
@@ -33,7 +33,7 @@ describe('agentIcons', () => {
         })
 
         it('backends needing background have needsBg flag (background via CSS --bg-tertiary)', () => {
-            const needsBg = ['opencode', 'mimo', 'pi']
+            const needsBg = ['opencode', 'mimo', 'pi', 'grok']
             for (const id of needsBg) {
                 const data = getAgentSvg(id)!
                 expect(data.needsBg, `backend "${id}" should have needsBg=true`).toBe(true)
@@ -41,7 +41,7 @@ describe('agentIcons', () => {
         })
 
         it('monochrome backends have monoCssClass for theme-aware color', () => {
-            const monochrome = ['opencode', 'pi', 'mimo', 'cline']
+            const monochrome = ['opencode', 'pi', 'mimo', 'grok']
             for (const id of monochrome) {
                 const data = getAgentSvg(id)!
                 expect(data.monoCssClass, `backend "${id}" should have monoCssClass`).toBeTruthy()
@@ -49,7 +49,7 @@ describe('agentIcons', () => {
         })
 
         it('color backends do not have monoCssClass', () => {
-            const color = ['claude', 'codebuddy', 'copilot', 'qoder', 'kimi', 'deepseek']
+            const color = ['claude', 'codebuddy', 'copilot', 'qoder', 'kimi', 'deepseek', 'antigravity']
             for (const id of color) {
                 const data = getAgentSvg(id)!
                 expect(data.monoCssClass, `backend "${id}" should not have monoCssClass`).toBeFalsy()
@@ -57,7 +57,7 @@ describe('agentIcons', () => {
         })
 
         it('backends with own background do not need needsBg', () => {
-            const noNeedsBg = ['codebuddy', 'kimi', 'claude', 'cline', 'copilot', 'qoder', 'deepseek', 'vecli']
+            const noNeedsBg = ['codebuddy', 'kimi', 'claude', 'copilot', 'qoder', 'deepseek', 'vecli', 'antigravity']
             for (const id of noNeedsBg) {
                 const data = getAgentSvg(id)!
                 expect(data.needsBg, `backend "${id}" should not have needsBg`).toBeFalsy()

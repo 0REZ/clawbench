@@ -3,6 +3,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -147,8 +148,8 @@ func ServeSessions(w http.ResponseWriter, r *http.Request) { //nolint:gocognit,g
 	}
 }
 
-// DeleteSession handles DELETE for a single session.
-func DeleteSession(w http.ResponseWriter, r *http.Request) {
+// ArchiveSession handles DELETE for archiving a single session.
+func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 	projectPath, ok := requireProject(w, r)
 	if !ok {
 		return
@@ -168,33 +169,109 @@ func DeleteSession(w http.ResponseWriter, r *http.Request) {
 		backend = "codebuddy"
 	}
 
-	// Cancel the running session before deleting to kill the CLI process.
-	// This ensures no orphan CLI processes remain after soft-delete.
+	// Cancel the running session before archiving to kill the CLI process.
+	// This ensures no orphan CLI processes remain after archive.
 	if service.IsSessionRunning(sessionID) {
-		slog.Info("cancelling running session before delete", "session_id", sessionID)
+		slog.Info("cancelling running session before archive", "session_id", sessionID)
 		service.CancelSession(sessionID)
 	}
 
-	// Close the ACP connection for this session before soft-delete
-	// (GetSessionAgentID queries WHERE deleted=0, so we must read it first)
+	// Close the ACP connection for this session before archive
+	// (GetSessionAgentID queries WHERE archived=0, so we must read it first)
 	// Run in a goroutine because CloseConn calls cmd.Wait() which can
 	// block indefinitely if the agent subprocess doesn't exit cleanly,
 	// preventing the HTTP response from being sent.
 	agentID := service.GetSessionAgentID(sessionID)
 	if agentID != "" {
 		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
-			slog.Info("acp: closing connection for deleted session", "session_id", sessionID, "agent_id", agentID)
+			slog.Info("acp: closing connection for archived session", "session_id", sessionID, "agent_id", agentID)
 			go ai.GetACPConnManager().CloseConn(sessionID)
 		}
 	}
 
-	if err := service.DeleteSession(projectPath, backend, sessionID); err != nil {
-		model.WriteError(w, model.Internal(fmt.Errorf("failed to delete session")))
+	// Empty sessions have nothing worth preserving for RAG — hard-delete instead.
+	// Use GetFinalizedMessageCount to exclude streaming placeholder rows,
+	// so a session with only a streaming row (e.g. interrupted mid-generation)
+	// is still considered empty.
+	msgCount := service.GetFinalizedMessageCount(sessionID)
+	if msgCount == 0 {
+		slog.Info("archiving empty session → hard-delete", "session_id", sessionID)
+
+		// Delete RAG chunks (best-effort, no-op if RAG not initialized)
+		if chunksDeleted, err := service.PurgeRAGChunksBySessionIDs([]string{sessionID}); err != nil {
+			slog.Warn("failed to delete RAG chunks for empty archived session", "session_id", sessionID, "err", err)
+		} else if chunksDeleted > 0 {
+			slog.Info("deleted RAG chunks for empty archived session", "session_id", sessionID, "chunks", chunksDeleted)
+		}
+
+		if err := service.HardDeleteSession(sessionID); err != nil {
+			model.WriteError(w, model.Internal(fmt.Errorf("failed to destroy empty session")))
+			return
+		}
+
+		sessionCount, _ := service.GetSessionCount(projectPath)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": true, "sessionCount": sessionCount})
+		return
+	}
+
+	if err := service.ArchiveSession(projectPath, backend, sessionID); err != nil {
+		model.WriteError(w, model.Internal(fmt.Errorf("failed to archive session")))
 		return
 	}
 
 	sessionCount, _ := service.GetSessionCount(projectPath)
-	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "sessionCount": sessionCount})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": false, "sessionCount": sessionCount})
+}
+
+// DestroySession handles DELETE for physically removing a session and all its data.
+// Unlike ArchiveSession, this irreversibly removes the session
+// from the database — chat_history, tool_calls, raw_responses, task_executions, and
+// the session record itself.
+func DestroySession(w http.ResponseWriter, r *http.Request) {
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+
+	if !requireMethod(w, r, http.MethodDelete) {
+		return
+	}
+
+	sessionID, ok := requireSessionID(w, r)
+	if !ok {
+		return
+	}
+
+	// Cancel the running session before destroying to kill the CLI process.
+	if service.IsSessionRunning(sessionID) {
+		slog.Info("cancelling running session before destroy", "session_id", sessionID)
+		service.CancelSession(sessionID)
+	}
+
+	// Close the ACP connection for this session before destroying
+	agentID := service.GetSessionAgentID(sessionID)
+	if agentID != "" {
+		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
+			slog.Info("acp: closing connection for destroyed session", "session_id", sessionID, "agent_id", agentID)
+			go ai.GetACPConnManager().CloseConn(sessionID)
+		}
+	}
+
+	// Delete RAG chunks for this session before hard-deleting session data.
+	// Best-effort — if RAG is not initialized, this is a no-op.
+	if chunksDeleted, err := service.PurgeRAGChunksBySessionIDs([]string{sessionID}); err != nil {
+		slog.Warn("failed to delete RAG chunks for destroyed session", "session_id", sessionID, "err", err)
+	} else if chunksDeleted > 0 {
+		slog.Info("deleted RAG chunks for destroyed session", "session_id", sessionID, "chunks", chunksDeleted)
+	}
+
+	if err := service.HardDeleteSession(sessionID); err != nil {
+		model.WriteError(w, model.Internal(fmt.Errorf("failed to destroy session")))
+		return
+	}
+
+	sessionCount, _ := service.GetSessionCount(projectPath)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": true, "sessionCount": sessionCount})
 }
 
 // getSessionID retrieves session ID from query param or cookie.
@@ -231,6 +308,8 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ModeID != "" {
+		// Persist mode change to DB context_state so it survives restarts
+		persistContextStateModeChange(sessionID, req.ModeID)
 		// Forward mode change to ACP agent so it updates its runtime state.
 		// Run asynchronously — the RPC can block for up to 30s if the agent
 		// is slow (e.g., Claude bridge adapter starting its CLI subprocess).
@@ -245,6 +324,8 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.ThinkingEffort != "" {
+		// Persist thinking effort change to DB context_state so it survives restarts
+		persistContextStateThinkingEffortChange(sessionID, req.ThinkingEffort)
 		// Forward thinking effort change to ACP agent — same async pattern as mode.
 		if conn := ai.GetACPConnManager().GetConn(sessionID); conn != nil {
 			go func() {
@@ -274,6 +355,23 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
+}
+
+// persistContextStateModeChange updates the mode currentModeId in DB context_state
+// using atomic json_set() so it doesn't erase previously saved thinking/usage data.
+func persistContextStateModeChange(sessionID, modeID string) {
+	// Only update currentModeId; availableModes list stays as-is from ACP events.
+	patch := &service.ModeStatePersist{CurrentModeID: modeID}
+	patchJSON, _ := json.Marshal(patch)
+	service.PatchContextStateMerge(sessionID, map[string]string{"mode": string(patchJSON)})
+}
+
+// persistContextStateThinkingEffortChange updates the thinkingEffort currentId in DB context_state
+// using atomic json_set() so it doesn't erase previously saved mode/usage data.
+func persistContextStateThinkingEffortChange(sessionID, effortID string) {
+	patch := &service.ThinkingEffortPersist{CurrentID: effortID}
+	patchJSON, _ := json.Marshal(patch)
+	service.PatchContextStateMerge(sessionID, map[string]string{"thinkingEffort": string(patchJSON)})
 }
 
 // setSessionID sets session ID in cookie.

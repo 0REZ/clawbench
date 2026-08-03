@@ -8,7 +8,7 @@
          algorithm fails to correctly transition between different Fragment
          structures (summary div vs blocks template v-for). -->
     <div v-show="showingSummary && summary" v-html="renderTextBlock(summary || '', msgId, 0, false)"></div>
-    <!-- In summary mode: still show auto-expand tools (AskUserQuestion, PermissionApproval), scheduled tasks, and RAG blocks -->
+    <!-- In summary mode: still show auto-expand tools (AskUserQuestion, PermissionApproval) and scheduled tasks -->
     <!-- Keep in sync with original branch below (~line 78) -->
     <template v-if="showingSummary && summary">
     <template v-for="(block, bi) in blocks" :key="'summary-ask-' + stableBlockKey(bi, block)">
@@ -31,8 +31,8 @@
         <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
         <div v-for="(sKey, sIdx) in scheduledTaskKeys(bi)" :key="sIdx" class="scheduled-task-card" :class="{ deleted: blockTasks[sKey].deleted }" @click="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task && $emit('task-card-click', blockTasks[sKey].taskId)">
           <div class="stask-header">
-            <span v-if="blockTasks[sKey].deleted" class="stask-icon">📦</span>
-            <span v-else class="stask-icon">⏰</span>
+            <Archive v-if="blockTasks[sKey].deleted" :size="14" class="stask-icon" />
+            <Clock v-else :size="14" class="stask-icon" />
             <template v-if="blockTasks[sKey].deleted">{{ t('chat.contentBlocks.taskDeleted') }}</template>
             <template v-else-if="blockTasks[sKey].loading">{{ t('chat.contentBlocks.loading') }}</template>
             <template v-else>{{ blockTasks[sKey].task?.name || t('chat.contentBlocks.scheduledTaskCreated') }}</template>
@@ -40,7 +40,7 @@
           </div>
           <div v-if="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task" class="stask-body">
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.frequency') }}</strong>{{ humanizeCron(blockTasks[sKey].task.cronExpr) }}</div>
-            <div class="stask-row"><strong>{{ t('chat.contentBlocks.executor') }}</strong><AgentIcon :backend="getAgentBackend(blockTasks[sKey].task.agentId)" :name="getAgentName(blockTasks[sKey].task.agentId)" :size="12" /> {{ getAgentName(blockTasks[sKey].task.agentId) }}</div>
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.executor') }}</strong><AgentIcon :backend="getAgentBackend(blockTasks[sKey].task.agentId)" :name="getAgentName(blockTasks[sKey].task.agentId)" :size="14" class="stask-agent-icon" /> {{ getAgentName(blockTasks[sKey].task.agentId) }}</div>
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.repeat') }}</strong>{{ repeatLabel(blockTasks[sKey].task.repeatMode, blockTasks[sKey].task.maxRuns) }}</div>
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.status') }}</strong><span class="stask-status-dot" :class="statusClass(blockTasks[sKey].task)"></span>{{ statusLabel(blockTasks[sKey].task) }}</div>
             <div v-if="blockTasks[sKey].task.lastRunAt" class="stask-row"><strong>{{ t('chat.contentBlocks.lastRun') }}</strong>{{ formatTime(blockTasks[sKey].task.lastRunAt) }}</div>
@@ -70,19 +70,7 @@
           <div v-if="expandedTools[key(bi)] || true" class="tool-detail" data-tool-name="AskUserQuestion" @click="handleToolDetailClick" v-html="formatToolInput(blockAskQuestions[blockTaskKey(bi)], 'AskUserQuestion')"></div>
         </template>
       </template>
-      <!-- RAG results card — also check block text so RAG cards appear when
-           message loads with showingSummary=true (blockRagResults not yet filled) -->
-      <template v-else-if="block.type === 'text' && (blockRagResults[blockTaskKey(bi)] || detectRagInText(block))">
-        <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
-        <div v-for="(ragItem, ragIdx) in blockRagResults[blockTaskKey(bi)]" :key="ragIdx" class="rag-result-card" @click.stop="emit('show-rag-detail', ragItem)">
-          <div class="rag-header">
-            <span class="rag-icon">🔍</span>
-            <span class="rag-title">{{ ragItem.sessionTitle || t('chat.contentBlocks.ragUntitled') }}</span>
-          </div>
-          <div v-if="ragItem.summary" class="rag-summary">{{ ragItem.summary }}</div>
-          <div v-if="ragItem.createdAt" class="rag-time">{{ formatTime(ragItem.createdAt) }}</div>
-        </div>
-      </template>
+
     </template>
     </template>
     <!-- Original content mode -->
@@ -99,9 +87,8 @@
           'thinking-collapsing': !!collapsingThinking[stableBlockKey(bi, block)],
           'thinking-expanding': !!expandingThinking[stableBlockKey(bi, block)],
         }"
-        @click.stop="handleThinkingClick(block, bi)"
       >
-        <div class="thinking-header">
+        <div class="thinking-header" @click.stop="handleThinkingClick(block, bi)">
           <Brain :size="12" class="thinking-icon" />
           <span class="thinking-label">{{ t('chat.message.deepThinking') }}</span>
           <!-- Status indicators: right-aligned, same pattern as tool_use -->
@@ -159,8 +146,8 @@
         <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
         <div v-for="(sKey, sIdx) in scheduledTaskKeys(bi)" :key="sIdx" class="scheduled-task-card" :class="{ deleted: blockTasks[sKey].deleted }" @click="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task && $emit('task-card-click', blockTasks[sKey].taskId)">
           <div class="stask-header">
-            <span v-if="blockTasks[sKey].deleted" class="stask-icon">📦</span>
-            <span v-else class="stask-icon">⏰</span>
+            <Archive v-if="blockTasks[sKey].deleted" :size="14" class="stask-icon" />
+            <Clock v-else :size="14" class="stask-icon" />
             <template v-if="blockTasks[sKey].deleted">{{ t('chat.contentBlocks.taskDeleted') }}</template>
             <template v-else-if="blockTasks[sKey].loading">{{ t('chat.contentBlocks.loading') }}</template>
             <template v-else>{{ blockTasks[sKey].task?.name || t('chat.contentBlocks.scheduledTaskCreated') }}</template>
@@ -168,7 +155,7 @@
           </div>
           <div v-if="!blockTasks[sKey].deleted && !blockTasks[sKey].loading && blockTasks[sKey].task" class="stask-body">
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.frequency') }}</strong>{{ humanizeCron(blockTasks[sKey].task.cronExpr) }}</div>
-            <div class="stask-row"><strong>{{ t('chat.contentBlocks.executor') }}</strong><AgentIcon :backend="getAgentBackend(blockTasks[sKey].task.agentId)" :name="getAgentName(blockTasks[sKey].task.agentId)" :size="12" /> {{ getAgentName(blockTasks[sKey].task.agentId) }}</div>
+            <div class="stask-row"><strong>{{ t('chat.contentBlocks.executor') }}</strong><AgentIcon :backend="getAgentBackend(blockTasks[sKey].task.agentId)" :name="getAgentName(blockTasks[sKey].task.agentId)" :size="14" class="stask-agent-icon" /> {{ getAgentName(blockTasks[sKey].task.agentId) }}</div>
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.repeat') }}</strong>{{ repeatLabel(blockTasks[sKey].task.repeatMode, blockTasks[sKey].task.maxRuns) }}</div>
             <div class="stask-row"><strong>{{ t('chat.contentBlocks.status') }}</strong><span class="stask-status-dot" :class="statusClass(blockTasks[sKey].task)"></span>{{ statusLabel(blockTasks[sKey].task) }}</div>
             <div v-if="blockTasks[sKey].task.lastRunAt" class="stask-row"><strong>{{ t('chat.contentBlocks.lastRun') }}</strong>{{ formatTime(blockTasks[sKey].task.lastRunAt) }}</div>
@@ -196,19 +183,7 @@
           <div v-if="expandedTools[key(bi)] || true" class="tool-detail" data-tool-name="AskUserQuestion" @click="handleToolDetailClick" v-html="formatToolInput(blockAskQuestions[blockTaskKey(bi)], 'AskUserQuestion')"></div>
         </template>
       </template>
-      <!-- RAG results card (from <rag-results> XML tag in text) — must come before generic text block -->
-      <template v-else-if="block.type === 'text' && (blockRagResults[blockTaskKey(bi)] || detectRagInText(block))">
-        <!-- Surrounding text (with rag-results tag stripped) -->
-        <div v-if="getBlockHtml(bi, block)" v-html="getBlockHtml(bi, block)"></div>
-        <div v-for="(ragItem, ragIdx) in blockRagResults[blockTaskKey(bi)]" :key="ragIdx" class="rag-result-card" @click.stop="emit('show-rag-detail', ragItem)">
-          <div class="rag-header">
-            <span class="rag-icon">🔍</span>
-            <span class="rag-title">{{ ragItem.sessionTitle || t('chat.contentBlocks.ragUntitled') }}</span>
-          </div>
-          <div v-if="ragItem.summary" class="rag-summary">{{ ragItem.summary }}</div>
-          <div v-if="ragItem.createdAt" class="rag-time">{{ formatTime(ragItem.createdAt) }}</div>
-        </div>
-      </template>
+
       <!-- Text block with @ command badge (user message starting with @chatsearch/@task) -->
       <template v-else-if="block.type === 'text' && extractAtCommand(block.text || '')">
         <span class="at-command-badge">{{ extractAtCommand(block.text).command }}</span>
@@ -234,9 +209,10 @@ import { ref, watch, onUnmounted, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { handleToolAction, shouldAutoExpandTool } from '@/utils/renderToolDetail.ts'
 import { getToolIcon, toolDisplayName } from '@/utils/icons'
-import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle } from 'lucide-vue-next'
+import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, Clock, Archive } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
+import { useThinkingContent } from '@/composables/useThinkingContent.ts'
 import {
   isSevereWarning,
   getWarningText as getWarningTextUtil,
@@ -255,6 +231,7 @@ import {
 } from '@/utils/contentBlocks.ts'
 
 const { t, locale } = useI18n()
+const thinkingContent = useThinkingContent()
 
 // Auto-expand tools (AskUserQuestion, PermissionApproval) need input to render inline.
 // In slim format, input is absent from DB-loaded content — fetch from API automatically.
@@ -335,7 +312,6 @@ const props = defineProps({
   expandedTools: { type: Object, default: () => ({}) },
   blockTasks: { type: Object, default: () => ({}) },
   blockAskQuestions: { type: Object, default: () => ({}) },
-  blockRagResults: { type: Object, default: () => ({}) },
   streaming: { type: Boolean, default: false },
   cancelled: { type: Boolean, default: false },
   summary: { type: String, default: null },
@@ -354,7 +330,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session', 'show-rag-detail'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session'])
 
 // Key helper: use msgId if available, otherwise msgIndex
 function key(bi) {
@@ -364,13 +340,6 @@ function key(bi) {
 // Key for blockTasks/blockAskQuestions lookup — prefix format used in useChatRender.ts
 function blockTaskKey(bi) {
   return blockTaskKeyUtil(props.msgId, bi)
-}
-
-// Quick check if block text contains <rag-results> tag — used in v-else-if condition
-// so RAG cards appear even when blockRagResults hasn't been filled yet (e.g. message
-// loaded from DB with showingSummary=true).
-function detectRagInText(block) {
-  return block.text && block.text.includes('<rag-results')
 }
 
 // Quick check if block text contains <ask-question> tag — used in v-else-if condition
@@ -397,12 +366,16 @@ function scheduledTaskKeys(bi) {
 
 /** Generate a stable key for a block, used for v-for :key and animation state.
  *  tool_use: block.id (unique tool call ID from backend)
- *  thinking: block._key (stable key assigned at creation/parsing)
+ *  thinking: block.think_id (stable backend-assigned ID, survives re-opens),
+ *            falling back to block._key (key assigned at creation/parsing)
  *  text: text-${bi} (text blocks merge so index is stable)
  *  other: type-bi (fallback) */
 function stableBlockKey(bi, block) {
   if (block.type === 'tool_use' && block.id) return block.id
-  if (block.type === 'thinking' && block._key) return block._key
+  if (block.type === 'thinking') {
+    if (block.think_id) return block.think_id
+    if (block._key) return block._key
+  }
   return `${block.type || 'other'}-${bi}`
 }
 
@@ -413,14 +386,25 @@ function handleThinkingClick(block, bi) {
     expandingThinking.value[blockKey] = true
     thinkingExpanded.value[blockKey] = true
     blockHtmlCache.value = {}
+    // Slim block (think_id, no text): lazy-load the thinking text on expand
+    if (!block.text && block.think_id) {
+      thinkingContent.loadThinking(block.think_id, props.msgId, props.sessionId)
+        .catch(() => { /* error surfaced via errors ref */ })
+    }
     // Clean up expanding state after animation
     const t = setTimeout(() => {
       delete expandingThinking.value[blockKey]
     }, EXPAND_TRANSITION_MS)
     _collapseTimers.push(t)
   } else if (isThinkingExpandedDone(block, bi)) {
-    // Collapse inline with animation
-    triggerThinkingCollapse(blockKey)
+    // Retry failed lazy-load when clicking an error-state slim block;
+    // otherwise collapse.
+    if (!block.text && block.think_id && thinkingContent.errors.value[block.think_id]) {
+      thinkingContent.loadThinking(block.think_id, props.msgId, props.sessionId)
+        .catch(() => { /* error surfaced via errors ref */ })
+    } else {
+      triggerThinkingCollapse(blockKey)
+    }
   }
 }
 
@@ -579,17 +563,34 @@ function getBlockHtml(bi, block) {
   return html
 }
 
-/** Get HTML for thinking block content during streaming (uses renderMarkdownHtml with throttling). */
+/** Get HTML for thinking block content. Live blocks render text inline;
+ *  slim blocks (think_id) render from the lazy-load cache/loading/error state. */
 function getThinkingHtml(bi, block) {
+  if (block.text) {
+    return getThinkingTextHtml(block.text, bi, block)
+  }
+  if (block.think_id) {
+    const text = thinkingContent.cachedText(block.think_id)
+    if (text) return renderMarkdownHtml(text)
+    if (thinkingContent.errors.value[block.think_id]) {
+      return `<div class="thinking-load-error"><span>${t('chat.contentBlocks.thinkingLoadFailed')}</span><button class="thinking-retry-btn" onclick="this.closest('.chat-thinking').querySelector('.thinking-header').click()">${t('chat.contentBlocks.retry')}</button></div>`
+    }
+    return '<div class="placeholder-dots"><span></span><span></span><span></span></div>'
+  }
+  return ''
+}
+
+/** Existing throttled streaming/inline render path (unchanged behavior). */
+function getThinkingTextHtml(text, bi, block) {
   if (!props.streaming || !props.active) {
-    return renderMarkdownHtml(block.text)
+    return renderMarkdownHtml(text)
   }
   const cacheKey = `t-${stableBlockKey(bi, block)}`
   // Streaming: deferred rendering with throttling (same pattern as text blocks)
   if (blockHtmlCache.value[cacheKey] !== undefined) {
     if (!_throttleTimer) {
       const newCache = { ...blockHtmlCache.value }
-      newCache[cacheKey] = renderMarkdownHtml(block.text)
+      newCache[cacheKey] = renderMarkdownHtml(text)
       blockHtmlCache.value = newCache
       _throttleTimer = setTimeout(flushBlockHtml, THROTTLE_MS)
     } else {
@@ -597,7 +598,7 @@ function getThinkingHtml(bi, block) {
     }
     return blockHtmlCache.value[cacheKey]
   }
-  const html = renderMarkdownHtml(block.text)
+  const html = renderMarkdownHtml(text)
   blockHtmlCache.value = { ...blockHtmlCache.value, [cacheKey]: html }
   return html
 }
@@ -618,19 +619,24 @@ watch(() => props.streaming, (streaming, wasStreaming) => {
 })
 
 // Watch for thinking blocks that become "done" mid-stream (via thinking_done SSE event).
-// Mark as expanded — only collapses on manual click.
-watch(() => props.blocks.filter(b => b.type === 'thinking' && b.done).map(b => b.done), () => {
-  if (!props.streaming) return // Only relevant during streaming
-  // Find thinking blocks that just became done (newly true), not already expanded/collapsing
-  for (let i = 0; i < props.blocks.length; i++) {
-    const block = props.blocks[i]
-    if (block.type === 'thinking' && block.done) {
-      const key = stableBlockKey(i, block)
-      if (!collapsingThinking.value[key] && !thinkingExpanded.value[key]) {
-        thinkingExpanded.value[key] = true
-      }
-    }
+// Only the block currently being streamed stays expanded — when its output
+// completes it collapses immediately. Blocks the user manually expanded are kept open.
+let _prevDoneKeys = new Set()
+watch(() => props.blocks.filter(b => b.type === 'thinking' && b.done).map(b => stableBlockKey(props.blocks.indexOf(b), b)), (doneKeys) => {
+  if (!props.streaming) {
+    // Not streaming: nothing to collapse live; remember the done set for later.
+    _prevDoneKeys = new Set(doneKeys)
+    return
   }
+  const doneSet = new Set(doneKeys)
+  for (const key of doneKeys) {
+    // Collapse only the blocks that JUST finished streaming (newly done),
+    // skipping ones already collapsed/collapsing or manually expanded.
+    if (_prevDoneKeys.has(key)) continue
+    if (thinkingExpanded.value[key] || collapsingThinking.value[key]) continue
+    triggerThinkingCollapse(key)
+  }
+  _prevDoneKeys = doneSet
   // Clear throttle cache so DOM re-renders with complete thinking content
   blockHtmlCache.value = {}
 })
@@ -671,6 +677,30 @@ onUnmounted(() => {
 @keyframes dot-bounce {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
+}
+
+/* Slim thinking block lazy-load error state */
+.thinking-load-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #dc2626;
+}
+
+.thinking-retry-btn {
+  border: 1px solid color-mix(in srgb, #ef4444 40%, var(--border-color));
+  background: transparent;
+  color: #dc2626;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.thinking-retry-btn:hover {
+  background: rgba(239, 68, 68, 0.08);
 }
 
 /* Inline cancelled marker inside thinking header — always visible even when thinking is collapsed */
@@ -775,11 +805,14 @@ onUnmounted(() => {
 
 /* Collapsed state: pill-shaped clickable chip */
 .chat-thinking.thinking-collapsed {
-  cursor: pointer;
   border-radius: 12px;
   border-left: none;
   border: 1px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
   background: color-mix(in srgb, var(--thinking-accent) 6%, var(--bg-secondary));
+}
+
+.chat-thinking.thinking-collapsed .thinking-header {
+  cursor: pointer;
 }
 
 .chat-thinking.thinking-collapsed:hover {
@@ -787,8 +820,8 @@ onUnmounted(() => {
   border-color: color-mix(in srgb, var(--thinking-accent) 35%, var(--border-color));
 }
 
-/* Expanded-done state: callout style, clickable to collapse */
-.chat-thinking.thinking-expanded-done {
+/* Expanded-done state: callout style, header is clickable to collapse */
+.chat-thinking.thinking-expanded-done .thinking-header {
   cursor: pointer;
 }
 
@@ -804,11 +837,14 @@ onUnmounted(() => {
 
 /* Collapse animation state: transitioning border from callout to pill */
 .chat-thinking.thinking-collapsing {
-  cursor: pointer;
   border-radius: 12px;
   border-left: none;
   border: 1px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
   background: color-mix(in srgb, var(--thinking-accent) 6%, var(--bg-secondary));
+}
+
+.chat-thinking.thinking-collapsing .thinking-header {
+  cursor: pointer;
 }
 
 /* Expand animation state: transitioning border from pill to callout */
@@ -1050,15 +1086,23 @@ onUnmounted(() => {
 .scheduled-task-card {
   margin: 8px 0;
   border: 1px solid color-mix(in srgb, var(--accent-color, #4a90d9) 30%, var(--border-color, #dee2e6));
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: 0;
   background: color-mix(in srgb, var(--accent-color, #4a90d9) 6%, var(--bg-primary, #fff));
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.scheduled-task-card:hover {
+  border-color: color-mix(in srgb, var(--accent-color, #4a90d9) 50%, var(--border-color, #dee2e6));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color, #4a90d9) 15%, transparent);
 }
 
 .scheduled-task-card.deleted {
   opacity: 0.5;
   border-color: var(--border-color, #dee2e6);
   background: var(--bg-secondary);
+  cursor: default;
+  box-shadow: none;
 }
 
 .scheduled-task-card.deleted .stask-header {
@@ -1081,7 +1125,8 @@ onUnmounted(() => {
 }
 
 .stask-icon {
-  margin-right: 4px;
+  flex-shrink: 0;
+  margin-right: 2px;
 }
 
 .stask-body {
@@ -1099,6 +1144,10 @@ onUnmounted(() => {
 .stask-row strong {
   min-width: 70px;
   color: var(--text-secondary, #495057);
+}
+
+.stask-agent-icon {
+  vertical-align: middle;
 }
 
 .stask-view-btn {
@@ -1143,88 +1192,6 @@ onUnmounted(() => {
 
 .stask-status-dot.status-completed {
   background: #9e9e9e;
-}
-
-/* RAG result card */
-.rag-result-card {
-  margin: 6px 0;
-  border: 1px solid color-mix(in srgb, #8b5cf6 30%, var(--border-color, #dee2e6));
-  border-radius: 8px;
-  background: color-mix(in srgb, #8b5cf6 6%, var(--bg-primary, #fff));
-  cursor: pointer;
-  transition: box-shadow 0.15s, border-color 0.15s;
-}
-
-.rag-result-card:hover {
-  border-color: color-mix(in srgb, #8b5cf6 50%, var(--border-color, #dee2e6));
-  box-shadow: 0 2px 8px color-mix(in srgb, #8b5cf6 15%, transparent);
-}
-
-.rag-header {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  background: color-mix(in srgb, #8b5cf6 12%, transparent);
-  color: #8b5cf6;
-  font-weight: 600;
-  font-size: 12px;
-  border-bottom: 1px solid color-mix(in srgb, #8b5cf6 15%, var(--border-color, #dee2e6));
-  overflow: hidden;
-}
-
-:root[data-theme="dark"] .rag-header {
-  color: #a78bfa;
-  background: color-mix(in srgb, #a78bfa 12%, transparent);
-  border-bottom-color: color-mix(in srgb, #a78bfa 15%, var(--border-color, #dee2e6));
-}
-
-.rag-icon {
-  margin-right: 4px;
-}
-
-.rag-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rag-summary {
-  padding: 8px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary, #495057);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  word-break: break-word;
-  position: relative;
-}
-
-/* Fade-out gradient at bottom of clamped summary — hints at truncated content */
-.rag-summary::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 1.4em;
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, #8b5cf6 6%, var(--bg-primary, #fff)));
-  pointer-events: none;
-}
-
-:root[data-theme="dark"] .rag-summary::after {
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, #a78bfa 6%, var(--bg-primary, #1a1a1a)));
-}
-
-.rag-time {
-  padding: 0 12px 6px;
-  font-size: 11px;
-  color: var(--text-muted, #999);
 }
 
 /* @ command badge in user messages */
@@ -1472,13 +1439,6 @@ onUnmounted(() => {
 .content-blocks .tool-detail .file-preview-line {
   white-space: pre;
   color: var(--text-primary);
-}
-
-.content-blocks .tool-detail .file-preview-meta {
-  white-space: normal;
-  color: var(--text-muted, #999);
-  font-style: italic;
-  padding: 4px 0;
 }
 
 .content-blocks .tool-detail .file-write-view {

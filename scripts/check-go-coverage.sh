@@ -112,7 +112,7 @@ exempt_files = {
     "internal/service/database.go",          # InitDB: file system + PRAGMA + DDL; reorder: tx error paths
     "internal/service/testutil.go",          # new file: InitInMemoryDB sql.Open error path
     "internal/service/chat.go",              # new diff: session model/paged history error paths
-    "internal/service/continue_conversation.go", # new diff: restoreDeletedSession/continue error paths
+    "internal/service/continue_conversation.go", # new diff: restoreArchivedSession/continue error paths
     "internal/service/upgrade.go",             # upgrade: performUpgrade kills own process, exec.Command for subprocess replacement
     "internal/cli/upgrade.go",                 # upgrade-replace: kills parent process, binary replacement, untestable in unit tests
     "internal/platform/network.go",            # China detection: real TCP/HTTP probes to external services
@@ -141,8 +141,6 @@ exempt_files = {
     "internal/ai/acp_events.go",            # ACP event mapping: 17+ event type branches, each trivial but structurally complex
     "internal/ai/agent_capability.go",      # ACP agent capability: persistAsync/saveToDB/LoadFromDB require real DB
     "internal/ai/orphan.go",                # Process scanning: reads /proc, requires OS-level integration
-    "internal/ai/cline.go",                 # Cline CLI backend: spawns subprocess
-    "internal/ai/cline_stream.go",          # Cline stream parser: requires real subprocess output
     "internal/ai/accumulate.go",            # Block accumulator: complex goroutine sync + cancel paths
     "internal/handler/chat_stream.go",      # SSE stream handler: goroutine + ctx cancellation paths
     "internal/ai/backends/codex/discovery.go",  # Codex binary scanning: requires real codex binary + npm package structure
@@ -152,10 +150,10 @@ exempt_files = {
     "internal/ai/backends/pi/discovery.go",  # Pi --list-models: requires pi binary
     "internal/ai/backends/vecli/discovery.go",  # VeCLI JS bundle parsing: requires installed vecli with MODEL_REGISTRY
     "internal/ai/backends/qoder/discovery.go",  # Qoder dynamic-texts.json: requires ~/.qoder/.auth/dynamic-texts.json
-    "internal/ai/backends/cline/discovery.go",  # Cline CLI: requires cline binary
     "internal/ai/backends/copilot/discovery.go",  # Copilot defaults: requires copilot binary
     "internal/ai/backends/kimi/discovery.go",  # Kimi CLI defaults: requires kimi binary
     "internal/ai/backends/mimo/discovery.go",  # Mimo defaults: requires mimo binary
+    "internal/ai/backends/grok/discovery.go",  # Grok models: requires grok binary + authentication
     "internal/ai/backends/opencode/discovery.go",  # OpenCode CLI models: requires opencode binary
     "internal/ai/backends/pi/cli.go",  # Pi API key injection: requires real DB + agent API key loader
     "internal/service/proxy.go",            # Defensive reverse proxy error paths, port conflict, OS-specific port detection

@@ -206,7 +206,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 				// appear immediately without requiring the first message.
 				// Note: usageState is NOT restored from agent-level registry — it is
 				// per-session and using the agent-level cache would show another
-				// session's context usage. It is resolved from orphanedUsage below.
+				// session's context usage. It is resolved from DB fallback below.
 				reg := ai.GetAgentCapabilityRegistry()
 				agentCap := reg.Get(sessionAgentID)
 				if agentCap != nil && agentCap.HasData() {
@@ -224,11 +224,20 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// If no usageState from live connection, try orphaned usage
-			// (preserved when the connection was reaped by idle sweep).
-			if usageState == nil {
-				if ou := ai.GetACPConnManager().GetOrphanedUsageState(sessionID); ou != nil {
-					usageState = ou
+
+			// DB fallback: if any state is still nil after in-memory lookups,
+			// try to restore from persisted context_state (survives server restart).
+			if modeState == nil || thinkingEffortState == nil || usageState == nil {
+				if ctxState := service.GetContextState(sessionID); ctxState != nil {
+					if modeState == nil && ctxState.Mode != nil {
+						modeState = ctxState.Mode
+					}
+					if thinkingEffortState == nil && ctxState.ThinkingEffort != nil {
+						thinkingEffortState = ctxState.ThinkingEffort
+					}
+					if usageState == nil && ctxState.Usage != nil {
+						usageState = ctxState.Usage
+					}
 				}
 			}
 		}
@@ -523,7 +532,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 				service.UnregisterSessionCancel(sessionID)
 				cancel()
 				// Emit error event to WS clients
-				emitStreamEvent(sessionID, ai.StreamEvent{Type: "error", Error: "AI internal error, please retry", Reason: ai.ReasonPanic})
+				ws.EmitToSession(sessionID, ai.StreamEvent{Type: "error", Error: "AI internal error, please retry", Reason: ai.ReasonPanic})
 				// Persist error to database
 				errMsg := "AI internal error, please retry"
 				errContent, _ := json.Marshal(map[string]any{"blocks": []any{map[string]string{"type": "error", "text": errMsg, "reason": ai.ReasonPanic}}})
@@ -544,7 +553,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 		markDoneAndSendFinal := func(event ai.StreamEvent) {
 			service.SetSessionRunning(sessionID, false, true) // skip event — we emit directly
 			// Emit terminal event to WS clients via StreamHub
-			emitStreamEvent(sessionID, event)
+			ws.EmitToSession(sessionID, event)
 		}
 		// Mark ACP connection as idle when the session goroutine exits.
 		// Previously this used CloseConn, which caused a race: the goroutine
@@ -602,11 +611,6 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// emitStreamEvent emits a stream event to WS clients via StreamHub.
-func emitStreamEvent(sessionID string, event ai.StreamEvent) {
-	ws.EmitToSession(sessionID, event)
-}
-
 // streamRunResult captures the outcome of a single AI stream execution.
 type streamRunResult struct {
 	cancelReason string // "", "user"
@@ -634,7 +638,7 @@ func executeStreamRun(
 	if err != nil {
 		slog.Error("failed to create backend", slog.String("backend", backendName), slog.String("err", err.Error()))
 		errMsg := T(r, "BackendCreateFailed", map[string]any{"Error": err.Error()})
-		emitStreamEvent(sessionID, ai.StreamEvent{Type: "error", Error: errMsg})
+		ws.EmitToSession(sessionID, ai.StreamEvent{Type: "error", Error: errMsg})
 		_, _ = service.AddChatMessage(projectPath, backendName, sessionID, "assistant", errMsg, nil, false, "")
 		return streamRunResult{err: errMsg}
 	}
@@ -652,7 +656,7 @@ func executeStreamRun(
 	if err != nil {
 		slog.Error("failed to start stream", slog.String("err", err.Error()))
 		errMsg := T(r, "StreamStartFailed", map[string]any{"Error": err.Error()})
-		emitStreamEvent(sessionID, ai.StreamEvent{Type: "error", Error: errMsg})
+		ws.EmitToSession(sessionID, ai.StreamEvent{Type: "error", Error: errMsg})
 		_, _ = service.AddChatMessage(projectPath, backendName, sessionID, "assistant", errMsg, nil, false, "")
 		return streamRunResult{err: errMsg}
 	}
@@ -682,7 +686,7 @@ func executeStreamRun(
 	runResult = executor.Finalize(runResult, eventCh)
 
 	// Send updated metadata (with wallMs) to WS clients before the terminal event
-	emitStreamEvent(sessionID, ai.StreamEvent{Type: "metadata", Meta: runResult.Metadata})
+	ws.EmitToSession(sessionID, ai.StreamEvent{Type: "metadata", Meta: runResult.Metadata})
 
 	// Convert RunResult to streamRunResult
 	result := streamRunResult{}
@@ -781,6 +785,20 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 				slog.String("backend", backendName),
 				slog.String("agent", agentID),
 				slog.Bool("ext_id_is_clawbench_uuid", resolvedExtID == sessionID))
+		} else if !service.SessionHasRealAssistantContent(sessionID) {
+			// The first assistant message is an empty cancel/warning placeholder
+			// (no text/tool_use/thinking blocks). This means the AI never responded
+			// with real content — the stream was interrupted before the CLI
+			// established a session. Resume with any ID would fail because the AI
+			// never saw this session. Clear effectiveSessionID and set resume=false
+			// so the backend starts a completely fresh session (no --resume, proper
+			// system prompt injection).
+			effectiveSessionID = ""
+			resume = false
+			slog.Info("session resume: external_session_id is empty and no real AI content (first message interrupted), starting fresh",
+				slog.String("session", sessionID),
+				slog.String("backend", backendName),
+				slog.String("agent", agentID))
 		} else {
 			// No external session ID available — the CLI cannot resume a session
 			// it has never seen. Clear effectiveSessionID so the backend does not
@@ -804,11 +822,15 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 	// ForkSession which copies messages in DB but doesn't inherit the AI-side session.
 	// Inject formatted history so the AI can continue with context.
 	//
+	// Note: This branch only fires when resume is still true after the above
+	// checks. If the first message was interrupted (resume set to false above),
+	// this fork detection is skipped — correct, because a phantom-cancel session
+	// is not a fork.
+	//
 	// Guard against re-injection on subsequent messages:
 	// After the first AI response, session_capture persists external_session_id,
-	// so resolvedExtID != "" and this branch is skipped. If capture fails
-	// (unlikely), the condition would re-trigger, but that's acceptable
-	// because the AI still needs context.
+	// so resolvedExtID != "" and the above resume branch uses it directly,
+	// bypassing this fork detection.
 	var forkContext string
 	if resume && resolvedExtID == "" {
 		forkContext = buildForkContext(sessionID)

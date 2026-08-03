@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	ai.RegisterBackend("claude", newClaudeBackend, true)
+	ai.RegisterBackend("claude", newClaudeBackend)
 	backends.Register(&backends.BackendPlugin{
 		ID: "claude",
 		Spec: model.BackendSpec{
@@ -20,9 +20,6 @@ func init() {
 			ACPLoadSession:       true,
 			InstallCmd:           "npm install -g @anthropic-ai/claude-code",
 			SortOrder:            1,
-		},
-		ACP: &backends.ACPPlugin{
-			InputRemaps: ClaudeACPRemaps,
 		},
 	})
 }

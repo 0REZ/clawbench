@@ -240,7 +240,8 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/ai/session", middleware.Auth(ServeAISession))
 	register("/api/ai/session/update", middleware.Auth(ServeAISessionUpdate))
 	register("/api/ai/sessions", middleware.Auth(ServeSessions))
-	register("/api/ai/session/delete", middleware.Auth(DeleteSession))
+	register("/api/ai/session/archive", middleware.Auth(ArchiveSession))
+	register("/api/ai/session/destroy", middleware.Auth(DestroySession))
 	register("/api/ai/session/resume", middleware.Auth(ServeSessionResume))
 	register("/api/ai/session/acp-load", middleware.Auth(ServeACPLoadSession))
 	register("/api/ai/session/fork", middleware.Auth(ServeForkSession))
@@ -249,6 +250,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/ai/chat/user-messages", middleware.Auth(ServeUserMessageIndex))
 	register("/api/ai/chat/message", middleware.Auth(ServeChatMessageUpdate))
 	register("/api/ai/chat/tool-call", middleware.Auth(ServeToolCallDetail))
+	register("/api/ai/chat/thinking", middleware.Auth(ServeThinkingDetail))
 	register("/api/ai/permission/respond", middleware.Auth(ServePermissionRespond))
 	register("/api/upload/file", middleware.Auth(UploadFile))
 	register("/api/upload/recent", middleware.Auth(UploadRecent))
@@ -298,6 +300,8 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/rag/message-index-status", middleware.Auth(ServeRAGMessageIndexStatus))
 	register("/api/rag/session", middleware.Auth(ServeRAGSession))
 	register("/api/rag/status", middleware.Auth(ServeRAGStatus))
+	register("/api/rag/reset", middleware.Auth(ServeRAGReset))
+	register("/api/rag/reset-vector", middleware.Auth(ServeRAGResetVector))
 	register("/api/rag/session-search", middleware.Auth(ServeRAGSessionSearch))
 
 	// Client log collection — intentionally unauthenticated:
@@ -365,6 +369,12 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// Chat quick-send (CRUD for quick-send presets stored in database)
 	register("/api/chat/quick-send", middleware.Auth(ServeChatQuickSend))
 	register("/api/chat/quick-send/", middleware.Auth(ServeChatQuickSendByID))
+
+	// Message clusters (cached cluster suggestions + on-demand computation)
+	register("/api/chat/message-clusters", middleware.Auth(ServeMessageClusters))
+	register("/api/chat/message-clusters/compute", middleware.Auth(ServeMessageClustersCompute))
+	register("/api/chat/message-clusters/compute/cancel", middleware.Auth(ServeMessageClustersComputeCancel))
+	register("/api/chat/message-clusters/compute/status", middleware.Auth(ServeMessageClustersComputeStatus))
 
 	// Self-upgrade
 	register("/api/upgrade/check", middleware.Auth(ServeUpgradeCheck))

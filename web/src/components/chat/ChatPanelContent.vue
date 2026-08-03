@@ -7,7 +7,6 @@
       :expandedTools="render.expandedTools.value"
       :blockTasks="render.blockTasks"
       :blockAskQuestions="render.blockAskQuestions"
-      :blockRagResults="render.blockRagResults"
       :agents="agentsList"
       :currentAgent="currentAgent"
       :currentSessionId="identity.currentSessionId.value"
@@ -28,7 +27,6 @@
       @render-flush="scrollBottom()"
       @toggle-summary="handleToggleSummary"
       @resume-session="handleResumeSession"
-      @show-rag-detail="handleRagDetail"
       @fork-from-message="handleForkFromMessage"
     />
 
@@ -102,7 +100,8 @@
       @toggle-auto-speech="autoSpeech.toggle"
       @create-session="() => manager.createSession()"
       @show-agent-selector="handleShowAgentSelector"
-      @delete-session="() => manager.deleteCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
+      @archive-session="() => manager.archiveCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
+      @destroy-session="() => manager.destroyCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @open-user-msg-index="handleOpenUserMsgIndex"
       @open-acp-sessions="$emit('open-acp-sessions')"
       @switch-model="handleSwitchModel"
@@ -138,14 +137,13 @@
     :toolOutputHtml="toolDetailOverlay.outputHtml"
     :toolStatus="toolDetailOverlay.status"
     :toolDone="toolDetailOverlay.done"
+    :toolDuration="toolDetailOverlay.duration"
     :displayNameOverride="toolDetailOverlay.displayNameOverride"
     @close="closeToolDetailOverlay()"
     @file-open="handleFileOpenInOverlay"
     @send-message="handleToolSendMessage"
     @click="handleOverlayRetryClick"
   />
-  <!-- RAG search result detail drawer -->
-  <RagDetailDrawer :item="ragDetailDrawer.effectiveOpen.value ? ragDetailItem : null" @close="ragDetailDrawer.close(); ragDetailItem.value = null" @resume="handleResumeFromDetail" />
 </template>
 
 <script setup>
@@ -155,7 +153,6 @@ import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
-import RagDetailDrawer from './RagDetailDrawer.vue'
 import ChatMetadataModal from './ChatMetadataModal.vue'
 import ToolDetailDrawer from './ToolDetailDrawer.vue'
 import ChatInputBar from './ChatInputBar.vue'
@@ -176,6 +173,7 @@ import { useNotification } from '@/composables/useNotification.ts'
 import { applySummaryUpdate } from '@/utils/chatSessionUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
+import { dedupeFiles } from '@/utils/fileAttachmentUtils.ts'
 import { refreshCurrentFile } from '@/composables/useFileRefresh.ts'
 import { playNotificationSound } from '@/composables/useNotificationSound.ts'
 import { useAutoSpeech, extractSpeakableText } from '@/composables/useAutoSpeech.ts'
@@ -296,7 +294,6 @@ const session = useChatSession({
   inputDisabled,
   blockTasks: render.blockTasks,
   blockAskQuestions: render.blockAskQuestions,
-  blockRagResults: render.blockRagResults,
   expandedTools: render.expandedTools,
   onParseAssistantContent: (content) => render.parseAssistantContent(content),
   onExtractScheduledTasks: (msgs) => render.extractScheduledTasks(msgs),
@@ -445,7 +442,8 @@ const manager = useSessionManager({
   loading,
   switchSessionCore: session.switchSession,
   createSessionCore: session.createSession,
-  deleteSessionCore: session.deleteSession,
+  archiveSessionCore: session.archiveSession,
+  destroySessionCore: session.destroySession,
   continueFromExecutionCore: session.continueFromExecution,
   forkSessionCore: session.forkSession,
   checkContinueSessionCore: session.checkContinueSession,
@@ -638,7 +636,7 @@ async function sendMessage(text) {
       const capturedPending = pendingFiles.value.map(f => ({ path: f.path, isDir: false }))
       // Build file paths and entries from attachedFiles (unified channel)
       const mergedPaths = capturedAttached.map(f => f.path)
-      const allFiles = [...capturedPending, ...capturedAttached]
+      const allFiles = dedupeFiles([...capturedPending, ...capturedAttached])
       // Generate unique queueId for precise matching in queue_drain/queue_cancel
       const queueId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       // Clear input state synchronously so user sees immediate feedback
@@ -675,7 +673,7 @@ async function sendMessage(text) {
     const filePaths = attachedFiles.value.map(f => f.path)
     const uploadedFiles = pendingFiles.value.map(f => ({ path: f.path, isDir: false }))
     const projectFiles = attachedFiles.value.map(f => ({ path: f.path, isDir: f.isDir ?? false, startLine: f.startLine, endLine: f.endLine }))
-    const allFiles = [...uploadedFiles, ...projectFiles]
+    const allFiles = dedupeFiles([...uploadedFiles, ...projectFiles])
 
     // Clear input state before async request
     clearAll()
@@ -745,7 +743,7 @@ async function sendMessageNow(text, filePaths, files) {
             }
             stream.connectStream(identity.currentSessionId.value)
             // Proactively sync ACP state for the running session
-            if (effectiveAgentId && agentsComposable.supportsDualTransport(effectiveAgentId)) {
+            if (effectiveAgentId && agentsComposable.supportsACP(effectiveAgentId)) {
                 populateACPStateFromCache(effectiveAgentId)
             }
             return
@@ -756,7 +754,7 @@ async function sendMessageNow(text, filePaths, files) {
         // the first prompt, but the frontend's clearModeState() during session switch
         // may have cleared availableModes before the SSE mode_update event arrives.
         // This ensures mode/thinking chips appear immediately.
-        if (effectiveAgentId && agentsComposable.supportsDualTransport(effectiveAgentId)) {
+        if (effectiveAgentId && agentsComposable.supportsACP(effectiveAgentId)) {
             populateACPStateFromCache(effectiveAgentId)
         }
     } catch (err) {
@@ -873,40 +871,6 @@ function handleToggleSummary(msgId) {
     msg.showingSummary = !msg.showingSummary
 }
 
-// RAG detail drawer
-const ragDetailItem = ref(null)
-const ragDetailDrawer = useTabDrawer('chat')
-
-function handleRagDetail(ragItem) {
-    ragDetailItem.value = ragItem
-    ragDetailDrawer.open()
-}
-
-async function handleResumeFromDetail(item) {
-    ragDetailItem.value = null
-    ragDetailDrawer.close()
-    if (!item?.sessionId) return
-    const confirmed = await dialog.confirm(
-        t('chat.contentBlocks.ragResumeConfirm', { title: item.sessionTitle || t('chat.contentBlocks.ragUntitled') }),
-        { title: t('chat.contentBlocks.ragResume'), confirmText: t('common.confirm') }
-    )
-    if (!confirmed) return
-    try {
-        const resp = await fetch('/api/ai/session/resume', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ session_id: item.sessionId }),
-        })
-        if (!resp.ok) {
-            const data = await resp.json().catch(() => ({}))
-            toast.show(data.error || t('chat.contentBlocks.ragResumeFailed'), { icon: '⚠️', type: 'error' })
-            return
-        }
-        await session.switchSession(item.sessionId)
-    } catch {
-        toast.show(t('chat.contentBlocks.ragResumeFailed'), { icon: '⚠️', type: 'error' })
-    }
-}
 
 // Resume a session from RAG search results (direct event, no detail drawer)
 async function handleResumeSession({ sessionId, sessionTitle }) {

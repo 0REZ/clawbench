@@ -131,7 +131,7 @@ export function resetIdentity(): void {
   sessionDrawer.close()
   _switchSession = null
   _createSession = null
-  _deleteSession = null
+  _archiveSession = null
   _sendMessage = null
   _openChatPanel = null
   _continueFromExecution = null
@@ -143,7 +143,7 @@ export function resetIdentity(): void {
     if (bridge) {
       bridge.createSession = null
       bridge.switchSession = null
-      bridge.deleteSession = null
+      bridge.archiveSession = null
     }
   }
 }
@@ -282,7 +282,7 @@ export function clearAllUsageState() {
   usageStateVersion.value++
 }
 
-/** Clear usage state for a specific session by ID (used by deleteSession). */
+/** Clear usage state for a specific session by ID (used by archiveSession). */
 export function clearUsageStateById(sessionId: string) {
   if (usageStateCache.delete(sessionId)) {
     usageStateVersion.value++
@@ -314,7 +314,8 @@ export function toggleAutoApprove(enabled: boolean) {
 
 let _switchSession: ((sessionId: string) => Promise<void>) | null = null
 let _createSession: ((agentId?: string) => Promise<void>) | null = null
-let _deleteSession: ((sessionId: string, backend?: string) => Promise<void>) | null = null
+let _archiveSession: ((sessionId: string, backend?: string) => Promise<void>) | null = null
+let _destroySession: ((sessionId: string) => Promise<void>) | null = null
 let _sendMessage: ((text: string) => Promise<void>) | null = null
 let _openChatPanel: (() => void) | null = null
 let _continueFromExecution: ((taskId: number, execId: number, switchTabFn: (tab: string) => void) => Promise<boolean>) | null = null
@@ -326,7 +327,8 @@ let _sessionDrawerRef: { openAgentSelector: () => void } | null = null
 export interface SessionActions {
   switchSession: (sessionId: string) => Promise<void>
   createSession: (agentId?: string) => Promise<void>
-  deleteSession: (sessionId: string, backend?: string) => Promise<void>
+  archiveSession: (sessionId: string, backend?: string) => Promise<void>
+  destroySession: (sessionId: string) => Promise<void>
   sendMessage: (text: string) => Promise<void>
   openChatPanel: () => void
   continueFromExecution: (taskId: number, execId: number, switchTabFn: (tab: string) => void) => Promise<boolean>
@@ -346,7 +348,8 @@ export interface SessionActions {
 export function registerSessionActions(actions: SessionActions) {
   _switchSession = actions.switchSession
   _createSession = actions.createSession
-  _deleteSession = actions.deleteSession
+  _archiveSession = actions.archiveSession
+  _destroySession = actions.destroySession
   _sendMessage = actions.sendMessage
   _openChatPanel = actions.openChatPanel
   _continueFromExecution = actions.continueFromExecution
@@ -359,7 +362,7 @@ export function registerSessionActions(actions: SessionActions) {
     const bridge = (window as unknown as { __clawbench?: Record<string, unknown> }).__clawbench || ((window as unknown as { __clawbench: Record<string, unknown> }).__clawbench = {})
     bridge.createSession = actions.createSession
     bridge.switchSession = actions.switchSession
-    bridge.deleteSession = actions.deleteSession
+    bridge.archiveSession = actions.archiveSession
   }
 }
 
@@ -440,16 +443,16 @@ export async function initSessionFromAPI() {
         }
         // Initialize mode: from ACP state or agent preference
         // Only populate mode state for ACP-capable agents — CLI backends don't support modes
-        if (agentsApi.supportsDualTransport(data.agentId || '')) {
+        if (agentsApi.supportsACP(data.agentId || '')) {
           modeState.clear()
           modeState.syncAndFallback(data.modeState?.currentModeId || '', data.modeState?.availableModes || [], data.agentId || '')
         }
         // Populate thinking effort state — update available levels.
         // currentThinkingEffort was already set above from ACP state.
         // Only for ACP-capable agents — CLI backends don't support thinking effort
-        if (agentsApi.supportsDualTransport(data.agentId || '') && data.thinkingEffortState && data.thinkingEffortState.availableLevels?.length > 0) {
+        if (agentsApi.supportsACP(data.agentId || '') && data.thinkingEffortState && data.thinkingEffortState.availableLevels?.length > 0) {
           updateAvailableThinkingEfforts(data.thinkingEffortState.availableLevels)
-        } else if (agentsApi.supportsDualTransport(data.agentId || '') && data.agentId) {
+        } else if (agentsApi.supportsACP(data.agentId || '') && data.agentId) {
           // Fallback: agent config (e.g. OpenCode/Kimi ACP don't expose thought_level)
           const agentLevels = agentsApi.getAgentThinkingEffortLevels(data.agentId)
           if (agentLevels.length > 0) {
@@ -546,9 +549,15 @@ export function useSessionIdentity() {
   /**
    * Delete a session. Delegates to ChatPanel if available.
    */
-  async function deleteSession(sessionId: string, backend?: string) {
-    if (_deleteSession) {
-      await _deleteSession(sessionId, backend)
+  async function archiveSession(sessionId: string, backend?: string) {
+    if (_archiveSession) {
+      await _archiveSession(sessionId, backend)
+    }
+  }
+
+  async function destroySession(sessionId: string) {
+    if (_destroySession) {
+      await _destroySession(sessionId)
     }
   }
 
@@ -671,7 +680,8 @@ export function useSessionIdentity() {
     // Action proxies
     switchSession,
     createSession,
-    deleteSession,
+    archiveSession,
+    destroySession,
     sendMessage,
     openChatPanel,
     openSessionTab,

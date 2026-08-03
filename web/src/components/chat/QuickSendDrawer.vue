@@ -3,9 +3,14 @@
     <template #header>
       <SendIcon :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ t('chat.quickSend.title') }}</span>
-      <button class="create-btn" @click.stop="addNewItem" :title="t('chat.quickSend.addItem')">
-        <PlusIcon :size="16" />
-      </button>
+      <span class="bs-header-actions">
+        <button class="create-btn" @click.stop="clustersDrawerRef?.open()" :title="t('chat.messageClusters.title')">
+          <SparklesIcon :size="16" />
+        </button>
+        <button class="create-btn" @click.stop="addNewItem" :title="t('chat.quickSend.addItem')">
+          <PlusIcon :size="16" />
+        </button>
+      </span>
     </template>
 
     <div class="qs-content">
@@ -49,6 +54,9 @@
       @close="editOpen = false"
       @saved="onItemSaved"
     />
+
+    <!-- Message clusters drawer -->
+    <MessageClustersDrawer ref="clustersDrawerRef" />
   </BottomSheet>
 </template>
 
@@ -58,7 +66,8 @@ import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import QuickSendEditModal from './QuickSendEditModal.vue'
-import { Send as SendIcon, PencilIcon, Trash2Icon, PlusIcon } from 'lucide-vue-next'
+import MessageClustersDrawer from './MessageClustersDrawer.vue'
+import { Send as SendIcon, PencilIcon, Trash2Icon, PlusIcon, Sparkles as SparklesIcon } from 'lucide-vue-next'
 import { useQuickSend, type QuickSendItem } from '@/composables/useQuickSend'
 import { useToast } from '@/composables/useToast'
 
@@ -76,6 +85,7 @@ const localItems = ref<QuickSendItem[]>([...items.value])
 const deleteConfirmId = ref<number | null>(null)
 const editOpen = ref(false)
 const editingItem = ref<QuickSendItem | null>(null)
+const clustersDrawerRef = ref<InstanceType<typeof MessageClustersDrawer> | null>(null)
 
 // Sync local list when items change
 watch(items, (val) => {
@@ -246,8 +256,14 @@ async function onDragEnd() {
   color: var(--text-muted, #999);
 }
 
-.create-btn {
+.bs-header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.create-btn {
   width: 24px;
   height: 24px;
   border: none;

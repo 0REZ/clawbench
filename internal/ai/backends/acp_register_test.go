@@ -4,9 +4,11 @@ import (
 	"testing"
 
 	"clawbench/internal/ai/backends"
+	_ "clawbench/internal/ai/backends/antigravity"
 	_ "clawbench/internal/ai/backends/claude"
 	_ "clawbench/internal/ai/backends/codebuddy"
 	_ "clawbench/internal/ai/backends/deepseek"
+	_ "clawbench/internal/ai/backends/grok"
 	_ "clawbench/internal/ai/backends/kimi"
 	_ "clawbench/internal/ai/backends/opencode"
 	_ "clawbench/internal/ai/backends/pi"
@@ -60,9 +62,9 @@ func TestACPInitRegistration(t *testing.T) {
 			t.Errorf("ToolCallIDPrefixes has %d entries, want %d", len(prefixes), len(expectedPrefixes))
 		}
 
-		// Kimi ACP has no InputRemaps
-		if len(ACP.InputRemaps) > 0 {
-			t.Errorf("expected empty InputRemaps for kimi ACP, got %v", ACP.InputRemaps)
+		// Kimi ACP has no InputRemaps (nil), falls back to generic via LookupACPRemaps
+		if ACP.InputRemaps != nil {
+			t.Errorf("expected nil InputRemaps for kimi ACP, got %v", ACP.InputRemaps)
 		}
 	})
 
@@ -90,33 +92,70 @@ func TestACPInitRegistration(t *testing.T) {
 
 	t.Run("claude", func(t *testing.T) {
 		p := mustLookup(t, "claude")
-		ACP := mustACP(t, p)
-
-		// Claude ACP has the generic 6-field normalization map
-		if len(ACP.InputRemaps) == 0 {
-			t.Error("expected non-empty InputRemaps for claude ACP (generic fields)")
+		// Claude ACP uses generic remaps (no ACP plugin registered)
+		if p.ACP != nil {
+			t.Fatal("expected nil ACP plugin for claude (redundant InputRemaps removed)")
 		}
-		if ACP.InputRemaps["filePath"] != "file_path" {
-			t.Errorf("expected generic filePath->file_path for claude, got %q", ACP.InputRemaps["filePath"])
+		remaps := backends.LookupACPRemaps("claude")
+		if remaps == nil {
+			t.Fatal("expected generic fallback remaps for claude")
 		}
-		if ACP.ToolCallIDPrefixes != nil {
-			t.Errorf("expected nil ToolCallIDPrefixes for claude, got %v", ACP.ToolCallIDPrefixes)
+		if remaps["filePath"] != "file_path" {
+			t.Errorf("expected generic filePath->file_path for claude, got %q", remaps["filePath"])
 		}
 	})
 
 	t.Run("codebuddy", func(t *testing.T) {
 		p := mustLookup(t, "codebuddy")
-		ACP := mustACP(t, p)
+		// Codebuddy ACP uses generic remaps (no ACP plugin registered)
+		if p.ACP != nil {
+			t.Fatal("expected nil ACP plugin for codebuddy (redundant InputRemaps removed)")
+		}
+		remaps := backends.LookupACPRemaps("codebuddy")
+		if remaps == nil {
+			t.Fatal("expected generic fallback remaps for codebuddy")
+		}
+		if remaps["filePath"] != "file_path" {
+			t.Errorf("expected generic filePath->file_path for codebuddy, got %q", remaps["filePath"])
+		}
+	})
 
-		// Codebuddy ACP has the generic 6-field normalization map
-		if len(ACP.InputRemaps) == 0 {
-			t.Error("expected non-empty InputRemaps for codebuddy ACP (generic fields)")
+	t.Run("grok", func(t *testing.T) {
+		p := mustLookup(t, "grok")
+		// Grok ACP uses generic remaps (no ACP plugin registered)
+		if p.ACP != nil {
+			t.Fatal("expected nil ACP plugin for grok (redundant InputRemaps removed)")
 		}
-		if ACP.InputRemaps["filePath"] != "file_path" {
-			t.Errorf("expected generic filePath->file_path for codebuddy, got %q", ACP.InputRemaps["filePath"])
+		remaps := backends.LookupACPRemaps("grok")
+		if remaps == nil {
+			t.Fatal("expected generic fallback remaps for grok")
 		}
-		if ACP.ToolCallIDPrefixes != nil {
-			t.Errorf("expected nil ToolCallIDPrefixes for codebuddy, got %v", ACP.ToolCallIDPrefixes)
+		if remaps["filePath"] != "file_path" {
+			t.Errorf("expected generic filePath->file_path for grok, got %q", remaps["filePath"])
+		}
+	})
+
+	t.Run("antigravity", func(t *testing.T) {
+		p := mustLookup(t, "antigravity")
+		// Antigravity ACP uses generic remaps (no ACP plugin registered)
+		if p.ACP != nil {
+			t.Fatal("expected nil ACP plugin for antigravity (redundant InputRemaps removed)")
+		}
+		remaps := backends.LookupACPRemaps("antigravity")
+		if remaps == nil {
+			t.Fatal("expected generic fallback remaps for antigravity")
+		}
+		if remaps["filePath"] != "file_path" {
+			t.Errorf("expected generic filePath->file_path for antigravity, got %q", remaps["filePath"])
+		}
+		if p.Spec.DefaultCmd != "agy" {
+			t.Errorf("expected DefaultCmd agy, got %q", p.Spec.DefaultCmd)
+		}
+		if p.Spec.AcpCommand != "npx -y agy-acp@latest" {
+			t.Errorf("expected AcpCommand npx -y agy-acp@latest, got %q", p.Spec.AcpCommand)
+		}
+		if !p.Spec.ACPLoadSession {
+			t.Error("expected ACPLoadSession=true for antigravity (bridge supports session/load)")
 		}
 	})
 
@@ -154,7 +193,7 @@ func TestACPInitRegistration(t *testing.T) {
 // work correctly with the real init state.
 func TestACPLookupAfterInit(t *testing.T) {
 	t.Run("kimi_remaps_fallback", func(t *testing.T) {
-		// Kimi has empty InputRemaps, so LookupACPRemaps should fall back to generic
+		// Kimi has nil InputRemaps, so LookupACPRemaps falls back to generic
 		remaps := backends.LookupACPRemaps("kimi")
 		if remaps == nil {
 			t.Fatal("expected generic fallback remaps for kimi")
@@ -188,6 +227,7 @@ func TestACPLookupAfterInit(t *testing.T) {
 	})
 
 	t.Run("claude_remaps_fallback", func(t *testing.T) {
+		// Claude has no ACP plugin, so LookupACPRemaps falls back to generic
 		remaps := backends.LookupACPRemaps("claude")
 		if remaps == nil {
 			t.Fatal("expected generic fallback remaps for claude")

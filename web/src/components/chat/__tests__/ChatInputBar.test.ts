@@ -13,8 +13,8 @@ const i18n = createI18n({
         actions: {
           session: 'Sessions',
           userMsgIndex: 'Index',
-          deleteCurrentSession: 'Delete',
-          noSessionToDelete: 'No session',
+          archiveCurrentSession: 'Archive',
+          noSessionToArchive: 'No session',
           autoSpeech: 'Auto speech',
           attachment: 'Attach',
         },
@@ -45,7 +45,7 @@ const i18n = createI18n({
           title: 'Quick send',
           edit: 'Edit',
         },
-        delete: { confirm: 'Delete session?' },
+        archive: { confirm: 'Archive current session? You can restore archived sessions via session search.' },
         atCommand: { title: 'At', chatsearchDesc: 'Search', taskDesc: 'Task' },
         slashCommand: { title: 'Slash' },
         acpSession: { title: 'ACP Sessions' },
@@ -57,6 +57,7 @@ const i18n = createI18n({
           inputTokens: 'Input',
           outputTokens: 'Output',
           contextCost: 'Cost',
+          compact: 'Compact context',
         },
         autoApprove: {
           enabled: 'Auto-approve enabled',
@@ -233,7 +234,7 @@ vi.mock('@/composables/useSessionIdentity', () => ({
 }))
 
 // Mock useAgents — return enough functions to avoid TypeError
-const mockSupportsDualTransport = vi.fn().mockReturnValue(false)
+const mockSupportsACP = vi.fn().mockReturnValue(false)
 const mockAgentCanResume = vi.fn().mockReturnValue(false)
 vi.mock('@/composables/useAgents', () => ({
   useAgents: () => ({
@@ -256,7 +257,7 @@ vi.mock('@/composables/useAgents', () => ({
     setDefaultAgent: vi.fn(),
     canRefreshModels: () => false,
     agentCanResume: mockAgentCanResume,
-    supportsDualTransport: mockSupportsDualTransport,
+    supportsACP: mockSupportsACP,
     getAgentTransport: () => 'cli',
     invalidateACPStateCache: vi.fn(),
     updateACPModelList: vi.fn(),
@@ -302,7 +303,6 @@ const stubs = {
   QuickSendDrawer: true,
   List: true,
   Plus: true,
-  Trash2: true,
   Archive: true,
   Search: true,
   Volume2: true,
@@ -322,6 +322,7 @@ const stubs = {
   Cpu: true,
   Compass: true,
   Activity: true,
+  Minimize2: true,
 }
 
 describe('ChatInputBar', () => {
@@ -498,16 +499,16 @@ describe('ChatInputBar', () => {
     expect(wrapper.emitted('send')![0]).toEqual(['hello'])
   })
 
-  it('delete button is disabled when no currentSessionId', () => {
+  it('archive button is disabled when no currentSessionId', () => {
     const wrapper = mountBar({ currentSessionId: '' })
-    const deleteBtn = wrapper.find('.chat-action-btn-archive')
-    expect(deleteBtn.classes()).toContain('disabled')
+    const archiveBtn = wrapper.find('.chat-action-btn-archive')
+    expect(archiveBtn.classes()).toContain('disabled')
   })
 
-  it('delete button is enabled when currentSessionId exists', () => {
+  it('archive button is enabled when currentSessionId exists', () => {
     const wrapper = mountBar({ currentSessionId: 'session-1' })
-    const deleteBtn = wrapper.find('.chat-action-btn-archive')
-    expect(deleteBtn.classes()).not.toContain('disabled')
+    const archiveBtn = wrapper.find('.chat-action-btn-archive')
+    expect(archiveBtn.classes()).not.toContain('disabled')
   })
 
   it('exposes quick send touch handlers', () => {
@@ -623,30 +624,30 @@ describe('ChatInputBar', () => {
     expect(wrapper.emitted('toggle-auto-speech')).toBeTruthy()
   })
 
-  it('delete button does nothing when no currentSessionId', async () => {
+  it('archive button does nothing when no currentSessionId', async () => {
     const wrapper = mountBar({ currentSessionId: '' })
-    const deleteBtn = wrapper.find('.chat-action-btn-archive')
-    await deleteBtn.trigger('click')
-    // Should not call dialog.confirm or emit delete-session
+    const archiveBtn = wrapper.find('.chat-action-btn-archive')
+    await archiveBtn.trigger('click')
+    // Should not call dialog.confirm or emit archive-session
     expect(mockDialogConfirm).not.toHaveBeenCalled()
-    expect(wrapper.emitted('delete-session')).toBeFalsy()
+    expect(wrapper.emitted('archive-session')).toBeFalsy()
   })
 
-  it('delete button calls dialog.confirm when session exists', async () => {
+  it('archive button calls dialog.confirm when session exists', async () => {
     mockDialogConfirm.mockResolvedValueOnce(false)
     const wrapper = mountBar({ currentSessionId: 'sess-1' })
-    const deleteBtn = wrapper.find('.chat-action-btn-archive')
-    await deleteBtn.trigger('click')
+    const archiveBtn = wrapper.find('.chat-action-btn-archive')
+    await archiveBtn.trigger('click')
     expect(mockDialogConfirm).toHaveBeenCalled()
   })
 
-  it('delete button emits delete-session on confirm', async () => {
+  it('archive button emits archive-session on confirm', async () => {
     mockDialogConfirm.mockResolvedValueOnce(true)
     const wrapper = mountBar({ currentSessionId: 'sess-1' })
-    const deleteBtn = wrapper.find('.chat-action-btn-archive')
-    await deleteBtn.trigger('click')
+    const archiveBtn = wrapper.find('.chat-action-btn-archive')
+    await archiveBtn.trigger('click')
     await wrapper.vm.$nextTick()
-    expect(wrapper.emitted('delete-session')).toBeTruthy()
+    expect(wrapper.emitted('archive-session')).toBeTruthy()
   })
 
   it('create button contextmenu emits create-session', async () => {
@@ -966,13 +967,13 @@ describe('ChatInputBar', () => {
     beforeEach(() => {
       mockAutoApprove.value = false
       mockToggleAutoApprove.mockReset()
-      mockSupportsDualTransport.mockReturnValue(true)
+      mockSupportsACP.mockReturnValue(true)
       mockAvailableModes.value = [{ name: 'code', description: 'Code mode' }]
       wrapper = mountBar({ currentModelName: 'gpt-4', currentAgentId: 'claude' })
     })
 
     afterEach(() => {
-      mockSupportsDualTransport.mockReturnValue(false)
+      mockSupportsACP.mockReturnValue(false)
     })
 
     it('clicking mode chip opens settings drawer', async () => {
@@ -1013,6 +1014,80 @@ describe('ChatInputBar', () => {
       await modeChip.trigger('mouseup')
       expect(mockToggleAutoApprove).toHaveBeenCalledWith(false)
       vi.useRealTimers()
+    })
+  })
+
+  describe('compact button', () => {
+    afterEach(() => {
+      mockContextUsed.value = 0
+      mockContextSize.value = 0
+      mockAvailableCommands.value = []
+      mockSessionTransport.value = ''
+    })
+
+    it('shows compact button when usage >= 75% and /compact command available in ACP transport', async () => {
+      mockContextUsed.value = 80000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
+      mockSessionTransport.value = 'acp-stdio'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      const btn = wrapper.find('.session-info-compact')
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).toContain('Compact context')
+    })
+
+    it('hides compact button when usage < 75%', async () => {
+      mockContextUsed.value = 50000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
+      mockSessionTransport.value = 'acp-stdio'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+    })
+
+    it('hides compact button when /compact command not available', async () => {
+      mockContextUsed.value = 80000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: '/help', description: 'Show help' }]
+      mockSessionTransport.value = 'acp-stdio'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+    })
+
+    it('shows compact button with command name without slash prefix', async () => {
+      mockContextUsed.value = 80000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: 'compact', description: 'Compact conversation' }]
+      mockSessionTransport.value = 'acp-stdio'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.session-info-compact').exists()).toBe(true)
+    })
+
+    it('hides compact button when not ACP transport', async () => {
+      mockContextUsed.value = 80000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
+      mockSessionTransport.value = 'cli'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+    })
+
+    it('clicking compact button emits send with /compact', async () => {
+      mockContextUsed.value = 80000
+      mockContextSize.value = 100000
+      mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
+      mockSessionTransport.value = 'acp-stdio'
+      const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.vm.$nextTick()
+      const compactBtn = wrapper.find('.session-info-compact')
+      await compactBtn.trigger('click')
+      expect(wrapper.emitted('send')).toBeTruthy()
+      expect(wrapper.emitted('send')![0]).toEqual(['/compact'])
     })
   })
 

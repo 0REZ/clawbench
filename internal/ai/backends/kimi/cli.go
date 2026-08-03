@@ -38,7 +38,7 @@ var KimiToolNameMap = map[string]string{
 }
 
 func init() {
-	ai.RegisterBackend("kimi", newKimiBackend, true)
+	ai.RegisterBackend("kimi", newKimiBackend)
 	backends.Register(&backends.BackendPlugin{
 		ID: "kimi",
 		Spec: model.BackendSpec{
@@ -51,7 +51,6 @@ func init() {
 		},
 		ACP: &backends.ACPPlugin{
 			ToolCallIDPrefixes: KimiACPTCIDPrefixes,
-			InputRemaps:        map[string]string{},
 		},
 	})
 }

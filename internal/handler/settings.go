@@ -36,18 +36,20 @@ var configMutex sync.RWMutex
 // hotReloadFields is the set of config dot-paths that take effect immediately
 // via applyHotReloadGlobals() and do NOT require a server restart.
 var hotReloadFields = map[string]bool{
-	"chat.initial_messages":       true,
-	"chat.page_size":              true,
-	"chat.system_prompt_interval": true,
-	"session.max_count":           true,
-	"recent_projects.max_count":   true,
-	"upload.max_size_mb":          true,
-	"upload.max_files":            true,
-	"tts.max_cache_files":         true,
-	"tts.voice":                   true,
-	"tts.speed":                   true,
-	"default_agent":               true,
-	"localhost_auth_exempt":       true,
+	"chat.initial_messages":             true,
+	"chat.page_size":                    true,
+	"chat.system_prompt_interval":       true,
+	"session.max_count":                 true,
+	"session.archive_retention_enabled": true,
+	"session.archive_retention_days":    true,
+	"recent_projects.max_count":         true,
+	"upload.max_size_mb":                true,
+	"upload.max_files":                  true,
+	"tts.max_cache_files":               true,
+	"tts.voice":                         true,
+	"tts.speed":                         true,
+	"default_agent":                     true,
+	"localhost_auth_exempt":             true,
 	// Terminal — reconfigure Manager or toggle enabled
 	"terminal.enabled":      true,
 	"terminal.idle_timeout": true,
@@ -93,6 +95,7 @@ var hotReloadFields = map[string]bool{
 	"rag.model":                 true,
 	"rag.api_key":               true,
 	"rag.chunk_size":            true,
+	"rag.chunk_overlap":         true,
 	"rag.search_limit":          true,
 	"rag.search_pool_size":      true,
 	"rag.retention_days":        true,
@@ -198,7 +201,9 @@ type configChat struct {
 }
 
 type configSession struct {
-	MaxCount int `json:"max_count"`
+	MaxCount                int  `json:"max_count"`
+	ArchiveRetentionEnabled bool `json:"archive_retention_enabled"`
+	ArchiveRetentionDays    int  `json:"archive_retention_days"`
 }
 
 type configRecentProjects struct {
@@ -258,6 +263,7 @@ type configRAG struct {
 	Model          string `json:"model"`
 	APIKey         string `json:"api_key"`
 	ChunkSize      int    `json:"chunk_size"`
+	ChunkOverlap   int    `json:"chunk_overlap"`
 	SearchLimit    int    `json:"search_limit"`
 	SearchPoolSize int    `json:"search_pool_size"`
 	RetentionDays  int    `json:"retention_days"`
@@ -309,71 +315,74 @@ type configFileSearch struct {
 // PatchableConfigPaths defines the whitelist of config paths that PATCH /api/config accepts.
 // Any path not in this list will be rejected with 400 Bad Request.
 var PatchableConfigPaths = map[string]bool{
-	"default_agent":               true,
-	"chat.initial_messages":       true,
-	"chat.page_size":              true,
-	"chat.system_prompt_interval": true,
-	"session.max_count":           true,
-	"recent_projects.max_count":   true,
-	"upload.max_size_mb":          true,
-	"upload.max_files":            true,
-	"terminal.enabled":            true,
-	"terminal.idle_timeout":       true,
-	"terminal.max_sessions":       true,
-	"terminal.buffer_lines":       true,
-	"tts.engine":                  true,
-	"tts.tts_model":               true,
-	"tts.format":                  true,
-	"tts.speed":                   true,
-	"tts.voice":                   true,
-	"tts.max_cache_files":         true,
-	"tts.piper.model_path":        true,
-	"tts.piper.noise_scale":       true,
-	"tts.piper.length_scale":      true,
-	"tts.piper.sentence_silence":  true,
-	"tts.kokoro.model_path":       true,
-	"tts.kokoro.voices_path":      true,
-	"tts.kokoro.lang":             true,
-	"tts.moss_nano.model_dir":     true,
-	"tts.moss_nano.backend":       true,
-	"rag.vector_enabled":          true,
-	"rag.base_url":                true,
-	"rag.model":                   true,
-	"rag.api_key":                 true,
-	"rag.chunk_size":              true,
-	"rag.search_limit":            true,
-	"rag.search_pool_size":        true,
-	"rag.retention_days":          true,
-	"port_forward.enabled":        true,
-	"port_forward.port":           true,
-	"port_forward.allowed_ports":  true,
-	"frp.enabled":                 true,
-	"frp.server_addr":             true,
-	"frp.server_port":             true,
-	"frp.token":                   true,
-	"frp.auto_port":               true,
-	"frp.remote_port":             true,
-	"frp.ssh_remote_port":         true,
-	"summarize.backend":           true,
-	"summarize.tts_backend":       true,
-	"summarize.model":             true,
-	"summarize.tts_model":         true,
-	"summarize.api.base_url":      true,
-	"summarize.api.key":           true,
-	"summarize.tts_api.base_url":  true,
-	"summarize.tts_api.key":       true,
-	"localhost_auth_exempt":       true,
-	"dingtalk.enabled":            true,
-	"dingtalk.app_key":            true,
-	"dingtalk.app_secret":         true,
-	"dingtalk.agent_id":           true,
-	"dingtalk.users":              true,
-	"feishu.enabled":              true,
-	"feishu.app_id":               true,
-	"feishu.app_secret":           true,
-	"feishu.users":                true,
-	"push_mode":                   true,
-	"file_search.display_limit":   true,
+	"default_agent":                     true,
+	"chat.initial_messages":             true,
+	"chat.page_size":                    true,
+	"chat.system_prompt_interval":       true,
+	"session.max_count":                 true,
+	"session.archive_retention_enabled": true,
+	"session.archive_retention_days":    true,
+	"recent_projects.max_count":         true,
+	"upload.max_size_mb":                true,
+	"upload.max_files":                  true,
+	"terminal.enabled":                  true,
+	"terminal.idle_timeout":             true,
+	"terminal.max_sessions":             true,
+	"terminal.buffer_lines":             true,
+	"tts.engine":                        true,
+	"tts.tts_model":                     true,
+	"tts.format":                        true,
+	"tts.speed":                         true,
+	"tts.voice":                         true,
+	"tts.max_cache_files":               true,
+	"tts.piper.model_path":              true,
+	"tts.piper.noise_scale":             true,
+	"tts.piper.length_scale":            true,
+	"tts.piper.sentence_silence":        true,
+	"tts.kokoro.model_path":             true,
+	"tts.kokoro.voices_path":            true,
+	"tts.kokoro.lang":                   true,
+	"tts.moss_nano.model_dir":           true,
+	"tts.moss_nano.backend":             true,
+	"rag.vector_enabled":                true,
+	"rag.base_url":                      true,
+	"rag.model":                         true,
+	"rag.api_key":                       true,
+	"rag.chunk_size":                    true,
+	"rag.chunk_overlap":                 true,
+	"rag.search_limit":                  true,
+	"rag.search_pool_size":              true,
+	"rag.retention_days":                true,
+	"port_forward.enabled":              true,
+	"port_forward.port":                 true,
+	"port_forward.allowed_ports":        true,
+	"frp.enabled":                       true,
+	"frp.server_addr":                   true,
+	"frp.server_port":                   true,
+	"frp.token":                         true,
+	"frp.auto_port":                     true,
+	"frp.remote_port":                   true,
+	"frp.ssh_remote_port":               true,
+	"summarize.backend":                 true,
+	"summarize.tts_backend":             true,
+	"summarize.model":                   true,
+	"summarize.tts_model":               true,
+	"summarize.api.base_url":            true,
+	"summarize.api.key":                 true,
+	"summarize.tts_api.base_url":        true,
+	"summarize.tts_api.key":             true,
+	"localhost_auth_exempt":             true,
+	"dingtalk.enabled":                  true,
+	"dingtalk.app_key":                  true,
+	"dingtalk.app_secret":               true,
+	"dingtalk.agent_id":                 true,
+	"dingtalk.users":                    true,
+	"feishu.enabled":                    true,
+	"feishu.app_id":                     true,
+	"feishu.app_secret":                 true,
+	"feishu.users":                      true,
+	"push_mode":                         true,
+	"file_search.display_limit":         true,
 }
 
 // validTTSEngines is the set of valid TTS engine values.
@@ -431,7 +440,9 @@ func serveConfigGet(w http.ResponseWriter, _ *http.Request) {
 			SystemPromptInterval: cfg.Chat.SystemPromptInterval,
 		},
 		Session: configSession{
-			MaxCount: cfg.Session.MaxCount,
+			MaxCount:                cfg.Session.MaxCount,
+			ArchiveRetentionEnabled: cfg.Session.ArchiveRetentionEnabled,
+			ArchiveRetentionDays:    cfg.Session.ArchiveRetentionDays,
 		},
 		RecentProjects: configRecentProjects{
 			MaxCount: cfg.RecentProjects.MaxCount,
@@ -460,6 +471,7 @@ func serveConfigGet(w http.ResponseWriter, _ *http.Request) {
 			Model:          cfg.RAG.Model,
 			APIKey:         cfg.RAG.APIKey,
 			ChunkSize:      cfg.RAG.ChunkSize,
+			ChunkOverlap:   cfg.RAG.ChunkOverlap,
 			SearchLimit:    cfg.RAG.SearchLimit,
 			SearchPoolSize: cfg.RAG.SearchPoolSize,
 			RetentionDays:  cfg.RAG.RetentionDays,
@@ -840,6 +852,9 @@ func validatePatchValues(patch map[string]any) error { //nolint:gocognit,gocyclo
 		if v, ok := session["max_count"].(float64); ok && v < 0 {
 			return fmt.Errorf("session.max_count must be non-negative")
 		}
+		if v, ok := session["archive_retention_days"].(float64); ok && v < 0 {
+			return fmt.Errorf("session.archive_retention_days must be non-negative")
+		}
 	}
 	recentProjects, ok := patch["recent_projects"].(map[string]any)
 	if ok {
@@ -939,6 +954,12 @@ func applyConfigPatch(patch map[string]any) { //nolint:gocognit,gocyclo // exhau
 	if session, ok := patch["session"].(map[string]any); ok {
 		if v, ok := session["max_count"].(float64); ok {
 			cfg.Session.MaxCount = int(v)
+		}
+		if v, ok := session["archive_retention_enabled"].(bool); ok {
+			cfg.Session.ArchiveRetentionEnabled = v
+		}
+		if v, ok := session["archive_retention_days"].(float64); ok {
+			cfg.Session.ArchiveRetentionDays = int(v)
 		}
 	}
 
@@ -1044,6 +1065,9 @@ func applyConfigPatch(patch map[string]any) { //nolint:gocognit,gocyclo // exhau
 		}
 		if v, ok := rag["chunk_size"].(float64); ok {
 			cfg.RAG.ChunkSize = int(v)
+		}
+		if v, ok := rag["chunk_overlap"].(float64); ok {
+			cfg.RAG.ChunkOverlap = int(v)
 		}
 		if v, ok := rag["search_limit"].(float64); ok {
 			cfg.RAG.SearchLimit = int(v)
@@ -1523,9 +1547,11 @@ func IsRunningUnderSupervisor() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
 	}
-	if os.Getppid() == 1 {
-		return true
-	}
+	// NOTE: PPid==1 (re-parented to init) is NOT evidence of a supervisor. It
+	// happens whenever the parent dies — e.g. a server launched by the restart
+	// sentinel, or started via setsid/nohup. Treating it as supervised would
+	// make the next config-panel restart skip launching a sentinel and simply
+	// shut down, leaving the service permanently down.
 	return false
 }
 

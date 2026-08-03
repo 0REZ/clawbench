@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	ai.RegisterBackend("codebuddy", newCodebuddyBackend, true)
+	ai.RegisterBackend("codebuddy", newCodebuddyBackend)
 	backends.Register(&backends.BackendPlugin{
 		ID: "codebuddy",
 		Spec: model.BackendSpec{
@@ -19,9 +19,6 @@ func init() {
 			AcpCommand:           "codebuddy --acp",
 			InstallCmd:           "npm install -g @tencent-ai/codebuddy-code",
 			SortOrder:            2,
-		},
-		ACP: &backends.ACPPlugin{
-			InputRemaps: CodebuddyACPRemaps,
 		},
 	})
 }

@@ -1,6 +1,6 @@
 <template>
   <div class="chat-messages-wrapper">
-  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll" @contextmenu="handleChatContextMenu" v-long-press="handleChatLongPress">
+  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
     <!-- Lazy load feedback -->
     <div class="chat-load-area">
       <Transition name="load-hint-fade">
@@ -60,7 +60,6 @@
       :expandedTools="expandedTools"
       :blockTasks="blockTasks"
       :blockAskQuestions="blockAskQuestions"
-      :blockRagResults="blockRagResults"
       :agents="agents"
       :staticBlockCache="staticBlockCache"
       :active="active"
@@ -73,7 +72,7 @@
       @render-flush="emit('render-flush')"
       @toggle-summary="$emit('toggle-summary', $event)"
       @resume-session="$emit('resume-session', $event)"
-      @show-rag-detail="$emit('show-rag-detail', $event)"
+
       @remove-pending="$emit('remove-pending', $event)"
       @fork-from-message="$emit('fork-from-message', $event)"
     />
@@ -137,7 +136,7 @@ import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import UserMsgIndexDrawer from './UserMsgIndexDrawer.vue'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 import { useDoubleClickCopy } from '@/composables/useDoubleClickCopy.ts'
-import { useFilePathAnnotation, useFilePathNavHandlers } from '@/composables/useFilePathAnnotation.ts'
+import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
 import { useLocalhostUrlClickHandler } from '@/composables/useLocalhostAnnotation.ts'
 import { useDialog } from '@/composables/useDialog'
@@ -157,7 +156,6 @@ const props = defineProps({
   expandedTools: Object,
   blockTasks: Object,
   blockAskQuestions: Object,
-  blockRagResults: Object,
   agents: Array,
   currentAgent: Object,
   currentSessionId: String,
@@ -168,12 +166,11 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'resume-session', 'show-rag-detail', 'fork-from-message'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'resume-session', 'fork-from-message'])
 
 const messagesRef = ref(null)
 const { handleDblClick } = useDoubleClickCopy()
 const { openFilePath } = useFilePathAnnotation()
-const { handleContextMenu: handleChatContextMenu, handleLongPress: handleChatLongPress } = useFilePathNavHandlers()
 const dialog = useDialog()
 const { handleLocalhostUrlClick } = useLocalhostUrlClickHandler()
 
@@ -289,8 +286,6 @@ async function handleChatClick(event) {
     if (ok) chatUI.navigateToFileViewer?.()
   })
 }
-
-// ── Long-press / right-click on file-path annotation → open in file manager (handled by useFilePathNavHandlers) ──
 
 let loadMorePending = false
 // Track whether the user is at the bottom of the chat.

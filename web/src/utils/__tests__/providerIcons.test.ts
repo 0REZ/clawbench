@@ -11,7 +11,8 @@ describe('providerIcons', () => {
         })
 
         it('detects anthropic prefix', () => {
-            expect(getModelProvider('anthropic/claude-sonnet-4-6')).toBe('anthropic')
+            // provider/model-name format: model-name part is matched first
+            expect(getModelProvider('anthropic/claude-sonnet-4-6')).toBe('claude')
         })
 
         // OpenAI family
@@ -125,9 +126,9 @@ describe('providerIcons', () => {
             expect(getModelProvider('meta/llama-3.1')).toBe('meta')
             expect(getModelProvider('xai/grok-2')).toBe('xai')
             expect(getModelProvider('qwen/qwen-max')).toBe('qwen')
-            expect(getModelProvider('cerebras/llama-3.1')).toBe('cerebras')
+            expect(getModelProvider('cerebras/llama-3.1')).toBe('meta')
             expect(getModelProvider('openrouter/auto')).toBe('openrouter')
-            expect(getModelProvider('fireworks/llama-3.1')).toBe('fireworks')
+            expect(getModelProvider('fireworks/llama-3.1')).toBe('meta')
         })
 
         // Unknown / edge cases
@@ -145,7 +146,7 @@ describe('providerIcons', () => {
 
     describe('getProviderIcon', () => {
         it('returns icon data for known providers', () => {
-            const providers = ['openai', 'anthropic', 'claude', 'gemini', 'deepseek', 'mistral', 'meta', 'qwen', 'kimi', 'xiaomi', 'groq', 'xai', 'copilot', 'codex', 'codebuddy', 'cline', 'zhipu', 'chatglm', 'glm']
+            const providers = ['openai', 'anthropic', 'claude', 'gemini', 'deepseek', 'mistral', 'meta', 'qwen', 'kimi', 'xiaomi', 'groq', 'xai', 'copilot', 'codex', 'codebuddy', 'zhipu', 'chatglm', 'glm']
             for (const id of providers) {
                 const data = getProviderIcon(id)
                 expect(data, `provider "${id}" should have icon data`).not.toBeNull()

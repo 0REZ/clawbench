@@ -390,7 +390,7 @@ func TestServeToolCallDetail_Found(t *testing.T) {
 	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", sessionID, "assistant", `{"blocks":[]}`, nil, false, "")
 	require.NoError(t, err)
 
-	err = service.UpsertToolCall(msgID, sessionID, "toolu_td01", "Read", json.RawMessage(`{"file_path":"/tmp/test.go"}`), "contents", "success", "test.go", true)
+	err = service.UpsertToolCall(msgID, sessionID, "toolu_td01", "Read", json.RawMessage(`{"file_path":"/tmp/test.go"}`), "contents", "success", "test.go", true, 0)
 	require.NoError(t, err)
 
 	req := newRequest(t, http.MethodGet, "/api/ai/chat/tool-call?tool_id=toolu_td01&message_id="+fmt.Sprintf("%d", msgID), nil)
@@ -447,7 +447,7 @@ func TestServeToolCallDetail_ProjectMismatch(t *testing.T) {
 	msgID, err := service.AddChatMessage(env.ProjectDir, "claude", sessionID, "assistant", `{"blocks":[]}`, nil, false, "")
 	require.NoError(t, err)
 
-	err = service.UpsertToolCall(msgID, sessionID, "toolu_td02", "Read", json.RawMessage(`{}`), "contents", "success", "", true)
+	err = service.UpsertToolCall(msgID, sessionID, "toolu_td02", "Read", json.RawMessage(`{}`), "contents", "success", "", true, 0)
 	require.NoError(t, err)
 
 	otherDir := env.WatchDir + "/other-project"
@@ -481,7 +481,7 @@ func TestServeToolCallDetail_SessionIDFallback(t *testing.T) {
 	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "Test", "claude", "", "default", "chat")
 	require.NoError(t, err)
 
-	// Simulate AutoResumeBackend: two assistant messages in the same session
+	// Simulate multiple assistant messages in a session
 	msgID1, err := service.AddChatMessage(env.ProjectDir, "claude", sessionID, "assistant", `{"blocks":[{"type":"tool_use","name":"Read","id":"toolu_split01","status":"success","done":true}]}`, nil, false, "")
 	require.NoError(t, err)
 
@@ -489,11 +489,11 @@ func TestServeToolCallDetail_SessionIDFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	// Tool call stored under msgID1 (first assistant message)
-	err = service.UpsertToolCall(msgID1, sessionID, "toolu_split01", "Read", json.RawMessage(`{"file_path":"/tmp/a.go"}`), "contents-a", "success", "", true)
+	err = service.UpsertToolCall(msgID1, sessionID, "toolu_split01", "Read", json.RawMessage(`{"file_path":"/tmp/a.go"}`), "contents-a", "success", "", true, 0)
 	require.NoError(t, err)
 
 	// Tool call stored under msgID2 (second assistant message)
-	err = service.UpsertToolCall(msgID2, sessionID, "toolu_split02", "Write", json.RawMessage(`{"file_path":"/tmp/b.go"}`), "contents-b", "success", "", true)
+	err = service.UpsertToolCall(msgID2, sessionID, "toolu_split02", "Write", json.RawMessage(`{"file_path":"/tmp/b.go"}`), "contents-b", "success", "", true, 0)
 	require.NoError(t, err)
 
 	// Case 1: Wrong message_id but correct session_id → should find via fallback
@@ -640,41 +640,41 @@ func TestServeSessions_Post_NoAgents(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-// --- DeleteSession ---
+// --- ArchiveSession ---
 
-func TestDeleteSession_OK(t *testing.T) {
+func TestArchiveSession_OK(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
 	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "To Delete", "claude", "", "default", "chat")
 	require.NoError(t, err)
 
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete?session_id="+sessionID, nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID, nil)
 	req = withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assertOK(t, w)
 }
 
-func TestDeleteSession_NoSessionID(t *testing.T) {
+func TestArchiveSession_NoSessionID(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
-	req := newRequest(t, http.MethodDelete, "/api/ai/session/delete", nil)
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive", nil)
 	req = withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestDeleteSession_BadMethod(t *testing.T) {
+func TestArchiveSession_BadMethod(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
-	req := newRequest(t, http.MethodPost, "/api/ai/session/delete", nil)
+	req := newRequest(t, http.MethodPost, "/api/ai/session/archive", nil)
 	req = withProjectCookie(req, env.ProjectDir)
 
-	w := callHandler(DeleteSession, req)
+	w := callHandler(ArchiveSession, req)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 

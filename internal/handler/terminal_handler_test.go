@@ -127,6 +127,7 @@ func TestTerminalStatus_NilManager(t *testing.T) {
 	var result map[string]any
 	decodeRespJSON(t, w.Body, &result)
 	assert.Equal(t, false, result["enabled"])
+	assert.Equal(t, false, result["platform_supported"])
 }
 
 func TestTerminalStatus_AllSessions(t *testing.T) {
@@ -154,12 +155,45 @@ func TestTerminalStatus_AllSessions(t *testing.T) {
 	var result map[string]any
 	decodeRespJSON(t, w.Body, &result)
 	assert.Equal(t, true, result["enabled"])
+	// platform_supported mirrors runtimeGOOS != "windows" — on Linux test machines it's true
+	assert.Contains(t, result, "platform_supported")
 	// No active sessions — AllSessionStatus returns nil slice which marshals to null
 	_, ok := result["sessions"]
 	assert.True(t, ok, "sessions field should be present")
 	// session_count should be present in the response
 	_, ok = result["session_count"]
 	assert.True(t, ok, "session_count field should be present")
+}
+
+func TestTerminalStatus_WithSessionID(t *testing.T) {
+	origMgr := GetTerminalManager()
+	t.Cleanup(func() {
+		curMgr := GetTerminalManager()
+		if curMgr != nil && curMgr != origMgr {
+			curMgr.Close()
+		}
+		SetTerminalManager(origMgr)
+	})
+
+	SetTerminalManager(terminal.NewManager(model.TerminalConfig{
+		Enabled:      true,
+		IdleTimeout:  "1m",
+		BufferLines:  100,
+		MaxLineBytes: 65536,
+		MaxBufferMB:  4,
+	}, 20000))
+
+	req := newRequest(t, http.MethodGet, "/api/terminal/status?session=missing-session", nil)
+	w := callHandler(TerminalStatus, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	decodeRespJSON(t, w.Body, &result)
+	assert.Equal(t, true, result["enabled"])
+	assert.Equal(t, false, result["hasSession"])
+	assert.Equal(t, "missing-session", result["sessionId"])
+	assert.Equal(t, "", result["cwd"])
+	assert.Equal(t, false, result["running"])
 }
 
 // ---------- TerminalClose ----------

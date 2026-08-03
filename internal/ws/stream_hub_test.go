@@ -124,8 +124,8 @@ func TestStreamHub_EmitSkipsNilPayload(t *testing.T) {
 	mgr.Subscribe(nil, &writeMu, "client1", "")
 	hub.Subscribe("client1", "session1")
 
-	// resume_split returns nil payload from StreamEventToPayload — Emit should skip it
-	hub.Emit("session1", ai.StreamEvent{Type: "resume_split"})
+	// Unknown event types return nil payload from StreamEventToPayload — Emit should skip it
+	hub.Emit("session1", ai.StreamEvent{Type: "unknown_nil_payload"})
 }
 
 // --- EmitToSession ---
@@ -227,12 +227,6 @@ func TestStreamEventToPayload_Metadata(t *testing.T) {
 	result, ok := payload.(*ai.Metadata)
 	assert.True(t, ok)
 	assert.Equal(t, "gpt-4", result.Model)
-}
-
-func TestStreamEventToPayload_ResumeSplit(t *testing.T) {
-	// resume_split is handled by EmitResumeSplitEvent, not StreamEventToPayload
-	payload := StreamEventToPayload(ai.StreamEvent{Type: "resume_split"})
-	assert.Nil(t, payload, "resume_split should return nil since it's handled separately")
 }
 
 // --- StreamEventToPayload: error and warning ---
@@ -471,7 +465,7 @@ func TestStreamEventToPayload_ToolResultMinimal(t *testing.T) {
 // --- attachToolMeta ---
 
 func TestAttachToolMeta_WithAllFields(t *testing.T) {
-	meta := ai.ToolCallMeta{DisplayName: "Edit File", Summary: "editing", FilePath: "/tmp/a.go"}
+	meta := ai.ToolCallMeta{DisplayName: "Edit File", Summary: "editing", FilePath: "/tmp/a.go", DurationMs: 3500}
 	payload := StreamEventToPayload(ai.StreamEvent{
 		Type:     "tool_use",
 		ToolMeta: &meta,
@@ -482,6 +476,14 @@ func TestAttachToolMeta_WithAllFields(t *testing.T) {
 	assert.Equal(t, "Edit File", m["display_name"])
 	assert.Equal(t, "editing", m["summary"])
 	assert.Equal(t, "/tmp/a.go", m["file_path"])
+	assert.Equal(t, 3500, m["duration_ms"])
+}
+
+func TestAttachToolMeta_ZeroDurationNotAttached(t *testing.T) {
+	payload := map[string]any{}
+	attachToolMeta(payload, &ai.ToolCallMeta{DurationMs: 0})
+	_, hasDuration := payload["duration_ms"]
+	assert.False(t, hasDuration, "zero duration should not be attached")
 }
 
 func TestAttachToolMeta_NilMeta(t *testing.T) {
@@ -638,51 +640,6 @@ func TestStreamHub_EmitStreamStartEvent(t *testing.T) {
 	assert.Equal(t, "session-start", data.SessionID)
 }
 
-// --- EmitResumeSplitEvent ---
-
-func TestStreamHub_EmitResumeSplitEvent_WithSubscribers(t *testing.T) {
-	mgr, hub := newTestStreamHub()
-
-	var writeMu sync.Mutex
-	sub := mgr.Subscribe(nil, &writeMu, "client-resume", "")
-	hub.Subscribe("client-resume", "session-resume")
-
-	hub.EmitResumeSplitEvent("session-resume", 99)
-
-	buffered := sub.GetBufferedEvents()
-	require.NotEmpty(t, buffered, "expected at least one buffered event")
-	data, ok := buffered[0].Data.(ChatStreamData)
-	require.True(t, ok, "expected ChatStreamData")
-	assert.Equal(t, "resume_split", data.EventType)
-	payload, _ := data.Payload.(map[string]any)
-	assert.Equal(t, int64(99), payload["message_id"])
-}
-
-func TestStreamHub_EmitResumeSplitEvent_NoSubscribers(t *testing.T) {
-	_, hub := newTestStreamHub()
-
-	// Should return early without panic
-	hub.EmitResumeSplitEvent("session-none", 1)
-}
-
-func TestStreamHub_EmitResumeSplitEvent_ZeroMessageID(t *testing.T) {
-	mgr, hub := newTestStreamHub()
-
-	var writeMu sync.Mutex
-	sub := mgr.Subscribe(nil, &writeMu, "client-zero", "")
-	hub.Subscribe("client-zero", "session-zero")
-
-	hub.EmitResumeSplitEvent("session-zero", 0)
-
-	buffered := sub.GetBufferedEvents()
-	require.NotEmpty(t, buffered, "expected at least one buffered event")
-	data, ok := buffered[0].Data.(ChatStreamData)
-	require.True(t, ok, "expected ChatStreamData")
-	payload, _ := data.Payload.(map[string]any)
-	_, hasMessageID := payload["message_id"]
-	assert.False(t, hasMessageID, "message_id should be omitted when 0")
-}
-
 // --- EmitACPStateEvents ---
 
 func TestStreamHub_EmitACPStateEvents_NoState(t *testing.T) {
@@ -749,28 +706,27 @@ func TestStreamHub_EmitACPStateEvents_WithCommandsOnly(t *testing.T) {
 	assert.True(t, found, "expected commands_update event in buffered events")
 }
 
-func TestStreamHub_EmitACPStateEvents_OrphanedUsage(t *testing.T) {
-	acpMgr := ai.GetACPConnManager()
-	// Create a connection with usage state, then close it to orphan the usage
-	agent := &model.Agent{ID: "test-acp-orphan", Backend: "acp-stdio", AcpCommand: "echo"}
-	conn := ai.NewACPConnForTest(agent, "session-orphan")
-	conn.SetCachedUsageState(&ai.UsageState{Used: 999, Size: 200000})
-	acpMgr.SetConnForTest("session-orphan", conn)
-	// CloseConn preserves usage into orphanedUsage
-	acpMgr.CloseConn("session-orphan")
-
+func TestStreamHub_EmitACPStateEvents_DBUsageFallback(t *testing.T) {
 	wsMgr, hub := newTestStreamHub()
+	// Inject a function that simulates DB fallback for usage state
+	hub.SetGetContextStateUsageFunc(func(sessionID string) *ContextStateUsage {
+		if sessionID == "session-db-fallback" {
+			return &ContextStateUsage{Used: 999, Size: 200000}
+		}
+		return nil
+	})
+
 	var writeMu sync.Mutex
 	sub := wsMgr.Subscribe(nil, &writeMu, "client1", "")
 
-	hub.EmitACPStateEvents("client1", "session-orphan")
+	hub.EmitACPStateEvents("client1", "session-db-fallback")
 
 	buffered := sub.GetBufferedEvents()
-	require.NotEmpty(t, buffered, "expected orphaned usage_update event")
+	require.NotEmpty(t, buffered, "expected DB fallback usage_update event")
 	data, ok := buffered[0].Data.(ChatStreamData)
 	require.True(t, ok)
 	assert.Equal(t, "usage_update", data.EventType)
-	usage, _ := data.Payload.(*ai.UsageState)
+	usage, _ := data.Payload.(*ContextStateUsage)
 	require.NotNil(t, usage)
 	assert.Equal(t, 999, usage.Used)
 }

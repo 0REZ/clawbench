@@ -589,6 +589,42 @@ describe('useChatStream', () => {
       expect(toolBlock.status).toBe('success')
     })
 
+    it('should copy duration_ms from tool_result onto the existing block', () => {
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+
+      connectStream('test-session-1')
+
+      simulateWsEvent('tool_use', { name: 'Read', id: 'tool-dur', input: { file_path: '/tmp/test.txt' } })
+      simulateWsEvent('tool_result', { id: 'tool-dur', status: 'success', duration_ms: 4200 })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      const toolBlock = assistantMsg.blocks.find(
+        (b: any) => b.type === 'tool_use' && b.id === 'tool-dur'
+      )
+      expect(toolBlock.duration_ms).toBe(4200)
+    })
+
+    it('should copy duration_ms from a done tool_use event', () => {
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+
+      connectStream('test-session-1')
+
+      simulateWsEvent('tool_use', { name: 'Read', id: 'tool-dur-2', input: { file_path: '/tmp/test.txt' } })
+      simulateWsEvent('tool_use', { name: 'Read', id: 'tool-dur-2', done: true, status: 'success', duration_ms: 1500 })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      const toolBlock = assistantMsg.blocks.find(
+        (b: any) => b.type === 'tool_use' && b.id === 'tool-dur-2'
+      )
+      expect(toolBlock.duration_ms).toBe(1500)
+    })
+
     it('should do nothing if no matching tool_use block exists', () => {
       const options = createOptions()
       const { connectStream } = useChatStream(options)
@@ -1671,138 +1707,7 @@ describe('useChatStream', () => {
     })
   })
 
-  // ── Resume split ──
 
-  describe('WS event handling — resume_split', () => {
-    it('should finalize Phase 1 message and create Phase 2 streaming message', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('content', { content: 'Phase 1 content' })
-
-      const streamingBefore = options.messages.value.filter(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(streamingBefore.length).toBe(1)
-
-      simulateWsEvent('resume_split', {})
-
-      const finalizedMsg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && !m.streaming && m.blocks?.some((b: any) => b.text === 'Phase 1 content')
-      )
-      expect(finalizedMsg).toBeDefined()
-      expect(finalizedMsg.streaming).toBeUndefined()
-
-      const streamingAfter = options.messages.value.filter(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(streamingAfter.length).toBe(1)
-      expect(streamingAfter[0].blocks).toEqual([])
-    })
-
-    it('should route Phase 2 content to the new streaming message', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('content', { content: 'Phase 1' })
-      simulateWsEvent('resume_split', {})
-      simulateWsEvent('content', { content: 'Phase 2' })
-
-      const phase1Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && !m.streaming && m.blocks?.some((b: any) => b.text === 'Phase 1')
-      )
-      expect(phase1Msg).toBeDefined()
-      expect(phase1Msg.blocks.every((b: any) => !b.text?.includes('Phase 2'))).toBe(true)
-
-      const phase2Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(phase2Msg).toBeDefined()
-      expect(phase2Msg.blocks[0].text).toBe('Phase 2')
-    })
-
-    it('should keep Phase 1 content visible', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('content', { content: 'Before ExitPlanMode' })
-      simulateWsEvent('tool_use', { name: 'ExitPlanMode', id: 'epm-1', input: {} })
-      simulateWsEvent('tool_use', { name: 'ExitPlanMode', id: 'epm-1', done: true })
-      simulateWsEvent('resume_split', {})
-
-      const phase1Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && !m.streaming
-      )
-      expect(phase1Msg).toBeDefined()
-      expect(phase1Msg.blocks.length).toBe(2)
-      expect(phase1Msg.blocks[0].text).toBe('Before ExitPlanMode')
-      expect(phase1Msg.blocks[1].name).toBe('ExitPlanMode')
-    })
-
-    it('should set Phase 2 message id from resume_split message_id', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('resume_split', { message_id: 12345 })
-
-      const phase2Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(phase2Msg).toBeDefined()
-      expect(phase2Msg.id).toBe(12345)
-    })
-
-    it('should create Phase 2 with resume- id when no message_id', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('resume_split', {})
-
-      const phase2Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(phase2Msg).toBeDefined()
-      expect(phase2Msg.id).toMatch(/^resume-/)
-    })
-
-    it('should call onRenderNeeded on resume_split', () => {
-      const options = createOptions()
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-      options.onRenderNeeded.mockClear()
-
-      simulateWsEvent('resume_split', {})
-
-      expect(options.onRenderNeeded).toHaveBeenCalled()
-    })
-
-    it('should create Phase 2 message with correct backend', () => {
-      const options = createOptions()
-      options.currentBackend.value = 'claude-code'
-      const { connectStream } = useChatStream(options)
-
-      connectStream('test-session-1')
-
-      simulateWsEvent('resume_split', {})
-
-      const phase2Msg = options.messages.value.find(
-        (m: any) => m.role === 'assistant' && m.streaming
-      )
-      expect(phase2Msg).toBeDefined()
-      expect(phase2Msg.backend).toBe('claude-code')
-    })
-  })
 
   // ── Stream timeout ──
 
@@ -2112,6 +2017,45 @@ describe('useChatStream', () => {
       )
       const textBlocks = assistantMsg?.blocks?.filter((b: any) => b.type === 'text') || []
       expect(textBlocks.length).toBe(0)
+    })
+  })
+
+  // ── tool_use block timeout ──
+
+  describe('tool_use block timeout', () => {
+    it('keeps subagent (task) tool block running past the 30s tool timeout', () => {
+      vi.useFakeTimers()
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+      connectStream('test-session-1')
+
+      simulateWsEvent('tool_use', { id: 'tool-task-1', name: 'task', done: false, status: '' })
+      vi.advanceTimersByTime(5000)
+      // Reset the stream timeout so only the per-tool timeout fires.
+      simulateWsEvent('content', { content: 'working' })
+      vi.advanceTimersByTime(26000) // 31s total since the tool started
+
+      const streamingMsg = options.messages.value.find((m: any) => m.role === 'assistant')
+      const taskBlock = streamingMsg.blocks.find((b: any) => b.id === 'tool-task-1')
+      expect(taskBlock.done).toBe(false)
+      vi.useRealTimers()
+    })
+
+    it('marks a non-subagent tool done after the 30s tool timeout (unchanged)', () => {
+      vi.useFakeTimers()
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+      connectStream('test-session-1')
+
+      simulateWsEvent('tool_use', { id: 'tool-read-1', name: 'Read', done: false, status: '' })
+      vi.advanceTimersByTime(5000)
+      simulateWsEvent('content', { content: 'working' })
+      vi.advanceTimersByTime(26000)
+
+      const streamingMsg = options.messages.value.find((m: any) => m.role === 'assistant')
+      const readBlock = streamingMsg.blocks.find((b: any) => b.id === 'tool-read-1')
+      expect(readBlock.done).toBe(true)
+      vi.useRealTimers()
     })
   })
 })

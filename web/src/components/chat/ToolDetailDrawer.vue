@@ -5,12 +5,13 @@
         <component :is="headerIcon" :size="14" class="tool-detail-header-icon" />
         <span class="tool-detail-header-name">{{ displayName }}</span>
         <span v-if="toolSummary" class="tool-detail-header-summary">{{ toolSummary }}</span>
+        <span v-if="toolDone && toolDuration > 0" class="tool-detail-duration">{{ formatDuration(toolDuration) }}</span>
         <span v-if="!toolDone" class="tool-detail-spinner"></span>
         <XCircle v-else-if="toolStatus === 'error'" :size="14" color="#ef4444" class="tool-detail-status" />
         <CheckCircle2 v-else :size="14" color="#22c55e" class="tool-detail-status" />
       </div>
     </template>
-    <div class="tool-detail-body" @click="handleBodyClick" @mousedown="onTableMouseDown" @touchstart="onTableTouchStart" @contextmenu="handleBodyContextMenu" v-long-press="handleBodyLongPress">
+    <div class="tool-detail-body" @click="handleBodyClick" @mousedown="onTableMouseDown" @touchstart="onTableTouchStart">
       <div v-html="toolInputHtml"></div>
       <!-- Tool output section -->
       <div v-if="toolOutputHtml" class="tool-output-section tool-content-wrap word-wrap">
@@ -43,11 +44,11 @@ import { CheckCircle2, XCircle } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 import { getToolIcon } from '@/utils/icons'
+import { formatDuration } from '@/utils/format.ts'
 import { handleToolAction, handleToolContentHeaderClick, COPY_ICON_SVG, WRAP_ICON_SVG } from '@/utils/renderToolDetail.ts'
 import { useLocalhostUrlClickHandler } from '@/composables/useLocalhostAnnotation.ts'
 import { store } from '@/stores/app.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
-import { useFilePathNavHandlers } from '@/composables/useFilePathAnnotation.ts'
 
 const props = defineProps({
   show: { type: Boolean, default: false },
@@ -58,6 +59,7 @@ const props = defineProps({
   toolOutputHtml: { type: String, default: '' },
   toolStatus: { type: String, default: '' },
   toolDone: { type: Boolean, default: true },
+  toolDuration: { type: Number, default: 0 },
   displayNameOverride: { type: String, default: '' },
 })
 
@@ -119,9 +121,6 @@ function handleBodyClick(event) {
   event.stopPropagation()
 }
 
-// ── Long-press / right-click on file-path annotation → open in file manager ──
-
-const { handleContextMenu: handleBodyContextMenu, handleLongPress: handleBodyLongPress } = useFilePathNavHandlers()
 </script>
 
 <style scoped>
@@ -177,6 +176,18 @@ const { handleContextMenu: handleBodyContextMenu, handleLongPress: handleBodyLon
 .tool-detail-status {
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.tool-detail-duration {
+  flex-shrink: 0;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--tool-accent) 12%, transparent);
+  color: color-mix(in srgb, var(--tool-accent) 90%, transparent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .tool-detail-spinner {
@@ -527,13 +538,6 @@ const { handleContextMenu: handleBodyContextMenu, handleLongPress: handleBodyLon
 .tool-detail-body .file-preview-line {
   white-space: pre;
   color: var(--text-primary);
-}
-
-.tool-detail-body .file-preview-meta {
-  white-space: normal;
-  color: var(--text-muted, #999);
-  font-style: italic;
-  padding: 4px 0;
 }
 
 /* File write */

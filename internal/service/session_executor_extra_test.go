@@ -593,39 +593,6 @@ func TestSessionExecutor_UpsertToolCallToDB_EmptySessionIDEarlyReturn(t *testing
 	// Early return — no panic, no DB call
 }
 
-// --- handleResumeSplit additional coverage ---
-
-func TestSessionExecutor_HandleResumeSplit_NoRawOutput(t *testing.T) {
-	setupExecutorDB(t)
-	model.Agents = map[string]*model.Agent{
-		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
-	}
-	defer func() { model.Agents = nil }()
-
-	sid := setupExecutorSession(t, "test-agent")
-	ctx := context.Background()
-	cfg := RunConfig{
-		Mode:        ModeInteractive,
-		ProjectPath: "/test",
-		BackendName: "test",
-		SessionID:   sid,
-		AgentID:     "test-agent",
-		ChatRequest: ai.ChatRequest{Prompt: "hello"},
-	}
-	executor := NewSessionExecutor(ctx, cfg)
-
-	// Add some blocks but no raw output
-	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: "part1"})
-	executor.responseMetadata = &ai.Metadata{InputTokens: 50}
-	executor.rawOutput = "" // empty raw output
-	executor.handleResumeSplit()
-
-	// Verify state was reset
-	assert.Nil(t, executor.blocks)
-	assert.Nil(t, executor.responseMetadata)
-	assert.Equal(t, 0, executor.eventCount)
-}
-
 // --- Finalize with metadata save ---
 
 func TestSessionExecutor_Finalize_SavesMetadata(t *testing.T) {
@@ -872,38 +839,6 @@ func TestSessionExecutor_BuildResult_AskUserQuestionPersisted(t *testing.T) {
 	_ = result
 }
 
-// --- handleResumeSplit sets StreamingMessageID ---
-
-func TestSessionExecutor_HandleResumeSplit_SetsStreamingMessageID(t *testing.T) {
-	setupExecutorDB(t)
-	model.Agents = map[string]*model.Agent{
-		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
-	}
-	defer func() { model.Agents = nil }()
-
-	sid := setupExecutorSession(t, "test-agent")
-	ctx := context.Background()
-	cfg := RunConfig{
-		Mode:               ModeInteractive,
-		ProjectPath:        "/test",
-		BackendName:        "test",
-		SessionID:          sid,
-		AgentID:            "test-agent",
-		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
-		StreamingMessageID: 0,
-	}
-	executor := NewSessionExecutor(ctx, cfg)
-
-	// Add some blocks and raw output
-	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: "part1"})
-	executor.rawOutput = "raw output"
-	executor.responseMetadata = &ai.Metadata{InputTokens: 50}
-	executor.handleResumeSplit()
-
-	// StreamingMessageID should have been set by the new streaming message
-	assert.Greater(t, executor.cfg.StreamingMessageID, int64(0), "StreamingMessageID should be set after handleResumeSplit")
-}
-
 // --- tool_result SSE forwarding with meta extraction ---
 
 func TestSessionExecutor_HandleNonTerminalEvent_ToolResultMetaExtraction(t *testing.T) {
@@ -971,6 +906,142 @@ func TestSessionExecutor_HandleNonTerminalEvent_UpsertToolCall(t *testing.T) {
 
 // --- UpsertToolCall and GetToolCall direct tests ---
 
+func TestSessionExecutor_TrackToolDuration(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID, err := AddChatMessage("/test", "test", sid, "assistant", `{"blocks":[]}`, nil, true, "")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: msgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// Tool starts (done=false) — records the start time
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Bash", ID: "tool-dur-1", Input: `{"command":"ls"}`, Done: false},
+	})
+	time.Sleep(30 * time.Millisecond)
+	// Tool completes via tool_result — computes duration
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_result",
+		Tool: &ai.ToolCall{Name: "Bash", ID: "tool-dur-1", Output: "ok", Status: "success"},
+	})
+
+	// The accumulated block should carry the duration
+	require.Len(t, executor.blocks, 1, "expected one accumulated block")
+	block := executor.blocks[0]
+	assert.True(t, block.Done)
+	assert.GreaterOrEqual(t, block.DurationMs, 25, "block duration should reflect elapsed wall-clock time")
+
+	// The persisted tool call record should carry the duration
+	record, err := GetToolCall("tool-dur-1", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.GreaterOrEqual(t, record.DurationMs, 25, "DB duration should reflect elapsed wall-clock time")
+}
+
+func TestSessionExecutor_TrackToolDuration_StartEventAlreadyDone(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID, err := AddChatMessage("/test", "test", sid, "assistant", `{"blocks":[]}`, nil, true, "")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: msgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// Backends that emit a single done tool_use without a start event:
+	// duration stays 0 (unknown) rather than a garbage value.
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Read", ID: "tool-dur-2", Input: `{"file_path":"/a.go"}`, Done: true},
+	})
+
+	record, err := GetToolCall("tool-dur-2", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.Equal(t, 0, record.DurationMs)
+}
+
+func TestSessionExecutor_TrackToolDuration_InterimThenFinal(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID, err := AddChatMessage("/test", "test", sid, "assistant", `{"blocks":[]}`, nil, true, "")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: msgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// Claude-style flow: start → input complete (done=true, interim duration) → tool_result (final).
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Edit", ID: "tool-dur-3", Input: `{"file_path":"/a.go"}`, Done: false},
+	})
+	time.Sleep(10 * time.Millisecond)
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Edit", ID: "tool-dur-3", Input: `{"file_path":"/a.go"}`, Done: true},
+	})
+	time.Sleep(40 * time.Millisecond)
+	executor.handleNonTerminalEvent(ai.StreamEvent{
+		Type: "tool_result",
+		Tool: &ai.ToolCall{Name: "Edit", ID: "tool-dur-3", Output: "done", Status: "success"},
+	})
+
+	// The final duration should cover the full span (start → tool_result), not just input streaming.
+	require.Len(t, executor.blocks, 1)
+	block := executor.blocks[0]
+	assert.GreaterOrEqual(t, block.DurationMs, 40, "final duration should reflect full elapsed time")
+
+	record, err := GetToolCall("tool-dur-3", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, record)
+	assert.GreaterOrEqual(t, record.DurationMs, 40, "DB duration should be the final value")
+}
+
+// --- UpsertToolCall and GetToolCall direct tests ---
+
 func TestUpsertToolCall_InsertAndGet(t *testing.T) {
 	setupExecutorDB(t)
 
@@ -982,7 +1053,7 @@ func TestUpsertToolCall_InsertAndGet(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert
-	err = UpsertToolCall(msgID, sid, "toolu_direct_1", "Read", json.RawMessage(`{"file_path":"/tmp/test.go"}`), "contents here", "success", "test.go", true)
+	err = UpsertToolCall(msgID, sid, "toolu_direct_1", "Read", json.RawMessage(`{"file_path":"/tmp/test.go"}`), "contents here", "success", "test.go", true, 0)
 	require.NoError(t, err)
 
 	// Get
@@ -1007,11 +1078,11 @@ func TestUpsertToolCall_UpdateExisting(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert
-	err = UpsertToolCall(msgID, sid, "toolu_update_1", "Bash", json.RawMessage(`{"command":"ls"}`), "", "running", "", false)
+	err = UpsertToolCall(msgID, sid, "toolu_update_1", "Bash", json.RawMessage(`{"command":"ls"}`), "", "running", "", false, 0)
 	require.NoError(t, err)
 
 	// Update with output
-	err = UpsertToolCall(msgID, sid, "toolu_update_1", "Bash", json.RawMessage(`{"command":"ls"}`), "file1.go\nfile2.go", "completed", "listing", true)
+	err = UpsertToolCall(msgID, sid, "toolu_update_1", "Bash", json.RawMessage(`{"command":"ls"}`), "file1.go\nfile2.go", "completed", "listing", true, 0)
 	require.NoError(t, err)
 
 	// Get updated record
@@ -1043,11 +1114,11 @@ func TestUpsertToolCall_EmptyOutputNotOverwritten(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert with output
-	err = UpsertToolCall(msgID, sid, "toolu_output_1", "Read", json.RawMessage(`{}`), "existing output", "success", "", true)
+	err = UpsertToolCall(msgID, sid, "toolu_output_1", "Read", json.RawMessage(`{}`), "existing output", "success", "", true, 0)
 	require.NoError(t, err)
 
 	// Update with empty output — should keep existing output
-	err = UpsertToolCall(msgID, sid, "toolu_output_1", "Read", json.RawMessage(`{}`), "", "updated", "", true)
+	err = UpsertToolCall(msgID, sid, "toolu_output_1", "Read", json.RawMessage(`{}`), "", "updated", "", true, 0)
 	require.NoError(t, err)
 
 	record, err := GetToolCall("toolu_output_1", msgID)
@@ -1055,4 +1126,103 @@ func TestUpsertToolCall_EmptyOutputNotOverwritten(t *testing.T) {
 	require.NotNil(t, record)
 	assert.Equal(t, "existing output", record.Output, "empty output should not overwrite existing output")
 	assert.Equal(t, "updated", record.Status)
+}
+
+// --- SessionHasRealAssistantContent tests ---
+
+func TestSessionHasRealAssistantContent_EmptyPlaceholder(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-empty", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Finalize an empty placeholder (cancelled stream, no AI content)
+	emptyBlocks, _ := json.Marshal(map[string]any{
+		"blocks":    []any{},
+		"metadata":  nil,
+		"cancelled": true,
+	})
+	_, err = AddChatMessage("/test", "claude", sid, "assistant", string(emptyBlocks), nil, false, "")
+	require.NoError(t, err)
+
+	assert.False(t, SessionHasRealAssistantContent(sid), "empty cancelled placeholder should not count as real content")
+}
+
+func TestSessionHasRealAssistantContent_WarningOnly(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-warning", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Finalize a warning-only placeholder (context cancelled)
+	warningBlocks, _ := json.Marshal(map[string]any{
+		"blocks": []any{
+			map[string]any{"type": "warning", "text": "AI response cancelled", "reason": "context_cancel"},
+		},
+		"metadata":  nil,
+		"cancelled": true,
+	})
+	_, err = AddChatMessage("/test", "claude", sid, "assistant", string(warningBlocks), nil, false, "")
+	require.NoError(t, err)
+
+	assert.False(t, SessionHasRealAssistantContent(sid), "warning-only placeholder should not count as real content")
+}
+
+func TestSessionHasRealAssistantContent_RealTextBlock(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-text", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Finalize a message with real content
+	realBlocks, _ := json.Marshal(map[string]any{
+		"blocks": []any{
+			map[string]any{"type": "text", "text": "Hello, I can help you with that."},
+		},
+		"metadata": map[string]any{"session_id": "ext-123"},
+	})
+	_, err = AddChatMessage("/test", "claude", sid, "assistant", string(realBlocks), nil, false, "")
+	require.NoError(t, err)
+
+	assert.True(t, SessionHasRealAssistantContent(sid), "message with text block should count as real content")
+}
+
+func TestSessionHasRealAssistantContent_ToolUseBlock(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-tool", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Tool use block counts as real content even if there's no text
+	toolBlocks, _ := json.Marshal(map[string]any{
+		"blocks": []any{
+			map[string]any{"type": "tool_use", "id": "tu-1", "name": "Read"},
+			map[string]any{"type": "warning", "text": "AI response cancelled", "reason": "context_cancel"},
+		},
+		"cancelled": true,
+	})
+	_, err = AddChatMessage("/test", "claude", sid, "assistant", string(toolBlocks), nil, false, "")
+	require.NoError(t, err)
+
+	assert.True(t, SessionHasRealAssistantContent(sid), "message with tool_use block should count as real content")
+}
+
+func TestSessionHasRealAssistantContent_PlainTextError(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-err", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Error messages from handler are plain text (not JSON)
+	_, err = AddChatMessage("/test", "claude", sid, "assistant", "Backend create failed: exit 1", nil, false, "")
+	require.NoError(t, err)
+
+	assert.False(t, SessionHasRealAssistantContent(sid), "plain text error message should not count as real content")
+}
+
+func TestSessionHasRealAssistantContent_NoAssistantMessages(t *testing.T) {
+	setupExecutorDB(t)
+	sid, err := CreateSession("/test", "claude", "test-real-content-none", "", "", "claude", "chat")
+	require.NoError(t, err)
+
+	// Only user message, no assistant messages
+	_, err = AddChatMessage("/test", "claude", sid, "user", "hello", nil, false, "")
+	require.NoError(t, err)
+
+	assert.False(t, SessionHasRealAssistantContent(sid), "session without assistant messages should not have real content")
 }

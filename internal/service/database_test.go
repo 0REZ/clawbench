@@ -3,8 +3,10 @@ package service
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"clawbench/internal/model"
@@ -67,7 +69,8 @@ func setupTestDBForTTS(t *testing.T) (*sql.DB, func()) {
 			source_session_id TEXT DEFAULT NULL,
 			transport TEXT DEFAULT '',
 			auto_approve INTEGER NOT NULL DEFAULT 0,
-			deleted INTEGER NOT NULL DEFAULT 0,
+			context_state TEXT DEFAULT '',
+			archived INTEGER NOT NULL DEFAULT 0,
 			last_read_at DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1067,7 +1070,7 @@ func TestSchema_ForwardedPortsMigration_HostColumnFromOldSchema(t *testing.T) {
 			title TEXT NOT NULL,
 			session_type TEXT NOT NULL DEFAULT 'chat',
 			external_session_id TEXT DEFAULT '',
-			deleted INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(project_path, backend, id)
@@ -1606,6 +1609,84 @@ func TestSchema_DropHistoryDeletedColumn_Idempotent(t *testing.T) {
 	assert.NotContains(t, columns, "deleted", "deleted column should still not exist after second InitDB")
 }
 
+// TestSchema_RenameSessionDeletedToArchived verifies that when a database has
+// the old chat_sessions.deleted column, InitDB renames it to archived and
+// preserves existing data and indexes.
+func TestSchema_RenameSessionDeletedToArchived(t *testing.T) {
+	tmpDir := t.TempDir()
+	origBinDir := model.BinDir
+	origDataDir := model.DataDir
+	model.BinDir = tmpDir
+	model.DataDir = filepath.Join(tmpDir, ".clawbench")
+	defer func() { model.BinDir = origBinDir; model.DataDir = origDataDir }()
+
+	origDB := UnsafeDBForTest()
+	origDBRead := dbRead
+	defer func() { db = origDB; dbRead = origDBRead }()
+
+	// Step 1: Create DB with old schema where chat_sessions uses `deleted`
+	dbDir := filepath.Join(tmpDir, ".clawbench")
+	assert.NoError(t, os.MkdirAll(dbDir, 0o755))
+	oldDB, err := sql.Open("sqlite", filepath.Join(dbDir, "ClawBench.db"))
+	assert.NoError(t, err)
+	oldDB.SetMaxOpenConns(1)
+	oldDB.Exec("PRAGMA journal_mode=WAL")
+	oldDB.Exec("PRAGMA busy_timeout=5000")
+
+	_, err = oldDB.Exec(`
+		CREATE TABLE IF NOT EXISTS chat_sessions (
+			id TEXT PRIMARY KEY,
+			project_path TEXT NOT NULL,
+			backend TEXT NOT NULL,
+			title TEXT NOT NULL,
+			session_type TEXT NOT NULL DEFAULT 'chat',
+			deleted INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_path, backend, id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_sessions_order ON chat_sessions(session_type, project_path, deleted, updated_at DESC, id DESC);
+	`)
+	assert.NoError(t, err)
+
+	_, err = oldDB.Exec("INSERT INTO chat_sessions (id, project_path, backend, title, deleted) VALUES ('active-sess', '/proj', 'claude', 'Active', 0)")
+	assert.NoError(t, err)
+	_, err = oldDB.Exec("INSERT INTO chat_sessions (id, project_path, backend, title, deleted) VALUES ('archived-sess', '/proj', 'claude', 'Archived', 1)")
+	assert.NoError(t, err)
+
+	// Verify deleted column exists before migration
+	columns := getTableColumns(t, oldDB, "chat_sessions")
+	assert.Contains(t, columns, "deleted", "deleted column should exist before migration")
+	assert.NotContains(t, columns, "archived")
+
+	oldDB.Close()
+
+	// Step 2: Run InitDB — should rename deleted to archived
+	err = InitDB()
+	assert.NoError(t, err)
+	defer CloseDB()
+
+	// Step 3: Verify archived column exists and deleted is gone
+	columns = getTableColumns(t, UnsafeDBForTest(), "chat_sessions")
+	assert.Contains(t, columns, "archived", "archived column should exist after migration")
+	assert.NotContains(t, columns, "deleted", "deleted column should be renamed after migration")
+
+	// Step 4: Verify data preserved and flag values intact
+	var archived int
+	err = db.QueryRow("SELECT archived FROM chat_sessions WHERE id = 'archived-sess'").Scan(&archived)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, archived, "archived session should retain archived=1")
+	err = db.QueryRow("SELECT archived FROM chat_sessions WHERE id = 'active-sess'").Scan(&archived)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, archived, "active session should retain archived=0")
+
+	// Step 5: Verify index still functions after rename
+	var activeCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM chat_sessions WHERE project_path = '/proj' AND archived = 0 AND session_type = 'chat'").Scan(&activeCount)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, activeCount)
+}
+
 // ---------- QuickCommand CRUD ----------
 
 // setupTestDBForQuickCommands creates an in-memory SQLite database with the terminal_quick_commands table
@@ -2069,7 +2150,7 @@ func setupTestDBForToolCallMigration(t *testing.T) func() {
 			backend TEXT NOT NULL,
 			title TEXT NOT NULL,
 			session_type TEXT NOT NULL DEFAULT 'chat',
-			deleted INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(project_path, backend, id)
@@ -2095,6 +2176,7 @@ func setupTestDBForToolCallMigration(t *testing.T) func() {
 			status TEXT NOT NULL DEFAULT '',
 			done INTEGER NOT NULL DEFAULT 0,
 			summary TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(tool_id, message_id)
 		);
@@ -2353,6 +2435,248 @@ func TestMigrateToolCallsFromContent_NoToolUseBlocks(t *testing.T) {
 	assert.Equal(t, 0, count, "messages without tool_use should not create tool call records")
 }
 
+// TestMigrateToolCallsFromContent_MoreThanOneBatch migrates more rows than one
+// batch (batchSize=200) and asserts EVERY old-format row is migrated. Guards
+// against OFFSET pagination over a shrinking result set skipping rows: as rows
+// are slimmed they leave the query result set, so a fixed OFFSET drifts ahead
+// and permanently skips a batch's worth of rows.
+func TestMigrateToolCallsFromContent_MoreThanOneBatch(t *testing.T) {
+	teardown := setupTestDBForToolCallMigration(t)
+	defer teardown()
+
+	_, err := db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES ('sess-8', '/proj', 'claude', 'Test')")
+	assert.NoError(t, err)
+
+	const total = 450
+	for i := range total {
+		oldContent := fmt.Sprintf(`{"blocks":[{"type":"tool_use","name":"Bash","id":"toolu_%03d","input":{"command":"ls"},"output":"out","status":"success","done":true}]}`, i)
+		_, err = db.Exec(
+			"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', ?, ?, 'claude', 0)",
+			"/proj", oldContent, "sess-8",
+		)
+		assert.NoError(t, err)
+	}
+
+	MigrateToolCallsFromContent()
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM chat_tool_calls").Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, total, count, "every old-format tool-use row must be migrated, none skipped by OFFSET pagination")
+
+	var unmigrated int
+	err = db.QueryRow(`
+		SELECT COUNT(*) FROM chat_history
+		WHERE role = 'assistant' AND content LIKE '%"tool_use"%' AND content LIKE '%"input"%'
+	`).Scan(&unmigrated)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, unmigrated, "no old-format tool-use rows may remain after migration")
+}
+
+// ---------- GetUserMessageStats: user message frequency analysis ----------
+
+// setupTestDBForMessageStats creates an in-memory SQLite database with chat_history
+// and chat_sessions tables for testing GetUserMessageStats.
+func setupTestDBForMessageStats(t *testing.T) func() {
+	t.Helper()
+
+	testDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	testDB.SetMaxOpenConns(1)
+	testDB.Exec("PRAGMA journal_mode=WAL")
+	testDB.Exec("PRAGMA busy_timeout=5000")
+
+	_, err = testDB.Exec(`
+		CREATE TABLE IF NOT EXISTS chat_sessions (
+			id TEXT PRIMARY KEY,
+			project_path TEXT NOT NULL,
+			backend TEXT NOT NULL,
+			title TEXT NOT NULL,
+			agent_id TEXT DEFAULT '',
+			agent_source TEXT DEFAULT 'default',
+			model TEXT DEFAULT '',
+			session_type TEXT NOT NULL DEFAULT 'chat',
+			external_session_id TEXT DEFAULT '',
+			source_session_id TEXT DEFAULT NULL,
+			transport TEXT DEFAULT '',
+			auto_approve INTEGER NOT NULL DEFAULT 0,
+			context_state TEXT DEFAULT '',
+			archived INTEGER NOT NULL DEFAULT 0,
+			last_read_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_path, backend, id)
+		);
+		CREATE TABLE IF NOT EXISTS chat_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_path TEXT NOT NULL,
+			role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+			content TEXT NOT NULL,
+			files TEXT,
+			session_id TEXT,
+			backend TEXT NOT NULL DEFAULT 'claude',
+			streaming INTEGER NOT NULL DEFAULT 0,
+			indexed INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS chat_quick_send (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			label TEXT NOT NULL,
+			command TEXT NOT NULL,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create tables: %v", err)
+	}
+
+	cleanup := SetDBForTest(testDB, testDB)
+	teardown := func() {
+		cleanup()
+		_ = testDB.Close()
+	}
+	return teardown
+}
+
+// insertUserMessage is a helper to insert a user message directly into chat_history
+// for testing GetUserMessageStats. It bypasses AddChatMessage to avoid the
+// archived-session guard and file-serialization logic.
+func insertUserMessage(t *testing.T, sessionID, content string, files string, streaming int) {
+	t.Helper()
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, files, session_id, backend, streaming) VALUES (?, 'user', ?, ?, ?, 'claude', ?)",
+		"/proj", content, files, sessionID, streaming,
+	)
+	assert.NoError(t, err)
+}
+
+func TestGetUserMessageStats_TopN(t *testing.T) {
+	teardown := setupTestDBForMessageStats(t)
+	defer teardown()
+
+	// Insert messages with varying frequency
+	insertUserMessage(t, "sess-1", "hello", "", 0)
+	insertUserMessage(t, "sess-1", "hello", "", 0) // duplicate
+	insertUserMessage(t, "sess-2", "hello", "", 0) // duplicate across session
+	insertUserMessage(t, "sess-1", "fix the bug", "", 0)
+	insertUserMessage(t, "sess-2", "fix the bug", "", 0) // duplicate across session
+	insertUserMessage(t, "sess-1", "continue", "", 0)
+
+	stats, err := GetUserMessageStats(100)
+	assert.NoError(t, err)
+	assert.Len(t, stats, 3)
+
+	// Ordered by count DESC
+	assert.Equal(t, "hello", stats[0].Text)
+	assert.Equal(t, 3, stats[0].Count)
+	assert.Equal(t, "fix the bug", stats[1].Text)
+	assert.Equal(t, 2, stats[1].Count)
+	assert.Equal(t, "continue", stats[2].Text)
+	assert.Equal(t, 1, stats[2].Count)
+}
+
+func TestGetUserMessageStats_ExcludesStreaming(t *testing.T) {
+	teardown := setupTestDBForMessageStats(t)
+	defer teardown()
+
+	// streaming=0 message should be included
+	insertUserMessage(t, "sess-1", "visible message", "", 0)
+	// streaming=1 message should be excluded
+	insertUserMessage(t, "sess-1", "in-progress message", "", 1)
+
+	stats, err := GetUserMessageStats(100)
+	assert.NoError(t, err)
+	assert.Len(t, stats, 1)
+	assert.Equal(t, "visible message", stats[0].Text)
+	assert.Equal(t, 1, stats[0].Count)
+}
+
+func TestGetUserMessageStats_ExcludesEmptyAndLong(t *testing.T) {
+	teardown := setupTestDBForMessageStats(t)
+	defer teardown()
+
+	// Empty content should be excluded — but content has NOT NULL constraint,
+	// so we insert a single space to test the "empty-like" filter.
+	// The SQL uses content != '' so only truly empty strings are excluded.
+	// Since NOT NULL prevents empty content, we test the LENGTH(content) <= 200 filter.
+	insertUserMessage(t, "sess-1", "short message", "", 0)
+
+	// 201-char message should be excluded
+	longContent := strings.Repeat("a", 201)
+	insertUserMessage(t, "sess-1", longContent, "", 0)
+
+	// 200-char message should be included
+	maxContent := strings.Repeat("b", 200)
+	insertUserMessage(t, "sess-1", maxContent, "", 0)
+
+	stats, err := GetUserMessageStats(100)
+	assert.NoError(t, err)
+	assert.Len(t, stats, 2)
+	// Order depends on SQLite internal sort when timestamps and counts are equal
+	texts := []string{stats[0].Text, stats[1].Text}
+	assert.Contains(t, texts, "short message")
+	assert.Contains(t, texts, maxContent)
+}
+
+func TestGetUserMessageStats_ExcludesSlashCommands(t *testing.T) {
+	teardown := setupTestDBForMessageStats(t)
+	defer teardown()
+
+	// Normal messages should be included
+	insertUserMessage(t, "sess-1", "hello", "", 0)
+	insertUserMessage(t, "sess-1", "please help", "", 0)
+
+	// Slash commands should be excluded
+	insertUserMessage(t, "sess-1", "/commit", "", 0)
+	insertUserMessage(t, "sess-1", "/help me", "", 0)
+
+	// @-prefixed messages should be excluded
+	insertUserMessage(t, "sess-1", "@agent do this", "", 0)
+	insertUserMessage(t, "sess-1", "@file read this", "", 0)
+
+	stats, err := GetUserMessageStats(100)
+	assert.NoError(t, err)
+	assert.Len(t, stats, 2)
+	// Only "hello" and "please help" should appear
+	for _, s := range stats {
+		assert.NotEqual(t, "/commit", s.Text)
+		assert.NotEqual(t, "/help me", s.Text)
+		assert.NotEqual(t, "@agent do this", s.Text)
+		assert.NotEqual(t, "@file read this", s.Text)
+	}
+}
+
+func TestGetUserMessageStats_ExcludesFileAttachments(t *testing.T) {
+	teardown := setupTestDBForMessageStats(t)
+	defer teardown()
+
+	// Message without files (empty string) should be included
+	insertUserMessage(t, "sess-1", "hello", "", 0)
+	// Message with NULL files should be included
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, files, session_id, backend, streaming) VALUES (?, 'user', ?, NULL, ?, 'claude', 0)",
+		"/proj", "null files message", "sess-1",
+	)
+	assert.NoError(t, err)
+	// Message with non-empty files should be excluded
+	insertUserMessage(t, "sess-1", "check this file", `[{"path":"/src/main.go"}]`, 0)
+
+	stats, err := GetUserMessageStats(100)
+	assert.NoError(t, err)
+	assert.Len(t, stats, 2)
+	// Both messages have count=1, order between equal counts is nondeterministic
+	texts := []string{stats[0].Text, stats[1].Text}
+	assert.Contains(t, texts, "hello")
+	assert.Contains(t, texts, "null files message")
+	for _, s := range stats {
+		assert.NotEqual(t, "check this file", s.Text)
+	}
+}
+
 func TestReorderChatQuickSend_DBNotInitialized(t *testing.T) {
 	// Set DB to a closed connection to trigger Begin error
 	closedDB, err := sql.Open("sqlite", ":memory:")
@@ -2363,4 +2687,214 @@ func TestReorderChatQuickSend_DBNotInitialized(t *testing.T) {
 
 	err = ReorderChatQuickSend([]int64{1, 2})
 	assert.Error(t, err, "reorder should fail when DB is closed")
+}
+
+// ---------- Cluster cache + meta CRUD ----------
+
+// setupTestDBForClusters creates an in-memory SQLite database with
+// message_clusters_cache, message_clusters_meta, and chat_quick_send tables
+// for testing cluster CRUD functions.
+func setupTestDBForClusters(t *testing.T) func() {
+	t.Helper()
+
+	testDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	testDB.SetMaxOpenConns(1)
+	testDB.Exec("PRAGMA journal_mode=WAL")
+	testDB.Exec("PRAGMA busy_timeout=5000")
+
+	_, err = testDB.Exec(`
+		CREATE TABLE IF NOT EXISTS message_clusters_cache (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			representative TEXT NOT NULL,
+			variants TEXT NOT NULL,
+			total_count INTEGER NOT NULL,
+			representative_count INTEGER NOT NULL,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS message_clusters_meta (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			mode TEXT NOT NULL DEFAULT '',
+			progress TEXT NOT NULL DEFAULT 'idle',
+			phase TEXT NOT NULL DEFAULT '',
+			msg_count INTEGER NOT NULL DEFAULT 0,
+			cluster_count INTEGER NOT NULL DEFAULT 0,
+			elapsed_ms INTEGER NOT NULL DEFAULT 0,
+			error_msg TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE IF NOT EXISTS chat_quick_send (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			label TEXT NOT NULL,
+			command TEXT NOT NULL,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatalf("failed to create tables: %v", err)
+	}
+
+	cleanup := SetDBForTest(testDB, testDB)
+	teardown := func() {
+		cleanup()
+		_ = testDB.Close()
+	}
+	return teardown
+}
+
+func TestSaveAndGetClusterCache(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	entries := []ClusterCacheEntry{
+		{Representative: "hello", Variants: "hello,hi,hey", TotalCount: 10, RepresentativeCount: 5, SortOrder: 0},
+		{Representative: "fix bug", Variants: "fix bug,fix the bug", TotalCount: 8, RepresentativeCount: 4, SortOrder: 1},
+		{Representative: "continue", Variants: "continue,继续", TotalCount: 3, RepresentativeCount: 2, SortOrder: 2},
+	}
+
+	err := SaveClusterCache(entries, "semantic")
+	assert.NoError(t, err)
+
+	result, mode, updatedAt, err := GetClusterCache()
+	assert.NoError(t, err)
+	assert.Equal(t, "semantic", mode)
+	assert.Len(t, result, 3)
+	assert.False(t, updatedAt.IsZero())
+
+	// Verify order by sort_order
+	assert.Equal(t, "hello", result[0].Representative)
+	assert.Equal(t, "hello,hi,hey", result[0].Variants)
+	assert.Equal(t, 10, result[0].TotalCount)
+	assert.Equal(t, 5, result[0].RepresentativeCount)
+	assert.Equal(t, 0, result[0].SortOrder)
+
+	assert.Equal(t, "fix bug", result[1].Representative)
+	assert.Equal(t, 1, result[1].SortOrder)
+
+	assert.Equal(t, "continue", result[2].Representative)
+	assert.Equal(t, 2, result[2].SortOrder)
+}
+
+func TestGetClusterCache_Empty(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	result, mode, updatedAt, err := GetClusterCache()
+	assert.NoError(t, err)
+	assert.Nil(t, result)
+	assert.Equal(t, "", mode)
+	assert.True(t, updatedAt.IsZero())
+}
+
+func TestSaveClusterMeta(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// Save progress during computation
+	err := SaveClusterMeta("clustering", "semantic", 100, 15, 5000)
+	assert.NoError(t, err)
+
+	meta := GetClusterMeta()
+	assert.Equal(t, "semantic", meta.Mode)
+	assert.Equal(t, "clustering", meta.Progress)
+	assert.Equal(t, "", meta.Phase)
+	assert.Equal(t, 100, meta.MsgCount)
+	assert.Equal(t, 15, meta.ClusterCount)
+	assert.Equal(t, 5000, meta.ElapsedMs)
+	assert.Equal(t, "", meta.ErrorMsg)
+	assert.False(t, meta.UpdatedAt.IsZero())
+}
+
+func TestSaveClusterMeta_EmptyModePreservesPrevious(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// First: save with a real mode
+	err := SaveClusterMeta("done", "fts", 50, 10, 1000)
+	assert.NoError(t, err)
+	meta := GetClusterMeta()
+	assert.Equal(t, "fts", meta.Mode)
+
+	// Second: save computing state with empty mode — should preserve "fts"
+	err = SaveClusterMeta("computing", "", 0, 0, 0)
+	assert.NoError(t, err)
+	meta = GetClusterMeta()
+	assert.Equal(t, "fts", meta.Mode) // preserved
+	assert.Equal(t, "computing", meta.Progress)
+}
+
+func TestSaveClusterMeta_EmptyModeOnFirstInsert(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// First insert with empty mode (no prior row exists) — should fall back to ""
+	err := SaveClusterMeta("computing", "", 0, 0, 0)
+	assert.NoError(t, err)
+	meta := GetClusterMeta()
+	assert.Equal(t, "", meta.Mode) // fallback to empty string (no prior row to preserve)
+	assert.Equal(t, "computing", meta.Progress)
+}
+
+func TestSaveClusterMetaError(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// First save some progress
+	err := SaveClusterMeta("clustering", "semantic", 100, 15, 5000)
+	assert.NoError(t, err)
+
+	// Then save error state
+	err = SaveClusterMetaError("error", "embedding", "API rate limit exceeded")
+	assert.NoError(t, err)
+
+	meta := GetClusterMeta()
+	assert.Equal(t, "semantic", meta.Mode) // mode preserved from initial save
+	assert.Equal(t, "error", meta.Progress)
+	assert.Equal(t, "embedding", meta.Phase)
+	assert.Equal(t, "API rate limit exceeded", meta.ErrorMsg)
+}
+
+func TestGetClusterMeta_Initial(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// No meta row inserted yet — should return defaults
+	meta := GetClusterMeta()
+	assert.Equal(t, "", meta.Mode)
+	assert.Equal(t, "idle", meta.Progress)
+	assert.Equal(t, "", meta.Phase)
+	assert.Equal(t, 0, meta.MsgCount)
+	assert.Equal(t, 0, meta.ClusterCount)
+	assert.Equal(t, 0, meta.ElapsedMs)
+	assert.Equal(t, "", meta.ErrorMsg)
+	assert.True(t, meta.UpdatedAt.IsZero())
+}
+
+func TestGetQuickSendCommands(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	// Insert some quick-send commands directly
+	_, err := db.Exec("INSERT INTO chat_quick_send (label, command, sort_order) VALUES ('继续', '继续', 0)")
+	assert.NoError(t, err)
+	_, err = db.Exec("INSERT INTO chat_quick_send (label, command, sort_order) VALUES ('提交', '提交', 1)")
+	assert.NoError(t, err)
+
+	commands := GetQuickSendCommands()
+	assert.Len(t, commands, 2)
+	assert.Equal(t, "继续", commands[0])
+	assert.Equal(t, "提交", commands[1])
+}
+
+func TestGetQuickSendCommands_Empty(t *testing.T) {
+	teardown := setupTestDBForClusters(t)
+	defer teardown()
+
+	commands := GetQuickSendCommands()
+	assert.Nil(t, commands)
 }

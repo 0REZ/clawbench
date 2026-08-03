@@ -4,12 +4,13 @@ import (
 	"testing"
 	"time"
 
+	_ "clawbench/internal/ai/backends/antigravity"
 	_ "clawbench/internal/ai/backends/claude"
-	_ "clawbench/internal/ai/backends/cline"
 	_ "clawbench/internal/ai/backends/codebuddy"
 	_ "clawbench/internal/ai/backends/codex"
 	_ "clawbench/internal/ai/backends/copilot"
 	_ "clawbench/internal/ai/backends/deepseek"
+	_ "clawbench/internal/ai/backends/grok"
 	_ "clawbench/internal/ai/backends/kimi"
 	_ "clawbench/internal/ai/backends/mimo"
 	_ "clawbench/internal/ai/backends/opencode"
@@ -25,7 +26,7 @@ import (
 // --- Test 1: BackendRegistry ---
 
 func TestBackendRegistry_ContainsAllBackends(t *testing.T) {
-	expectedIDs := []string{"claude", "codebuddy", "opencode", "codex", "qoder", "vecli", "deepseek", "pi", "cline", "kimi", "copilot", "mimo"}
+	expectedIDs := []string{"claude", "codebuddy", "opencode", "codex", "qoder", "vecli", "deepseek", "pi", "kimi", "copilot", "mimo", "grok", "antigravity"}
 	assert.Len(t, model.GetBackendRegistry(), len(expectedIDs))
 
 	seen := make(map[string]bool)
@@ -67,6 +68,33 @@ func TestBackendRegistry_SpecificValues(t *testing.T) {
 
 	// Verify install command on opencode BackendSpec
 	assert.Equal(t, "npm install -g opencode-ai", specs["opencode"].InstallCmd, "opencode should have InstallCmd set")
+
+	// ACP-only backends: agy is detected via DefaultCmd, ACP via agy-acp bridge
+	assert.Equal(t, "agy", specs["antigravity"].DefaultCmd)
+	assert.Equal(t, "npx -y agy-acp@latest", specs["antigravity"].AcpCommand)
+	assert.Equal(t, "grok agent stdio", specs["grok"].AcpCommand)
+}
+
+func TestBackendSupportsCLI_ComputedFromFactoryRegistry(t *testing.T) {
+	// Backends with a CLI factory report true
+	assert.True(t, model.BackendSupportsCLI("claude"))
+	assert.True(t, model.BackendSupportsCLI("opencode"))
+	assert.True(t, model.BackendSupportsCLI("kimi"))
+
+	// ACP-only backends (e.g. grok) report false
+	assert.False(t, model.BackendSupportsCLI("grok"), "grok is ACP-only and has no CLI factory")
+	assert.False(t, model.BackendSupportsCLI("antigravity"), "antigravity is ACP-only and has no CLI factory")
+}
+
+func TestBackendSupportsCLI_UnwiredFnFallsBack(t *testing.T) {
+	// When the function variable is not wired (isolated test), the helper
+	// falls back to false instead of panicking.
+	orig := model.BackendSupportsCLIFn
+	t.Cleanup(func() { model.BackendSupportsCLIFn = orig })
+	model.BackendSupportsCLIFn = nil
+
+	assert.False(t, model.BackendSupportsCLI("claude"))
+	assert.False(t, model.BackendSupportsCLI("grok"))
 }
 
 // --- Test 2: checkCLIExists ---

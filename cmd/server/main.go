@@ -22,12 +22,13 @@ import (
 
 	"clawbench/internal/ai"
 	_ "clawbench/internal/ai/backends"
+	_ "clawbench/internal/ai/backends/antigravity"
 	_ "clawbench/internal/ai/backends/claude"
-	_ "clawbench/internal/ai/backends/cline"
 	_ "clawbench/internal/ai/backends/codebuddy"
 	_ "clawbench/internal/ai/backends/codex"
 	_ "clawbench/internal/ai/backends/copilot"
 	_ "clawbench/internal/ai/backends/deepseek"
+	_ "clawbench/internal/ai/backends/grok"
 	_ "clawbench/internal/ai/backends/kimi"
 	_ "clawbench/internal/ai/backends/mimo"
 	_ "clawbench/internal/ai/backends/opencode"
@@ -780,6 +781,7 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		slog.Warn("failed to initialize RAG system, search will be limited", slog.String("err", err.Error()))
 	}
 	defer rag.Shutdown()
+	defer service.StopSessionCleanupWorker()
 
 	// Determine port before loading skills/agents (skills and agents need {{PORT}})
 	port := cfg.Port
@@ -934,8 +936,19 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		rag.StartIndexer(cfg.RAG)
 	}
 
-	// Start cleanup worker for soft-deleted data
+	// Start cleanup worker for archived data
 	rag.StartCleanupWorker(cfg.RAG)
+
+	// Set RAG chunk purge callback for session cleanup worker
+	service.SetPurgeRAGChunksFn(func(sessionIDs []string) (int64, error) {
+		if rag.GlobalStore == nil {
+			return 0, nil
+		}
+		return rag.GlobalStore.DeleteChunksBySessionIDs(sessionIDs)
+	})
+
+	// Start session archive cleanup worker
+	service.StartSessionCleanupWorker(cfg)
 
 	// Initialize proxy service (port forwarding) and SSH tunnel server.
 	// ProxyRegistry is only created when SSH tunnel is enabled — it has no
@@ -1065,6 +1078,12 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	dingtalk.RegisterClientChecker(ws.GetManager())
 	feishu.RegisterClientChecker(ws.GetManager())
 
+	// Initialize cluster worker (on-demand, no cron) — must be after ws.InitManager()
+	mgr := ws.GetManager()
+	if mgr != nil {
+		rag.StartClusterWorker(mgr.StreamHub())
+	}
+
 	// Register WS chat stream callbacks (breaks import cycle between ws and service)
 	ws.OnSubscribe = func(mgr *ws.Manager, clientID, sessionID string) {
 		hub := mgr.StreamHub()
@@ -1077,6 +1096,17 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	}
 	ws.OnCancelSession = service.CancelSession
 	ws.OnPermissionRespond = service.RespondPermission
+
+	// Inject DB context state usage fallback into StreamHub (breaks import cycle).
+	// Both UsageStatePersist and ContextStateUsage are type aliases of ai.UsageState,
+	// so direct assignment is safe — no manual field mapping needed.
+	ws.GetManager().StreamHub().SetGetContextStateUsageFunc(func(sessionID string) *ws.ContextStateUsage {
+		ctxState := service.GetContextState(sessionID)
+		if ctxState == nil || ctxState.Usage == nil {
+			return nil
+		}
+		return ctxState.Usage
+	})
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
@@ -1316,6 +1346,9 @@ func hotReloadReconfigure(port int) {
 
 	// --- RAG: reconfigure embedder, indexer, cleanup worker ---
 	rag.Reconfigure(cfg.RAG)
+
+	// --- Session cleanup: reconfigure archive retention worker ---
+	service.ReconfigureSessionCleanup(cfg)
 
 	// --- FRP: reconfigure or toggle enabled ---
 	hotReloadFRP(cfg, port)

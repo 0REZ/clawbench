@@ -6,7 +6,7 @@
     </div>
 
     <!-- Scrollable message content -->
-    <div class="exec-detail-content" ref="contentRef" @click="handleContentClick" @mousedown="onTableMouseDown" @touchstart="onTableTouchStart" @contextmenu="handleExecContextMenu" v-long-press="handleExecLongPress">
+    <div class="exec-detail-content" ref="contentRef" @click="handleContentClick" @mousedown="onTableMouseDown" @touchstart="onTableTouchStart">
       <!-- Summary / Original tab bar (hidden during live streaming) -->
       <SummaryToggle v-if="hasSummary && !execStream.isStreaming.value" mode="tab" :showing-summary="activeTab === 'summary'" i18n-prefix="task.exec" @toggle="setTab(activeTab === 'summary' ? 'original' : 'summary')" />
       <ChatMessageItem
@@ -47,6 +47,7 @@
       :toolOutputHtml="toolDetailOverlay.outputHtml"
       :toolStatus="toolDetailOverlay.status"
       :toolDone="toolDetailOverlay.done"
+      :toolDuration="toolDetailOverlay.duration"
       :displayNameOverride="toolDetailOverlay.displayNameOverride"
       @close="closeOverlay"
       @file-open="handleFileOpenInOverlay"
@@ -89,7 +90,7 @@ import ChatMetadataModal from '@/components/chat/ChatMetadataModal.vue'
 import SummaryToggle from '@/components/common/SummaryToggle.vue'
 import { useChatRender } from '@/composables/useChatRender.ts'
 import { useAgents } from '@/composables/useAgents'
-import { useFilePathAnnotation, useFilePathNavHandlers } from '@/composables/useFilePathAnnotation.ts'
+import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useLocalhostUrlClickHandler } from '@/composables/useLocalhostAnnotation.ts'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
 import { store as appStore } from '@/stores/app.ts'
@@ -115,7 +116,6 @@ const { refreshExecDetail } = useTaskTab()
 const identity = useSessionIdentity()
 const theme = inject('theme', ref('light'))
 const { openFilePath, verifyFilePaths } = useFilePathAnnotation()
-const { handleContextMenu: handleExecContextMenu, handleLongPress: handleExecLongPress } = useFilePathNavHandlers()
 const { handleLocalhostUrlClick } = useLocalhostUrlClickHandler()
 const switchTab = inject('switchTab', () => {})
 const { tableRowModal, closeTableRowModal, tableRowPrev, tableRowNext, handleTableRowClick, onTableMouseDown, onTableTouchStart } = useTableRowExpand()
@@ -455,8 +455,6 @@ function handleContentClick(event) {
   }
 }
 
-// ── Long-press / right-click on file-path annotation → open in file manager (handled by useFilePathNavHandlers) ──
-
 // ── Reset state when exec detail changes ──
 watch(() => props.execDetail, (newVal, oldVal) => {
   expandedTools.value = {}
@@ -570,13 +568,14 @@ onUnmounted(() => {
 }
 
 .action-btn.accent {
-  background: var(--accent-color, #0066cc);
-  color: #fff;
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 20%, var(--bg-secondary, #f1f3f5));
+  color: var(--accent-color, #0066cc);
 }
 
 @media (hover: hover) {
   .action-btn.accent:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-color, #0066cc) 85%, black);
+    background: color-mix(in srgb, var(--accent-color, #0066cc) 35%, var(--bg-secondary, #f1f3f5));
+    color: #fff;
   }
 }
 

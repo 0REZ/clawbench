@@ -1,7 +1,7 @@
 SessionNotRunning: 会话未在运行
 SessionStreamNotFound: 未找到会话流
 SessionStreamBusy: 会话流正在其他设备上查看
-SessionLimitReached: 已达会话数量上限（{{.MaxCount}}），请先删除旧会话
+SessionLimitReached: 已达会话数量上限（{{.MaxCount}}），请先归档旧会话
 SessionIdRequired: session_id 为必填项
 NewSession: 新会话
 NewSessionN: 新会话 {{.N}}
@@ -30,6 +30,8 @@ SessionNotFound: 会话未找到
 NoAgentsAvailable: 没有可用的智能体
 MessageOrFilesRequired: 消息或文件为必填项
 TextRequired: 文本为必填项
+ThinkIdAndMessageIdRequired: 缺少 think_id 或 message_id
+ThinkingNotFound: 思考内容未找到
 JobIdRequired: 任务ID为必填项
 FileNotFound: "文件未找到: {{.Path}}"
 ClientIdRequired: 客户端ID为必填项
@@ -67,6 +69,7 @@ TaskExecutionNotFound: 执行实例未找到或已结束
 DirectoryNameRequired: 目录名称为必填项
 LineNumberOutOfRange: 行号超出范围
 InvalidIndex: 无效的索引
+InvalidMessageId: 无效的消息 ID
 JobNotFound: 任务未找到
 AgentNotFound: 智能体未找到
 InvalidModelForAgent: 无效的模型

@@ -15,7 +15,7 @@ Brings the full power of AI coding agents to browsers and mobile apps, creating 
 Core Advantage: Native passthrough of AI capabilities (tool calls, extended thinking, Skills, MCP) with zero adaptation cost, fully preserving the power of coding agents. Unlike other mobile AI tools that are merely "remote controllers," ClawBench is a full-featured mobile workstation — files, code, Git, AI, scheduled tasks, TTS, get real work done on your phone without needing a PC online.
 
 - **Supported Platforms**: Browser (PC / Tablet / Phone), Android App, PWA
-- **AI Backends**: CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Cline, Copilot, Kimi
+- **AI Backends**: CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Copilot, Kimi
 
 <p align="center">
   <img src="assets/architecture.en.svg" alt="ClawBench Deployment Architecture" width="640">
@@ -86,7 +86,7 @@ Core Advantage: Native passthrough of AI capabilities (tool calls, extended thin
 
 ### Prerequisites
 
-- **A PC (Linux / macOS / Windows)**: To run the ClawBench server, with at least one AI coding agent CLI installed (CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Cline, Copilot, or Kimi)
+- **A PC (Linux / macOS / Windows)**: To run the ClawBench server, with at least one AI coding agent CLI installed (CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Copilot, or Kimi)
 - **A phone**: Install the [ClawBench Android App](https://github.com/xulongzhe/clawbench/releases), or use a mobile browser (Chrome recommended) to access the server address
 
 ### npm Install
@@ -174,34 +174,38 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 ### 🤖 AI Agents
 - **Streaming Response**: Real-time WebSocket push, thinking process and tool calls fully visible
 - **Multi-Agent Support**: General assistant, coding expert, handyman, etc.; custom agents can be loaded via `config/agents/*.yaml` (supplementary method for non-standard agents)
-- **AI Backend Switching**: CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Cline, Copilot, Kimi — session-level isolation
-- **Thinking Effort Levels**: Per-agent thinking depth selection (Low / Medium / High, etc.), supported by 9 backends (Claude/CodeBuddy/OpenCode/Codex/MiMo/Pi/Cline/Copilot/Kimi), selection auto-persisted
+- **AI Backend Switching**: CodeBuddy, Claude Code, OpenCode, Codex, Qoder CLI, VeCLI, CodeWhale, MiMo-Code, Pi, Copilot, Kimi — session-level isolation
+- **Thinking Effort Levels**: Per-agent thinking depth selection (Low / Medium / High, etc.), supported by 8 backends (Claude/CodeBuddy/OpenCode/Codex/MiMo/Pi/Copilot/Kimi), selection auto-persisted
 - **Model Selection Modal**: Unified model switching and thinking effort selection in a dual-tab interface, with search filtering, one-click model list refresh (for agents supporting auto-discovery), and long-press to set default model
 - **Model Selection Persistence**: Model choice and thinking effort per agent auto-saved to localStorage, restored on reload/session switch
 - **Scheduled Tasks**: AI creates Cron schedules via CLI subcommands, executes automatically; independent tab with 4-level breadcrumb navigation; task cards embedded in chat messages; frequency presets (hourly/daily/weekly/monthly) + custom cron expressions; per-execution read tracking + TTS playback; execution auto-summary + completion notification (sound/haptic/toast)
 - **Continue Conversation**: One-click continue conversation from task execution detail, auto-copies history messages and summaries to a new session, inherits backend/agent/model/thinking effort; sessions originated from scheduled tasks show a purple "Task" badge in session list
-- **Multi-Session Management**: Create, switch, archive independent sessions, swipe to switch
+- **Multi-Session Management**: Create, switch, archive independent sessions, swipe to switch; archived sessions recoverable via search, physical delete (irreversible) and archive retention auto-cleanup available
 - **Swipe Session Toggle**: Toggle left/right swipe session switching in Settings → Chat; defaults to off to prevent accidental switches when scrolling wide content
 - **Image Upload**: Upload images for AI conversation (multimodal)
 - **Disconnect Protection**: Messages persist immediately, no data loss on disconnect, 15s heartbeat keep-alive + 30s timeout auto-reconnect (live content updates during polling fallback)
-- **Auto Resume**: Automatically sends "continue" after Claude/CodeBuddy/Qoder/CodeWhale/MiMo/Pi/Cline/Copilot/Kimi exits Plan Mode
+- **Auto Resume**: Automatically sends "continue" after Claude/CodeBuddy/Qoder/CodeWhale/MiMo/Pi/Copilot/Kimi exits Plan Mode
 - **Message Queue**: Messages queue when AI is busy, sent sequentially
+- **Message Clusters**: Auto-analyze chat history patterns, group semantically similar user messages into clusters, one-click add to Quick Send; Union-Find + Sørensen-Dice similarity, on-demand computation with progress tracking
 - **Auto Summary**: Automatically generates a summary of the last assistant message on session complete; toggle between summary/original via bottom banner; TTS playback also uses the summary
 - **@ Commands**: Type `@chatsearch` to search conversation history, `@task` to manage scheduled tasks — autocomplete popup menu, purple command badge in user messages
 - **RAG Results Card**: RAG search results in AI responses rendered as purple-themed cards; click to open detail drawer, one-click resume conversation
 - **Inline Thinking Streaming**: Thinking process streams inline during active session; auto-collapses to clickable chip on completion
 - **Session Progress Indicator**: Session drawer shows capsule progress bar with color-coded fill (blue/orange/red) based on usage
+- **ACP Context State Persistence**: Mode, thinking effort, and context usage auto-persisted to database; state survives server restarts
 
 ### 🤖 AI Conversation
 - **Tool Call Visualization**: Name, parameters, execution results displayed in real time with success/error status
 - **Extended Thinking**: Complex tasks auto-trigger extended thinking, reasoning visible in real time
 - **File Path Navigation**: Clickable file paths in AI responses, with line range navigation
 - **Localhost URL Navigation**: localhost URLs in AI responses (e.g., http://localhost:3000) are auto-detected with an open button; in App mode, port forwarding is auto-registered and the URL opens via WebView with zero manual config
-- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder, one-click send, input placeholder hint showing current quick send; long-press fills input box (with progressive fill bar) for editing before sending
+- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder, one-click send, input placeholder hint showing current quick send; long-press fills input box (with progressive fill bar) for editing before sending; message clusters analysis discovers recurring patterns and adds them
 - **Quote & Ask**: Select code or text, ask AI directly, auto-attaches context
 - **Current Directory Attachment**: Chat input supports attaching current directory context, AI auto-gets directory structure
+- **Drag & Paste Upload**: Drag files onto chat area or paste clipboard content (screenshots/files), auto-upload and attach as tags without opening the attach drawer
+- **Compact Context**: When ACP session context usage ≥ 75%, a "Compact context" button appears in the session-info bar, one-click sends `/compact` command to free context space
 - **Unread Badge**: Chat panel icon shows unread message count
-
+- **Attach Drawer Footer**: Selected files shown as persistent scrollable tags at the bottom of the attach drawer, with direct removal support
 - **Auto-Approve Indicator**: Mode chip turns green when auto-approve is enabled, providing visual feedback for ACP permission mode
 
 ### 🖼️ Media Preview
