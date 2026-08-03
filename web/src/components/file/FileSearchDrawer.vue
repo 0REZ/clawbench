@@ -1,5 +1,5 @@
 <template>
-  <BottomSheet :open="open" auto @close="handleClose">
+  <BottomSheet :open="open" auto wide @close="handleClose">
     <template #header>
       <Search :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ headerTitle }}</span>
@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Search, FolderTree, Globe, RotateCcw, FolderOpen } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
@@ -127,7 +127,8 @@ const headerTitle = computed(() => {
 // Focus input when drawer opens
 watch(() => props.open, async (val) => {
   if (val) {
-    await nextTick()
+    // Wait for BottomSheet slide-up animation (250ms) to complete before focusing
+    await new Promise(r => setTimeout(r, 300))
     inputRef.value?.focus()
     // Re-run search if query exists (results may be stale)
     if (search.state.query.trim()) {

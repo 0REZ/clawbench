@@ -1,8 +1,14 @@
 import { describe, expect, it, beforeEach } from 'vitest'
+import { nextTick } from 'vue'
 import { useTabDrawer, onTabSwitch, resetTabDrawerState } from '@/composables/useTabDrawer'
+import { _setBigScreenForTest, resetBigScreenState as resetBigScreen, switchLeftTab } from '@/composables/useBigScreenLayout'
 
 beforeEach(() => {
   resetTabDrawerState()
+  // Narrow-mode default: jsdom's innerWidth (1024) makes useBigScreenLayout's
+  // physical-width detection init to big-screen — force it off so the plain
+  // drawer tests exercise narrow behavior.
+  _setBigScreenForTest(false)
 })
 
 describe('useTabDrawer', () => {
@@ -125,5 +131,41 @@ describe('useTabDrawer', () => {
     // effectiveOpen follows currentTab + openRef logic.
     onTabSwitch('browse')
     expect(drawer.effectiveOpen.value).toBe(drawer.isOpen.value && true)
+  })
+})
+
+describe('useTabDrawer big-screen awareness', () => {
+  beforeEach(() => {
+    resetBigScreen()
+    _setBigScreenForTest(false)
+  })
+
+  it('big-screen: chat and leftTab drawers both open simultaneously', () => {
+    _setBigScreenForTest(true)
+    switchLeftTab('browse')
+    const chatDrawer = useTabDrawer('chat')
+    const browseDrawer = useTabDrawer('browse')
+
+    chatDrawer.open()
+    browseDrawer.open()
+    expect(chatDrawer.effectiveOpen.value).toBe(true)
+    expect(browseDrawer.effectiveOpen.value).toBe(true)
+
+    switchLeftTab('terminal')
+    expect(browseDrawer.effectiveOpen.value).toBe(false)
+    expect(chatDrawer.effectiveOpen.value).toBe(true)
+  })
+
+  it('big-screen: autoRestore:false closes when leftTab switches away', async () => {
+    _setBigScreenForTest(true)
+    switchLeftTab('browse')
+    const drawer = useTabDrawer('browse', { autoRestore: false })
+    drawer.open()
+    expect(drawer.effectiveOpen.value).toBe(true)
+
+    switchLeftTab('tasks')
+    await nextTick()
+    expect(drawer.isOpen.value).toBe(false)
+    expect(drawer.effectiveOpen.value).toBe(false)
   })
 })

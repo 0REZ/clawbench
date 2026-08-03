@@ -19,114 +19,147 @@
       />
       <ConnectionOverlay />
 
-      <main class="main-content">
+      <main class="main-content" :class="{ 'big-screen': isBigScreen }">
+        <!-- Big-screen vertical dock (non-chat tabs only) -->
+        <div v-show="isBigScreen" class="big-dock">
+          <div class="big-dock-center">
+            <div class="dock-active-indicator big-dock-active-indicator" :style="bigDockIndicatorStyle"></div>
+            <div v-for="tab in BIG_SCREEN_DOCK_TABS" :key="tab" class="dock-btn-wrap">
+              <button class="dock-btn" :class="bigDockBtnClass(tab)" @click.stop="handleBigDockTabClick(tab)" :title="bigDockTabTitle(tab)">
+                <component :is="bigDockTabIcon(tab)" />
+              </button>
+              <span v-if="bigDockBadgeVisible(tab)" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': bigDockBadgeAnim(tab) }" @animationend="bigDockBadgeAnimEnd(tab)">{{ formatBadgeCount(bigDockBadgeCount(tab)) }}</span>
+            </div>
+          </div>
+        </div>
+
         <div class="content-area" id="contentArea">
-          <!-- Chat Tab -->
-          <TabPanel tabId="chat" :activeTab="activeTab">
-            <template #header>
-              <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
-              <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description">
-                <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
+          <SplitView
+            :enabled="isBigScreen"
+            :ratio="splitRatio"
+            @update:ratio="onSplitRatioChange"
+          >
+            <template #left>
+              <div class="col-left" v-show="isBigScreen || activeTab !== 'chat'" @pointerdown="setActivePane('left')" @focusin="setActivePane('left')">
+                <!-- File Browse Tab (合一：目录浏览 + 文件覆盖预览) -->
+                <TabPanel tabId="browse" :activeTab="leftPanelActive" :noHeader="true">
+                  <div class="browse-panel">
+                    <FileManagerContent
+                      ref="fileManagerRef"
+                      :entries="dirEntries"
+                      :current-dir="currentDir"
+                      :current-file="currentFile"
+                      :show-hidden="showHidden"
+                      :sort-field="sortField"
+                      :sort-dir="sortDir"
+                      :dir-loading="store.state.dirLoading"
+                      :search-drawer="fileSearchDrawer"
+                      :recent-drawer="recentFilesDrawer"
+                      :keyboard-active="fileManagerShortcutActive"
+                      @navigate-dir="handleNavigateDir"
+                      @navigate-back="handleNavigateBack"
+                      @select-file="handleBrowseSelectFile"
+                      @toggle-sort="handleToggleSort"
+                      @toggle-hidden="toggleHidden"
+                      @rename="handleRename"
+                      @delete="handleDelete"
+                      @batch-delete="handleBatchDelete"
+                      @refresh="handleRefresh"
+                      @open-terminal="handleOpenTerminal"
+                    />
+                    <FileOverlay
+                      ref="fileOverlayRef"
+                      :overlay-open="fileNav.overlayOpen.value"
+                      :current-file="currentFile"
+                      :file-loading="store.state.fileLoading"
+                      :toc-open="tocDrawer.effectiveOpen.value"
+                      :search-open="searchDrawer.effectiveOpen.value"
+                      :markdown-view-mode="markdownViewMode"
+                      :file-history-open="fileHistoryDrawer.effectiveOpen.value"
+                      :toc-file="tocFile"
+                      :pdf-outline="pdfOutline"
+                      @delete="handleDelete($event)"
+                      @show-details="detailsDrawer.open()"
+                      @open-git-history="openFileHistory"
+                      @toggle-toc="tocDrawer.toggle()"
+                      @toggle-search="currentFile?.content && searchDrawer.toggle()"
+                      @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
+                      @refresh="handleRefresh"
+                      @jump="scrollToLine"
+                      @jump-page="handleJumpPdfPage"
+                      @close-git-history="fileHistoryDrawer.close()"
+                      @open-file="handleOverlayOpenFile"
+                      @overlay-close="handleOverlayClose"
+                      @open-recent-files="recentFilesDrawer.open()"
+                    />
+                  </div>
+                </TabPanel>
+
+                <!-- History Tab -->
+                <TabPanel tabId="history" :activeTab="leftPanelActive" :noHeader="true">
+                  <GitHistoryContent
+                    mode="project"
+                    :active="panelIsActive('history')"
+                    @open-file="handleSelectFile"
+                  />
+                </TabPanel>
+
+                <!-- Proxy Tab -->
+                <TabPanel tabId="proxy" :activeTab="leftPanelActive" :noHeader="true">
+                  <ProxyPanelContent />
+                </TabPanel>
+
+                <!-- Terminal Tab -->
+                <TabPanel tabId="terminal" :activeTab="leftPanelActive" :noHeader="true">
+                  <TerminalPanelContent
+                    :requested-cwd="terminalRequestedCwd"
+                    :active="panelIsActive('terminal')"
+                    :platform-unsupported="isPlatformUnsupported"
+                    @cwd-handled="terminalRequestedCwd = null"
+                  />
+                </TabPanel>
+
+                <!-- Tasks Tab -->
+                <TabPanel tabId="tasks" :activeTab="leftPanelActive" :noHeader="true">
+                  <TaskTab :active="panelIsActive('tasks')" @open-file="handleTaskOpenFile" />
+                </TabPanel>
+
+                <!-- Settings Tab -->
+                <TabPanel tabId="settings" :activeTab="leftPanelActive" :noHeader="true">
+                  <SettingsPage :active="panelIsActive('settings')" />
+                </TabPanel>
               </div>
             </template>
-            <ChatPanelContent
-              :active="activeTab === 'chat'"
-              :current-file="currentFile"
-              :current-dir="currentDir"
-              @open="switchTab('chat')"
-              @open-file="handleSelectFile"
-              @task-card-click="onTaskCardClick"
-              @open-acp-sessions="acpSessionDrawer.open()"
-              @open-session-search="sessionSearchDrawer.open()"
-            />
-          </TabPanel>
 
-          <!-- File Browse Tab (合一：目录浏览 + 文件覆盖预览) -->
-          <TabPanel tabId="browse" :activeTab="activeTab" :noHeader="true">
-            <div class="browse-panel">
-              <FileManagerContent
-                ref="fileManagerRef"
-                :entries="dirEntries"
-                :current-dir="currentDir"
-                :current-file="currentFile"
-                :show-hidden="showHidden"
-                :sort-field="sortField"
-                :sort-dir="sortDir"
-                :dir-loading="store.state.dirLoading"
-                :search-drawer="fileSearchDrawer"
-                :recent-drawer="recentFilesDrawer"
-                @navigate-dir="handleNavigateDir"
-                @navigate-back="handleNavigateBack"
-                @select-file="handleBrowseSelectFile"
-                @toggle-sort="handleToggleSort"
-                @toggle-hidden="toggleHidden"
-                @rename="handleRename"
-                @delete="handleDelete"
-                @batch-delete="handleBatchDelete"
-                @refresh="handleRefresh"
-                @open-terminal="handleOpenTerminal"
-              />
-              <FileOverlay
-                ref="fileOverlayRef"
-                :overlay-open="fileNav.overlayOpen.value"
-                :current-file="currentFile"
-                :file-loading="store.state.fileLoading"
-                :toc-open="tocDrawer.effectiveOpen.value"
-                :search-open="searchDrawer.effectiveOpen.value"
-                :markdown-view-mode="markdownViewMode"
-                :file-history-open="fileHistoryDrawer.effectiveOpen.value"
-                :toc-file="tocFile"
-                :pdf-outline="pdfOutline"
-                @delete="handleDelete($event)"
-                @show-details="detailsDrawer.open()"
-                @open-git-history="openFileHistory"
-                @toggle-toc="tocDrawer.toggle()"
-                @toggle-search="currentFile?.content && searchDrawer.toggle()"
-                @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
-                @refresh="handleRefresh"
-                @jump="scrollToLine"
-                @jump-page="handleJumpPdfPage"
-                @close-git-history="fileHistoryDrawer.close()"
-                @open-file="handleOverlayOpenFile"
-                @overlay-close="handleOverlayClose"
-                @open-recent-files="recentFilesDrawer.open()"
-              />
-            </div>
-          </TabPanel>
-
-          <!-- History Tab -->
-          <TabPanel tabId="history" :activeTab="activeTab" :noHeader="true">
-            <GitHistoryContent
-              mode="project"
-              :active="activeTab === 'history'"
-              @open-file="handleSelectFile"
-            />
-          </TabPanel>
-
-          <!-- Proxy Tab -->
-          <TabPanel tabId="proxy" :activeTab="activeTab" :noHeader="true">
-            <ProxyPanelContent />
-          </TabPanel>
-
-          <!-- Terminal Tab -->
-          <TabPanel tabId="terminal" :activeTab="activeTab" :noHeader="true">
-            <TerminalPanelContent
-              :requested-cwd="terminalRequestedCwd"
-              :active="activeTab === 'terminal'"
-              :platform-unsupported="isPlatformUnsupported"
-              @cwd-handled="terminalRequestedCwd = null"
-            />
-          </TabPanel>
-
-          <!-- Tasks Tab -->
-          <TabPanel tabId="tasks" :activeTab="activeTab" :noHeader="true">
-            <TaskTab :active="activeTab === 'tasks'" @open-file="handleTaskOpenFile" />
-          </TabPanel>
-
-          <!-- Settings Tab -->
-          <TabPanel tabId="settings" :activeTab="activeTab" :noHeader="true">
-            <SettingsPage :active="activeTab === 'settings'" />
-          </TabPanel>
+            <template #right>
+              <div class="col-right" v-show="isBigScreen || activeTab === 'chat'" :class="{ 'chat-drop-active': chatDropActive }" @pointerdown="setActivePane('right')" @focusin="setActivePane('right')" @dragenter="onChatColDragEnter" @dragover="onChatColDragOver" @dragleave="onChatColDragLeave" @drop="onChatColDrop">
+                <!-- Chat Tab -->
+                <TabPanel tabId="chat" :activeTab="chatActive">
+                  <template #header>
+                    <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
+                    <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description">
+                      <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
+                    </div>
+                  </template>
+                  <ChatPanelContent
+                    :active="isBigScreen || activeTab === 'chat'"
+                    :keyboard-active="chatShortcutActive"
+                    :current-file="currentFile"
+                    :current-dir="currentDir"
+                    @open="switchTab('chat')"
+                    @open-file="handleSelectFile"
+                    @task-card-click="onTaskCardClick"
+                    @open-acp-sessions="acpSessionDrawer.open()"
+                    @open-session-search="sessionSearchDrawer.open()"
+                  />
+                </TabPanel>
+                <div v-if="chatDropActive" class="chat-drop-hint">
+                  <Paperclip :size="16" />
+                  {{ t('file.dropToAttach') }}
+                </div>
+              </div>
+            </template>
+          </SplitView>
         </div>
       </main>
 
@@ -193,7 +226,7 @@
       />
 
       <!-- Bottom dock (tab bar) -->
-      <div v-if="isAuthenticated" v-show="!anyKeyboardActive" class="bottom-dock-wrapper">
+      <div v-if="isAuthenticated" v-show="!anyKeyboardActive && !isBigScreen" class="bottom-dock-wrapper">
         <div ref="dockRef" class="bottom-dock">
           <div class="dock-center">
             <div class="dock-active-indicator" :style="dockIndicatorStyle"></div>
@@ -288,7 +321,7 @@ import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
-import { MessageSquare, FolderOpen, GitBranch, EthernetPort, SquareTerminal as TerminalIcon, CalendarClock, MoreHorizontal, Settings } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, GitBranch, EthernetPort, SquareTerminal as TerminalIcon, CalendarClock, MoreHorizontal, Settings, Paperclip } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
 import FileOverlay from './components/file/FileOverlay.vue'
@@ -346,6 +379,19 @@ import { store, loadBrowseDir } from './stores/app.ts'
 import { setPendingCommitNavigation } from './composables/useCommitNavigation.ts'
 import { getFileType } from './utils/fileType.ts'
 import { formatBadgeCount } from './utils/format.ts'
+import { useChatContext } from './composables/useChatContext.ts'
+import { readAttachDragData, hasAttachDragData } from './utils/attachDrag'
+import SplitView from './components/common/SplitView.vue'
+import {
+  useBigScreenLayout,
+  resolveLeftTabOnEnter,
+  setActivePane,
+  resolveActivePaneOnEnter,
+  switchLeftTab,
+  setSplitRatio,
+  registerBigScreenCallbacks,
+  BIG_SCREEN_DOCK_TABS,
+} from './composables/useBigScreenLayout'
 import 'highlight.js/styles/github.css'
 import 'highlight.js/styles/github-dark.css'
 import './assets/hljs-light-override.css'
@@ -452,6 +498,23 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
 
 const activeTab = ref('chat')
 
+// ── Big-screen layout state ──
+const { isBigScreen, leftTab, splitRatio, activePane } = useBigScreenLayout()
+
+const chatActive = computed(() => (isBigScreen.value ? 'chat' : activeTab.value))
+const leftPanelActive = computed(() => (isBigScreen.value ? leftTab.value : activeTab.value))
+const panelIsActive = (tabId) =>
+  isBigScreen.value ? leftTab.value === tabId : activeTab.value === tabId
+
+// Focus-aware keyboard gating: a panel's global shortcuts only fire when the
+// user is actually working in that pane (big-screen) or that tab (narrow).
+const chatShortcutActive = computed(() => (isBigScreen.value ? activePane.value === 'right' : activeTab.value === 'chat'))
+const fileManagerShortcutActive = computed(() => (isBigScreen.value ? activePane.value === 'left' : activeTab.value === 'browse'))
+
+function onSplitRatioChange(ratio) {
+  setSplitRatio(ratio)
+}
+
 // Dock active indicator — water-drop sliding highlight
 // Dynamic button count: chat, browse, history, [inline overflow...], [overflow btn]
 const DOCK_STEP = 46 // 34 (btn width) + 12 (gap)
@@ -472,6 +535,12 @@ const dockIndicatorStyle = computed(() => ({
 }))
 
 function switchTab(tab) {
+  if (isBigScreen.value) {
+    // Big-screen: chat is always visible; non-chat tabs route to the left column
+    if (tab === 'chat') return
+    switchLeftTab(tab)
+    return
+  }
   if (activeTab.value === tab) return
   activeTab.value = tab
   // Auto-close all drawers not belonging to the new tab
@@ -595,7 +664,7 @@ const sortField = ref(localConfig.sortField || null)
 const sortDir = ref(localConfig.sortDir || 'asc')
 
 useFileWatch({
-  fileManagerOpen: computed(() => activeTab.value === 'browse'),
+  fileManagerOpen: computed(() => leftPanelActive.value === 'browse'),
   currentDir: computed(() => store.state.currentDir),
   currentFile: computed(() => store.state.currentFile),
 })
@@ -623,15 +692,15 @@ const isPlatformUnsupported = computed(() => platformSupported.value === false)
 // disabled to avoid a flash of the terminal button on first mount.
 const isTerminalDisabled = computed(() => terminalRuntimeEnabled.value !== true)
 watch(isSSHDisabled, (disabled) => {
-  if (disabled && activeTab.value === 'proxy') {
-    switchTab('chat')
+  if (disabled && panelIsActive('proxy')) {
+    switchTab(isBigScreen.value ? 'browse' : 'chat')
   }
 })
 watch(isTerminalDisabled, (disabled) => {
   // Only force-switch when terminal is config-disabled (not platform unsupported).
   // Platform unsupported shows a dedicated empty state — user can stay on the tab.
-  if (disabled && !isPlatformUnsupported.value && activeTab.value === 'terminal') {
-    switchTab('chat')
+  if (disabled && !isPlatformUnsupported.value && panelIsActive('terminal')) {
+    switchTab(isBigScreen.value ? 'browse' : 'chat')
   }
 })
 const { navigateToTaskSettings, navigateToTaskHistory, openExecDetail, loadTasks } = useTaskTab()
@@ -661,13 +730,23 @@ const handleForeground = () => {
     }
 }
 
+// WS reconnect: refresh WS-push state that may have changed while disconnected.
+// Lighter than handleForeground — skips file/dir refresh (SSE reconnects independently)
+// and terminal status (not WS-push state).
+const handleReconnect = () => {
+    if (!isAuthenticated.value) return
+    loadSessionsOnce()
+    loadTasks()
+    store.loadGitBranch()
+}
+
 // Edge swipe back gesture detection (right-edge-left-swipe → go back)
 useEdgeSwipeBack()
 
 // 文件覆盖层的返回手势：overlay 优先级高于 browse，无论 mount 顺序如何
 useFeatureBackHandler(
   'file-overlay',
-  () => activeTab.value === 'browse' && fileNav.overlayOpen.value,
+  () => panelIsActive('browse') && fileNav.overlayOpen.value,
   () => {
     if (fileNav.canGoBack.value) {
       const prevPath = fileNav.goBack()
@@ -698,6 +777,7 @@ window.addEventListener('clawbench-back-press', () => {
     }
 })
 window.addEventListener('clawbench-foreground', handleForeground)
+window.addEventListener('clawbench-reconnect', handleReconnect)
 const terminalRequestedCwd = ref(null)
 
 // Terminal keyboard height for detecting when soft keyboard is open in terminal tab.
@@ -714,7 +794,7 @@ const terminalKeyboardNeedsShrink = computed(() => terminalKeyboardActive.value 
 // Chat keyboard — on iOS WKWebView there's no adjustResize, so we detect
 // keyboard via visualViewport and compensate in the web layer.
 const { chatKeyboardHeight } = useChatKeyboard()
-const chatKeyboardActive = computed(() => activeTab.value === 'chat' && chatKeyboardHeight.value > 0)
+const chatKeyboardActive = computed(() => chatActive.value === 'chat' && chatKeyboardHeight.value > 0)
 
 // Unified: any soft keyboard is open (terminal or chat)
 const anyKeyboardActive = computed(() => terminalKeyboardActive.value || chatKeyboardActive.value)
@@ -1237,6 +1317,146 @@ function handleInlineOverflowClick(tab) {
   }
 }
 
+// Big-screen mode transitions: keep useTabDrawer's currentTab coherent
+// (chat drawers work in wide mode; collapse returns to the last active tab).
+watch(isBigScreen, (val) => {
+  if (val) {
+    // Continuity-first (Q1A): adopt activeTab if non-chat, else keep persisted leftTab
+    const next = resolveLeftTabOnEnter(activeTab.value, leftTab.value)
+    if (leftTab.value !== next) switchLeftTab(next)
+    onTabSwitch('chat')
+    overflowMenuOpen.value = false
+    // Focus continuity: the pane the user was working in becomes the active one.
+    setActivePane(resolveActivePaneOnEnter(activeTab.value))
+    // Big-screen: the bottom dock is hidden, so bottom-sheet drawers must sit
+    // flush with the screen bottom — don't let a stale --dock-height leave a gap.
+    document.documentElement.style.setProperty('--dock-height', '0px')
+  } else {
+    onTabSwitch(activeTab.value)
+    // Bottom dock visible again — re-measure (ResizeObserver may miss the
+    // display:none → visible transition, see the keyboard safety-net comment).
+    nextTick(() => {
+      startDockResize()
+      const dw = document.querySelector('.bottom-dock-wrapper')
+      if (dw) {
+        const h = dw.offsetHeight
+        document.documentElement.style.setProperty('--dock-height', h ? `${h}px` : '0px')
+      }
+    })
+  }
+}, { immediate: true })
+
+// Route leftTab side-effects (reuse narrow-mode behaviors) and sync activeTab (Q3B)
+registerBigScreenCallbacks({
+  setActiveTab: (tab) => { activeTab.value = tab },
+  sideEffects: (tab) => {
+    if (tab === 'browse') store.loadFiles(store.state.currentDir)
+    if (tab === 'tasks') { store.state.taskUnreadCount = 0; loadTasks() }
+  },
+})
+
+// ── Big-screen vertical dock helpers ──
+function handleBigDockTabClick(tab) {
+  // Clicking a dock item means the user intends to work in the left pane.
+  setActivePane('left')
+  switchLeftTab(tab)
+}
+
+// ── Drag file/dir from the left panel → attach to chat (big-screen only) ──
+const { addAttachedFile } = useChatContext()
+const chatDropActive = ref(false)
+let chatDropCounter = 0
+
+function onChatColDragEnter(e) {
+  if (!isBigScreen.value || !hasAttachDragData(e.dataTransfer)) return
+  chatDropCounter++
+  chatDropActive.value = true
+}
+
+function onChatColDragOver(e) {
+  // Allow the drop only for internal attach drags (don't hijack OS file drops)
+  if (isBigScreen.value && hasAttachDragData(e.dataTransfer)) e.preventDefault()
+}
+
+function onChatColDragLeave() {
+  chatDropCounter--
+  if (chatDropCounter <= 0) {
+    chatDropCounter = 0
+    chatDropActive.value = false
+  }
+}
+
+function onChatColDrop(e) {
+  chatDropCounter = 0
+  chatDropActive.value = false
+  if (!isBigScreen.value) return
+  const data = readAttachDragData(e.dataTransfer)
+  if (!data) return
+  e.preventDefault()
+  addAttachedFile(data.path, data.isDir)
+  toast.show(t('chat.attach.addedToChat'), { icon: '📎', type: 'success', duration: 1500 })
+}
+
+const bigScreenTabMeta = {
+  browse: { icon: FolderOpen, titleKey: 'nav.fileManager' },
+  history: { icon: GitBranch, titleKey: 'git.history.projectHistory' },
+  tasks: overflowTabMeta.tasks,
+  proxy: overflowTabMeta.proxy,
+  terminal: overflowTabMeta.terminal,
+  settings: overflowTabMeta.settings,
+}
+
+function bigDockTabIcon(tab) {
+  return bigScreenTabMeta[tab]?.icon ?? FolderOpen
+}
+function bigDockTabTitle(tab) {
+  return bigScreenTabMeta[tab] ? t(bigScreenTabMeta[tab].titleKey) : ''
+}
+function bigDockBtnClass(tab) {
+  return {
+    active: leftTab.value === tab,
+    'has-unread': tab === 'tasks' && store.state.taskUnreadCount > 0 && leftTab.value !== 'tasks',
+    'just-completed': tab === 'tasks' && store.state.taskJustCompleted && leftTab.value !== 'tasks',
+    'has-running': tab === 'tasks' && store.state.taskRunning && leftTab.value !== 'tasks',
+  }
+}
+function bigDockBadgeCount(tab) {
+  switch (tab) {
+    case 'history': return store.state.gitWorkingTreeChangeCount
+    case 'tasks': return store.state.taskUnreadCount
+    case 'terminal': return store.state.terminalSessionCount
+    case 'proxy': return store.state.portForwardActiveCount
+    default: return 0
+  }
+}
+function bigDockBadgeVisible(tab) {
+  return bigDockBadgeCount(tab) > 0 && leftTab.value !== tab
+}
+function bigDockBadgeAnim(tab) {
+  switch (tab) {
+    case 'history': return historyBadgeAnim.value
+    case 'tasks': return taskBadgeAnim.value
+    case 'terminal': return terminalBadgeAnim.value
+    case 'proxy': return proxyBadgeAnim.value
+    default: return false
+  }
+}
+function bigDockBadgeAnimEnd(tab) {
+  switch (tab) {
+    case 'history': historyBadgeAnim.value = false; break
+    case 'tasks': taskBadgeAnim.value = false; break
+    case 'terminal': terminalBadgeAnim.value = false; break
+    case 'proxy': proxyBadgeAnim.value = false; break
+  }
+}
+const bigDockActiveIndex = computed(() => {
+  const i = BIG_SCREEN_DOCK_TABS.indexOf(leftTab.value)
+  return i >= 0 ? i : 0
+})
+const bigDockIndicatorStyle = computed(() => ({
+  transform: `translateY(${bigDockActiveIndex.value * DOCK_STEP}px)`,
+}))
+
 const isOverflowTabActive = computed(() => popupOverflowTabs.value.includes(activeTab.value))
 
 const overflowPopupStyle = computed(() => {
@@ -1611,6 +1831,28 @@ onMounted(async () => {
 
 // ── Ctrl+F / Cmd+F: open context-aware search drawer ──
 const _dlg = useDialog()
+function openChatSearchDrawer() {
+  if (sessionSearchDrawer.isOpen.value) {
+    sessionSearchDrawerRef.value?.focusSearchInput()
+  } else {
+    sessionSearchDrawer.open()
+  }
+}
+function openBrowseSearchDrawer() {
+  if (fileNav.overlayOpen.value) {
+    if (searchDrawer.isOpen.value) {
+      fileOverlayRef.value?.focusSearchInput()
+    } else if (currentFile.value?.content) {
+      searchDrawer.open()
+    }
+  } else {
+    if (fileSearchDrawer.isOpen.value) {
+      fileManagerRef.value?.focusSearchInput()
+    } else {
+      fileSearchDrawer.open()
+    }
+  }
+}
 function handleCtrlF(e) {
     if (!(e.ctrlKey || e.metaKey) || e.key !== 'f') return
     // Skip when focus is in input/textarea/contenteditable/terminal
@@ -1621,30 +1863,22 @@ function handleCtrlF(e) {
     // Skip when modal dialog or project dialog is open
     if (_dlg.state.value.visible || projectDialogOpen.value) return
 
-    if (activeTab.value === 'chat') {
-        // Chat tab → SessionSearchDrawer
-        e.preventDefault()
-        if (sessionSearchDrawer.isOpen.value) {
-            sessionSearchDrawerRef.value?.focusSearchInput()
-        } else {
-            sessionSearchDrawer.open()
+    if (isBigScreen.value) {
+        // Focus-aware: route Ctrl+F to the pane the user is working in
+        if (activePane.value === 'right') {
+            e.preventDefault()
+            openChatSearchDrawer()
+        } else if (panelIsActive('browse')) {
+            e.preventDefault()
+            openBrowseSearchDrawer()
         }
+        // Left pane focused on a non-searchable tab → native Ctrl+F
+    } else if (activeTab.value === 'chat') {
+        e.preventDefault()
+        openChatSearchDrawer()
     } else if (activeTab.value === 'browse') {
-        // Browse tab → context-aware: overlay open → SearchDrawer (content), else → FileSearchDrawer (filename)
         e.preventDefault()
-        if (fileNav.overlayOpen.value) {
-            if (searchDrawer.isOpen.value) {
-                fileOverlayRef.value?.focusSearchInput()
-            } else if (currentFile.value?.content) {
-                searchDrawer.open()
-            }
-        } else {
-            if (fileSearchDrawer.isOpen.value) {
-                fileManagerRef.value?.focusSearchInput()
-            } else {
-                fileSearchDrawer.open()
-            }
-        }
+        openBrowseSearchDrawer()
     }
     // Other tabs: don't preventDefault — let browser handle Ctrl+F natively
 }
@@ -1657,6 +1891,7 @@ onUnmounted(() => {
     stopDockResize()
     removeTaskHandler()
     window.removeEventListener('clawbench-foreground', handleForeground)
+    window.removeEventListener('clawbench-reconnect', handleReconnect)
     destroyGlobalEvents()
     window.removeEventListener('open-file-manager', handleOpenFileManager)
     window.removeEventListener('open-file-overlay', handleOpenFileOverlay)
@@ -1690,6 +1925,45 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
+/* Big-screen split panes — positioned ancestors for the absolute TabPanels */
+.col-left,
+.col-right {
+    position: relative;
+    height: 100%;
+}
+
+/* Drag file/dir onto the chat column (big-screen) — highlight the drop target */
+.chat-drop-active::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 2px dashed var(--accent-color, #0066cc);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--accent-color, #0066cc) 6%, transparent);
+    pointer-events: none;
+    z-index: 10;
+}
+
+.chat-drop-hint {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: var(--bg-primary);
+    border: 1px solid var(--accent-color, #0066cc);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    color: var(--accent-color, #0066cc);
+    font-size: 14px;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 11;
+}
+
 /* When chat keyboard is open on iOS/PWA (no adjustResize), shrink the app container
    from the bottom so content stays above the keyboard. */
 .chat-keyboard-open {
@@ -1708,6 +1982,63 @@ onUnmounted(() => {
     flex-shrink: 0;
     -webkit-tap-highlight-color: transparent;
     user-select: none;
+}
+
+/* Big-screen vertical dock (left edge) — VS Code activity-bar style */
+.big-dock {
+    flex-shrink: 0;
+    width: 48px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    background: var(--bg-primary);
+    border-right: 1px solid var(--border-color);
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+
+.big-dock-center {
+    position: relative;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+/* VS Code activity-bar style active highlight: faint translucent theme tint
+   spanning the dock width + a thin theme-colored bar on the left edge.
+   Scoped under .big-dock so it outranks the base .dock-active-indicator
+   (same single-class specificity — a bare .big-dock-active-indicator would
+   lose to the later base rule and render as the circular water-drop). */
+.big-dock .big-dock-active-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 34px;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+    /* Base uses a springy overshoot (for the bottom-dock water-drop); a smooth
+       ease-out reads better on a full-width highlight. */
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.big-dock .big-dock-active-indicator::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--accent-color);
+}
+
+/* Active icon follows the theme color (VS Code activity bar) */
+.big-dock .dock-btn.active {
+    color: var(--accent-color);
+}
+.big-dock .dock-btn.active:hover {
+    color: var(--accent-color);
 }
 
 .bottom-dock {

@@ -1,6 +1,9 @@
 package antigravity
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,4 +101,30 @@ func TestDiscoverAntigravityModels_FallsBackOnMissingBinary(t *testing.T) {
 	models := DiscoverAntigravityModels()
 	require.NotEmpty(t, models)
 	assert.True(t, models[0].Default)
+}
+
+func TestDiscoverAntigravityModels_SucceedsWithMockBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mock script relies on sh, not available on Windows")
+	}
+	// Create a mock `agy` script that returns model output, so the success
+	// path (parseAgyModels on stdout) is exercised in CI.
+	tmpDir := t.TempDir()
+	agyPath := filepath.Join(tmpDir, "agy")
+	script := `#!/bin/sh
+echo "gemini-3-pro"
+echo "gemini-3-flash"
+`
+	require.NoError(t, os.WriteFile(agyPath, []byte(script), 0o755))
+
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", tmpDir+":"+origPath)
+
+	models := DiscoverAntigravityModels()
+	require.Len(t, models, 2)
+	assert.Equal(t, "gemini-3-pro", models[0].ID)
+	assert.Equal(t, "Gemini 3 Pro", models[0].Name)
+	assert.True(t, models[0].Default)
+	assert.Equal(t, "gemini-3-flash", models[1].ID)
+	assert.False(t, models[1].Default)
 }

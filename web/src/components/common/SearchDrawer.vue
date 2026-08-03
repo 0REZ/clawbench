@@ -36,7 +36,7 @@
 
 <script setup>
 import { Search } from 'lucide-vue-next'
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BottomSheet from './BottomSheet.vue'
 import HeaderMarquee from './HeaderMarquee.vue'
@@ -65,7 +65,8 @@ const isRenderedView = computed(() => {
 
 watch(() => props.open, async (val) => {
   if (val) {
-    await nextTick()
+    // Wait for BottomSheet slide-up animation (250ms) to complete before focusing
+    await new Promise(r => setTimeout(r, 300))
     inputRef.value?.focus()
   }
 })
