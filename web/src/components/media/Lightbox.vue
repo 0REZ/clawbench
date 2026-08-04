@@ -644,10 +644,24 @@ onMounted(() => {
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
     // Listen for clicks on images and mermaid diagrams to open lightbox
-    // Only activate on touch — skip mouse clicks for PC mode
     document.addEventListener('click', (e) => {
-        if (e.pointerType !== 'touch') return
-        const img = e.target.closest('.lightbox-img')
+        // Touch mode: direct click on .lightbox-img or .mermaid opens lightbox
+        // PC mode: click on .lightbox-expand-icon (hover overlay) opens lightbox;
+        //   mermaid diagrams always respond to click (they have ::after expand icon
+        //   as a visual hint, but ::after pseudo-elements aren't real DOM targets).
+        const isExpandIcon = !!e.target.closest('.lightbox-expand-icon')
+        const isMermaidClick = !!e.target.closest('.mermaid')
+        if (!isExpandIcon && !isMermaidClick && e.pointerType !== 'touch') return
+
+        // When clicking the expand icon, find the image from the wrapper
+        // (the icon is a sibling of the img, not a child)
+        let img
+        if (isExpandIcon) {
+            const wrap = e.target.closest('.lightbox-img-wrap')
+            img = wrap ? wrap.querySelector('.lightbox-img') : null
+        } else {
+            img = e.target.closest('.lightbox-img')
+        }
         if (img) {
             e.preventDefault()
             // Check if the image is inside a markdown body — collect sibling images for navigation

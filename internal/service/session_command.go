@@ -36,7 +36,8 @@ func FindSessionsByPrefix(prefix string) ([]DingTalkSessionInfo, error) {
 	if dbRead == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	rows, err := dbRead.QueryContext(context.Background(),
+	rows, err := dbRead.QueryContext(
+		context.Background(),
 		`SELECT id, title, project_path, backend, agent_id, model
 		 FROM chat_sessions
 		 WHERE LOWER(id) LIKE LOWER(?) AND archived = 0 AND session_type = 'chat'
@@ -59,7 +60,8 @@ func ListRecentSessions(limit int) ([]DingTalkSessionInfo, error) {
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := dbRead.QueryContext(context.Background(),
+	rows, err := dbRead.QueryContext(
+		context.Background(),
 		`SELECT id, title, project_path, backend, agent_id, model
 		 FROM chat_sessions
 		 WHERE archived = 0 AND session_type = 'chat'
@@ -106,7 +108,8 @@ func FindRunningSessionsByPrefix(prefix string) ([]DingTalkSessionInfo, error) {
 		args[i] = id
 	}
 
-	rows, err := dbRead.QueryContext(context.Background(),
+	rows, err := dbRead.QueryContext(
+		context.Background(),
 		fmt.Sprintf(
 			`SELECT id, title, project_path, backend, agent_id, model
 			 FROM chat_sessions
@@ -258,7 +261,8 @@ func LaunchSessionExecution(cfg LaunchConfig) {
 // handleSessionPanic recovers from panics in the session goroutine.
 func handleSessionPanic(cfg LaunchConfig, sessionID string, cancel context.CancelFunc) {
 	if r := recover(); r != nil {
-		slog.Error("session goroutine panicked",
+		slog.Error(
+			"session goroutine panicked",
 			slog.String("session", sessionID),
 			slog.Any("panic", r),
 			slog.String("stack", string(debug.Stack())),
@@ -413,11 +417,26 @@ func appendMediaPrompt(systemPrompt string) string {
 
 // BuildForkContext reads the chat history from DB and formats it as a text block
 // that can be prepended to the user's prompt for fork sessions.
+// Includes text blocks as-is and tool_use blocks as structured JSON wrapped in
+// <tool_use> tags. Thinking blocks are excluded.
 func BuildForkContext(sessionID string) string {
 	messages, err := GetMessagesBySessionID(sessionID)
 	if err != nil || len(messages) == 0 {
 		return ""
 	}
+
+	// Batch-fetch tool call details for the session (input/output are stored
+	// separately in chat_tool_calls, not in content JSON).
+	toolCalls, err := GetToolCallsBySession(sessionID)
+	if err != nil {
+		toolCalls = nil // proceed without tool details; blocks get slim version
+	}
+	// Build lookup: toolID → ToolCallRecord for quick enrichment
+	toolCallMap := make(map[string]*ToolCallRecord, len(toolCalls))
+	for i := range toolCalls {
+		toolCallMap[toolCalls[i].ToolID] = &toolCalls[i]
+	}
+
 	var sb strings.Builder
 	for _, msg := range messages {
 		if msg.Role != roleUser && msg.Role != roleAssistant {
@@ -429,16 +448,95 @@ func BuildForkContext(sessionID string) string {
 		if err := json.Unmarshal([]byte(msg.Content), &content); err != nil {
 			continue
 		}
-		for _, b := range content.Blocks {
-			if b.Type == contentKeyText && b.Text != "" {
-				sb.WriteString(msg.Role)
-				sb.WriteString(": ")
-				sb.WriteString(b.Text)
+
+		// Collect all non-skipped block outputs for this message
+		msgParts := extractMessageParts(content.Blocks, toolCallMap)
+		if len(msgParts) == 0 {
+			continue
+		}
+		sb.WriteString(msg.Role)
+		sb.WriteString(": ")
+		for i, part := range msgParts {
+			if i > 0 {
 				sb.WriteString("\n\n")
 			}
+			sb.WriteString(part)
 		}
+		sb.WriteString("\n\n")
 	}
 	return sb.String()
+}
+
+// extractMessageParts collects non-skipped block outputs from content blocks.
+func extractMessageParts(blocks []model.ContentBlock, toolCallMap map[string]*ToolCallRecord) []string {
+	var parts []string
+	for _, b := range blocks {
+		switch b.Type {
+		case contentKeyText:
+			if b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		case eventTypeToolUse:
+			tcJSON := FormatToolUseBlock(b, toolCallMap)
+			if tcJSON != "" {
+				parts = append(parts, tcJSON)
+			}
+			// thinking, warning, error: skipped
+		}
+	}
+	return parts
+}
+
+// FormatToolUseBlock renders a tool_use ContentBlock as structured JSON wrapped
+// in <tool_use> tags. Enriches the block with input/output from the detail table
+// when available. Applies truncation to keep the output reasonable.
+func FormatToolUseBlock(b model.ContentBlock, toolCallMap map[string]*ToolCallRecord) string {
+	// Base fields from the slim content block
+	obj := map[string]any{
+		"name": b.Name,
+		"id":   b.ID,
+	}
+	if b.Status != "" {
+		obj["status"] = b.Status
+	}
+	if b.Done {
+		obj["done"] = true
+	}
+	if b.DurationMs > 0 {
+		obj["duration_ms"] = b.DurationMs
+	}
+	if b.Summary != "" {
+		obj["summary"] = truncateString(b.Summary, 500)
+	}
+
+	// Enrich with input/output from chat_tool_calls detail table
+	tc, found := toolCallMap[b.ID]
+	if found {
+		inputStr := string(tc.Input)
+		obj["input"] = truncateString(inputStr, 500)
+		obj["output"] = truncateString(tc.Output, 1000)
+	} else if b.Input != nil {
+		// Fallback: use input from content block (interactive tools keep input inline)
+		inputJSON, _ := json.Marshal(b.Input)
+		obj["input"] = truncateString(string(inputJSON), 500)
+		if b.Output != "" {
+			obj["output"] = truncateString(b.Output, 1000)
+		}
+	}
+
+	jsonBytes, err := json.Marshal(obj)
+	if err != nil {
+		return ""
+	}
+	return "<tool_use>" + string(jsonBytes) + "</tool_use>"
+}
+
+// truncateString truncates s to maxLen bytes, appending "...(truncated)" if exceeded.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "...(truncated)"
 }
 
 type streamRunResultShared struct {

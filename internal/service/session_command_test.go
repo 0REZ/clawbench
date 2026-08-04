@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,21 @@ func setupTestDBForSessionCommand(t *testing.T) *sql.DB {
 			summary     TEXT NOT NULL,
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(target_type, target_id)
+		);
+		CREATE TABLE IF NOT EXISTS chat_tool_calls (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id INTEGER NOT NULL,
+			session_id TEXT NOT NULL,
+			tool_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			input TEXT NOT NULL DEFAULT '{}',
+			output TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			done INTEGER NOT NULL DEFAULT 0,
+			summary TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(tool_id, message_id)
 		);
 	`)
 	require.NoError(t, err)
@@ -912,10 +928,35 @@ func TestBuildForkContext_MultipleTextBlocks(t *testing.T) {
 
 	result := BuildForkContext(sessionID)
 	assert.Contains(t, result, "user: first part")
-	assert.Contains(t, result, "user: second part")
-	// thinking blocks don't match contentKeyText="text", they have type="thinking"
-	// so "thinking part" should not appear as a "user: thinking part" line
-	assert.NotContains(t, result, "user: thinking part")
+	assert.Contains(t, result, "second part")
+	// thinking blocks are excluded
+	assert.NotContains(t, result, "thinking part")
+}
+
+func TestGetToolCallsBySession_ClosedDB(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := initTestDB(dbDir); err != nil {
+		t.Fatalf("initTestDB: %v", err)
+	}
+	// Close the database to trigger error in GetToolCallsBySession
+	db.Close()
+	dbRead.Close()
+
+	_, err := GetToolCallsBySession("any-session")
+	assert.Error(t, err)
+}
+
+func TestGetThinkingBySessionAll_ClosedDB(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := initTestDB(dbDir); err != nil {
+		t.Fatalf("initTestDB: %v", err)
+	}
+	// Close the database to trigger error in GetThinkingBySessionAll
+	db.Close()
+	dbRead.Close()
+
+	_, err := GetThinkingBySessionAll("any-session")
+	assert.Error(t, err)
 }
 
 // ============================================================================
@@ -2069,17 +2110,210 @@ func TestBuildForkContext_SkipsSystemMessages(t *testing.T) {
 	sessionID := "fork-sys-skip"
 	// The chat_history table has a CHECK(role IN ('user', 'assistant')),
 	// so we can't insert system messages directly. But we can verify
-	// that messages with only non-text blocks produce empty fork context.
-	// Instead, test with tool_use blocks that are not type="text"
+	// that messages with only thinking blocks produce empty fork context
+	// (thinking blocks are now excluded, tool_use blocks are included).
 	_, err := WriteExec(
 		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'user', ?, ?, 'claude', 0)",
-		"/proj", `{"blocks":[{"type":"tool_use","id":"t1","name":"Read"}]}`, sessionID,
+		"/proj", `{"blocks":[{"type":"thinking","text":"thinking content"}]}`, sessionID,
 	)
 	require.NoError(t, err)
 
 	result := BuildForkContext(sessionID)
-	// tool_use blocks don't match contentKeyText="text", so they're skipped
-	assert.Equal(t, "", result, "non-text blocks should be skipped in fork context")
+	// thinking blocks are excluded, so only-thinking messages produce empty fork context
+	assert.Equal(t, "", result, "thinking-only messages should be skipped in fork context")
+}
+
+func TestBuildForkContext_ToolUseBlock(t *testing.T) {
+	db := setupTestDBForSessionCommand(t)
+	defer func() { _ = db.Close() }()
+
+	sessionID := "fork-tooluse"
+	// Insert assistant message with tool_use block + text
+	_, err := WriteExec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', ?, ?, 'claude', 0)",
+		"/proj", `{"blocks":[{"type":"text","text":"I'll read the file"},{"type":"tool_use","name":"Read","id":"toolu_1","status":"success","done":true,"duration_ms":150,"summary":"Read /path/to/file.go"}]}`, sessionID,
+	)
+	require.NoError(t, err)
+	// Insert tool call detail record
+	_, err = WriteExec(
+		"INSERT INTO chat_tool_calls (message_id, session_id, tool_id, name, input, output, status, done, summary, duration_ms) VALUES (?, ?, 'toolu_1', 'Read', ?, ?, 'success', 1, 'Read /path/to/file.go', 150)",
+		1, sessionID, `{"file_path":"/path/to/file.go"}`, "package main\n\nfunc main() {}",
+	)
+	require.NoError(t, err)
+
+	result := BuildForkContext(sessionID)
+	assert.Contains(t, result, "assistant: I'll read the file")
+	assert.Contains(t, result, "<tool_use>")
+	assert.Contains(t, result, `"name":"Read"`)
+	assert.Contains(t, result, `"id":"toolu_1"`)
+	assert.Contains(t, result, `"status":"success"`)
+	assert.Contains(t, result, `"input"`)
+	assert.Contains(t, result, `"output"`)
+	assert.Contains(t, result, "</tool_use>")
+}
+
+func TestBuildForkContext_ToolUseBlockWithoutDetail(t *testing.T) {
+	db := setupTestDBForSessionCommand(t)
+	defer func() { _ = db.Close() }()
+
+	sessionID := "fork-tooluse-no-detail"
+	// Insert assistant message with tool_use block but no matching detail record
+	_, err := WriteExec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', ?, ?, 'claude', 0)",
+		"/proj", `{"blocks":[{"type":"tool_use","name":"Bash","id":"toolu_2","status":"success","done":true}]}`, sessionID,
+	)
+	require.NoError(t, err)
+
+	result := BuildForkContext(sessionID)
+	assert.Contains(t, result, "assistant:")
+	assert.Contains(t, result, "<tool_use>")
+	assert.Contains(t, result, `"name":"Bash"`)
+	assert.Contains(t, result, `"id":"toolu_2"`)
+	// Without detail record, no input/output
+	assert.NotContains(t, result, `"input"`)
+	assert.NotContains(t, result, `"output"`)
+}
+
+func TestBuildForkContext_ThinkingExcluded(t *testing.T) {
+	db := setupTestDBForSessionCommand(t)
+	defer func() { _ = db.Close() }()
+
+	sessionID := "fork-thinking-excl"
+	// Insert assistant message with thinking + text
+	_, err := WriteExec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', ?, ?, 'claude', 0)",
+		"/proj", `{"blocks":[{"type":"thinking","text":"I should think about this"},{"type":"text","text":"Here is my answer"}]}`, sessionID,
+	)
+	require.NoError(t, err)
+
+	result := BuildForkContext(sessionID)
+	assert.Contains(t, result, "assistant: Here is my answer")
+	assert.NotContains(t, result, "I should think about this")
+}
+
+func TestFormatToolUseBlock_Truncation(t *testing.T) {
+	// Test truncation of long input/output/summary
+	longInput := strings.Repeat("a", 600)
+	longOutput := strings.Repeat("b", 1100)
+	longSummary := strings.Repeat("c", 600)
+
+	b := model.ContentBlock{
+		Type:       "tool_use",
+		Name:       "Bash",
+		ID:         "toolu_trunc",
+		Status:     "success",
+		Done:       true,
+		DurationMs: 100,
+		Summary:    longSummary,
+	}
+	tc := ToolCallRecord{
+		ToolID: "toolu_trunc",
+		Input:  json.RawMessage(longInput),
+		Output: longOutput,
+	}
+	toolCallMap := map[string]*ToolCallRecord{"toolu_trunc": &tc}
+
+	result := FormatToolUseBlock(b, toolCallMap)
+	assert.Contains(t, result, "...(truncated)")
+	// Input truncated at 500
+	assert.Contains(t, result, strings.Repeat("a", 500))
+	assert.NotContains(t, result, strings.Repeat("a", 600))
+	// Summary truncated at 500
+	assert.Contains(t, result, strings.Repeat("c", 500))
+}
+
+func TestExtractMessageParts_TextBlocks(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: contentKeyText, Text: "hello"},
+		{Type: contentKeyText, Text: "world"},
+	}
+	parts := extractMessageParts(blocks, nil)
+	assert.Equal(t, []string{"hello", "world"}, parts)
+}
+
+func TestExtractMessageParts_SkipsEmptyText(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: contentKeyText, Text: ""},
+		{Type: contentKeyText, Text: "visible"},
+	}
+	parts := extractMessageParts(blocks, nil)
+	assert.Equal(t, []string{"visible"}, parts)
+}
+
+func TestExtractMessageParts_ToolUseBlock(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: contentKeyText, Text: "preamble"},
+		{Type: eventTypeToolUse, Name: "Bash", ID: "t1", Status: "success", Done: true},
+	}
+	parts := extractMessageParts(blocks, nil)
+	assert.Len(t, parts, 2)
+	assert.Equal(t, "preamble", parts[0])
+	assert.Contains(t, parts[1], "<tool_use>")
+}
+
+func TestExtractMessageParts_SkipsThinkingAndWarning(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: contentKeyText, Text: "msg"},
+		{Type: "thinking", Text: "hidden"},
+		{Type: "warning", Text: "also hidden"},
+	}
+	parts := extractMessageParts(blocks, nil)
+	assert.Equal(t, []string{"msg"}, parts)
+}
+
+func TestExtractMessageParts_EmptyBlocks(t *testing.T) {
+	parts := extractMessageParts(nil, nil)
+	assert.Nil(t, parts)
+}
+
+func TestFormatToolUseBlock_InlineInputFallback(t *testing.T) {
+	t.Run("uses Input from content block when no toolCallMap entry", func(t *testing.T) {
+		b := model.ContentBlock{
+			Type:  eventTypeToolUse,
+			Name:  "AskUserQuestion",
+			ID:    "ask-001",
+			Input: map[string]any{"question": "Continue?"},
+		}
+		result := FormatToolUseBlock(b, nil)
+		assert.Contains(t, result, "<tool_use>")
+		assert.Contains(t, result, "AskUserQuestion")
+		assert.Contains(t, result, `"input"`)
+	})
+
+	t.Run("uses Output from content block as fallback", func(t *testing.T) {
+		b := model.ContentBlock{
+			Type:   eventTypeToolUse,
+			Name:   "Bash",
+			ID:     "ask-002",
+			Input:  map[string]any{"command": "ls"},
+			Output: "file1.txt\nfile2.txt",
+		}
+		result := FormatToolUseBlock(b, nil)
+		assert.Contains(t, result, "<tool_use>")
+		assert.Contains(t, result, `"input"`)
+		assert.Contains(t, result, `"output"`)
+		assert.Contains(t, result, "file1.txt")
+	})
+
+	t.Run("prefers toolCallMap over inline input", func(t *testing.T) {
+		b := model.ContentBlock{
+			Type:   eventTypeToolUse,
+			Name:   "Read",
+			ID:     "toolu_map",
+			Input:  map[string]any{"file_path": "/inline.go"},
+			Output: "inline output",
+		}
+		tc := ToolCallRecord{
+			ToolID: "toolu_map",
+			Input:  json.RawMessage(`{"file_path":"/db.go"}`),
+			Output: "db output",
+		}
+		toolCallMap := map[string]*ToolCallRecord{"toolu_map": &tc}
+		result := FormatToolUseBlock(b, toolCallMap)
+		assert.Contains(t, result, "/db.go")
+		assert.Contains(t, result, "db output")
+		assert.NotContains(t, result, "/inline.go")
+	})
 }
 
 // ============================================================================

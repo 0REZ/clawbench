@@ -184,7 +184,7 @@
         <div
           v-long-press="(e) => onLongPress(entry, e)"
           class="file-item"
-          :draggable="isBigScreen"
+          :draggable="isWideScreen"
           @dragstart="onItemDragStart(entry, $event)"
           :class="{
             'dir-item': entry.type === 'dir',
@@ -246,7 +246,7 @@
       <div v-for="entry in visibleEntries" :key="entry.name"
         v-long-press="(e) => onLongPress(entry, e)"
         class="grid-item"
-        :draggable="isBigScreen"
+        :draggable="isWideScreen"
         @dragstart="onItemDragStart(entry, $event)"
         :class="{
           'grid-dir': entry.type === 'dir',
@@ -401,7 +401,7 @@ import { useTerminalStatus } from '@/composables/useTerminalStatus.ts'
 import { useFeatureBackHandler, PRIORITY_PAGE } from '@/composables/useEdgeSwipeBack'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
-import { useBigScreenLayout } from '@/composables/useBigScreenLayout'
+import { useWideScreenLayout } from '@/composables/useWideScreenLayout'
 import { setAttachDragData, hasAttachDragData } from '@/utils/attachDrag'
 import { downloadFileByPath } from '@/utils/download.ts'
 import { useFileNavStack } from '@/composables/useFileNavStack'
@@ -465,7 +465,7 @@ async function onDrop(e) {
 
 /** Start an internal drag of a file/dir so it can be dropped onto the chat column. */
 function onItemDragStart(entry, e) {
-  if (!isBigScreen.value) return
+  if (!isWideScreen.value) return
   const path = itemPath(entry.name)
   setAttachDragData(e.dataTransfer, path, entry.type === 'dir')
   e.dataTransfer.effectAllowed = 'copy'
@@ -519,7 +519,7 @@ const dialog = useDialog()
 const { addAttachedFile, hasAttachedFile, removeAttachedFileByPath } = useChatContext()
 const { terminalRuntimeEnabled } = useTerminalStatus()
 const isTerminalDisabled = computed(() => terminalRuntimeEnabled.value !== true)
-const { isBigScreen } = useBigScreenLayout()
+const { isWideScreen } = useWideScreenLayout()
 
 const activeTab = inject('activeTab', ref(''))
 
@@ -1045,8 +1045,9 @@ function handleItemClick(e) {
     const action = item.dataset.action
     const path = item.dataset.path
 
-    // Multi-select mode: toggle selection on click
+    // Multi-select mode: toggle selection on click (also track last item for Space key)
     if (multiSelect.active) {
+        selectedPath.value = path
         toggleSelect(path)
         return
     }
@@ -1259,7 +1260,7 @@ function doDelete() {
 function handleKeydown(e) {
     // Only active when browse tab is focused
     if (activeTab.value !== 'browse') return
-    // Focus-aware: in big-screen mode also require the left pane to be focused
+    // Focus-aware: in wide-screen mode also require the left pane to be focused
     if (props.keyboardActive === false) return
     // Skip in Android app mode
     if (isAppMode.value) return
@@ -1314,8 +1315,8 @@ function handleKeydown(e) {
         return
     }
 
-    // Delete — delete
-    if (e.key === 'Delete') {
+    // Delete — delete (Shift+Delete handled separately as force delete)
+    if (e.key === 'Delete' && !e.shiftKey) {
         if (multiSelect.active && multiSelect.selected.size > 0) {
             e.preventDefault()
             doBatchDelete()
@@ -1336,6 +1337,162 @@ function handleKeydown(e) {
         toggleSelectAll()
         return
     }
+
+    // ── Additional file-manager shortcuts ──
+
+    // Enter — open the currently selected entry (dir → navigate in, file → preview)
+    if (e.key === 'Enter') {
+        // Don't hijack Enter when an interactive element (button/link) is focused
+        if (selectedPath.value && !e.target.closest?.('button, a, select')) {
+            const entry = visibleEntries.value.find(x => itemPath(x.name) === selectedPath.value)
+            if (entry) {
+                e.preventDefault()
+                if (entry.type === 'dir') emit('navigateDir', selectedPath.value)
+                else emit('selectFile', selectedPath.value)
+            }
+        }
+        return
+    }
+
+    // Alt+↑ — parent directory
+    if (e.altKey && e.key === 'ArrowUp') {
+        e.preventDefault()
+        emit('navigateBack')
+        return
+    }
+
+    // F2 — rename the selected entry (falls back to the currently open file)
+    if (e.key === 'F2') {
+        const path = selectedPath.value || props.currentFile?.path
+        if (path) {
+            e.preventDefault()
+            emit('rename', { path, name: path.split('/').pop() || path })
+        }
+        return
+    }
+
+    // Ctrl+R / F5 — refresh
+    if ((isCtrl && e.key === 'r') || e.key === 'F5') {
+        e.preventDefault()
+        emit('refresh')
+        return
+    }
+
+    // Ctrl+Shift+H — toggle hidden files
+    if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault()
+        emit('toggleHidden')
+        return
+    }
+
+    // Ctrl+Shift+M — toggle multi-select mode
+    if (isCtrl && e.shiftKey && e.key.toLowerCase() === 'm') {
+        e.preventDefault()
+        if (multiSelect.active) exitMultiSelect()
+        else enterMultiSelect()
+        return
+    }
+
+    // Space — toggle the selected item while in multi-select mode
+    if (e.key === ' ' && multiSelect.active && selectedPath.value) {
+        e.preventDefault()
+        toggleSelect(selectedPath.value)
+        return
+    }
+
+    // Escape — exit multi-select mode
+    if (e.key === 'Escape' && multiSelect.active) {
+        e.preventDefault()
+        exitMultiSelect()
+        return
+    }
+
+    // ↑/↓/Home/End — move the highlighted selection (Windows Explorer / Finder style)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
+        e.preventDefault()
+        const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
+        moveSelection(delta, e.key === 'Home', e.key === 'End')
+        // Shift+Arrow extends multi-select to the moved item
+        if (e.shiftKey && multiSelect.active && selectedPath.value) {
+            if (!multiSelect.selected.has(selectedPath.value)) toggleSelect(selectedPath.value)
+        }
+        return
+    }
+
+    // Backspace — parent directory
+    if (e.key === 'Backspace') {
+        e.preventDefault()
+        emit('navigateBack')
+        return
+    }
+
+    // Ctrl+N — new file; Ctrl+Shift+N — new folder
+    if (isCtrl && e.key === 'n') {
+        e.preventDefault()
+        if (e.shiftKey) doNewFolder()
+        else doNewFile()
+        return
+    }
+
+    // Ctrl+1 — list view; Ctrl+2 — grid view
+    if (isCtrl && e.key === '1') {
+        e.preventDefault()
+        viewMode.value = 'list'
+        return
+    }
+    if (isCtrl && e.key === '2') {
+        e.preventDefault()
+        viewMode.value = 'grid'
+        return
+    }
+
+    // Shift+Delete — force delete without confirmation (permanent)
+    if (e.shiftKey && e.key === 'Delete') {
+        e.preventDefault()
+        if (multiSelect.active && multiSelect.selected.size > 0) {
+            emit('batchDelete', [...multiSelect.selected])
+            exitMultiSelect()
+        } else if (selectedPath.value) {
+            emit('delete', selectedPath.value)
+        } else if (props.currentFile) {
+            emit('delete', props.currentFile.path)
+        }
+        return
+    }
+}
+
+/** Move the highlighted selection by delta (or to the start/end), scrolling it into view. */
+function moveSelection(delta, toStart = false, toEnd = false) {
+    const entries = visibleEntries.value
+    if (entries.length === 0) return
+    let idx
+    if (toStart) idx = 0
+    else if (toEnd) idx = entries.length - 1
+    else {
+        const cur = entries.findIndex(x => itemPath(x.name) === selectedPath.value)
+        idx = cur === -1 ? (delta > 0 ? 0 : entries.length - 1) : Math.min(entries.length - 1, Math.max(0, cur + delta))
+    }
+    const path = itemPath(entries[idx].name)
+    selectedPath.value = path
+    scrollSelectedIntoView(path)
+}
+
+/** Scroll the given entry into view within the active list/grid container. */
+function scrollSelectedIntoView(path) {
+    nextTick(() => {
+        const container = viewMode.value === 'grid' ? fileGridRef.value : fileListRef.value
+        if (!container) return
+        const items = container.querySelectorAll('[data-path]')
+        for (const it of items) {
+            if (it.getAttribute('data-path') === path) {
+                // jsdom (tests) may not implement scrollIntoView — guard it
+                if (typeof it.scrollIntoView === 'function') {
+                    it.scrollIntoView({ block: 'nearest' })
+                }
+                break
+            }
+        }
+    })
 }
 
 // Build a clipboard entry from the currently viewed/selected file
