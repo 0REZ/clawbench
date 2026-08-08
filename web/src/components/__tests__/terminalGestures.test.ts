@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
-import { shouldPreventTerminalContextMenu, useTerminalGestures } from '@/composables/useTerminalGestures'
+import { TerminalMode, selectionCellsToSelect, shouldPreventTerminalContextMenu, useTerminalGestures } from '@/composables/useTerminalGestures'
 
 function makeTouch(clientX: number, clientY: number): Touch {
   return { clientX, clientY } as Touch
@@ -42,7 +42,7 @@ afterEach(() => {
 
 let activeGestures: ReturnType<typeof useTerminalGestures> | null = null
 
-function setupGestures() {
+function setupGestures(initialMode: TerminalMode = 'gesture') {
   const el = document.createElement('div')
   document.body.appendChild(el)
 
@@ -63,6 +63,7 @@ function setupGestures() {
     onTouchScroll: (deltaY: number) => scrollDeltas.push(deltaY),
   })
   gestures.attach()
+  gestures.setMode(initialMode)
   activeGestures = gestures
 
   return { el, sent, hints, zoomDeltas, scrollDeltas, gestures }
@@ -79,6 +80,11 @@ describe('shouldPreventTerminalContextMenu', () => {
 })
 
 describe('useTerminalGestures', () => {
+  it('defaults to browse mode', () => {
+    const { gestures } = setupGestures('browse')
+    expect(gestures.mode.value).toBe('browse')
+  })
+
   it('prevents the native double-tap selection side effect when sending Tab', () => {
     const { el, sent, hints } = setupGestures()
 
@@ -176,15 +182,14 @@ describe('useTerminalGestures', () => {
   })
 
   it('scrolls terminal output with one-finger vertical drags when gestures are disabled', () => {
-    const { el, sent, scrollDeltas, gestures } = setupGestures()
+    const { el, sent, scrollDeltas, gestures } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     const smallMove = dispatchTouch(el, 'touchmove', [makeTouch(82, 108)])
     const firstScrollMove = dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
     const secondScrollMove = dispatchTouch(el, 'touchmove', [makeTouch(84, 155)])
 
-    expect(gestures.enabled.value).toBe(false)
+    expect(gestures.mode.value).toBe('browse')
     expect(sent).toEqual([])
     expect(scrollDeltas).toEqual([40, 15])
     expect(smallMove.preventDefault).not.toHaveBeenCalled()
@@ -193,9 +198,8 @@ describe('useTerminalGestures', () => {
   })
 
   it('stops a disabled-mode scroll sequence when a second finger is added', () => {
-    const { el, scrollDeltas, gestures } = setupGestures()
+    const { el, scrollDeltas } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
     dispatchTouch(el, 'touchmove', [makeTouch(84, 140), makeTouch(120, 140)])
@@ -205,23 +209,39 @@ describe('useTerminalGestures', () => {
   })
 
   it('restores native touch behavior when gestures are disabled before a scroll starts', () => {
-    const { el, gestures } = setupGestures()
+    const { el, gestures } = setupGestures('browse')
 
-    gestures.toggle()
-
-    expect(gestures.enabled.value).toBe(false)
+    expect(gestures.mode.value).toBe('browse')
     expect(el.style.touchAction).toBe('auto')
   })
 
-  it('does not disable native touch selection when gestures are toggled back on', () => {
-    const { el, gestures } = setupGestures()
+  it('does not disable native touch selection when gestures are re-enabled', () => {
+    const { el, gestures } = setupGestures('browse')
 
-    gestures.toggle()
-    expect(gestures.enabled.value).toBe(false)
-    gestures.toggle()
+    expect(gestures.mode.value).toBe('browse')
+    gestures.setMode('gesture')
 
-    expect(gestures.enabled.value).toBe(true)
+    expect(gestures.mode.value).toBe('gesture')
     expect(el.style.touchAction).not.toBe('none')
+  })
+
+  it('cycles through browse → gesture → selection → browse by default', () => {
+    const { gestures } = setupGestures('browse')
+    expect(gestures.mode.value).toBe('browse')
+    gestures.cycleMode()
+    expect(gestures.mode.value).toBe('gesture')
+    gestures.cycleMode()
+    expect(gestures.mode.value).toBe('selection')
+    gestures.cycleMode()
+    expect(gestures.mode.value).toBe('browse')
+  })
+
+  it('setMode switches and no-ops when identical', () => {
+    const { gestures } = setupGestures()
+    gestures.setMode('selection')
+    expect(gestures.mode.value).toBe('selection')
+    gestures.setMode('selection')
+    expect(gestures.mode.value).toBe('selection')
   })
 })
 
@@ -372,9 +392,8 @@ describe('useTerminalGestures — uncovered branches', () => {
   })
 
   it('does not send scroll deltas when movement is primarily horizontal in disabled mode', () => {
-    const { el, scrollDeltas, gestures } = setupGestures()
+    const { el, scrollDeltas } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     dispatchTouch(el, 'touchmove', [makeTouch(150, 108)]) // mostly horizontal
 
@@ -382,9 +401,8 @@ describe('useTerminalGestures — uncovered branches', () => {
   })
 
   it('resets disabled scroll state on touchend after scrolling', () => {
-    const { el, scrollDeltas, gestures } = setupGestures()
+    const { el, scrollDeltas } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
     expect(scrollDeltas).toEqual([40])
@@ -395,9 +413,8 @@ describe('useTerminalGestures — uncovered branches', () => {
   })
 
   it('resets disabled scroll state on touchcancel', () => {
-    const { el, scrollDeltas, gestures } = setupGestures()
+    const { el, scrollDeltas } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
     expect(scrollDeltas).toEqual([40])
@@ -412,17 +429,15 @@ describe('useTerminalGestures — uncovered branches', () => {
   })
 
   it('does not preventDefault on touchend when disabled scroll was not active', () => {
-    const { el, gestures } = setupGestures()
+    const { el } = setupGestures('browse')
 
-    gestures.toggle()
     const touchEnd = dispatchTouch(el, 'touchend', [], [makeTouch(80, 100)])
     expect(touchEnd.preventDefault).not.toHaveBeenCalled()
   })
 
   it('allows second finger to disable scroll in disabled mode via touchstart', () => {
-    const { el, scrollDeltas, gestures } = setupGestures()
+    const { el, scrollDeltas } = setupGestures('browse')
 
-    gestures.toggle()
     dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
     dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
     expect(scrollDeltas).toEqual([40])
@@ -477,5 +492,92 @@ describe('useTerminalGestures — uncovered branches', () => {
     vi.advanceTimersByTime(150)
     expect(sent.length).toBe(3)
     expect(sent[2]).toBe('down')
+  })
+})
+
+describe('selection mode', () => {
+  function setupSelection() {
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'getBoundingClientRect', {
+      value: () => ({ top: 100, bottom: 700, height: 600, left: 50, right: 450, width: 400, x: 50, y: 100, toJSON: () => ({}) }),
+    })
+    document.body.appendChild(el)
+
+    const starts: Array<[number, number]> = []
+    const extends_: Array<[number, number, number, number]> = []
+    const ends: number[] = []
+    const gestures = useTerminalGestures(ref(el), {
+      getCellHeight: () => 20,
+      getCellWidth: () => 10,
+      onSelectionStart: (col, row) => starts.push([col, row]),
+      onSelectionExtend: (ac, ar, cc, cr) => extends_.push([ac, ar, cc, cr]),
+      onSelectionEnd: () => ends.push(1),
+    })
+    gestures.setMode('selection')
+    gestures.attach()
+    activeGestures = gestures
+
+    return { el, starts, extends_, ends, gestures }
+  }
+
+  it('maps a diagonal drag into viewport cell selection callbacks', () => {
+    const { el, starts, extends_, ends } = setupSelection()
+    // clientX 90 → (90-50)/10 = col 4; clientY 120 → (120-100)/20 = row 1
+    dispatchTouch(el, 'touchstart', [makeTouch(90, 120)])
+    expect(starts).toEqual([[4, 1]])
+    // clientX 110 → col 6; clientY 240 → row 7
+    dispatchTouch(el, 'touchmove', [makeTouch(110, 240)])
+    expect(extends_).toEqual([[4, 1, 6, 7]])
+    dispatchTouch(el, 'touchend', [], [makeTouch(110, 240)])
+    expect(ends).toEqual([1])
+  })
+
+  it('clamps cells into the viewport bounds', () => {
+    const { el, starts, extends_ } = setupSelection()
+    dispatchTouch(el, 'touchstart', [makeTouch(90, 120)])   // (4, 1)
+    dispatchTouch(el, 'touchmove', [makeTouch(500, 800)])   // col 45 → clamp 39, row 35 → clamp 29
+    expect(extends_).toEqual([[4, 1, 39, 29]])
+  })
+
+  it('sets touchAction none and attaches selection listeners in selection mode', () => {
+    const { el, gestures } = setupSelection()
+    expect(gestures.mode.value).toBe('selection')
+    expect(el.style.touchAction).toBe('none')
+  })
+
+  it('switching away from selection clears the selection anchor', () => {
+    const { el, extends_, gestures } = setupSelection()
+    gestures.setMode('browse')
+    dispatchTouch(el, 'touchstart', [makeTouch(80, 100)])
+    dispatchTouch(el, 'touchmove', [makeTouch(84, 140)])
+    expect(extends_).toEqual([])
+  })
+})
+
+describe('selectionCellsToSelect', () => {
+  it('selects a partial single-line range inclusive of the end cell', () => {
+    // start (col 2, row 0) → end (col 5, row 0), cols=80
+    expect(selectionCellsToSelect(2, 0, 5, 0, 0, 80)).toEqual({ col: 2, row: 0, length: 4 })
+  })
+
+  it('selects a multi-row range with partial columns', () => {
+    // start (col 2, row 0) → end (col 3, row 1), cols=80
+    // length = (1-0)*80 - 2 + 3 + 1 = 82
+    expect(selectionCellsToSelect(2, 0, 3, 1, 0, 80)).toEqual({ col: 2, row: 0, length: 82 })
+  })
+
+  it('applies the viewport offset to rows', () => {
+    // viewportY=100 shifts both rows into buffer coordinates
+    expect(selectionCellsToSelect(0, 0, 9, 2, 100, 80)).toEqual({ col: 0, row: 100, length: 170 })
+  })
+
+  it('normalizes a reversed (upward/left) drag to the earlier cell', () => {
+    // dragging from lower/right back to upper/left — anchor must be normalized first
+    const reversed = selectionCellsToSelect(5, 3, 2, 0, 0, 80)
+    expect(reversed).toEqual({ col: 2, row: 0, length: (3) * 80 - 2 + 5 + 1 })
+  })
+
+  it('handles a same-cell selection as length 1', () => {
+    expect(selectionCellsToSelect(4, 1, 4, 1, 0, 80)).toEqual({ col: 4, row: 1, length: 1 })
   })
 })

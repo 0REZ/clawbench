@@ -30,6 +30,8 @@ const i18n = createI18n({
           fileHistory: 'File history',
           shareExternal: 'Share',
           exportHtml: 'Export HTML',
+          edit: 'Edit',
+          finishEditing: 'Finish editing',
         },
         overlay: { back: 'Back' },
       },
@@ -131,14 +133,6 @@ describe('FileHeader', () => {
     expect(getMenuOpen(wrapper)).toBe(false)
   })
 
-  it('emits toggleStickyScroll when handler is called', async () => {
-    const wrapper = mountHeader({ viewMode: 'source' })
-    const vm = wrapper.vm as any
-    vm.$.setupState.handleToggleStickyScroll()
-    await nextTick()
-    expect(wrapper.emitted('toggleStickyScroll')).toBeTruthy()
-    expect(getMenuOpen(wrapper)).toBe(false)
-  })
 
   it('emits toggleWordWrap when handler is called', async () => {
     const wrapper = mountHeader({ viewMode: 'source' })
@@ -155,6 +149,15 @@ describe('FileHeader', () => {
     vm.$.setupState.handleToggleLineNumbers()
     await nextTick()
     expect(wrapper.emitted('toggleLineNumbers')).toBeTruthy()
+    expect(getMenuOpen(wrapper)).toBe(false)
+  })
+
+  it('emits toggleStickyScroll when handler is called', async () => {
+    const wrapper = mountHeader({ viewMode: 'source' })
+    const vm = wrapper.vm as any
+    vm.$.setupState.handleToggleStickyScroll()
+    await nextTick()
+    expect(wrapper.emitted('toggleStickyScroll')).toBeTruthy()
     expect(getMenuOpen(wrapper)).toBe(false)
   })
 
@@ -268,19 +271,9 @@ describe('FileHeader', () => {
     expect(mockAddAttachedFile).not.toHaveBeenCalled()
   })
 
-  it('closes menu after toggling sticky scroll', async () => {
-    const wrapper = mountHeader({ viewMode: 'source' })
-    await wrapper.find('.dropdown-wrapper .file-header-btn').trigger('click')
-    expect(getMenuOpen(wrapper)).toBe(true)
-    const vm = wrapper.vm as any
-    vm.$.setupState.handleToggleStickyScroll()
-    await nextTick()
-    expect(getMenuOpen(wrapper)).toBe(false)
-  })
-
   describe('media file filtering', () => {
     it('hides code-only toolbar items for image files', async () => {
-      const wrapper = mountHeader({ file: { name: 'photo.png', path: '/tmp/photo.png', content: '' } })
+      const wrapper = mountHeader({ file: { name: 'photo.png', path: '/tmp/photo.png', content: null } })
       const vm = wrapper.vm as any
       expect(vm.$.setupState.isMediaFile).toBe(true)
       // wordWrap, lineNumbers, stickyScroll should not be in toolbar IDs
@@ -296,33 +289,30 @@ describe('FileHeader', () => {
     })
 
     it('hides code-only toolbar items for audio files', async () => {
-      const wrapper = mountHeader({ file: { name: 'song.mp3', path: '/tmp/song.mp3', content: '' } })
+      const wrapper = mountHeader({ file: { name: 'song.mp3', path: '/tmp/song.mp3', content: null } })
       const vm = wrapper.vm as any
       expect(vm.$.setupState.isMediaFile).toBe(true)
       const ids = vm.$.setupState.toolbarInlineIds
       expect(ids).not.toContain('wordWrap')
       expect(ids).not.toContain('lineNumbers')
-      expect(ids).not.toContain('stickyScroll')
     })
 
     it('hides code-only toolbar items for video files', async () => {
-      const wrapper = mountHeader({ file: { name: 'clip.mp4', path: '/tmp/clip.mp4', content: '' } })
+      const wrapper = mountHeader({ file: { name: 'clip.mp4', path: '/tmp/clip.mp4', content: null } })
       const vm = wrapper.vm as any
       expect(vm.$.setupState.isMediaFile).toBe(true)
       const ids = vm.$.setupState.toolbarInlineIds
       expect(ids).not.toContain('wordWrap')
       expect(ids).not.toContain('lineNumbers')
-      expect(ids).not.toContain('stickyScroll')
     })
 
     it('hides code-only toolbar items for PDF files', async () => {
-      const wrapper = mountHeader({ file: { name: 'doc.pdf', path: '/tmp/doc.pdf', content: '' } })
+      const wrapper = mountHeader({ file: { name: 'doc.pdf', path: '/tmp/doc.pdf', content: null } })
       const vm = wrapper.vm as any
       expect(vm.$.setupState.isMediaFile).toBe(true)
       const ids = vm.$.setupState.toolbarInlineIds
       expect(ids).not.toContain('wordWrap')
       expect(ids).not.toContain('lineNumbers')
-      expect(ids).not.toContain('stickyScroll')
       expect(ids).not.toContain('toggleView')
       // PDF keeps TOC and search
       expect(ids).toContain('toc')
@@ -336,7 +326,48 @@ describe('FileHeader', () => {
       const ids = vm.$.setupState.toolbarInlineIds
       expect(ids).toContain('wordWrap')
       expect(ids).toContain('lineNumbers')
-      expect(ids).toContain('stickyScroll')
+    })
+  })
+
+  describe('edit button', () => {
+    it('shows edit button for editable text file', () => {
+      const wrapper = mountHeader()
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isEditable).toBe(true)
+      expect(vm.$.setupState.toolbarInlineIds).toContain('edit')
+    })
+
+    it('shows edit button for markdown files', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.isEditable).toBe(true)
+      expect(vm.$.setupState.toolbarInlineIds).toContain('edit')
+    })
+
+    it('shows edit button and code features for a newly-created empty text file', () => {
+      const wrapper = mountHeader({ file: { name: 'newfile.ts', path: '/tmp/newfile.ts', content: '' } })
+      const vm = wrapper.vm as any
+      expect(vm.$.setupState.hasTextContent).toBe(true)
+      expect(vm.$.setupState.isEditable).toBe(true)
+      const ids = vm.$.setupState.toolbarInlineIds
+      expect(ids).toContain('edit')
+      expect(ids).toContain('wordWrap')
+      expect(ids).toContain('lineNumbers')
+      expect(ids).toContain('refresh')
+    })
+
+    it('emits toggleEdit when edit button is clicked', async () => {
+      const wrapper = mountHeader()
+      const vm = wrapper.vm as any
+      vm.$.setupState.handleToggleEdit()
+      await nextTick()
+      expect(wrapper.emitted('toggleEdit')).toBeTruthy()
+    })
+
+    it('applies active class on edit button when editing', async () => {
+      const wrapper = mountHeader({ editing: true })
+      const activeBtn = wrapper.findAll('.header-actions .file-header-btn').find(b => b.classes().includes('active'))
+      expect(activeBtn).toBeTruthy()
     })
   })
 })

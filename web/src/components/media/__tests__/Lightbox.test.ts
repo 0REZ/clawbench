@@ -156,36 +156,67 @@ describe('Lightbox', () => {
     })
   })
 
-  // ── Drag at scale=1 ──
+  // ── Drag disabled at fitScale ──
 
-  describe('drag at scale=1', () => {
-    it('enables mouse drag even when scale=1', async () => {
+  describe('drag at fitScale', () => {
+    it('disables mouse drag when scale equals fitScale', async () => {
       const wrapper = mountLightbox()
       const vm = wrapper.vm as any
 
-      // Open the lightbox
       vm.open('http://localhost/test.png')
       await nextTick()
 
-      // scale starts at 1
+      // scale starts at 1, fitScale starts at 1
+      expect(vm.scale).toBe(1)
+      expect(vm.fitScale).toBe(1)
+
+      vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
+
+      expect(vm.isDragging).toBe(false)
+    })
+
+    it('disables touch drag when scale equals fitScale', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
       expect(vm.scale).toBe(1)
 
-      // Simulate mousedown directly
+      vm.handleTouchStart({
+        touches: [{ clientX: 100, clientY: 100, clientX: 100, clientY: 100 }],
+        length: 1,
+      })
+
+      expect(vm.isDragging).toBe(false)
+    })
+
+    it('enables mouse drag when zoomed beyond fitScale', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+
+      vm.open('http://localhost/test.png')
+      await nextTick()
+
+      vm.fitScale = 0.5
+      vm.scale = 1.0
+
       vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
 
       expect(vm.isDragging).toBe(true)
     })
 
-    it('enables touch drag even when scale=1', async () => {
+    it('enables touch drag when zoomed beyond fitScale', async () => {
       const wrapper = mountLightbox()
       const vm = wrapper.vm as any
 
       vm.open('http://localhost/test.png')
       await nextTick()
 
-      expect(vm.scale).toBe(1)
+      vm.fitScale = 0.5
+      vm.scale = 1.0
 
-      // Simulate touchstart via direct call since test-utils doesn't support TouchList
       vm.handleTouchStart({
         touches: [{ clientX: 100, clientY: 100, clientX: 100, clientY: 100 }],
         length: 1,
@@ -731,6 +762,8 @@ describe('Lightbox', () => {
       const wrapper = mountLightbox()
       const vm = wrapper.vm as any
 
+      vm.fitScale = 0.5
+      vm.scale = 1.0
       vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
       vm.handleMouseMove({ clientX: 150, clientY: 120, preventDefault: vi.fn() })
 
@@ -750,6 +783,8 @@ describe('Lightbox', () => {
       const wrapper = mountLightbox()
       const vm = wrapper.vm as any
 
+      vm.fitScale = 0.5
+      vm.scale = 1.0
       vm.handleMouseDown({ button: 0, clientX: 100, clientY: 100, preventDefault: vi.fn() })
       vm.handleMouseMove({ clientX: 150, clientY: 120, preventDefault: vi.fn() })
       vm.handleMouseUp()
@@ -766,6 +801,9 @@ describe('Lightbox', () => {
     it('handles single touch drag', async () => {
       const wrapper = mountLightbox()
       const vm = wrapper.vm as any
+
+      vm.fitScale = 0.5
+      vm.scale = 1.0
 
       vm.handleTouchStart({
         touches: [{ clientX: 100, clientY: 100 }],
@@ -837,6 +875,52 @@ describe('Lightbox', () => {
       expect(result.startIdx).toBe(1)
 
       document.body.removeChild(container)
+    })
+  })
+
+  // ── data-full-src (thumbnail inline, full-size in lightbox) ──
+
+  describe('data-full-src', () => {
+    it('navigateMdImage opens the data-full-src original when present', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      const img = document.createElement('img')
+      img.src = '/api/file/thumb?path=photo.png&w=800'
+      img.setAttribute('data-full-src', '/api/local-file/photo.png')
+      vm.mdImages = [img]
+
+      vm.navigateMdImage(0, 'next')
+      await nextTick()
+
+      expect(vm.currentUrl).toContain('/api/local-file/photo.png')
+      expect(vm.currentUrl).not.toContain('/api/file/thumb')
+    })
+
+    it('navigateMdImage falls back to img.src when no data-full-src', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      const img = document.createElement('img')
+      img.src = '/api/local-file/photo.png'
+      vm.mdImages = [img]
+
+      vm.navigateMdImage(0, 'next')
+      await nextTick()
+
+      expect(vm.currentUrl).toContain('/api/local-file/photo.png')
+    })
+
+    it('openMdImages uses data-full-src for the first image', async () => {
+      const wrapper = mountLightbox()
+      const vm = wrapper.vm as any
+      const img = document.createElement('img')
+      img.src = '/api/file/thumb?path=photo.jpg&w=800'
+      img.setAttribute('data-full-src', '/api/local-file/photo.jpg')
+
+      vm.openMdImages([img], 0)
+      await nextTick()
+
+      expect(vm.currentUrl).toContain('/api/local-file/photo.jpg')
+      expect(vm.currentUrl).not.toContain('/api/file/thumb')
     })
   })
 })

@@ -16,7 +16,7 @@
       </div>
       <div
         class="lightbox-content"
-        :class="{ grabbing: isDragging, 'slide-left': slideDirection === 'left', 'slide-right': slideDirection === 'right' }"
+        :class="{ grabbing: isDragging, 'slide-left': slideDirection === 'left', 'slide-right': slideDirection === 'right', 'can-drag': canDrag }"
         ref="contentRef"
         @click="handleContentClick"
         @wheel.prevent="handleWheel"
@@ -211,13 +211,11 @@ function onSvgMounted() {
         const padding = 56
         const availH = vh - padding * 2
         if (w > 0 && h > 0) {
-            const s = Math.min(vw / w, availH / h, 1)
-            if (s < 1) {
-                svg.setAttribute('width', Math.round(w * s) + 'px')
-                svg.setAttribute('height', Math.round(h * s) + 'px')
-                svg.style.maxWidth = 'none'
-                svg.style.maxHeight = 'none'
-            }
+            const s = Math.min(vw / w, availH / h)
+            svg.setAttribute('width', Math.round(w * s) + 'px')
+            svg.setAttribute('height', Math.round(h * s) + 'px')
+            svg.style.maxWidth = 'none'
+            svg.style.maxHeight = 'none'
         }
         fitScale.value = 1
         scale.value = 1
@@ -312,10 +310,18 @@ function navigateToIndex(newIdx, direction) {
     store.selectFile(entryPath)
 }
 
+/**
+ * Resolve the full-size image URL for the lightbox.
+ * Inline images may use a low-res thumbnail src with the original stored in
+ * data-full-src; the lightbox must always show the original.
+ */
+function fullImgSrc(img) {
+    return (img && img.dataset && img.dataset.fullSrc) || (img ? img.src : '')
+}
+
 function navigateMdImage(newIdx, direction) {
     const img = mdImages.value[newIdx]
     if (!img) return
-
     // Show loading immediately
     imageLoading.value = true
     slideDirection.value = direction
@@ -332,7 +338,7 @@ function navigateMdImage(newIdx, direction) {
     lastTy.value = 0
 
     mdCurrentIndex.value = newIdx
-    currentUrl.value = img.src + (img.src.includes('?') ? '&' : '?') + 't=' + Date.now()
+    currentUrl.value = fullImgSrc(img) + (fullImgSrc(img).includes('?') ? '&' : '?') + 't=' + Date.now()
     currentSvg.value = ''
 }
 
@@ -340,6 +346,7 @@ function open(url, svg = '') {
     currentUrl.value = svg ? '' : url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
     currentSvg.value = svg
     lightboxVisible.value = true
+    imageLoading.value = !svg
     fitScale.value = 1
     naturalW.value = 0
     naturalH.value = 0
@@ -377,11 +384,12 @@ function openMdImages(imgs, startIndex) {
     mdCurrentIndex.value = startIndex
 
     const img = imgs[startIndex]
-    currentUrl.value = img.src + (img.src.includes('?') ? '&' : '?') + 't=' + Date.now()
+    currentUrl.value = fullImgSrc(img) + (fullImgSrc(img).includes('?') ? '&' : '?') + 't=' + Date.now()
     currentSvg.value = ''
     currentFilePath.value = ''
 
     lightboxVisible.value = true
+    imageLoading.value = true
     fitScale.value = 1
     naturalW.value = 0
     naturalH.value = 0
@@ -487,9 +495,13 @@ function handleWheel(e) {
     scale.value = newScale
 }
 
+// Can drag only when zoomed in beyond fit-to-screen
+const canDrag = computed(() => scale.value > fitScale.value)
+
 // Mouse events
 function handleMouseDown(e) {
     if (e.button !== 0) return // Only left click
+    if (!canDrag.value) return
     e.preventDefault()
     isDragging.value = true
     dragStartX.value = e.clientX - lastTx.value
@@ -528,9 +540,11 @@ function handleTouchStart(e) {
         touchLastY.value = e.touches[0].clientY
         hasMoved.value = false
 
-        isDragging.value = true
-        dragStartX.value = e.touches[0].clientX - lastTx.value
-        dragStartY.value = e.touches[0].clientY - lastTy.value
+        if (canDrag.value) {
+            isDragging.value = true
+            dragStartX.value = e.touches[0].clientX - lastTx.value
+            dragStartY.value = e.touches[0].clientY - lastTy.value
+        }
     }
 }
 
@@ -646,12 +660,10 @@ onMounted(() => {
     // Listen for clicks on images and mermaid diagrams to open lightbox
     document.addEventListener('click', (e) => {
         // Touch mode: direct click on .lightbox-img or .mermaid opens lightbox
-        // PC mode: click on .lightbox-expand-icon (hover overlay) opens lightbox;
-        //   mermaid diagrams always respond to click (they have ::after expand icon
-        //   as a visual hint, but ::after pseudo-elements aren't real DOM targets).
+        // PC mode: only click on .lightbox-expand-icon opens lightbox
         const isExpandIcon = !!e.target.closest('.lightbox-expand-icon')
-        const isMermaidClick = !!e.target.closest('.mermaid')
-        if (!isExpandIcon && !isMermaidClick && e.pointerType !== 'touch') return
+        // PC mode: only expand icon opens lightbox (not the image/mermaid itself)
+        if (!isExpandIcon && e.pointerType !== 'touch') return
 
         // When clicking the expand icon, find the image from the wrapper
         // (the icon is a sibling of the img, not a child)
@@ -676,7 +688,7 @@ onMounted(() => {
                     }
                 }
             }
-            open(img.src)
+            open(fullImgSrc(img))
             return
         }
         const mermaidDiv = e.target.closest('.markdown-body .mermaid, .chat-message .mermaid')
@@ -819,6 +831,9 @@ onUnmounted(() => {
     height: 100%;
     touch-action: none;
     overscroll-behavior: none;
+}
+
+.lightbox-content.can-drag {
     cursor: grab;
 }
 

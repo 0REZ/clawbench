@@ -397,6 +397,7 @@ import 'highlight.js/styles/github.css'
 import 'highlight.js/styles/github-dark.css'
 import './assets/hljs-light-override.css'
 import './assets/annotation-buttons.css'
+import './assets/code-viewer.css'
 import './assets/mono-icon-colors.css'
 import './assets/chat-actions.css'
 
@@ -528,10 +529,12 @@ function onSplitRatioChange(ratio) {
 // field (e.g. the chat input on the right). Otherwise the focused INPUT/TEXTAREA
 // stays the event target and the file manager's input-focus guard swallows all
 // its keyboard shortcuts even though the user has clearly clicked into it.
+// Skip blur for CodeMirror .cm-content — blurring it on mobile causes the
+// soft keyboard to dismiss then re-appear when CM re-focuses on mousedown.
 function onLeftPanePointerDown() {
   setActivePane('left')
   const el = document.activeElement
-  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || (el.isContentEditable && !el.classList.contains('cm-content')))) {
     el.blur()
   }
 }
@@ -1613,6 +1616,8 @@ function handleOpenTerminal(cwd) {
 function scrollToLine(line, lineEnd) {
     const startLine = Math.max(1, line)
     const endLine = Math.min(lineEnd && lineEnd > startLine ? lineEnd : startLine, startLine + 200)
+    // CodeMirror-based viewers (code/raw files) scroll internally via this event
+    window.dispatchEvent(new CustomEvent('cm-scroll-to-line', { detail: { line: startLine, lineEnd } }))
     const selector = `.code-line[data-line="${startLine}"]`
     const maxAttempts = 30
     let attempts = 0
@@ -1976,9 +1981,9 @@ onUnmounted(() => {
 .chat-drop-active::after {
     content: '';
     position: absolute;
-    inset: 4px;
+    inset: 0;
     border: 2px dashed var(--accent-color, #0066cc);
-    border-radius: 12px;
+    border-radius: 0;
     background: color-mix(in srgb, var(--accent-color, #0066cc) 6%, transparent);
     pointer-events: none;
     z-index: 10;

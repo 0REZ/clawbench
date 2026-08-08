@@ -487,6 +487,25 @@ func extractMessageParts(blocks []model.ContentBlock, toolCallMap map[string]*To
 	return parts
 }
 
+// forkToolOutputMaxLen is the maximum number of runes kept from a tool_use
+// output field when building fork context.  Long outputs (file reads, command
+// results, etc.) are truncated to avoid blowing up the context window of the
+// forked session.
+const forkToolOutputMaxLen = 500
+
+// truncateRunes returns s truncated to maxRunes with a "...(truncated)" suffix
+// when the string exceeds the limit.
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "...(truncated)"
+}
+
 // FormatToolUseBlock renders a tool_use ContentBlock as structured JSON wrapped
 // in <tool_use> tags. Enriches the block with input/output from the detail table
 // when available. Applies truncation to keep the output reasonable.
@@ -506,21 +525,21 @@ func FormatToolUseBlock(b model.ContentBlock, toolCallMap map[string]*ToolCallRe
 		obj["duration_ms"] = b.DurationMs
 	}
 	if b.Summary != "" {
-		obj["summary"] = truncateString(b.Summary, 500)
+		obj["summary"] = b.Summary
 	}
 
 	// Enrich with input/output from chat_tool_calls detail table
 	tc, found := toolCallMap[b.ID]
 	if found {
 		inputStr := string(tc.Input)
-		obj["input"] = truncateString(inputStr, 500)
-		obj["output"] = truncateString(tc.Output, 1000)
+		obj["input"] = inputStr
+		obj["output"] = truncateRunes(tc.Output, forkToolOutputMaxLen)
 	} else if b.Input != nil {
 		// Fallback: use input from content block (interactive tools keep input inline)
 		inputJSON, _ := json.Marshal(b.Input)
-		obj["input"] = truncateString(string(inputJSON), 500)
+		obj["input"] = string(inputJSON)
 		if b.Output != "" {
-			obj["output"] = truncateString(b.Output, 1000)
+			obj["output"] = truncateRunes(b.Output, forkToolOutputMaxLen)
 		}
 	}
 
@@ -529,14 +548,6 @@ func FormatToolUseBlock(b model.ContentBlock, toolCallMap map[string]*ToolCallRe
 		return ""
 	}
 	return "<tool_use>" + string(jsonBytes) + "</tool_use>"
-}
-
-// truncateString truncates s to maxLen bytes, appending "...(truncated)" if exceeded.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "...(truncated)"
 }
 
 type streamRunResultShared struct {

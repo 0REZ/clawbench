@@ -16,19 +16,6 @@
         :aria-label="pm.ariaLabel"
       >{{ pm.label }}</button>
     </div>
-
-    <!-- Raw markdown -->
-    <CodePreview
-      v-else
-      :content="file?.content ?? ''"
-      language="markdown"
-      :file-path="file?.path ?? ''"
-      :word-wrap="wordWrap"
-      :show-line-numbers="showLineNumbers"
-      :flash-ranges="flashRanges"
-      :flash-type="flashType"
-      :sticky-scroll="stickyScroll"
-    />
   </div>
 
   <!-- Table row expand modal -->
@@ -42,7 +29,6 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import CodePreview from './CodePreview.vue'
 import { renderMarkdownHtml, renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
 import { useDoubleClickCopy } from '@/composables/useDoubleClickCopy.ts'
 import { useQuoteQuestion } from '@/composables/useQuoteQuestion.ts'
@@ -50,7 +36,6 @@ import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
 import { store } from '@/stores/app.ts'
 import { dirName, splitPath, joinPath } from '@/utils/path.ts'
-import { flashRanges, flashType } from '@/composables/useFileRefresh.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 import {
@@ -68,7 +53,6 @@ const props = defineProps<{
     viewMode?: string
     wordWrap?: boolean
     showLineNumbers?: boolean
-    stickyScroll?: boolean
 }>()
 
 const renderedHtml = ref('')
@@ -394,13 +378,7 @@ defineExpose({
 }
 
 .markdown-body .lightbox-img-wrap .lightbox-img {
-  cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.markdown-body .lightbox-img-wrap:hover .lightbox-img {
-  transform: scale(1.02);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: default;
 }
 
 .markdown-body .lightbox-img-wrap .lightbox-expand-icon {
@@ -418,10 +396,12 @@ defineExpose({
   pointer-events: auto;
 }
 
-.markdown-body .lightbox-img-wrap:hover .lightbox-expand-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+@media (hover: hover) {
+  .markdown-body .lightbox-img-wrap:hover .lightbox-expand-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }
 
 .markdown-body .lightbox-img-wrap .lightbox-expand-icon::after {
@@ -435,8 +415,7 @@ defineExpose({
   position: relative;
 }
 
-.markdown-body .mermaid::after {
-  content: '⤢';
+.markdown-body .mermaid .lightbox-expand-icon {
   display: none;
   position: absolute;
   top: 4px;
@@ -451,9 +430,17 @@ defineExpose({
   text-align: center;
   cursor: pointer;
   z-index: 2;
+  align-items: center;
+  justify-content: center;
 }
 
-.markdown-body .mermaid:hover::after {
-  display: block;
+.markdown-body .mermaid .lightbox-expand-icon::after {
+  content: '⤢';
+}
+
+@media (hover: hover) {
+  .markdown-body .mermaid:hover .lightbox-expand-icon {
+    display: flex;
+  }
 }
 </style>

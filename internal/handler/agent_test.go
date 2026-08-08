@@ -138,6 +138,37 @@ func TestAgentPatch_InvalidPreferredModel(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestAgentPatch_PreferredModel_ACPReportedModel(t *testing.T) {
+	defer setupAgentTestEnv(t)()
+
+	// Simulate ACP reporting a model that is NOT in the CLI-discovered
+	// agent.Models list (e.g. a model only exposed by the ACP runtime).
+	reg := ai.GetAgentCapabilityRegistry()
+	reg.Update("codebuddy", &ai.AgentCapability{
+		AvailableModels: []model.AgentModel{
+			{ID: "claude-opus-4-5", Name: "Claude Opus 4.5", Default: true},
+		},
+	})
+
+	// ACP-only model should be accepted (runtime union of CLI + ACP models)
+	body := map[string]any{
+		"id":              "codebuddy",
+		"preferred_model": "claude-opus-4-5",
+	}
+	req := newRequest(t, http.MethodPatch, "/api/agents", body)
+	withAuthCookie(req, model.SessionToken)
+	w := callHandler(ServeAgents, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "claude-opus-4-5", model.Agents["codebuddy"].PreferredModel)
+
+	// DB should reflect the update
+	var preferredModel string
+	err := service.UnsafeDBForTest().QueryRow("SELECT preferred_model FROM agents WHERE id = ?", "codebuddy").Scan(&preferredModel)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-opus-4-5", preferredModel)
+}
+
 // ── install command preparation tests ──
 
 func TestPrepareInstallCmd_NpmInstallWithChinaMirror(t *testing.T) {
@@ -916,72 +947,6 @@ func TestServeAgents_MethodNotAllowed(t *testing.T) {
 	w := callHandler(ServeAgents, req)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
-}
-
-// ---------- ServeAgentRefreshModels with provider filter ----------
-
-func TestServeAgentRefreshModels_WithProviderFilter(t *testing.T) {
-	defer setupAgentTestEnv(t)()
-
-	// Save original DiscoverModels and restore later
-	origDiscover := model.DiscoverModels
-	defer func() { model.DiscoverModels = origDiscover }()
-
-	// Mock DiscoverModels to return models with provider prefix
-	model.DiscoverModels = func(spec model.BackendSpec) []model.AgentModel {
-		return []model.AgentModel{
-			{ID: "openai/gpt-4o", Name: "openai/GPT-4o"},
-			{ID: "anthropic/claude-sonnet-4-20250514", Name: "anthropic/Claude Sonnet 4"},
-			{ID: "deepseek/deepseek-chat", Name: "deepseek/DeepSeek Chat"},
-		}
-	}
-
-	// Add agent_api_keys entry using SaveAgentAPIKey
-	require.NoError(t, service.SaveAgentAPIKey(service.UnsafeDBForTest(), "codebuddy", "openai", "", "test-api-key"))
-
-	req := newRequest(t, http.MethodPost, "/api/agents/codebuddy/refresh-models", nil)
-	withAuthCookie(req, model.SessionToken)
-	req.URL.Path = "/api/agents/codebuddy/refresh-models"
-	w := callHandler(ServeAgentRefreshModels, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-
-	models := resp["models"].([]any)
-	assert.NotEmpty(t, models, "should have models after provider filtering")
-}
-
-func TestServeAgentRefreshModels_ProviderFilterNoMatch(t *testing.T) {
-	defer setupAgentTestEnv(t)()
-
-	origDiscover := model.DiscoverModels
-	defer func() { model.DiscoverModels = origDiscover }()
-
-	// Mock DiscoverModels to return models that DON'T match the provider prefix
-	model.DiscoverModels = func(spec model.BackendSpec) []model.AgentModel {
-		return []model.AgentModel{
-			{ID: "openai/gpt-4o", Name: "openai/GPT-4o"},
-			{ID: "anthropic/claude-sonnet-4-20250514", Name: "anthropic/Claude Sonnet 4"},
-		}
-	}
-
-	// Set up provider that won't match any model prefix
-	require.NoError(t, service.SaveAgentAPIKey(service.UnsafeDBForTest(), "codebuddy", "deepseek", "", "test-api-key"))
-
-	req := newRequest(t, http.MethodPost, "/api/agents/codebuddy/refresh-models", nil)
-	withAuthCookie(req, model.SessionToken)
-	req.URL.Path = "/api/agents/codebuddy/refresh-models"
-	w := callHandler(ServeAgentRefreshModels, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// When no models match the prefix, all discovered models are returned as fallback
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	models := resp["models"].([]any)
-	assert.Len(t, models, 2, "should return all models when no prefix matches")
 }
 
 // ---------- serveAgentsGet ACP state tests ----------

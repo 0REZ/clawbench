@@ -1,5 +1,56 @@
 import { ref, type Ref } from 'vue'
 
+export type TerminalMode = 'browse' | 'gesture' | 'selection'
+const MODE_ORDER: TerminalMode[] = ['browse', 'gesture', 'selection']
+
+/** Convert an absolute touch Y coordinate to a viewport row (0..viewportRows-1), clamped. */
+export function clientYToViewportRow(
+  clientY: number,
+  containerTop: number,
+  cellHeight: number,
+  viewportRows: number,
+): number {
+  if (cellHeight <= 0 || viewportRows <= 0) return 0
+  const row = Math.floor((clientY - containerTop) / cellHeight)
+  return Math.max(0, Math.min(viewportRows - 1, row))
+}
+
+/** Convert an absolute touch X coordinate to a viewport column (0..viewportCols-1), clamped. */
+export function clientXToViewportCol(
+  clientX: number,
+  containerLeft: number,
+  cellWidth: number,
+  viewportCols: number,
+): number {
+  if (cellWidth <= 0 || viewportCols <= 0) return 0
+  const col = Math.floor((clientX - containerLeft) / cellWidth)
+  return Math.max(0, Math.min(viewportCols - 1, col))
+}
+
+/**
+ * Convert an anchor/current viewport cell pair into the args for xterm's
+ * `select(col, row, length)`. `select` is exclusive of the end cell, so the
+ * length adds 1 to include the end. Returns the normalized (earlier-first) start.
+ */
+export function selectionCellsToSelect(
+  anchorCol: number,
+  anchorRow: number,
+  currentCol: number,
+  currentRow: number,
+  viewportY: number,
+  cols: number,
+): { col: number; row: number; length: number } {
+  const aRow = viewportY + anchorRow
+  const cRow = viewportY + currentRow
+  const forward = cRow > aRow || (cRow === aRow && currentCol >= anchorCol)
+  const sRow = forward ? aRow : cRow
+  const sCol = forward ? anchorCol : currentCol
+  const eRow = forward ? cRow : aRow
+  const eCol = forward ? currentCol : anchorCol
+  const length = (eRow - sRow) * cols - sCol + eCol + 1
+  return { col: sCol, row: sRow, length }
+}
+
 export interface GestureCallbacks {
   sendArrowUp: () => void
   sendArrowDown: () => void
@@ -11,6 +62,16 @@ export interface GestureCallbacks {
   onPinchZoom?: (delta: number) => void
   onGestureHint?: (symbol: string) => void
   onTouchScroll?: (deltaY: number) => void
+  /** Selection mode: read the current terminal cell height (px) for coord→row conversion. */
+  getCellHeight?: () => number
+  /** Selection mode: read the current terminal cell width (px) for coord→col conversion. */
+  getCellWidth?: () => number
+  /** Selection mode: finger down, report the anchor viewport cell (col, row). */
+  onSelectionStart?: (col: number, row: number) => void
+  /** Selection mode: dragging, report [anchorCol, anchorRow, currentCol, currentRow] (viewport cells). */
+  onSelectionExtend?: (anchorCol: number, anchorRow: number, currentCol: number, currentRow: number) => void
+  /** Selection mode: finger up. */
+  onSelectionEnd?: () => void
 }
 
 type Direction = 'up' | 'down' | 'left' | 'right'
@@ -48,10 +109,14 @@ export function useTerminalGestures(
   const DOUBLE_TAP_MS = 300 // max ms between two taps for double-tap
   const TAP_THRESHOLD = 10 // max px movement to still count as a tap
 
-  // Gesture enable/disable state
-  const enabled = ref(true)
+  // Gesture mode state
+  const mode = ref<TerminalMode>('browse')
   let listenersAttached = false
   let disabledScrollListenersAttached = false
+  let selectionListenersAttached = false
+  let selectionActive = false
+  let selectionAnchorCol = -1
+  let selectionAnchorRow = -1
 
   let touchStartX = 0
   let touchStartY = 0
@@ -328,6 +393,75 @@ export function useTerminalGestures(
     resetDisabledScrollState()
   }
 
+  function viewportCellForXY(clientX: number, clientY: number): { col: number; row: number } {
+    const el = elementRef.value
+    if (!el) return { col: 0, row: 0 }
+    const rect = el.getBoundingClientRect()
+    const cellH = callbacks.getCellHeight?.() ?? 0
+    const cellW = callbacks.getCellWidth?.() ?? 0
+    const viewportRows = cellH > 0 ? Math.max(1, Math.floor(rect.height / cellH)) : 1
+    const viewportCols = cellW > 0 ? Math.max(1, Math.floor(rect.width / cellW)) : 1
+    return {
+      col: clientXToViewportCol(clientX, rect.left, cellW, viewportCols),
+      row: clientYToViewportRow(clientY, rect.top, cellH, viewportRows),
+    }
+  }
+
+  function onSelectionTouchStart(e: TouchEvent) {
+    if (e.touches.length !== 1) return
+    preventNativeTouch(e)
+    const touch = e.touches[0]
+    const cell = viewportCellForXY(touch.clientX, touch.clientY)
+    selectionAnchorCol = cell.col
+    selectionAnchorRow = cell.row
+    selectionActive = true
+    callbacks.onSelectionStart?.(cell.col, cell.row)
+  }
+
+  function onSelectionTouchMove(e: TouchEvent) {
+    if (e.touches.length !== 1 || !selectionActive) return
+    preventNativeTouch(e)
+    const touch = e.touches[0]
+    const cell = viewportCellForXY(touch.clientX, touch.clientY)
+    callbacks.onSelectionExtend?.(selectionAnchorCol, selectionAnchorRow, cell.col, cell.row)
+  }
+
+  function onSelectionTouchEnd(_e: TouchEvent) {
+    const wasActive = selectionActive
+    selectionActive = false
+    selectionAnchorCol = -1
+    selectionAnchorRow = -1
+    if (wasActive) callbacks.onSelectionEnd?.()
+  }
+
+  function onSelectionTouchCancel() {
+    selectionActive = false
+    selectionAnchorCol = -1
+    selectionAnchorRow = -1
+  }
+
+  function attachSelectionListeners() {
+    if (selectionListenersAttached) return
+    const el = elementRef.value
+    if (!el) return
+    el.addEventListener('touchstart', onSelectionTouchStart, { passive: false })
+    el.addEventListener('touchmove', onSelectionTouchMove, { passive: false })
+    el.addEventListener('touchend', onSelectionTouchEnd, { passive: false })
+    el.addEventListener('touchcancel', onSelectionTouchCancel, { passive: false })
+    selectionListenersAttached = true
+  }
+
+  function detachSelectionListeners() {
+    if (!selectionListenersAttached) return
+    const el = elementRef.value
+    if (!el) return
+    el.removeEventListener('touchstart', onSelectionTouchStart)
+    el.removeEventListener('touchmove', onSelectionTouchMove)
+    el.removeEventListener('touchend', onSelectionTouchEnd)
+    el.removeEventListener('touchcancel', onSelectionTouchCancel)
+    selectionListenersAttached = false
+  }
+
   function onTouchEnd(e: TouchEvent) {
     // Reset pinch state when one or both fingers lift
     if (e.touches.length < 2) {
@@ -431,31 +565,38 @@ export function useTerminalGestures(
     resetDisabledScrollState()
   }
 
-  // Apply gesture state: attach terminal gesture listeners when enabled. When
-  // disabled, keep a small vertical-scroll handler because xterm's scrollable
-  // viewport is not the element users touch, so fully native panning has no
-  // scroll target on many mobile browsers.
   function applyState() {
     const el = elementRef.value
-    if (enabled.value) {
-      detachDisabledScrollListeners()
+    detachListeners()
+    detachDisabledScrollListeners()
+    detachSelectionListeners()
+    if (mode.value === 'gesture') {
       attachListeners()
       if (el) el.style.touchAction = 'manipulation'
-    } else {
-      detachListeners()
+    } else if (mode.value === 'browse') {
       attachDisabledScrollListeners()
       if (el) el.style.touchAction = 'auto'
+    } else {
+      attachSelectionListeners()
+      if (el) el.style.touchAction = 'none'
     }
   }
 
-  function toggle() {
-    enabled.value = !enabled.value
-    if (!enabled.value) {
-      resetGestureState()
-      resetDisabledScrollState()
-      lastTapTime = 0
-    }
+  function setMode(m: TerminalMode) {
+    if (m === mode.value) return
+    mode.value = m
+    resetGestureState()
+    resetDisabledScrollState()
+    lastTapTime = 0
+    selectionActive = false
+    selectionAnchorCol = -1
+    selectionAnchorRow = -1
     applyState()
+  }
+
+  function cycleMode() {
+    const idx = MODE_ORDER.indexOf(mode.value)
+    setMode(MODE_ORDER[(idx + 1) % MODE_ORDER.length])
   }
 
   // Called by TerminalPanel on mount or when the container element changes
@@ -464,6 +605,7 @@ export function useTerminalGestures(
   function attach() {
     detachListeners()
     detachDisabledScrollListeners()
+    detachSelectionListeners()
     applyState()
   }
 
@@ -471,6 +613,7 @@ export function useTerminalGestures(
   function detach() {
     detachListeners()
     detachDisabledScrollListeners()
+    detachSelectionListeners()
     const el = elementRef.value
     if (el) el.style.touchAction = ''
   }
@@ -478,7 +621,8 @@ export function useTerminalGestures(
   return {
     attach,
     detach,
-    enabled,
-    toggle,
+    mode,
+    setMode,
+    cycleMode,
   }
 }

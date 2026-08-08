@@ -32,6 +32,20 @@ describe('TerminalPanel xterm selection defaults', () => {
     expect(source).toContain('handleToolbarKeyClick(def)')
   })
 
+  it('re-focuses the xterm textarea on blur to keep the soft keyboard open on tap', () => {
+    const source = readTerminalComponent('../terminal/TerminalPanelContent.vue')
+
+    // The Android WebView blurs the textarea before touchstart (uncancellable),
+    // so the fix restores focus on blur instead of trying to preventDefault.
+    expect(source).toContain("textareaEl.addEventListener('blur'")
+    expect(source).toContain('shouldAutoRefocusTerminal(!!props.active, next)')
+    // Only restores when focus fell to body/document (tap on the surface), and
+    // defers focus() out of the blur dispatch via a microtask so the keyboard
+    // never visibly collapses.
+    expect(source).toContain('queueMicrotask(() => {')
+    expect(source).toContain('ta.focus()')
+  })
+
   it('keeps terminal virtual keys in a borderless, transparent overlay system', () => {
     for (const path of terminalComponentPaths) {
       const source = readTerminalComponent(path)

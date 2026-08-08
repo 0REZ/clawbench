@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
+import { nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import FileViewer from '../FileViewer.vue'
@@ -17,6 +18,11 @@ const i18n = createI18n({
         header: {
           openAsText: 'Open as text',
           shareExternal: 'Share',
+          edit: 'Edit',
+        },
+        editor: {
+          save: 'Save',
+          cancel: 'Cancel',
         },
       },
       common: { download: 'Download', close: 'Close' },
@@ -78,10 +84,10 @@ vi.mock('@/composables/useFileNavStack.ts', () => ({
 
 vi.mock('@/composables/useSettingsConfig', () => ({
   useSettingsConfig: () => ({
-    localConfig: { wordWrap: true, lineNumbers: true, stickyScroll: true },
+    localConfig: { wordWrap: true, lineNumbers: true },
     setLocalConfig: vi.fn(),
   }),
-  localConfig: { wordWrap: true, lineNumbers: true, stickyScroll: true, recentFilesCount: 10 },
+  localConfig: { wordWrap: true, lineNumbers: true, recentFilesCount: 10 },
   setLocalConfig: vi.fn(),
 }))
 
@@ -90,6 +96,11 @@ vi.mock('@/stores/app.ts', () => ({
     state: { currentFile: null, currentDir: '', projectRoot: '/tmp' },
     selectFile: vi.fn(),
   },
+}))
+
+const mockSaveFile = vi.fn()
+vi.mock('@/composables/useCodeEditorSave.ts', () => ({
+  useCodeEditorSave: () => ({ saving: { value: false }, saveFile: mockSaveFile }),
 }))
 
 vi.mock('@/utils/fileType.ts', () => ({
@@ -152,7 +163,7 @@ const stubs = {
   VideoPreview: true,
   OfficePreview: true,
   MarkdownPreview: true,
-  CodePreview: true,
+  CodeMirrorViewer: true,
   DiffDrawer: true,
 }
 
@@ -266,5 +277,87 @@ describe('FileViewer', () => {
     const wrapper = mountViewer({ file: { name: 'doc.pdf', path: 'doc.pdf', isPdf: true, content: null } })
     const vm = wrapper.vm as any
     expect(typeof vm.pdfScrollToPage).toBe('function')
+  })
+
+  describe('edit mode', () => {
+    const editableFile = {
+      name: 'main.ts',
+      path: '/tmp/main.ts',
+      content: 'const x = 1',
+      isMarkdown: false,
+      isHtml: false,
+      isImage: false,
+      isAudio: false,
+      isVideo: false,
+      isPdf: false,
+      isOffice: false,
+      isBinary: false,
+      tooLarge: false,
+    }
+
+    function setupState(wrapper: ReturnType<typeof mount>) {
+      return (wrapper.vm as any).$.setupState
+    }
+
+    it('toggles editing via FileHeader toggleEdit emit', async () => {
+      const wrapper = mountViewer({ file: editableFile })
+      expect(setupState(wrapper).editing).toBe(false)
+      const header = wrapper.findComponent({ name: 'FileHeader' })
+      header.vm.$emit('toggleEdit')
+      await nextTick()
+      expect(setupState(wrapper).editing).toBe(true)
+      header.vm.$emit('toggleEdit')
+      await nextTick()
+      expect(setupState(wrapper).editing).toBe(false)
+    })
+
+    it('calls saveFile with path and content and exits edit mode on success', async () => {
+      mockSaveFile.mockResolvedValue(true)
+      const wrapper = mountViewer({ file: editableFile })
+      const ss = setupState(wrapper)
+      ss.handleToggleEdit()
+      await nextTick()
+      await ss.handleSave('const x = 2')
+      expect(mockSaveFile).toHaveBeenCalledWith('/tmp/main.ts', 'const x = 2')
+      expect(ss.editing).toBe(false)
+    })
+
+    it('stays in edit mode when save fails', async () => {
+      mockSaveFile.mockResolvedValue(false)
+      const wrapper = mountViewer({ file: editableFile })
+      const ss = setupState(wrapper)
+      ss.handleToggleEdit()
+      await nextTick()
+      await ss.handleSave('const x = 2')
+      expect(mockSaveFile).toHaveBeenCalledWith('/tmp/main.ts', 'const x = 2')
+      expect(ss.editing).toBe(true)
+    })
+
+    it('renders CodeMirrorViewer for markdown when editing is toggled on', async () => {
+      const mdFile = {
+        name: 'readme.md',
+        path: '/tmp/readme.md',
+        content: '# Title\n\nsome text',
+        isMarkdown: true,
+        isHtml: false,
+        isImage: false,
+        isAudio: false,
+        isVideo: false,
+        isPdf: false,
+        isOffice: false,
+        isBinary: false,
+        tooLarge: false,
+      }
+      const wrapper = mountViewer({ file: mdFile })
+      // Not editing → rendered markdown preview
+      expect(wrapper.findComponent({ name: 'CodeMirrorViewer' }).exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'MarkdownPreview' }).exists()).toBe(true)
+
+      const ss = setupState(wrapper)
+      ss.handleToggleEdit()
+      await nextTick()
+      expect(wrapper.findComponent({ name: 'CodeMirrorViewer' }).exists()).toBe(true)
+      expect(wrapper.findComponent({ name: 'MarkdownPreview' }).exists()).toBe(false)
+    })
   })
 })

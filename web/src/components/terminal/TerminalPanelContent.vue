@@ -73,6 +73,14 @@
       </div>
     </div>
 
+    <Transition name="copy-bar">
+      <div v-if="selectionActive" class="selection-copy-bar">
+        <span class="selection-copy-count">{{ t('terminal.selectedChars', { n: selectedText.length }) }}</span>
+        <button class="selection-copy-btn" @click="handleCopySelection" @contextmenu.prevent>{{ t('common.copy') }}</button>
+        <button class="selection-copy-close" @click="handleDismissSelection" @contextmenu.prevent :aria-label="t('terminal.close')">✕</button>
+      </div>
+    </Transition>
+
     <!-- Virtual key toolbar -->
     <div class="terminal-toolbar" v-show="!isPC">
       <!-- Symbol bar (toggleable, above main toolbar) -->
@@ -88,8 +96,10 @@
 
       <!-- Main toolbar row -->
       <div class="main-toolbar-row">
-        <button class="toolbar-btn modifier gesture-toggle" :class="{ active: gestures.enabled.value }" @click="handleGestureToggle" @contextmenu.prevent :title="t('terminal.gestures')">
-          <HandIcon :size="14" />
+        <button class="toolbar-btn modifier gesture-toggle" :class="{ active: gestures.mode.value === 'gesture', 'mode-selection': gestures.mode.value === 'selection' }" @click="handleModeCycle" @contextmenu.prevent :title="t('terminal.modes')">
+          <EyeIcon v-if="gestures.mode.value === 'browse'" :size="14" />
+          <HandIcon v-else-if="gestures.mode.value === 'gesture'" :size="14" />
+          <TextCursorInputIcon v-else :size="14" />
         </button>
         <button class="toolbar-btn modifier gesture-toggle" :class="{ active: showSymbolBar }" @click="toggleSymbolBar()" @contextmenu.prevent :title="t('terminal.symbols')">
           <HashIcon :size="14" />
@@ -112,10 +122,6 @@
           <div class="key-group">
             <button ref="cmdBtnRef" class="toolbar-btn btn-action" @click="showCommands = !showCommands" :title="t('terminal.quickCommands')">
               <ZapIcon :size="14" />
-            </button>
-            <!-- Copy output button -->
-            <button class="toolbar-btn btn-action" @click="handleCopyOutput" :title="t('terminal.copyOutput')">
-              <CopyIcon :size="14" />
             </button>
             <!-- Settings button (always present) -->
             <button class="toolbar-btn btn-action" @click="keyConfigDrawer.open()" :title="t('terminal.keyConfigTitle')">
@@ -160,13 +166,6 @@
       @saved="onKeyConfigSaved"
     />
 
-    <!-- Output text drawer — copy visible terminal output -->
-    <OutputDrawer
-      :open="outputDrawer.effectiveOpen.value"
-      :output-text="outputDrawerText"
-      :font-size="fontSize"
-      @close="outputDrawer.close()"
-    />
   </div>
 </template>
 
@@ -178,13 +177,14 @@ import '@xterm/xterm/css/xterm.css'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import QuickCommandDrawer from '@/components/terminal/QuickCommandDrawer.vue'
 import KeyConfigDrawer from '@/components/terminal/KeyConfigDrawer.vue'
-import OutputDrawer from '@/components/terminal/OutputDrawer.vue'
 import TerminalTabMenu from '@/components/terminal/TerminalTabMenu.vue'
 import { useTerminalTabs, type TerminalTab } from '@/composables/useTerminalTabs'
+import type { Terminal as TerminalType } from '@xterm/xterm'
+import { copyText } from '@/utils/clipboard.ts'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import { useTerminalViewport } from '@/composables/useTerminalViewport'
 import { useTerminalKeys, type ModifierKey } from '@/composables/useTerminalKeys'
-import { shouldPreventTerminalContextMenu, useTerminalGestures } from '@/composables/useTerminalGestures'
+import { selectionCellsToSelect, shouldPreventTerminalContextMenu, useTerminalGestures } from '@/composables/useTerminalGestures'
 import { useToast } from '@/composables/useToast'
 import { useQuickCommands } from '@/composables/useQuickCommands'
 import { useAppMode } from '@/composables/useAppMode'
@@ -199,9 +199,10 @@ import {
   showErrorOverlay as showErrorOverlayUtil,
 } from '@/utils/terminalFontUtils'
 import { localConfig, setLocalConfig, useSettingsConfig } from '@/composables/useSettingsConfig'
+import { shouldAutoRefocusTerminal } from '@/utils/terminalBlurUtils'
 import type { KeyDef } from '@/utils/terminalKeyDefs'
 
-import { Zap as ZapIcon, Hand as HandIcon, Hash as HashIcon, Plus as PlusIcon, MoreVertical as MoreVerticalIcon, SquareTerminal as TerminalIcon, Settings, Copy as CopyIcon } from 'lucide-vue-next'
+import { Zap as ZapIcon, Hand as HandIcon, Hash as HashIcon, Plus as PlusIcon, MoreVertical as MoreVerticalIcon, SquareTerminal as TerminalIcon, Settings, Eye as EyeIcon, TextCursorInput as TextCursorInputIcon } from 'lucide-vue-next'
 const props = defineProps<{
   requestedCwd?: string | null
   active?: boolean
@@ -245,8 +246,8 @@ function applyFontSize(size: number) {
 // Refs
 const gestureHint = ref('')
 let gestureHintTimer: ReturnType<typeof setTimeout> | null = null
-const outputDrawer = useTabDrawer('terminal')
-const outputDrawerText = ref('')
+const selectionActive = ref(false)
+const selectedText = ref('')
 const showCommands = ref(false)
 const cmdBtnRef = ref<HTMLElement | null>(null)
 const showSymbolBar = ref(false)
@@ -303,7 +304,7 @@ const keyConfigDrawer = useTabDrawer('terminal')
 /** Keys visible in the toolbar, filtered by gesture mode (Tab/PgUp/PgDn/arrows hidden when gestures on) */
 const GESTURE_HIDDEN_KEYS = new Set(['tab', 'pgup', 'pgdn', 'arrow_up', 'arrow_down', 'arrow_left', 'arrow_right'])
 const visibleKeys = computed(() => {
-  if (!gestures.enabled.value) return selectedKeys.value
+  if (gestures.mode.value !== 'gesture') return selectedKeys.value
   return selectedKeys.value.filter(def => !GESTURE_HIDDEN_KEYS.has(def.id))
 })
 
@@ -321,9 +322,12 @@ function onKeyConfigSaved() {
   keyConfigDrawer.close()
 }
 
-function handleGestureToggle() {
-  gestures.toggle()
-  toast.show(gestures.enabled.value ? t('terminal.gesturesOn') : t('terminal.gesturesOff'), { icon: '✋', type: 'info', duration: 1200 })
+function handleModeCycle() {
+  gestures.cycleMode()
+  const m = gestures.mode.value
+  const label = m === 'browse' ? t('terminal.modeBrowse') : m === 'gesture' ? t('terminal.modeGesture') : t('terminal.modeSelection')
+  const icon = m === 'browse' ? '👁️' : m === 'gesture' ? '✋' : '✂️'
+  toast.show(label, { icon, type: 'info', duration: 1200 })
   focusTerminal()
 }
 
@@ -380,6 +384,61 @@ const terminalKeys = useTerminalKeys((data: string) => {
   activeTab.value?.session.sendInput(data)
 })
 
+function updateSelectionFromTerm(term: TerminalType) {
+  const text = term.getSelection() ?? ''
+  selectionActive.value = text.length > 0
+  selectedText.value = text
+}
+
+/** Read the real CSS cell height from xterm's renderer, falling back to font-size×line-height. */
+function getXtermCellHeight(term: TerminalType | null): number {
+  if (!term) return 0
+  const core = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } } })._core
+  const h = core?._renderService?.dimensions?.css?.cell?.height
+  if (h && h > 0) return h
+  const lineHeight = typeof term.options.lineHeight === 'number' ? term.options.lineHeight : 1
+  const fontSize = typeof term.options.fontSize === 'number' ? term.options.fontSize : 14
+  return fontSize * lineHeight
+}
+
+/** Read the real CSS cell width from xterm's renderer, falling back to a font-size estimate. */
+function getXtermCellWidth(term: TerminalType | null): number {
+  if (!term) return 0
+  const core = (term as unknown as { _core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number } } } } } })._core
+  const w = core?._renderService?.dimensions?.css?.cell?.width
+  if (w && w > 0) return w
+  const fontSize = typeof term.options.fontSize === 'number' ? term.options.fontSize : 14
+  return fontSize * 0.6
+}
+
+function handleSelectionExtend(anchorCol: number, anchorRow: number, currentCol: number, currentRow: number) {
+  const term = activeTab.value?.xterm
+  if (!term) return
+  const sel = selectionCellsToSelect(anchorCol, anchorRow, currentCol, currentRow, term.buffer.active.viewportY, term.cols)
+  term.select(sel.col, sel.row, sel.length)
+  updateSelectionFromTerm(term)
+}
+
+function handleDismissSelection() {
+  activeTab.value?.xterm?.clearSelection()
+  selectionActive.value = false
+  selectedText.value = ''
+}
+
+function handleCopySelection() {
+  const text = selectedText.value
+  if (!text) return
+  copyText(text, () => {
+    toast.show(t('terminal.copied'), { icon: '✅', type: 'success' })
+    activeTab.value?.xterm?.clearSelection()
+    selectionActive.value = false
+    selectedText.value = ''
+    gestures.setMode('browse')
+  }, () => {
+    toast.show(t('terminal.copyFailed'), { icon: '⚠️', type: 'error' })
+  })
+}
+
 const tabManager = useTerminalTabs(getWsUrl, {
   fontSize,
   getXtermTheme,
@@ -387,6 +446,9 @@ const tabManager = useTerminalTabs(getWsUrl, {
     shellStartFailed: t('terminal.shellStartFailed'),
     websocketFailed: t('terminal.websocketFailed'),
     platformUnsupported: t('terminal.platformUnsupported'),
+  },
+  onTermCreated: (term) => {
+    term.onSelectionChange(() => updateSelectionFromTerm(term))
   },
   onCloseSessionViaHttp: (sessionId: string) => {
     fetch(`/api/terminal/close?session=${encodeURIComponent(sessionId)}`, { method: 'POST' }).catch(() => {})
@@ -445,6 +507,9 @@ const gestures = useTerminalGestures(
     sendTab: terminalKeys.sendTab,
     onPinchZoom: (delta: number) => applyFontSize(fontSize.value + delta),
     onTouchScroll: handleTerminalTouchScroll,
+    getCellHeight: () => getXtermCellHeight(activeTab.value?.xterm ?? null),
+    getCellWidth: () => getXtermCellWidth(activeTab.value?.xterm ?? null),
+    onSelectionExtend: handleSelectionExtend,
     onGestureHint: (symbol: string) => {
       gestureHint.value = symbol
       if (gestureHintTimer) clearTimeout(gestureHintTimer)
@@ -454,11 +519,21 @@ const gestures = useTerminalGestures(
 )
 
 // Re-evaluate fade when gesture toggle changes visible buttons
-watch(() => gestures.enabled.value, () => nextTick(refreshToolbarFade))
+watch(() => gestures.mode.value, (m) => {
+  nextTick(refreshToolbarFade)
+  if (m !== 'selection') {
+    activeTab.value?.xterm?.clearSelection()
+    selectionActive.value = false
+    selectedText.value = ''
+  }
+})
 
 // Re-bind gesture listeners when switching/creating tabs (container element changes).
 // Use double nextTick to ensure mountTabToContainer has already run.
 watch(activeTabId, () => {
+  activeTab.value?.xterm?.clearSelection()
+  selectionActive.value = false
+  selectedText.value = ''
   nextTick(() => nextTick(() => gestures.attach()))
 })
 
@@ -562,12 +637,49 @@ function mountTabToContainer(tab: TerminalTab, container: HTMLElement) {
 
   // Context menu handler — suppress long-press context menu while gestures are enabled
   const contextMenuHandler = (e: Event) => {
-    if (shouldPreventTerminalContextMenu(gestures.enabled.value)) {
+    if (shouldPreventTerminalContextMenu(gestures.mode.value !== 'browse')) {
       e.preventDefault()
     }
   }
   container.addEventListener('contextmenu', contextMenuHandler)
   ;(container as unknown as { __terminalContextMenuHandler?: ((e: Event) => void) | null }).__terminalContextMenuHandler = contextMenuHandler
+
+  // Mobile keyboard stability: on Android WebView, touching the terminal surface
+  // blurs the focused xterm textarea BEFORE touchstart is dispatched, collapsing
+  // the soft keyboard; xterm then re-focuses on the synthesized mousedown,
+  // reopening it — a visible collapse-then-reopen on every tap. The blur happens
+  // before the touch event so it can't be blocked with preventDefault(). Instead,
+  // restore focus the moment the textarea blurs to body/document while the
+  // terminal panel is still active, keeping the keyboard up. If a real control
+  // (toolbar/dock button, input) takes focus, we leave it alone.
+  //
+  // NOTE: this is a deliberate workaround for a platform quirk (blur fires before
+  // touchstart and is uncancellable). It re-acquires focus rather than preventing
+  // the blur, so it is safe only while the terminal panel is active. Residual
+  // risk: if the panel is active but the user genuinely intends to dismiss the
+  // keyboard by tapping the surface (e.g. a future in-panel "collapse keyboard"
+  // interaction), this guard will fight that intent by re-showing it. The
+  // decision logic lives in shouldAutoRefocusTerminal() (utils/terminalBlurUtils.ts)
+  // and is unit-tested; keep any new "should dismiss" exceptions gated there.
+  const installBlurRefocus = () => {
+    const textareaEl = tab.xterm?.textarea
+    if (!textareaEl || (textareaEl as unknown as { __blurRefocus?: boolean }).__blurRefocus) return
+    ;(textareaEl as unknown as { __blurRefocus?: boolean }).__blurRefocus = true
+    textareaEl.addEventListener('blur', () => {
+      const next = document.activeElement
+      if (!shouldAutoRefocusTerminal(!!props.active, next)) return
+      // Refocus as a microtask: runs after the current event (and the browser's
+      // touch-down default that blurred us) but before the next paint, so the
+      // keyboard never visibly collapses. Faster than requestAnimationFrame.
+      queueMicrotask(() => {
+        const ta = tab.xterm?.textarea
+        if (ta && document.activeElement !== ta && !!props.active) {
+          ta.focus()
+        }
+      })
+    })
+  }
+  installBlurRefocus()
 
   // Fit the terminal after mounting
   requestAnimationFrame(() => {
@@ -655,35 +767,6 @@ function handleTabMenuCopyPath() {
   // Already handled by TerminalTabMenu
 }
 
-function handleCopyOutput() {
-  const xterm = activeTab.value?.xterm
-  if (!xterm) return
-  const buffer = xterm.buffer.active
-  const viewportY = buffer.viewportY
-  const rows = xterm.rows
-  const lines: string[] = []
-  for (let i = viewportY; i < viewportY + rows && i < buffer.length; i++) {
-    const line = buffer.getLine(i)
-    if (!line) continue
-    const text = line.translateToString(true)
-    if (line.isWrapped && lines.length > 0) {
-      lines[lines.length - 1] += text
-    } else {
-      lines.push(text)
-    }
-  }
-  // Trim trailing empty lines
-  while (lines.length > 0 && lines[lines.length - 1] === '') {
-    lines.pop()
-  }
-  if (lines.length === 0) {
-    toast.show(t('terminal.noOutput'), { icon: 'ℹ️', type: 'info', duration: 1500 })
-    return
-  }
-  outputDrawerText.value = lines.join('\n')
-  outputDrawer.open()
-}
-
 async function handleTabMenuCloseAll() {
   const confirmed = await dialog.confirm(t('terminal.confirmCloseAll'), {
     title: t('terminal.closeAllTabs'),
@@ -702,7 +785,6 @@ function handleReconnect(tab: TerminalTab) {
 }
 
 // Rebuild (re-create) the active tab's session
-// Copy output from active tab
 function executeCommand(cmd: { id: number; label: string; command: string }) {
   activeTab.value?.session.sendInput(cmd.command + '\r')
   showCommands.value = false
@@ -1284,6 +1366,12 @@ defineExpose({ activate: () => {}, deactivate: () => {}, keyboardHeight: viewpor
 
 .gesture-toggle { flex-shrink: 0; }
 
+.gesture-toggle.mode-selection {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
 .toolbar-scroll {
   display: flex;
   align-items: center;
@@ -1361,6 +1449,60 @@ defineExpose({ activate: () => {}, deactivate: () => {}, keyboardHeight: viewpor
 
 .toolbar-btn.btn-modifier, .toolbar-btn.btn-nav, .toolbar-btn.btn-arrow, .toolbar-btn.btn-symbol, .toolbar-btn.btn-action { background: transparent; }
 .toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; }
+
+.selection-copy-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 90%, black);
+  color: #fff;
+  font-size: 12px;
+  z-index: 20;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+.selection-copy-count {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selection-copy-btn {
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 4px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.selection-copy-close {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.selection-copy-close:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+.copy-bar-enter-active,
+.copy-bar-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.copy-bar-enter-from,
+.copy-bar-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
 </style>
 
 <style>

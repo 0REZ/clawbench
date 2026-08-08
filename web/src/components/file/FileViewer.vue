@@ -12,8 +12,10 @@
       :sticky-scroll="stickyScroll"
       :overlay-open="fileNav.overlayOpen.value"
       :recent-files-available="recentFilesAvailable"
+      :editing="editing"
       @delete="emit('delete', file.path)"
       @toggle-view="emit('toggleView')"
+      @toggle-edit="handleToggleEdit"
       @show-details="emit('showDetails')"
       @open-git-history="emit('openGitHistory')"
       @toggle-toc="emit('toggleToc')"
@@ -119,17 +121,35 @@
       </div>
 
       <!-- Markdown file -->
-      <MarkdownPreview
-        v-else-if="isMarkdown"
-        :file="file"
-        :view-mode="markdownViewMode"
-        :word-wrap="wordWrap"
-        :show-line-numbers="showLineNumbers"
-        :sticky-scroll="stickyScroll"
-        @delete="emit('delete', file.path)"
-        @show-details="emit('showDetails')"
-        @open-git-history="emit('openGitHistory')"
-      />
+      <template v-else-if="isMarkdown">
+        <!-- Rendered browse (not editing) -->
+        <MarkdownPreview
+          v-if="!editing && markdownViewMode === 'rendered'"
+          :file="file"
+          :view-mode="markdownViewMode"
+          :word-wrap="wordWrap"
+          :show-line-numbers="showLineNumbers"
+          @delete="emit('delete', file.path)"
+          @show-details="emit('showDetails')"
+          @open-git-history="emit('openGitHistory')"
+        />
+        <!-- Source/raw mode: a single CodeMirrorViewer for both browse and edit
+             (editable toggles), so scroll survives the edit toggle. -->
+        <CodeMirrorViewer
+          v-else
+          :file="file"
+          :content="file.content"
+          :language="rawFileLanguage"
+          :word-wrap="wordWrap"
+          :show-line-numbers="showLineNumbers"
+          :sticky-scroll="stickyScroll"
+          :editable="editing"
+          :saving="saving"
+          @save="handleSave"
+          @cancel="editing = false"
+          @exit-edit="editing = false"
+        />
+      </template>
 
       <!-- HTML file -->
       <template v-else-if="isHtml">
@@ -140,17 +160,15 @@
           :srcdoc="file.content"
           sandbox="allow-scripts"
         />
-        <CodePreview
+        <CodeMirrorViewer
           v-else
+          :file="file"
           :content="file.content"
           language="xml"
-          :file-path="file.path"
           :word-wrap="wordWrap"
           :show-line-numbers="showLineNumbers"
           :sticky-scroll="stickyScroll"
-          :flash-ranges="flashRanges"
-          :flash-type="flashType"
-          @open-file="emit('openFile', $event)"
+          :editable="false"
         />
       </template>
 
@@ -162,16 +180,14 @@
           :view-mode="markdownViewMode"
         />
         <div v-else class="raw-content-viewer">
-          <CodePreview
+          <CodeMirrorViewer
+            :file="file"
             :content="file.content"
             :language="rawFileLanguage"
-            :file-path="file.path"
             :word-wrap="wordWrap"
             :show-line-numbers="showLineNumbers"
             :sticky-scroll="stickyScroll"
-            :flash-ranges="flashRanges"
-            :flash-type="flashType"
-            @open-file="emit('openFile', $event)"
+            :editable="false"
           />
         </div>
       </template>
@@ -182,16 +198,18 @@
           <AlertTriangle :size="14" />
           {{ t('file.viewer.truncated') }}
         </div>
-        <CodePreview
+        <CodeMirrorViewer
+          :file="file"
           :content="file.content"
           :language="rawFileLanguage"
-          :file-path="file.path"
           :word-wrap="wordWrap"
           :show-line-numbers="showLineNumbers"
           :sticky-scroll="stickyScroll"
-          :flash-ranges="flashRanges"
-          :flash-type="flashType"
-          @open-file="emit('openFile', $event)"
+          :editable="editing"
+          :saving="saving"
+          @save="handleSave"
+          @cancel="editing = false"
+          @exit-edit="editing = false"
         />
       </div>
     </div>
@@ -219,14 +237,16 @@ import AudioPreview from '@/components/media/AudioPreview.vue'
 import VideoPreview from '@/components/media/VideoPreview.vue'
 const OfficePreview = defineAsyncComponent(() => import('@/components/media/OfficePreview.vue'))
 import MarkdownPreview from './MarkdownPreview.vue'
-import CodePreview from './CodePreview.vue'
-import OpenApiPreview from './OpenApiPreview.vue'
+const CodeMirrorViewer = defineAsyncComponent(() => import('./CodeMirrorViewer.vue'))
+const OpenApiPreview = defineAsyncComponent(() => import('./OpenApiPreview.vue'))
 import DiffDrawer from './DiffDrawer.vue'
 import { useDiffDrawer } from '@/composables/useDiffDrawer.ts'
 import { diffDrawer } from '@/composables/useMarkdownDiff.ts'
-import { flashRanges, flashType } from '@/composables/useFileRefresh.ts'
 import FileHeader from './FileHeader.vue'
 import { getFileType, formatFileSize } from '@/utils/fileType.ts'
+import { EditorView } from '@codemirror/view'
+import { extractToc } from '@/utils/toc.ts'
+import { pickPreviewAnchor, pickCmAnchor, relTopFor, scrollTopFor } from '@/utils/markdownScroll.ts'
 import { store } from '@/stores/app.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { useFileNavStack } from '@/composables/useFileNavStack.ts'
@@ -234,6 +254,7 @@ import { useRecentFiles } from '@/composables/useRecentFiles'
 import { exportRenderedHtml } from '@/utils/exportHtml.ts'
 import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
 import { useToast } from '@/composables/useToast.ts'
+import { useCodeEditorSave } from '@/composables/useCodeEditorSave.ts'
 
 const { t } = useI18n()
 const { isAppMode } = useAppMode()
@@ -265,6 +286,43 @@ const contentRef = ref(null)
 const pdfPreviewRef = ref(null)
 const officePreviewRef = ref(null)
 const htmlPreviewRef = ref(null)
+
+// Edit mode (source text editing via CodeEditor)
+const editing = ref(false)
+const { saving, saveFile } = useCodeEditorSave()
+
+async function handleSave(content) {
+    const saved = captureScrollFrom(getScrollEl())
+    const ok = await saveFile(props.file?.path || '', content)
+    if (ok) {
+        editing.value = false
+        // Save reloads the file content (which can reset scroll), so restore it.
+        restoreScrollAfter(saved)
+    }
+}
+
+function handleToggleEdit() {
+    const saved = captureScrollFrom(getScrollEl())
+    editing.value = !editing.value
+    restoreScrollAfter(saved)
+}
+
+// Restore the previously captured scroll anchor/ratio once the current scroll
+// container is ready. The browse/edit view can swap scroll containers that
+// mount async (CodeMirror is lazy-loaded), so retry until it is laid out.
+function restoreScrollAfter(saved) {
+    if (!saved) return
+    let attempts = 0
+    const timer = setInterval(() => {
+        const el = getScrollEl()
+        if (el && el.scrollHeight > el.clientHeight) {
+            clearInterval(timer)
+            restoreScroll(saved, el)
+        } else if (++attempts > 60) {
+            clearInterval(timer)
+        }
+    }, 50)
+}
 
 // Expose PDF outline and scrollToPage for TOC integration
 const pdfOutline = computed(() => pdfPreviewRef.value?.outline || [])
@@ -311,21 +369,133 @@ function clearRestoreTimer() {
     }
 }
 
-// Find the actual scroll container based on file type
+// Find the actual scroll container based on file type & view state
 function getScrollEl() {
+    return scrollElFor(props.markdownViewMode, editing.value)
+}
+
+// Resolve the scroll container for an explicit view mode + edit state. Used to
+// capture from the pane being left (its DOM is still mounted during a pre-flush
+// watch, before the new pane swaps in).
+function scrollElFor(viewMode, isEditing) {
     const el = contentRef.value
     if (!el) return null
+    // Edit mode always renders the CodeMirror editor
+    if (isEditing) {
+        return el.querySelector('.cm-scroller')
+    }
     if (isMarkdown.value) {
-        return el.querySelector('.markdown-body')
+        // Rendered markdown scrolls in .markdown-body; source view uses CM
+        return viewMode === 'rendered'
+            ? el.querySelector('.markdown-body')
+            : el.querySelector('.cm-scroller')
     }
     /* v8 ignore next - trivial prop access fix, tested via integration */
-    if (isHtml.value && props.markdownViewMode === 'rendered') {
+    if (isHtml.value && viewMode === 'rendered') {
         return null // iframe handles its own scrolling
     }
-    if (isOpenapi.value && props.markdownViewMode === 'rendered') {
+    if (isOpenapi.value && viewMode === 'rendered') {
         return null // ReDoc iframe handles its own scrolling
     }
-    return el.querySelector('.raw-content-pre')
+    // CodeMirror-based viewers scroll inside .cm-scroller
+    return el.querySelector('.cm-scroller')
+}
+
+// ─── Heading-anchored scroll sync (preview ↔ edit/raw) ──────────────────────
+// Capture a TOC heading anchor at the viewport top plus a percentage-ratio
+// fallback. On restore, heading alignment wins; percentage is the fallback.
+
+function capturePreviewAnchor(el) {
+    const toc = extractToc(props.file?.content || '', 'markdown')
+    if (toc.length === 0) return null
+    const idToMeta = new Map(toc.map((i) => [i.id, i]))
+    const headings = []
+    for (const h of el.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+        const meta = h.id ? idToMeta.get(h.id) : undefined
+        if (!meta) continue
+        headings.push({
+            id: h.id,
+            line: meta.line,
+            contentTop: h.getBoundingClientRect().top - el.getBoundingClientRect().top,
+        })
+    }
+    return pickPreviewAnchor(headings, el.scrollTop)
+}
+
+function captureCmAnchor(el) {
+    const view = EditorView.findFromDOM(el)
+    if (!view) return null
+    const toc = extractToc(props.file?.content || '', 'markdown')
+    if (toc.length === 0) return null
+    let topBlock
+    try {
+        topBlock = view.lineBlockAtHeight(el.scrollTop + 1)
+    } catch {
+        return null
+    }
+    const topLine = view.state.doc.lineAt(topBlock.from).number
+    const item = pickCmAnchor(toc, topLine)
+    if (!item) return null
+    const line = view.state.doc.line(Math.min(Math.max(1, item.line), view.state.doc.lines))
+    let block
+    try {
+        block = view.lineBlockAt(line.from)
+    } catch {
+        return null
+    }
+    return { id: item.id, line: item.line, relTop: relTopFor(block.top, el.scrollTop) }
+}
+
+// Capture the current scroll position as { anchor, ratio } so it survives a
+// component switch (rendered markdown ↔ CodeMirror source/edit) with different
+// heights. Heading anchor is preferred; ratio is the fallback.
+function captureScrollFrom(el) {
+    if (!el) return null
+    const max = el.scrollHeight - el.clientHeight
+    const ratio = max > 0 ? { ratio: el.scrollTop / max } : null
+    let anchor = null
+    if (isMarkdown.value) {
+        if (el.classList.contains('markdown-body')) {
+            anchor = capturePreviewAnchor(el)
+        } else if (el.classList.contains('cm-scroller')) {
+            anchor = captureCmAnchor(el)
+        }
+    }
+    return { anchor, ratio }
+}
+
+function restorePreviewAnchor(el, anchor) {
+    const target = el.querySelector(`#${CSS.escape(anchor.id)}`)
+    if (!target) return false
+    const contentTop = target.getBoundingClientRect().top - el.getBoundingClientRect().top
+    el.scrollTop = scrollTopFor(contentTop, anchor.relTop)
+    return true
+}
+
+function restoreCmAnchor(el, anchor) {
+    const view = EditorView.findFromDOM(el)
+    if (!view) return false
+    const line = view.state.doc.line(Math.min(Math.max(1, anchor.line), view.state.doc.lines))
+    let block
+    try {
+        block = view.lineBlockAt(line.from)
+    } catch {
+        return false
+    }
+    el.scrollTop = scrollTopFor(block.top, anchor.relTop)
+    return true
+}
+
+function restoreScroll(saved, el) {
+    // TOC heading alignment first, percentage ratio as fallback.
+    if (saved.anchor && isMarkdown.value) {
+        if (el.classList.contains('markdown-body') && restorePreviewAnchor(el, saved.anchor)) return
+        if (el.classList.contains('cm-scroller') && restoreCmAnchor(el, saved.anchor)) return
+    }
+    if (saved.ratio) {
+        const max = el.scrollHeight - el.clientHeight
+        if (max > 0) el.scrollTop = Math.round(saved.ratio.ratio * max)
+    }
 }
 
 // Listen for scroll events on the actual scroll container and save position
@@ -394,6 +564,8 @@ watch(() => props.file, (f, oldF) => {
     // Stop listening on old scroll container
     detachScrollListener()
 
+    editing.value = false
+
     clearRestoreTimer()
     if (!f) { currentFilePath = null; loading.value = true; return }
     currentFilePath = f.path
@@ -420,6 +592,16 @@ watch(() => props.file?.content, (content) => {
     if (content != null) {
         tryRestoreOrAttach()
     }
+})
+
+// Sync scroll position when toggling rendered <-> raw view for a markdown file.
+// Runs as a pre-flush watcher: the pane being left is still mounted, so we
+// capture its anchor before the new pane swaps in.
+watch(() => props.markdownViewMode, (newMode, oldMode) => {
+    if (newMode === oldMode || !isMarkdown.value || !props.file?.content) return
+    const oldEl = scrollElFor(oldMode, editing.value)
+    const saved = captureScrollFrom(oldEl)
+    if (saved) restoreScrollAfter(saved)
 })
 
 function formatSize(bytes) {

@@ -1,0 +1,241 @@
+import { describe, it, expect } from 'vitest'
+import {
+  escapeHtml,
+  buildHighlightedHtml,
+  firstVisibleLineNumber,
+  findEnclosingScopes,
+  buildStickyLines,
+  computeStickyOffsets,
+  type ScopeSymbol,
+  type StickyView,
+} from '@/utils/codeStickyScroll'
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function sym(line: number, endLine: number, extra: Partial<ScopeSymbol> = {}): ScopeSymbol {
+  return { name: 'f', kind: 'function', line, endLine, level: 1, ...extra }
+}
+
+/**
+ * Build a minimal StickyView mock. `heights` maps line number -> rendered height.
+ * Each line is assumed 1 line tall unless overridden. `lineHeights` and `topFor`
+ * simulate CM's block geometry where block.top = sum of heights of previous lines.
+ */
+function makeView(lines: number, heights: Record<number, number> = {}): StickyView {
+  const lineTop: Record<number, number> = {}
+  let acc = 0
+  for (let n = 1; n <= lines; n++) {
+    lineTop[n] = acc
+    acc += heights[n] ?? 20
+  }
+  return {
+    lineBlockAtHeight(height: number) {
+      const clamped = Math.max(0, height)
+      for (let n = 1; n <= lines; n++) {
+        if (clamped >= lineTop[n] && clamped < lineTop[n] + (heights[n] ?? 20)) {
+          return { from: n * 100 }
+        }
+      }
+      // beyond last line -> clamp to last line's block start
+      return { from: lines * 100 }
+    },
+    lineBlockAt(pos: number) {
+      const n = Math.max(1, Math.min(lines, Math.round(pos / 100)))
+      return { top: lineTop[n], height: heights[n] ?? 20 }
+    },
+    state: {
+      doc: {
+        lineAt(pos: number) {
+          return { number: Math.max(1, Math.min(lines, Math.round(pos / 100))) }
+        },
+        line(n: number) {
+          return { from: Math.max(1, Math.min(lines, n)) * 100 }
+        },
+      },
+    },
+  }
+}
+
+// ─── escapeHtml ───────────────────────────────────────────────────────────────
+describe('escapeHtml', () => {
+  it('escapes HTML-special characters', () => {
+    expect(escapeHtml('<div a="b">\'&\'</div>')).toBe('&lt;div a=&quot;b&quot;&gt;&#39;&amp;&#39;&lt;/div&gt;')
+  })
+
+  it('leaves plain text untouched', () => {
+    expect(escapeHtml('func foo(x) { return x }')).toBe('func foo(x) { return x }')
+  })
+})
+
+// ─── buildHighlightedHtml ─────────────────────────────────────────────────────
+describe('buildHighlightedHtml', () => {
+  it('wraps styled ranges in spans with the given classes', () => {
+    const text = 'const x = 1'
+    const ranges = [
+      { from: 0, to: 5, classes: 'tok-keyword' },
+      { from: 10, to: 11, classes: 'tok-number' },
+    ]
+    expect(buildHighlightedHtml(text, ranges)).toBe(
+      '<span class="tok-keyword">const</span> x = <span class="tok-number">1</span>',
+    )
+  })
+
+  it('emits escaped plain text for gaps between ranges', () => {
+    const text = 'a < b'
+    const ranges = [{ from: 0, to: 1, classes: 'tok-var' }]
+    expect(buildHighlightedHtml(text, ranges)).toBe('<span class="tok-var">a</span> &lt; b')
+  })
+
+  it('returns fully escaped text when there are no ranges', () => {
+    expect(buildHighlightedHtml('<x>', [])).toBe('&lt;x&gt;')
+  })
+
+  it('renders the exact highlighted HTML for a function line using line-relative ranges', () => {
+    // Regression: highlightTree reports absolute doc offsets; ranges must be shifted
+    // to be relative to the line start so buildHighlightedHtml slices the 0-based text
+    // correctly. Otherwise the whole line renders as plain text plus empty spans.
+    const text = 'func Foo(x int, y string) {'
+    const ranges = [
+      { from: 0, to: 4, classes: 'ͼ6' },
+      { from: 5, to: 8, classes: 'ͼ9' },
+      { from: 9, to: 10, classes: 'ͼb' },
+      { from: 11, to: 14, classes: 'ͼb' },
+      { from: 16, to: 17, classes: 'ͼb' },
+      { from: 18, to: 24, classes: 'ͼb' },
+    ]
+    expect(buildHighlightedHtml(text, ranges)).toBe(
+      '<span class="ͼ6">func</span> <span class="ͼ9">Foo</span>(<span class="ͼb">x</span> <span class="ͼb">int</span>, <span class="ͼb">y</span> <span class="ͼb">string</span>) {',
+    )
+  })
+
+  it('emits plain text for gaps and empty spans when ranges use absolute offsets into a short slice', () => {
+    // Guards against the previous bug where absolute doc offsets (>> text length) were
+    // passed as range positions: the leading plain text is emitted once and the rest are
+    // empty spans. Documents that ranges must be line-relative.
+    const text = 'func Foo(x int) {'
+    const ranges = [
+      { from: 300, to: 304, classes: 'ͼ6' },
+      { from: 305, to: 308, classes: 'ͼ9' },
+    ]
+    expect(buildHighlightedHtml(text, ranges)).toBe(
+      'func Foo(x int) {<span class="ͼ6"></span><span class="ͼ9"></span>',
+    )
+  })
+})
+
+// ─── firstVisibleLineNumber ───────────────────────────────────────────────────
+describe('firstVisibleLineNumber', () => {
+  it('resolves the line at the given scrollTop', () => {
+    const view = makeView(10)
+    expect(firstVisibleLineNumber(view, 0)).toBe(1)
+    expect(firstVisibleLineNumber(view, 25)).toBe(2)
+    expect(firstVisibleLineNumber(view, 65)).toBe(4)
+  })
+
+  it('clamps negative scrollTop to the first line', () => {
+    const view = makeView(5)
+    expect(firstVisibleLineNumber(view, -50)).toBe(1)
+  })
+})
+
+// ─── findEnclosingScopes ──────────────────────────────────────────────────────
+describe('findEnclosingScopes', () => {
+  it('returns only scopes containing the line, sorted outermost-first', () => {
+    const symbols = [
+      sym(1, 50, { kind: 'class' }),
+      sym(10, 30),
+      sym(20, 25),
+      sym(100, 120), // not enclosing
+      sym(1, 40), // smaller, should come after the big one
+    ]
+    const result = findEnclosingScopes(symbols, 22)
+    expect(result.map((s) => [s.line, s.endLine])).toEqual([
+      [1, 50],
+      [1, 40],
+      [10, 30],
+      [20, 25],
+    ])
+  })
+
+  it('returns empty when nothing encloses the line', () => {
+    const symbols = [sym(1, 5), sym(10, 20)]
+    expect(findEnclosingScopes(symbols, 30)).toEqual([])
+  })
+})
+
+// ─── buildStickyLines ─────────────────────────────────────────────────────────
+describe('buildStickyLines', () => {
+  it('pins enclosing scopes whose definition line is scrolled above the top', () => {
+    const view = makeView(50)
+    const symbols = [sym(5, 40), sym(20, 30)]
+    // scrolled so line 22 is visible (top = 420): def lines 5 and 20 are above
+    const rows = buildStickyLines(view, symbols, 420, 5)
+    expect(rows.map((r) => r.lineNum)).toEqual([5, 20])
+    expect(rows[0]).toMatchObject({ lineNum: 5, top: 0, height: 20 })
+    // second row stacks below the first
+    expect(rows[1].top).toBe(20)
+  })
+
+  it('skips scopes whose definition line is still in view', () => {
+    const view = makeView(50)
+    const symbols = [sym(5, 40), sym(20, 30)]
+    // scrolled to the very top: nothing pinned
+    expect(buildStickyLines(view, symbols, 0, 5)).toEqual([])
+  })
+
+  it('caps the number of pinned rows at maxSticky', () => {
+    const view = makeView(200)
+    const symbols = [sym(1, 200), sym(10, 190), sym(20, 180), sym(30, 170), sym(40, 160), sym(50, 150)]
+    const rows = buildStickyLines(view, symbols, 1200, 5)
+    expect(rows.length).toBe(5)
+  })
+
+  it('honours wrapped-line heights from block geometry', () => {
+    const view = makeView(50, { 5: 60 }) // line 5 wraps to 3 rows -> height 60
+    const symbols = [sym(5, 40)]
+    const rows = buildStickyLines(view, symbols, 300, 5)
+    expect(rows[0]).toMatchObject({ lineNum: 5, height: 60 })
+  })
+
+  it('sticks an inner scope once it reaches the bottom of the already-stuck rows, not only past the viewport top', () => {
+    // Four nested scopes, all 20px lines, all enclosing the visible line 27.
+    const view = makeView(40)
+    const symbols = [sym(1, 40), sym(10, 40), sym(20, 40), sym(30, 40)]
+    // scrollTop 530 -> first visible line 27. The 4th def line (line 30, top 580)
+    // is at relative top 50, still BELOW the viewport top (580 > 530) but within the
+    // stack height (50 <= 20+20+20=60), so it must stick rather than wait to leave view.
+    const rows = buildStickyLines(view, symbols, 530, 5)
+    expect(rows.map((r) => r.lineNum)).toEqual([1, 10, 20, 30])
+    // tops stack contiguously
+    expect(rows.map((r) => r.top)).toEqual([0, 20, 40, 60])
+  })
+})
+
+// ─── computeStickyOffsets ─────────────────────────────────────────────────────
+describe('computeStickyOffsets', () => {
+  it('aligns the code text to the content left when the overlay sits at x=0 (gutter toggled on later)', () => {
+    // content spans [33, 616], overlay at 0 -> code offset = 33, row fills to 616.
+    const o = computeStickyOffsets(0, 33, 616)
+    expect(o).toEqual({ left: 33, width: 616 })
+  })
+
+  it('produces no phantom gutter offset when the overlay is pushed right by the gutter (gutter on from initial load)', () => {
+    // Regression: with line numbers on from the start, the overlay is a flex item at
+    // x=gutterWidth (33). The code offset relative to the overlay must be 0 (so its
+    // absolute position is 33, aligned with content) — NOT 33 again, which caused an
+    // extra ghost line-number column (code at 66).
+    const o = computeStickyOffsets(33, 33, 616)
+    expect(o.left).toBe(0)
+    expect(o.width).toBe(583)
+  })
+
+  it('fills the whole content container width regardless of overlay offset', () => {
+    expect(computeStickyOffsets(0, 0, 616).width).toBe(616)
+    expect(computeStickyOffsets(33, 33, 616).width).toBe(583)
+  })
+
+  it('clamps negative offsets to zero (no horizontal overflow)', () => {
+    const o = computeStickyOffsets(40, 33, 616) // overlay somehow right of content
+    expect(o.left).toBe(0)
+    expect(o.width).toBe(576)
+  })
+})
