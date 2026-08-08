@@ -3,6 +3,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, reactive } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ContentBlocks from '@/components/chat/ContentBlocks.vue'
+import { apiGet } from '@/utils/api'
+import { store } from '@/stores/app.ts'
 
 // ── Mocks ──
 
@@ -31,6 +33,14 @@ vi.mock('@/composables/useMarkdownRenderer.ts', () => ({
 
 vi.mock('@/utils/appLog', () => ({
   appLog: { d: vi.fn(), i: vi.fn(), w: vi.fn(), e: vi.fn() },
+}))
+
+vi.mock('@/utils/api', () => ({
+  apiGet: vi.fn(),
+}))
+
+vi.mock('@/stores/app.ts', () => ({
+  store: { state: { tasks: [] } },
 }))
 
 vi.mock('@/utils/contentBlocks.ts', () => ({
@@ -107,6 +117,9 @@ function mountBlocks(props: Record<string, unknown> = {}) {
         AlertCircle: LucideStub,
         AlertTriangle: LucideStub,
         XCircle: LucideStub,
+        Clock: LucideStub,
+        Archive: LucideStub,
+        AgentIcon: { template: '<span class="agent-stub" />' },
       },
     },
   })
@@ -386,6 +399,100 @@ describe('ContentBlocks', () => {
       const summaryDiv = wrapper.find('[v-show]')
       // The original content should be visible
       expect(wrapper.html()).toContain('Original content')
+    })
+
+    it('renders summary text and a tool card from summaryCards.tools (no block traversal)', () => {
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'sum text',
+        showingSummary: true,
+        summaryCards: {
+          tools: [{ name: 'AskUserQuestion', id: 't1', input: { question: 'go?' } }],
+          taskIDs: [],
+          askQuestions: [],
+        },
+      })
+      expect(wrapper.html()).toContain('sum text')
+      expect(wrapper.html()).toContain('AskUserQuestion')
+    })
+
+    it('renders an ask-question card from summaryCards.askQuestions via formatToolInput', () => {
+      const formatToolInput = vi.fn((input: any) => JSON.stringify(input))
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'sum text',
+        showingSummary: true,
+        summaryCards: {
+          tools: [],
+          taskIDs: [],
+          askQuestions: [{ header: '', multiSelect: false, question: 'Continue?', options: [{ label: 'Yes' }] }],
+        },
+        formatToolInput,
+      })
+      expect(formatToolInput).toHaveBeenCalledWith(
+        { questions: [{ header: '', multiSelect: false, question: 'Continue?', options: [{ label: 'Yes' }] }] },
+        'AskUserQuestion',
+      )
+      expect(wrapper.html()).toContain('Continue?')
+    })
+
+    it('renders a scheduled-task card from summaryCards.taskIDs with fetched task data', async () => {
+      const apiGetMock = vi.mocked(apiGet)
+      apiGetMock.mockResolvedValue({
+        tasks: [
+          { id: 42, name: 'Nightly', status: 'active', cronExpr: '0 0 * * *', agentId: 'a1', repeatMode: 'once', maxRuns: 1, lastRunAt: '', nextRunAt: '' },
+        ],
+      })
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'sum text',
+        showingSummary: true,
+        summaryCards: {
+          tools: [],
+          taskIDs: [42],
+          askQuestions: [],
+        },
+      })
+      await flushPromises()
+      await nextTick()
+      const card = wrapper.find('.scheduled-task-card')
+      expect(card.exists()).toBe(true)
+      expect(card.html()).toContain('Nightly')
+
+      // Clicking the card emits task-card-click with the task id.
+      await card.trigger('click')
+      expect(wrapper.emitted('task-card-click')).toBeTruthy()
+      expect(wrapper.emitted('task-card-click')![0][0]).toBe(42)
+    })
+
+    it('does NOT mark a summary task deleted when the store list is empty (app reset / not yet populated)', async () => {
+      const apiGetMock = vi.mocked(apiGet)
+      apiGetMock.mockResolvedValue({
+        tasks: [
+          { id: 99, name: 'KeepMe', status: 'active', cronExpr: '0 0 * * *', agentId: 'a1', repeatMode: 'once', maxRuns: 1, lastRunAt: '', nextRunAt: '' },
+        ],
+      })
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'sum text',
+        showingSummary: true,
+        summaryCards: {
+          tools: [],
+          taskIDs: [99],
+          askQuestions: [],
+        },
+      })
+      await flushPromises()
+      await nextTick()
+      expect(wrapper.find('.scheduled-task-card').exists()).toBe(true)
+      expect(wrapper.html()).toContain('KeepMe')
+
+      // Simulate an app reset / empty global store list — must NOT mark the task deleted.
+      store.state.tasks = []
+      await nextTick()
+      await flushPromises()
+      expect(wrapper.html()).toContain('KeepMe')
+      expect(wrapper.html()).not.toContain('taskDeleted')
     })
   })
 
@@ -684,5 +791,17 @@ describe('ContentBlocks', () => {
       await nextTick()
       expect(wrapper.find('.thinking-inline-content').html()).toContain('button recovered')
     })
+  })
+})
+
+describe('summary mode with empty blocks (view=summary stripped content)', () => {
+  it('renders summary text even when blocks are empty', () => {
+    const wrapper = mountBlocks({
+      blocks: [],
+      summary: 'Service currently serves new bundle index-DVJhC1nf.js',
+      showingSummary: true,
+    })
+    expect(wrapper.html()).toContain('index-DVJhC1nf.js')
+    expect(wrapper.html()).toContain('Service currently')
   })
 })

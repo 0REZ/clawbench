@@ -15,7 +15,11 @@
       <AppHeader
         :project-root="projectRoot"
         :home-dir="homeDir"
+        :current-file-name="currentFile?.name"
+        :current-file-path="currentFile?.path"
+        :recent-files-available="recentFilesCount"
         @open-project-dialog="handleOpenProjectDialog"
+        @select-recent-file="handleAppHeaderRecentFileSelect"
       />
       <ConnectionOverlay />
 
@@ -54,7 +58,6 @@
                       :sort-dir="sortDir"
                       :dir-loading="store.state.dirLoading"
                       :search-drawer="fileSearchDrawer"
-                      :recent-drawer="recentFilesDrawer"
                       :keyboard-active="fileManagerShortcutActive"
                       @navigate-dir="handleNavigateDir"
                       @navigate-back="handleNavigateBack"
@@ -90,7 +93,6 @@
                       @close-git-history="fileHistoryDrawer.close()"
                       @open-file="handleOverlayOpenFile"
                       @overlay-close="handleOverlayClose"
-                      @open-recent-files="recentFilesDrawer.open()"
                     />
                   </div>
                 </TabPanel>
@@ -174,13 +176,6 @@
         :file="currentFile"
         :open="detailsDrawer.effectiveOpen.value && fileNav.overlayOpen.value"
         @close="detailsDrawer.close()"
-      />
-
-      <RecentFilesDrawer
-        :open="recentFilesDrawer.effectiveOpen.value"
-        :current-file-path="fileNav.overlayOpen.value ? currentFile?.path : null"
-        @close="recentFilesDrawer.close()"
-        @select-file="handleRecentFileSelect"
       />
 
       <!-- Quote question floating bar (narrow mode only; wide-screen uses ChatInputBar quote tag) -->
@@ -289,12 +284,12 @@
       <Transition name="dock-popup">
         <div v-if="overflowMenuOpen" class="dock-overflow-popup" :style="overflowPopupStyle" @keydown.escape="overflowMenuOpen = false">
           <button v-if="popupOverflowTabs.includes('tasks')" class="dock-overflow-item" :class="{ active: activeTab === 'tasks' }" @click.stop="handleOverflowSelect('tasks')">
-            <CalendarClock :size="16" />
+            <Clock :size="16" />
             <span>{{ t('nav.tasks') }}</span>
             <span v-if="store.state.taskUnreadCount > 0" class="dock-overflow-count" :class="{ 'dock-badge-pop': taskBadgeAnim }" @animationend="taskBadgeAnim = false">{{ formatBadgeCount(store.state.taskUnreadCount) }}</span>
           </button>
           <button v-if="popupOverflowTabs.includes('proxy')" class="dock-overflow-item" :class="{ active: activeTab === 'proxy' }" @click.stop="handleOverflowSelect('proxy')">
-            <EthernetPort :size="16" />
+            <Network :size="16" />
             <span>{{ t('nav.portForward') }}</span>
             <span v-if="store.state.portForwardActiveCount > 0" class="dock-overflow-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardActiveCount) }}</span>
           </button>
@@ -322,7 +317,7 @@ import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
-import { MessageSquare, FolderOpen, GitBranch, EthernetPort, SquareTerminal as TerminalIcon, CalendarClock, MoreHorizontal, Settings, Paperclip } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
 import FileOverlay from './components/file/FileOverlay.vue'
@@ -339,7 +334,6 @@ import VersionMismatchOverlay from './components/VersionMismatchOverlay.vue'
 import UpgradePromptOverlay from './components/UpgradePromptOverlay.vue'
 import UpgradeDialog from './components/settings/UpgradeDialog.vue'
 import FileDetailsDrawer from './components/file/FileDetailsDrawer.vue'
-import RecentFilesDrawer from './components/file/RecentFilesDrawer.vue'
 import ToastNotification from './components/common/ToastNotification.vue'
 import DialogOverlay from './components/common/DialogOverlay.vue'
 import SessionDrawer from './components/session/SessionDrawer.vue'
@@ -369,7 +363,8 @@ import { usePortForward } from './composables/usePortForward.ts'
 import { useTerminalStatus } from './composables/useTerminalStatus.ts'
 import { useFileWatch } from './composables/useFileWatch.ts'
 import { useFileNavStack } from './composables/useFileNavStack'
-import { removeRecentFile } from './composables/useRecentFiles'
+import { useFileEditor } from './composables/useFileEditor'
+import { removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
 import { refreshCurrentFile } from './composables/useFileRefresh.ts'
 import { useGlobalEvents } from './composables/useGlobalEvents'
 import ConnectionOverlay from './components/common/ConnectionOverlay.vue'
@@ -663,7 +658,6 @@ const tocDrawer = useTabDrawer('browse')
 const searchDrawer = useTabDrawer('browse')
 const fileHistoryDrawer = useTabDrawer('browse')
 const fileSearchDrawer = useTabDrawer('browse', { autoRestore: false })
-const recentFilesDrawer = useTabDrawer('browse', { autoRestore: false })
 
 function openFileHistory() {
   fileHistoryDrawer.open()
@@ -694,10 +688,11 @@ useFileWatch({
 })
 
 const fileNav = useFileNavStack()
+const fileEditor = useFileEditor()
 
 function closeOverlayAndSync() {
   fileNav.closeOverlay()
-  clearOpenFile()
+  store.closeCurrentFile()
   tocDrawer.close()
   detailsDrawer.close()
   searchDrawer.close()
@@ -773,6 +768,12 @@ useFeatureBackHandler(
   'file-overlay',
   () => panelIsActive('browse') && fileNav.overlayOpen.value,
   () => {
+    // 编辑模式下，屏幕边缘向内滑应先退出编辑（有未保存改动时弹出确认菜单），
+    // 而不是直接返回上一文件或关闭文件。退出手势在此被消费，用户停留在文件浏览态。
+    if (fileEditor.isEditing()) {
+      fileEditor.exitEdit()
+      return
+    }
     if (fileNav.canGoBack.value) {
       const prevPath = fileNav.goBack()
       if (prevPath) store.selectFile(prevPath)
@@ -1076,6 +1077,8 @@ const theme = ref(localConfig.theme === 'auto'
 const dirEntries = computed(() => store.state.dirEntries)
 const currentDir = computed(() => store.state.currentDir)
 const currentFile = computed(() => store.state.currentFile)
+const { entries: recentFileEntries } = useRecentFiles()
+const recentFilesCount = computed(() => recentFileEntries.value.length)
 const projectRoot = computed(() => store.state.projectRoot)
 const homeDir = computed(() => store.state.homeDir)
 
@@ -1193,10 +1196,10 @@ async function handleOverlayOpenFile(payload) {
     }
 }
 
-async function handleRecentFileSelect(path) {
-    recentFilesDrawer.close()
+async function handleAppHeaderRecentFileSelect(path) {
     const ok = await store.selectFile(path)
     if (ok) {
+        switchTab('browse')
         fileNav.openFile(path)
     }
 }
@@ -1274,8 +1277,8 @@ const overflowTabs = computed(() => {
   return tabs
 })
 const overflowTabMeta = {
-  tasks:   { icon: CalendarClock, titleKey: 'nav.tasks' },
-  proxy:   { icon: EthernetPort, titleKey: 'nav.portForward' },
+  tasks:   { icon: Clock, titleKey: 'nav.tasks' },
+  proxy:   { icon: Network, titleKey: 'nav.portForward' },
   terminal:{ icon: TerminalIcon, titleKey: 'terminal.title' },
   settings:{ icon: Settings, titleKey: 'nav.settings' },
 }
@@ -1327,7 +1330,7 @@ watch(() => localConfig.uiScale, () => {
 
 // Helpers for dynamic inline overflow buttons
 function dockTabIcon(tab) {
-  return overflowTabMeta[tab]?.icon ?? CalendarClock
+  return overflowTabMeta[tab]?.icon ?? Clock
 }
 function dockTabTitle(tab) {
   return overflowTabMeta[tab] ? t(overflowTabMeta[tab].titleKey) : ''

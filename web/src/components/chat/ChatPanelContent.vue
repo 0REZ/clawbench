@@ -170,7 +170,7 @@ import { useAgents, populateACPStateFromCache } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useNotification } from '@/composables/useNotification.ts'
-import { applySummaryUpdate } from '@/utils/chatSessionUtils.ts'
+import { applySummaryUpdate, shouldShowSummary } from '@/utils/chatSessionUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 import { buildQuoteMessage } from '@/utils/quoteQuestionUtils.ts'
@@ -881,14 +881,38 @@ function handleSummaryUpdate(e) {
     const msg = messages.value.find(m => String(m.id) === msgId)
     if (!msg) return
     const atBottom = messageListRef.value?.isAtBottom() ?? true
-    applySummaryUpdate(msg, data.summary, atBottom)
+    applySummaryUpdate(msg, data.summary, data.summaryCards, atBottom)
 }
 
 // Toggle summary/original view for a message
-function handleToggleSummary(msgId) {
+async function handleToggleSummary(msgId) {
     const msg = messages.value.find(m => m.id === msgId)
     if (!msg) return
-    msg.showingSummary = !msg.showingSummary
+    const showingNow = shouldShowSummary(msg)
+    // Switching FROM summary TO original: if blocks weren't loaded (content omitted in view=summary), fetch the full message.
+    if (showingNow && (!msg.blocks || msg.blocks.length === 0)) {
+        await ensureMessageContent(msg)
+    }
+    // Record the user's explicit preference. If they were showing the summary,
+    // toggle to original; otherwise toggle to summary.
+    msg.showingSummary = !showingNow
+}
+
+// Lazily fetch the full message content when the original view is requested but
+// blocks were omitted (view=summary omits content for summarized messages).
+async function ensureMessageContent(msg) {
+    if (msg._loadingOriginal) return
+    msg._loadingOriginal = true
+    try {
+        const full = await apiGet(`/api/rag/message?id=${msg.id}`)
+        const { blocks } = render.parseAssistantContent(full.content || '')
+        msg.blocks = blocks
+        if (full.files) msg.files = full.files
+    } catch (err) {
+        appLog.w(TAG, 'failed to load original content', err)
+    } finally {
+        msg._loadingOriginal = false
+    }
 }
 
 

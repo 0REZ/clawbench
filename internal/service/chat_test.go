@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS summaries (
 	target_type TEXT NOT NULL,
 	target_id   INTEGER NOT NULL,
 	summary     TEXT NOT NULL,
+	summary_cards TEXT NOT NULL DEFAULT '',
 	created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
 	UNIQUE(target_type, target_id)
 );
@@ -2957,14 +2958,14 @@ func TestGetChatHistoryPaged_LimitAndBeforeID(t *testing.T) {
 	}
 
 	// Get last 2 messages with limit only (no cursor)
-	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 2, 0)
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 2, 0, false)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 2)
 	assert.Equal(t, "msg 3", msgs[0].Content)
 	assert.Equal(t, "msg 4", msgs[1].Content)
 
 	// Get 2 messages before the last message (cursor-based)
-	msgs, _, err = service.GetChatHistoryPaged("/project", "claude", sid, 2, int(msgIDs[4]))
+	msgs, _, err = service.GetChatHistoryPaged("/project", "claude", sid, 2, int(msgIDs[4]), false)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 2)
 	assert.Equal(t, "msg 2", msgs[0].Content)
@@ -3042,7 +3043,7 @@ func TestGetChatHistoryPaged_NoLimit(t *testing.T) {
 	assert.NoError(t, err)
 
 	// limit=0 returns all messages
-	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0)
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, false)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 2)
 }
@@ -3058,7 +3059,7 @@ func TestGetChatHistoryPaged_LimitOnly(t *testing.T) {
 	}
 
 	// limit=3, no cursor — should return the 3 most recent
-	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 3, 0)
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 3, 0, false)
 	assert.NoError(t, err)
 	assert.Len(t, msgs, 3)
 	assert.Equal(t, "msg 2", msgs[0].Content) // oldest of the 3
@@ -3070,7 +3071,7 @@ func TestGetChatHistoryPaged_Empty(t *testing.T) {
 
 	sid := helperCreateSession(t, "/project", "claude", "Empty Paged")
 
-	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 10, 0)
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 10, 0, false)
 	assert.NoError(t, err)
 	assert.Empty(t, msgs)
 }
@@ -3571,4 +3572,77 @@ func TestHardDeleteSession_RemovesThinking(t *testing.T) {
 	err = service.UnsafeDBForTest().QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE session_id = ?", sid).Scan(&count)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count, "thinking rows must be purged with the session")
+}
+
+// ---------- GetChatHistoryPaged: view=summary ----------
+
+func TestGetChatHistoryPagedViewSummaryOmitsContent(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Summary View")
+
+	asstID, err := service.AddChatMessage("/project", "claude", sid, "assistant",
+		`{"blocks":[{"type":"text","text":"long assistant answer"}]}`, nil, false, "")
+	assert.NoError(t, err)
+
+	cards := &model.SummaryCards{
+		Tools: []model.SummaryTool{{Name: "Bash", ID: "tool_bash"}},
+	}
+	assert.NoError(t, service.SaveSummaryWithCards("chat_message", asstID, "reading summary", cards))
+
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, true)
+	assert.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "assistant", msgs[0].Role)
+	assert.Equal(t, "", msgs[0].Content, "summary view must omit content for summarized, non-streaming messages")
+	require.NotNil(t, msgs[0].Summary)
+	assert.Equal(t, "reading summary", *msgs[0].Summary)
+	require.NotNil(t, msgs[0].SummaryCards)
+	require.Len(t, msgs[0].SummaryCards.Tools, 1)
+	assert.Equal(t, "Bash", msgs[0].SummaryCards.Tools[0].Name)
+
+	msgs, _, err = service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, false)
+	assert.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.NotEqual(t, "", msgs[0].Content, "full view must keep content")
+}
+
+func TestGetChatHistoryPagedViewSummaryKeepsStreamingContent(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Summary View Streaming")
+
+	asstID, err := service.AddChatMessage("/project", "claude", sid, "assistant",
+		`{"blocks":[{"type":"text","text":"in-flight streaming answer"}]}`, nil, true, "")
+	assert.NoError(t, err)
+
+	cards := &model.SummaryCards{TaskIDs: []int64{7}}
+	assert.NoError(t, service.SaveSummaryWithCards("chat_message", asstID, "reading summary", cards))
+
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, true)
+	assert.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.True(t, msgs[0].Streaming)
+	assert.NotEqual(t, "", msgs[0].Content, "streaming messages must keep content even in summary view")
+	assert.NotNil(t, msgs[0].Summary)
+}
+
+func TestGetChatHistoryPagedViewSummaryKeepsEmptySummaryContent(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Summary View Empty Summary")
+
+	asstID, err := service.AddChatMessage("/project", "claude", sid, "assistant",
+		`{"blocks":[{"type":"text","text":"too short to summarize"}]}`, nil, false, "")
+	assert.NoError(t, err)
+
+	// Empty summary = text too short. This is what AsyncSummarize persists for short replies.
+	assert.NoError(t, service.SaveSummaryWithCards("chat_message", asstID, "", nil))
+
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, true)
+	assert.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.NotEqual(t, "", msgs[0].Content, "messages with an empty summary must keep content so they remain visible")
+	require.NotNil(t, msgs[0].Summary)
+	assert.Equal(t, "", *msgs[0].Summary)
 }
