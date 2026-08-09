@@ -68,11 +68,16 @@ type ChatMessage struct {
 
 // SummaryTool is a compact record of a tool_use block present in a reading
 // summary view. input is included for interactive tools (AskUserQuestion,
-// PermissionApproval) that need it for card rendering.
+// PermissionApproval) that need it for card rendering. done/status/output are
+// captured so interactive cards (e.g. PermissionApproval) can render their
+// final approved/denied state in summary view instead of pending buttons.
 type SummaryTool struct {
-	Name  string         `json:"name"`
-	ID    string         `json:"id,omitempty"`
-	Input map[string]any `json:"input,omitempty"`
+	Name   string         `json:"name"`
+	ID     string         `json:"id,omitempty"`
+	Input  map[string]any `json:"input,omitempty"`
+	Done   bool           `json:"done,omitempty"`
+	Status string         `json:"status,omitempty"`
+	Output string         `json:"output,omitempty"`
 }
 
 // AskQuestionOption is a single option in an ask-question card.
@@ -101,6 +106,12 @@ type SummaryCards struct {
 	Tools        []SummaryTool     `json:"tools,omitempty"`
 	TaskIDs      []int64           `json:"taskIDs,omitempty"`
 	AskQuestions []AskQuestionCard `json:"askQuestions,omitempty"`
+	// CreatedFiles / ModifiedFiles hold the file paths written (Write) or edited
+	// (Edit) by the message. They restore the file-changes banner in summary-only
+	// view, where full content blocks are omitted so they cannot be derived from
+	// blocks on the frontend.
+	CreatedFiles  []string `json:"createdFiles,omitempty"`
+	ModifiedFiles []string `json:"modifiedFiles,omitempty"`
 }
 
 // UnmarshalJSON implements custom deserialization for ChatMessage.

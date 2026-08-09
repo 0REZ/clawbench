@@ -11,14 +11,19 @@ func TestExtractSummaryCards(t *testing.T) {
 		{Type: "thinking", Text: "reasoning"},
 		{Type: "tool_use", Name: "Bash", ID: "t1", Input: map[string]any{"command": "ls"}},
 		{Type: "tool_use", Name: "AskUserQuestion", ID: "t2", Input: map[string]any{"question": "go?"}},
+		{Type: "tool_use", Name: "PermissionApproval", ID: "t3", Input: map[string]any{"toolName": "Bash"}, Done: true, Status: "error", Output: "Cancelled"},
 		{Type: "text", Text: "Answer <scheduled-task id=\"42\">x</scheduled-task> <ask-question><item><header>Q</header><question>continue?</question><option><label>Yes</label></option></item></ask-question>"},
 	}
 	cards := extractSummaryCards(blocks)
-	if len(cards.Tools) != 1 {
-		t.Fatalf("expected 1 auto-expand tool, got %d: %+v", len(cards.Tools), cards.Tools)
+	if len(cards.Tools) != 2 {
+		t.Fatalf("expected 2 auto-expand tools, got %d: %+v", len(cards.Tools), cards.Tools)
 	}
 	if cards.Tools[0].Name != "AskUserQuestion" || cards.Tools[0].ID != "t2" {
 		t.Fatalf("expected AskUserQuestion t2 tool, got: %+v", cards.Tools[0])
+	}
+	perm := cards.Tools[1]
+	if perm.Name != "PermissionApproval" || !perm.Done || perm.Status != "error" || perm.Output != "Cancelled" {
+		t.Fatalf("PermissionApproval result state not captured: %+v", perm)
 	}
 	if len(cards.TaskIDs) != 1 || cards.TaskIDs[0] != 42 {
 		t.Fatalf("taskIDs mismatch: %+v", cards.TaskIDs)
@@ -31,6 +36,30 @@ func TestExtractSummaryCards(t *testing.T) {
 	}
 	if len(cards.AskQuestions[0].Options) != 1 || cards.AskQuestions[0].Options[0].Label != "Yes" {
 		t.Fatalf("expected option 'Yes', got: %+v", cards.AskQuestions[0].Options)
+	}
+}
+
+func TestExtractSummaryCardsFileChanges(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: "tool_use", Name: "Write", ID: "w1", FilePath: "/src/new.go", Done: true},
+		{Type: "tool_use", Name: "Write", ID: "w2", FilePath: "/src/dup.go", Done: true},
+		{Type: "tool_use", Name: "Edit", ID: "e1", FilePath: "/src/a.go", Done: true},
+		{Type: "tool_use", Name: "Edit", ID: "e2", FilePath: "/src/a.go", Done: true},
+		{Type: "tool_use", Name: "Write", ID: "w3", Done: false, FilePath: "/src/notdone.go"},
+		{Type: "tool_use", Name: "Edit", ID: "e3", Done: true, Input: map[string]any{"file_path": "/src/via-input.go"}},
+	}
+	cards := extractSummaryCards(blocks)
+	if len(cards.CreatedFiles) != 2 {
+		t.Fatalf("expected 2 created files, got %+v", cards.CreatedFiles)
+	}
+	if cards.CreatedFiles[0] != "/src/new.go" || cards.CreatedFiles[1] != "/src/dup.go" {
+		t.Fatalf("created mismatch: %+v", cards.CreatedFiles)
+	}
+	if len(cards.ModifiedFiles) != 2 {
+		t.Fatalf("expected 2 modified files (dedup + input fallback), got %+v", cards.ModifiedFiles)
+	}
+	if cards.ModifiedFiles[0] != "/src/a.go" || cards.ModifiedFiles[1] != "/src/via-input.go" {
+		t.Fatalf("modified mismatch: %+v", cards.ModifiedFiles)
 	}
 }
 

@@ -144,6 +144,17 @@
     @send-message="handleToolSendMessage"
     @click="handleOverlayRetryClick"
   />
+
+  <!-- Agent Selector for Fork -->
+  <AgentSelectorDrawer
+    :open="forkAgentSelectorDrawer.effectiveOpen.value"
+    :modelValue="identity.currentAgentId.value"
+    :title="t('chat.session.selectAgentForFork')"
+    :default-badge="t('chat.sessionSetting.defaultBadge')"
+    :set-default-title="t('session.setAsDefaultAgent')"
+    @update:open="v => { if (v) forkAgentSelectorDrawer.open(); else { forkAgentSelectorDrawer.close(); forkPending.value = null } }"
+    @select="handleForkAgentSelect"
+  />
 </template>
 
 <script setup>
@@ -184,6 +195,8 @@ import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { store } from '@/stores/app.ts'
 
 import { useDialog } from '@/composables/useDialog'
+
+import AgentSelectorDrawer from '@/components/common/AgentSelectorDrawer.vue'
 
 import '@/assets/loading-mask.css'
 import { useToolDetailDrawer } from '@/composables/useToolDetailDrawer.ts'
@@ -227,6 +240,8 @@ const metadataModal = ref({
   vecIndexed: false
 })
 const metadataDrawer = useTabDrawer('chat')
+const forkAgentSelectorDrawer = useTabDrawer('chat', { autoRestore: false })
+const forkPending = ref(null) // { sessionId, beforeMessageId }
 const toast = useToast()
 const dialog = useDialog()
 const notification = useNotification()
@@ -241,8 +256,8 @@ async function handleFileTagClick(filePath) {
         // so openFilePath doesn't treat in-project files as external.
         const root = store.state.projectRoot
         const relPath = root && filePath.startsWith(root + '/') ? filePath.slice(root.length + 1) : filePath
-        const ok = await openFilePath(relPath)
-        if (ok) switchTab('browse')
+        // openFilePath decides the destination tab itself (file → view, dir → browse).
+        await openFilePath(relPath)
     }
 }
 
@@ -250,7 +265,7 @@ function handleQuoteClick() {
     const q = quoteData.value
     if (q?.filePath) {
         store.selectFile(q.filePath).then(() => {
-            switchTab('browse')
+            switchTab('view')
         })
     }
 }
@@ -282,8 +297,8 @@ const {
   chatRender: render,
   tabId: 'chat',
   onFileOpen: async (path, lineStart, lineEnd) => {
-    const ok = await openFilePath(path, lineStart, lineEnd)
-    if (ok) switchTab('browse')
+    // openFilePath decides the destination tab itself (file → view, dir → browse).
+    await openFilePath(path, lineStart, lineEnd)
   },
   findLiveBlock: (ids) => findToolBlock(ids),
 })
@@ -503,7 +518,9 @@ provide('chatRender', {
   hasImagesInContent: render.hasImagesInContent,
 })
 provide('chatSession', { getAgentBackend, getAgentName })
-provide('chatUI', { navigateToFileViewer: () => switchTab('browse') })
+// openFilePath (via open-file-overlay / open-file-manager events) already routes to
+// the correct tab (file → view, dir → browse), so this is a no-op to avoid overriding.
+provide('chatUI', { navigateToFileViewer: () => {} })
 provide('autoSpeech', autoSpeech)
 provide('layoutRefreshKey', layoutRefreshKey)
 
@@ -611,8 +628,24 @@ async function handleForkFromMessage(msg) {
   if (!sid) return
   if (await dialog.confirm(t('chat.session.forkFromMessageConfirm'))) {
     messageListRef.value?.closeUserMsgIndex()
-    await manager.forkSession(sid, msg.id)
+    await agentsComposable.loadAgents()
+    // If only one agent, fork directly (inherits source session's agent)
+    if (agentsList.value.length <= 1) {
+      await manager.forkSession(sid, msg.id)
+      return
+    }
+    // Multiple agents — show selector with source session's agent pre-selected
+    forkPending.value = { sessionId: sid, beforeMessageId: msg.id }
+    forkAgentSelectorDrawer.open()
   }
+}
+
+function handleForkAgentSelect(agentId) {
+  forkAgentSelectorDrawer.close()
+  const pending = forkPending.value
+  if (!pending) return
+  forkPending.value = null
+  manager.forkSession(pending.sessionId, pending.beforeMessageId, agentId)
 }
 
 /** Persist session-scoped settings (mode, thinkingEffort, model, transport)
