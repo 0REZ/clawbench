@@ -30,18 +30,23 @@ vi.mock('@/composables/useDialog', () => ({
 
 vi.mock('@/utils/chatStreamUtils', () => ({
   extractFileChanges: (blocks: any[], summaryCards?: any) => {
-    const created: string[] = []
-    const modified: string[] = []
+    const created = new Map<string, { path: string; toolIds: string[] }>()
+    const modified = new Map<string, { path: string; toolIds: string[] }>()
+    const push = (map: Map<string, any>, filePath: string, id?: string) => {
+      let fc = map.get(filePath)
+      if (!fc) { fc = { path: filePath, toolIds: [] }; map.set(filePath, fc) }
+      if (id && !fc.toolIds.includes(id)) fc.toolIds.push(id)
+    }
     for (const block of blocks || []) {
       if (block.type !== 'tool_use' || !block.done) continue
       const filePath = block.file_path || block.input?.file_path
       if (!filePath) continue
-      if (block.name === 'Write') created.push(filePath)
-      else if (block.name === 'Edit') modified.push(filePath)
+      if (block.name === 'Write') push(created, filePath, block.id)
+      else if (block.name === 'Edit') push(modified, filePath, block.id)
     }
-    for (const p of summaryCards?.createdFiles || []) created.push(p)
-    for (const p of summaryCards?.modifiedFiles || []) modified.push(p)
-    return { created, modified }
+    for (const item of summaryCards?.createdFiles || []) push(created, typeof item === 'string' ? item : item.path)
+    for (const item of summaryCards?.modifiedFiles || []) push(modified, typeof item === 'string' ? item : item.path)
+    return { created: [...created.values()], modified: [...modified.values()] }
   },
 }))
 
@@ -73,6 +78,9 @@ vi.mock('@/components/common/SummaryToggle.vue', () => ({
 }))
 vi.mock('@/components/chat/FileChangesDrawer.vue', () => ({
   default: { name: 'FileChangesDrawer', template: '<div class="file-changes-drawer-stub" />' },
+}))
+vi.mock('@/components/chat/FileDiffsDrawer.vue', () => ({
+  default: { name: 'FileDiffsDrawer', template: '<div class="file-diffs-drawer-stub" />' },
 }))
 
 const i18n = createI18n({
@@ -193,6 +201,28 @@ describe('ChatMessageItem', () => {
     expect(wrapper.find('.summary-toggle-stub').exists()).toBe(true)
   })
 
+  it('shows read-aloud button for summary view with empty blocks (summary fallback)', () => {
+    // extractSpeakableText returns '' for empty blocks, but the read-aloud button
+    // must still render in summary view so the summary can be spoken.
+    const wrapper = createWrapper({
+      msg: { id: 's2', role: 'assistant', content: '', blocks: [], summary: 'Short summary', streaming: false },
+    })
+    const speakBtn = wrapper.find('.chat-action-btn--wide')
+    expect(speakBtn.exists()).toBe(true)
+    expect(speakBtn.text()).toContain('朗读')
+  })
+
+  it('speaks summary text when clicking read-aloud in summary view with empty blocks', async () => {
+    const wrapper = createWrapper({
+      msg: { id: 's3', role: 'assistant', content: '', blocks: [], summary: 'Speak me', streaming: false },
+    })
+    const speakBtn = wrapper.find('.chat-action-btn--wide')
+    await speakBtn.trigger('click')
+    const autoSpeech = (wrapper.vm as any).$.provides.autoSpeech
+    // speakText falls back to the summary because blocks are empty
+    expect(autoSpeech.speakText).toHaveBeenCalledWith('s3', 'Speak me')
+  })
+
   it('applies has-metadata class when assistant message has metadata', () => {
     const wrapper = createWrapper({
       msg: { id: '7', role: 'assistant', content: 'response', blocks: [], metadata: { wallMs: 100 } },
@@ -276,6 +306,31 @@ describe('ChatMessageItem', () => {
         msg: { id: 'c6', role: 'assistant', content: '', blocks: [], streaming: false, summary: 's', summaryCards: { createdFiles: [], modifiedFiles: [] } },
       })
       expect(wrapper.find('.chat-file-changes-banner').exists()).toBe(false)
+    })
+  })
+
+  describe('file diffs drill-down', () => {
+    it('opens the file diffs drawer with the selected file when a file is selected', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'fd1', role: 'assistant', content: '', blocks: [{ type: 'tool_use', name: 'Write', done: true, file_path: '/new.ts' }], streaming: false },
+      })
+      const fc = wrapper.findComponent({ name: 'FileChangesDrawer' })
+      fc.vm.$emit('select-file', { path: '/new.ts', toolName: 'Write' })
+      await wrapper.vm.$nextTick()
+      const fd = wrapper.findComponent({ name: 'FileDiffsDrawer' })
+      expect(fd.attributes('file-path')).toBe('/new.ts')
+      expect(fd.attributes('tool-name')).toBe('Write')
+    })
+
+    it('strips projectRoot prefix when opening a file from the diffs drawer', async () => {
+      const { openFilePath } = await import('@/composables/useFilePathAnnotation')
+      const wrapper = createWrapper({
+        msg: { id: 'fd2', role: 'assistant', content: '', blocks: [{ type: 'tool_use', name: 'Edit', done: true, file_path: '/home/user/project/a.ts' }], streaming: false },
+      })
+      const fd = wrapper.findComponent({ name: 'FileDiffsDrawer' })
+      fd.vm.$emit('file-open', { path: '/home/user/project/a.ts', lineStart: 3 })
+      await wrapper.vm.$nextTick()
+      expect(openFilePath).toHaveBeenCalledWith('a.ts', 3, undefined)
     })
   })
 })

@@ -21,6 +21,31 @@ async function fetchRecentUploads() {
   }
 }
 
+// Delete a recently uploaded file and remove it from the local list.
+async function deleteRecentUpload(path: string) {
+  try {
+    const res = await fetch('/api/upload/recent', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    })
+    // Only trust the delete when the server confirms it with {ok:true}. An old
+    // server without the DELETE handler returns 200 + a JSON array, which we
+    // must NOT treat as success — otherwise the file is only hidden, not deleted.
+    if (res.ok) {
+      const data = await res.json().catch(() => null)
+      if (data && data.ok === true) {
+        recentUploads.value = recentUploads.value.filter(f => f.path !== path)
+        return true
+      }
+    }
+    appLog.w('UploadRecent', 'Failed to delete recent upload', path, res.status)
+  } catch (e) {
+    appLog.w('UploadRecent', 'Failed to delete recent upload', e)
+  }
+  return false
+}
+
 export function useUploadRecent() {
-  return { recentUploads, fetchRecentUploads }
+  return { recentUploads, fetchRecentUploads, deleteRecentUpload }
 }

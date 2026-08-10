@@ -32,11 +32,22 @@ export function loadOpenFile(): string {
     } catch { return '' }
 }
 
-export function clearOpenFile(): void {
+// Private — only closeCurrentFile() and clearStaleOpenFile() may clear the
+// persisted open-file record. Exposing it as a public API invites misuse
+// (e.g. calling it against the wrong project, which previously broke
+// per-project restore on switch-back).
+function clearOpenFile(): void {
     if (!state.projectRoot) return
     try {
         localStorage.removeItem(OPEN_FILE_PREFIX + state.projectRoot)
     } catch { /* ignore */ }
+}
+
+// Public cleanup for a stale open-file record (e.g. the saved file was deleted).
+// Keeps the low-level clearOpenFile private; restore calls this when selectFile
+// fails so the record isn't retried (and re-reported) on every launch/switch.
+export function clearStaleOpenFile(): void {
+    clearOpenFile()
 }
 
 /**
@@ -131,7 +142,7 @@ interface AppState {
     terminalSessionCount: number
 
     // Active port forward count (for dock badge)
-    portForwardActiveCount: number
+    portForwardEnabledCount: number
 
     // Task list (kept in sync by global polling)
     tasks: Array<Record<string, unknown>>
@@ -179,7 +190,7 @@ const state = reactive<AppState>({
     taskRunning: false,
     taskJustCompleted: false,
     terminalSessionCount: 0,
-    portForwardActiveCount: 0,
+    portForwardEnabledCount: 0,
     tasks: [],
 
     // File browser
@@ -281,7 +292,7 @@ function resetProjectState(): void {
     state.taskRunning = false
     state.taskJustCompleted = false
     state.terminalSessionCount = 0
-    state.portForwardActiveCount = 0
+    state.portForwardEnabledCount = 0
     state.tasks = []
     // Config defaults
     state.uploadMaxSizeMB = 100

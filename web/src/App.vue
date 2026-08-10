@@ -320,7 +320,7 @@
               </button>
               <span v-if="tab === 'tasks' && store.state.taskUnreadCount > 0 && activeTab !== 'tasks'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': taskBadgeAnim }" @animationend="taskBadgeAnim = false">{{ formatBadgeCount(store.state.taskUnreadCount) }}</span>
               <span v-if="tab === 'terminal' && store.state.terminalSessionCount > 0 && activeTab !== 'terminal'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': terminalBadgeAnim }" @animationend="terminalBadgeAnim = false">{{ formatBadgeCount(store.state.terminalSessionCount) }}</span>
-              <span v-if="tab === 'proxy' && store.state.portForwardActiveCount > 0 && activeTab !== 'proxy'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardActiveCount) }}</span>
+              <span v-if="tab === 'proxy' && store.state.portForwardEnabledCount > 0 && activeTab !== 'proxy'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardEnabledCount) }}</span>
             </div>
             <!-- Single remaining popup item shown directly (no overflow menu) -->
             <div v-if="singleDirectTab" :key="'single-' + singleDirectTab" class="dock-btn-wrap">
@@ -329,7 +329,7 @@
               </button>
               <span v-if="singleDirectTab === 'tasks' && store.state.taskUnreadCount > 0 && activeTab !== 'tasks'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': taskBadgeAnim }" @animationend="taskBadgeAnim = false">{{ formatBadgeCount(store.state.taskUnreadCount) }}</span>
               <span v-if="singleDirectTab === 'terminal' && store.state.terminalSessionCount > 0 && activeTab !== 'terminal'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': terminalBadgeAnim }" @animationend="terminalBadgeAnim = false">{{ formatBadgeCount(store.state.terminalSessionCount) }}</span>
-              <span v-if="singleDirectTab === 'proxy' && store.state.portForwardActiveCount > 0 && activeTab !== 'proxy'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardActiveCount) }}</span>
+              <span v-if="singleDirectTab === 'proxy' && store.state.portForwardEnabledCount > 0 && activeTab !== 'proxy'" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardEnabledCount) }}</span>
             </div>
             <!-- Overflow button (popup has >1 items) -->
             <div v-if="showOverflowButton" class="dock-overflow-wrapper">
@@ -368,7 +368,7 @@
           <button v-if="popupOverflowTabs.includes('proxy')" class="dock-overflow-item" :class="{ active: activeTab === 'proxy' }" @click.stop="handleOverflowSelect('proxy')">
             <Network :size="16" />
             <span>{{ t('nav.portForward') }}</span>
-            <span v-if="store.state.portForwardActiveCount > 0" class="dock-overflow-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardActiveCount) }}</span>
+            <span v-if="store.state.portForwardEnabledCount > 0" class="dock-overflow-count" :class="{ 'dock-badge-pop': proxyBadgeAnim }" @animationend="proxyBadgeAnim = false">{{ formatBadgeCount(store.state.portForwardEnabledCount) }}</span>
           </button>
           <button v-if="popupOverflowTabs.includes('settings')" class="dock-overflow-item" :class="{ active: activeTab === 'settings' }" @click.stop="handleOverflowSelect('settings')">
             <Settings :size="16" />
@@ -424,6 +424,7 @@ import { useTabDrawer, onTabSwitch, resetTabDrawerState } from '@/composables/us
 import { resetAgents, useAgents } from '@/composables/useAgents'
 import { useSessionIdentity, registerSessionDrawerRef, resetIdentity } from './composables/useSessionIdentity.ts'
 import { loadSessionsOnce, resetChatSessionState } from './composables/useChatSession.ts'
+import { resetAllCrudLists } from '@/composables/useCrudList'
 import { resetTaskTabState } from './composables/useTaskTab.ts'
 import { clearPlanState } from './composables/usePlanProgress.ts'
 import { useToast } from './composables/useToast.ts'
@@ -438,14 +439,14 @@ import { useTerminalStatus } from './composables/useTerminalStatus.ts'
 import { useFileWatch } from './composables/useFileWatch.ts'
 import { useFileNavStack } from './composables/useFileNavStack'
 import { useFileEditor } from './composables/useFileEditor'
-import { removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
+import { openRecentFile, removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
 import { refreshCurrentFile } from './composables/useFileRefresh.ts'
 import { useGlobalEvents } from './composables/useGlobalEvents'
 import ConnectionOverlay from './components/common/ConnectionOverlay.vue'
 import { useUpgrade } from './composables/useUpgrade'
 import { useEdgeSwipeBack, useFeatureBackHandler, PRIORITY_OVERLAY } from './composables/useEdgeSwipeBack'
 import { handleBackNavigation, requestExitConfirm } from './composables/useBackHandler'
-import { store, loadBrowseDir, loadOpenFile, clearOpenFile } from './stores/app.ts'
+import { store, loadBrowseDir, loadOpenFile, clearStaleOpenFile } from './stores/app.ts'
 import { setPendingCommitNavigation } from './composables/useCommitNavigation.ts'
 import { getFileType } from './utils/fileType.ts'
 import { formatBadgeCount } from './utils/format.ts'
@@ -484,8 +485,9 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
   await new Promise(r => setTimeout(r, 150))
 
   // ── Phase 2: POST to backend — now returns full init data (roots, homeDir, config) ──
-  // Clear open file for the OLD project before switching (setProject resets projectRoot)
-  clearOpenFile()
+  // Note: do NOT clearOpenFile() here. It runs before setProject(), so it would
+  // delete the OLD project's persisted open-file record, breaking restore when
+  // the user switches back to it. Per-project restore relies on that record.
   try {
     await store.setProject(newProjectPath)
   } catch (err) {
@@ -512,6 +514,7 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
   clearPlanState()
   resetTaskTabState()
   resetTabDrawerState()
+  resetAllCrudLists()
   fileNav.closeOverlay()
   activeTab.value = 'chat'
 
@@ -528,26 +531,9 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
   switchingProject.value = false
 
   // ── Phase 6: Background data loading — all independent, fully parallel, non-blocking ──
-  const restoreBrowseDir = async () => {
-    const savedDir = loadBrowseDir()
-    if (savedDir) {
-      try { await store.loadFiles(savedDir, true) } catch {
-        // Directory no longer exists — fall back to project root
-        await store.loadFiles('')
-      }
-    } else {
-      await store.loadFiles('')
-    }
-    // Restore last opened file for this project
-    const savedFile = loadOpenFile()
-    if (savedFile) {
-      const ok = await store.selectFile(savedFile)
-      if (ok) fileNav.openFile(savedFile)
-    }
-  }
   await sessionIdentity.initSessionFromAPI()
   Promise.allSettled([
-    restoreBrowseDir(),
+    restoreProjectWorkspace(),
     loadSessionsOnce(),
     store.loadGitBranch(),
     loadTasks(),
@@ -770,6 +756,40 @@ function closeOverlayAndSync() {
   detailsDrawer.close()
   searchDrawer.close()
   fileHistoryDrawer.close()
+}
+
+/**
+ * Restore the current project's workspace: last browsed directory (falling
+ * back to the project root if it no longer exists) and last opened file.
+ *
+ * Single source of truth shared by app startup (initializeApp) and project
+ * switch (hotSwitchProject) — keeps both paths in sync and avoids divergence.
+ * If the saved file can no longer be opened (deleted/moved), its stale record
+ * is cleared so it isn't retried and re-reported on every launch/switch.
+ */
+async function restoreProjectWorkspace() {
+  const savedDir = loadBrowseDir()
+  if (savedDir) {
+    try { await store.loadFiles(savedDir, true) } catch {
+      // Directory no longer exists — fall back to project root
+      try { await store.loadFiles('') } catch {}
+    }
+  } else {
+    try { await store.loadFiles('') } catch {
+      toast.show(t('toast.fileListLoadFailed'), { icon: '⚠️', type: 'error', duration: 6000 })
+    }
+  }
+  // Restore last opened file (per-project)
+  const savedFile = loadOpenFile()
+  if (savedFile) {
+    const ok = await store.selectFile(savedFile)
+    if (ok) {
+      fileNav.openFile(savedFile)
+    } else {
+      // File no longer exists — clear the stale record to avoid repeated failures.
+      clearStaleOpenFile()
+    }
+  }
 }
 
 const { isAppMode } = useAppMode()
@@ -1062,24 +1082,9 @@ async function initializeApp() {
   loadSSHInfo().catch(() => {})
   loadTerminalStatus().catch(() => {})
   store.loadGitBranch().catch(() => {})
-  // Restore last browsed directory; fall back to project root if the dir no longer exists
-  const savedDir = loadBrowseDir()
-  if (savedDir) {
-    try { await store.loadFiles(savedDir, true) } catch {
-      // Directory no longer exists — fall back to project root
-      try { await store.loadFiles('') } catch {}
-    }
-  } else {
-    try { await store.loadFiles('') } catch {
-      toast.show(t('toast.fileListLoadFailed'), { icon: '⚠️', type: 'error', duration: 6000 })
-    }
-  }
-  // Restore last opened file (per-project)
-  const savedFile = loadOpenFile()
-  if (savedFile) {
-    const ok = await store.selectFile(savedFile)
-    if (ok) fileNav.openFile(savedFile)
-  }
+  // Restore last browsed directory + last opened file (per-project), falling
+  // back to the project root if the saved dir/file no longer exists.
+  await restoreProjectWorkspace()
   return true
 }
 
@@ -1272,7 +1277,7 @@ async function handleOverlayOpenFile(payload) {
 }
 
 async function handleAppHeaderRecentFileSelect(path) {
-    const ok = await store.selectFile(path)
+    const ok = await openRecentFile(path, (p) => store.selectFile(p))
     if (ok) {
         switchTab('view')
         fileNav.openFile(path)
@@ -1568,7 +1573,7 @@ function wideDockBadgeCount(tab) {
     case 'history': return store.state.gitWorkingTreeChangeCount
     case 'tasks': return store.state.taskUnreadCount
     case 'terminal': return store.state.terminalSessionCount
-    case 'proxy': return store.state.portForwardActiveCount
+    case 'proxy': return store.state.portForwardEnabledCount
     default: return 0
   }
 }
@@ -1656,7 +1661,7 @@ watch(() => store.state.terminalSessionCount, (n, o) => {
     if (!allInlineOverflowTabs.value.includes('terminal')) triggerBadgeAnim(overflowBadgeAnim)
   }
 })
-watch(() => store.state.portForwardActiveCount, (n, o) => {
+watch(() => store.state.portForwardEnabledCount, (n, o) => {
   if (o !== undefined && n !== o) {
     triggerBadgeAnim(proxyBadgeAnim)
     if (!allInlineOverflowTabs.value.includes('proxy')) triggerBadgeAnim(overflowBadgeAnim)
@@ -1665,12 +1670,12 @@ watch(() => store.state.portForwardActiveCount, (n, o) => {
 
 const overflowBadgeCount = computed(() => {
   let count = store.state.taskUnreadCount
-  if (!isSSHDisabled.value) count += store.state.portForwardActiveCount
+  if (!isSSHDisabled.value) count += store.state.portForwardEnabledCount
   if (!isTerminalDisabled.value) count += store.state.terminalSessionCount
   // Subtract counts for ALL inline overflow tabs
   for (const tab of allInlineOverflowTabs.value) {
     if (tab === 'tasks') count -= store.state.taskUnreadCount
-    else if (tab === 'proxy') count -= store.state.portForwardActiveCount
+    else if (tab === 'proxy') count -= store.state.portForwardEnabledCount
     else if (tab === 'terminal') count -= store.state.terminalSessionCount
   }
   return Math.max(0, count)

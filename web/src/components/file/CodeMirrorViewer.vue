@@ -30,6 +30,7 @@ import { defaultKeymap, historyKeymap, history, undo, redo, undoDepth, redoDepth
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { buildLangExtension } from '@/utils/codeEditorLang'
+import { getWordRangeAt } from '@/utils/codeWordRange'
 import { diffMarkers, openDiffDrawer } from '@/composables/useMarkdownDiff.ts'
 import { flashRanges, flashType } from '@/composables/useFileRefresh.ts'
 import { copyText } from '@/utils/clipboard.ts'
@@ -188,13 +189,19 @@ function handleEditorClick(event) {
     return false
 }
 
-function handleEditorDblClick(_event, editor) {
-    const sel = editor.state.selection.main
-    if (sel.empty) return
-    const text = editor.state.sliceDoc(sel.from, sel.to).trim()
+function handleEditorDblClick(event, editor) {
+    if (props.editable) return // double-click select+copy is for browse mode only
+    // Native selection is disabled in browse mode, so select the word at the
+    // click position ourselves, then copy it.
+    const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (pos == null) return
+    const range = getWordRangeAt(editor.state, pos)
+    if (!range) return
+    editor.dispatch({ selection: { anchor: range.from, head: range.to } })
+    const text = editor.state.sliceDoc(range.from, range.to).trim()
     if (!text) return
-    const startLine = editor.state.doc.lineAt(sel.from).number
-    const endLine = editor.state.doc.lineAt(sel.to).number
+    const startLine = editor.state.doc.lineAt(range.from).number
+    const endLine = editor.state.doc.lineAt(range.to).number
     copyText(text)
     quoteQuestion.showBar({
         text,
@@ -206,8 +213,17 @@ function handleEditorDblClick(_event, editor) {
 }
 
 const interactionExtension = EditorView.domEventHandlers({
-    click(event, editor) { handleEditorClick(event, editor) },
+    click(event, editor) { return handleEditorClick(event, editor) },
     dblclick(event, editor) { handleEditorDblClick(event, editor) },
+    // Browse mode: stop the browser AND CodeMirror from starting a drag or
+    // long-press text selection — selecting + copying is a deliberate
+    // double-click action. Returning true prevents the default mousedown
+    // (native selection) and skips CodeMirror's built-in MouseSelection.
+    mousedown(event, _editor) {
+        if (props.editable) return false
+        event.preventDefault()
+        return true
+    },
 })
 
 // ─── Selection-based quote question (read-only mode) ───
@@ -445,6 +461,11 @@ watch(() => props.content, (c) => {
         canUndo.value = false
         canRedo.value = false
         dirty.value = false
+        // setState() rebuilds extensions from scratch, which seeds the lang
+        // compartment empty. Re-apply the language so syntax highlighting
+        // survives an in-place content refresh (e.g. after a quote-driven edit
+        // deletes lines and the file reloads with the same language prop).
+        mountLang()
     }
     savedSnapshot = next
     // Sticky def lines may have shifted; clear the highlight cache and recompute.
@@ -478,10 +499,13 @@ function handleSaveShortcut() {
 
 // Exit edit mode. If there are unsaved changes, confirm whether to save,
 // discard, or cancel (stay editing) instead of silently exiting.
+// Returns true if the edit actually exits (save or discard), false if the
+// user cancels and stays editing. Callers can use this to chain a follow-up
+// action (e.g. opening the preview) only after edit mode has really ended.
 async function handleExit() {
     if (!dirty.value) {
         emit('exitEdit')
-        return
+        return true
     }
     const choice = await dialog.confirm(t('file.editor.confirmExit'), {
         confirmText: t('file.editor.save'),
@@ -493,14 +517,17 @@ async function handleExit() {
     if (choice === true) {
         // Save and exit (FileViewer's handleSave reloads content and leaves edit mode).
         emit('save', getValue())
+        return true
     } else if (choice === null) {
         // Discard changes and exit.
         emit('exitEdit')
+        return true
     }
     // choice === false → user cancelled; stay in edit mode.
+    return false
 }
 
-defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit })
+defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, isDirty: () => dirty.value })
 </script>
 
 <style scoped>
@@ -603,6 +630,16 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit })
 .cm-viewer.cm-readonly .cm-activeLine,
 .cm-viewer.cm-readonly .cm-activeLineGutter {
     display: none;
+}
+
+/* Browse mode: suppress native text selection (mobile long-press / desktop drag)
+   so accidental selection handles don't appear. Selecting + copying is done
+   deliberately via double-click (see handleEditorDblClick). Edit mode keeps the
+   normal selectable behavior. */
+.cm-viewer.cm-readonly .cm-content {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 /* Diff marker gutter label */

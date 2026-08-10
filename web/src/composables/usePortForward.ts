@@ -52,6 +52,7 @@ interface ForwardedPort {
   name: string
   protocol: string
   active: boolean
+  enabled: boolean
 }
 
 interface DetectedPort {
@@ -65,6 +66,7 @@ interface AndroidNativeBridge {
   addForwardedPort?: (localPort: number, targetPort: number, host: string) => void
   removeForwardedPort?: (localPort: number) => void
   stopBackgroundService?: () => void
+  getForwardedPorts?: () => string
   isTunnelConnected?: () => boolean | null
   getTunnelError?: () => string
   getTunnelErrorType?: () => string
@@ -117,6 +119,12 @@ const tunnelErrorType = ref<TunnelErrorType>('')
 // These show a yellow blinking dot instead of green/grey.
 const connectingPorts = ref(new Set<number>())
 
+// Port scan drawer state: whether a scan has ever completed (drives first-open auto-scan),
+// the current scanning flag, and the open state of the scan drawer.
+const scanDrawerOpen = ref(false)
+const hasScanned = ref(false)
+const scanning = ref(false)
+
 // Auto-refresh interval when tunnel is unhealthy
 let tunnelPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -143,14 +151,16 @@ function ensurePortForwardListener() {
   }) as EventListener)
 }
 
-/** Returns true if any registered port has an active backend */
+/** Returns true if any enabled port has an active backend */
 function hasActivePorts(): boolean {
-  return ports.value.some(p => p.active)
+  return ports.value.some(p => p.enabled && p.active)
 }
 
-// Sync active port count to global store for dock badge
+// Sync enabled port count to global store for dock badge.
+// Counts ENABLED ports (not just connected ones) so the badge stays visible
+// even when the tunnel/backends are temporarily down.
 watch(ports, () => {
-  store.state.portForwardActiveCount = ports.value.filter(p => p.active).length
+  store.state.portForwardEnabledCount = ports.value.filter(p => p.enabled).length
 }, { deep: true })
 
 /**
@@ -260,23 +270,88 @@ export function usePortForward() {
   }
 
   async function detectPorts() {
-    const data = await apiGet<{ ports: DetectedPort[] }>('/api/proxy/detect')
-    detectedPorts.value = data.ports || []
+    scanning.value = true
+    try {
+      const data = await apiGet<{ ports: DetectedPort[] }>('/api/proxy/detect')
+      detectedPorts.value = data.ports || []
+      hasScanned.value = true
+    } finally {
+      scanning.value = false
+    }
+  }
+
+  /** Enable or disable a forwarded port on the backend, then refresh the list.
+   *  In app mode, also sync the native SSH tunnel so disabling actually stops
+   *  forwarding (otherwise the native layer keeps counting it in the notification). */
+  async function setPortEnabled(localPort: number, enabled: boolean) {
+    await apiPut('/api/proxy/ports/enabled', { localPort, enabled })
+    await loadPorts(true)
+    if (isAppMode.value) {
+      const p = ports.value.find(x => x.localPort === localPort)
+      const native = getAndroidNative()
+      if (enabled && p) {
+        native?.addForwardedPort?.(p.localPort, p.port, p.host || '')
+      } else if (!enabled) {
+        native?.removeForwardedPort?.(localPort)
+      }
+    }
+  }
+
+  /** Open the scan drawer, auto-running a scan the first time it is opened. */
+  async function openScanDrawer() {
+    scanDrawerOpen.value = true
+    if (!hasScanned.value && !scanning.value) {
+      await detectPorts()
+    }
+  }
+
+  /** Close the scan drawer. */
+  function closeScanDrawer() {
+    scanDrawerOpen.value = false
+  }
+
+  /** Re-run a scan from within the drawer. */
+  async function rescanPorts() {
+    await detectPorts()
   }
 
   /** Sync all registered ports to Android native on initial load.
-   *  If the server has no registered ports, stop the native service
-   *  to avoid an idle foreground service draining battery. */
+   *  Reconciles the native layer with the server's enabled ports: ports that
+   *  are disabled or no longer registered are removed from the native set so
+   *  the notification count stays accurate. If the server has no enabled ports,
+   *  stops the native service to avoid an idle foreground service draining battery. */
   async function syncToNative() {
     if (!isAppMode.value) return
     await loadPorts()
-    if (ports.value.length === 0) {
-      // No ports on server — stop the native service (clears stale SharedPreferences)
-      ;getAndroidNative()?.stopBackgroundService?.()
+    const native = getAndroidNative()
+    if (!native) return
+
+    const enabledPorts = ports.value.filter(p => p.enabled)
+    if (enabledPorts.length === 0) {
+      // No enabled ports on server — stop the native service (clears stale SharedPreferences)
+      native.stopBackgroundService?.()
       return
     }
-    for (const p of ports.value) {
-      ;getAndroidNative()?.addForwardedPort?.(p.localPort, p.port, p.host || '')
+
+    const enabledLocalPorts = new Set(enabledPorts.map(p => p.localPort))
+
+    // Remove native forwards that are no longer enabled on the server.
+    if (typeof native.getForwardedPorts === 'function') {
+      try {
+        const current: Array<{ port?: number; host?: string }> = JSON.parse(native.getForwardedPorts() || '[]')
+        for (const item of current) {
+          const lp = item && item.port
+          if (lp && !enabledLocalPorts.has(lp)) {
+            native.removeForwardedPort?.(lp)
+          }
+        }
+      } catch {
+        // Ignore parse errors — reconciliation is best-effort.
+      }
+    }
+
+    for (const p of enabledPorts) {
+      native.addForwardedPort?.(p.localPort, p.port, p.host || '')
     }
   }
 
@@ -609,12 +684,19 @@ export function usePortForward() {
   /**
    * Ensure a port is registered for forwarding, registering it if needed.
    * Returns the localPort that was assigned (may differ from target port).
-   * Idempotent: if already registered with the same (port, host), returns existing localPort immediately.
+   * Idempotent: if already registered with the same (port, host), returns existing localPort.
+   * If the existing port is currently disabled, it is re-enabled so the caller
+   * (e.g. the localhost URL click handler) can actually open it.
    * Used by localhost URL click handler to auto-setup port forwarding.
    */
   async function ensurePortRegistered(port: number, protocol: string, host?: string): Promise<number> {
     const existing = ports.value.find(p => p.port === port && p.host === (host || ''))
-    if (existing) return existing.localPort
+    if (existing) {
+      if (!existing.enabled) {
+        await setPortEnabled(existing.localPort, true)
+      }
+      return existing.localPort
+    }
     return registerPort(port, '', protocol, host)
   }
 
@@ -630,11 +712,18 @@ export function usePortForward() {
     tunnelError,
     tunnelErrorType,
     connectingPorts,
+    scanDrawerOpen,
+    hasScanned,
+    scanning,
     loadPorts,
     registerPort,
     updatePort,
     unregisterPort,
+    setPortEnabled,
     detectPorts,
+    openScanDrawer,
+    closeScanDrawer,
+    rescanPorts,
     syncToNative,
     loadSSHInfo,
     checkTunnelHealth,

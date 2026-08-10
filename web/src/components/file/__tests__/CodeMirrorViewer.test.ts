@@ -192,6 +192,23 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     expect(document.body.textContent).toContain('line two')
   })
 
+  it('keeps syntax highlighting after an in-place content refresh of the same file', async () => {
+    // Dynamically import the language facet so it resolves to the same
+    // @codemirror/language module instance the component's extension chain
+    // uses (a top-level static import resolves to a different copy in this
+    // environment, making the facet read return null regardless of state).
+    const { language: languageFacet } = await import('@codemirror/language')
+    const wrapper = mountViewer({ content: 'const a = 1\n', language: 'javascript', file: { path: '/p/main.js' } })
+    await sleep(80) // let mountLang() apply the language
+    expect(wrapper.vm.getView().state.facet(languageFacet)).toBeTruthy()
+    // Simulate a same-file refresh after content deletion: content changes but
+    // the language prop stays identical, so the refresh path re-creates state
+    // from buildAllExtensions() and previously dropped the tokenizer.
+    await wrapper.setProps({ content: 'const b = 2\n' })
+    await sleep(80)
+    expect(wrapper.vm.getView().state.facet(languageFacet)).toBeTruthy()
+  })
+
   it('shows quote question on selection in read-only mode', async () => {
     const wrapper = mountViewer({ content: 'aaa\nbbb\nccc', file: { path: '/p/main.go' } })
     await sleep(80)
@@ -310,5 +327,31 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     expect(css).toMatch(/\.cm-viewer\.is-editable\b/)
     expect(css).toMatch(/border-top:\s*2px\s+solid/)
     expect(css).toMatch(/--code-bg-editing/)
+  })
+
+  it('disables native text selection in browse mode only', async () => {
+    mountViewer({ content: 'x', editable: false })
+    mountViewer({ content: 'x', editable: true })
+    await sleep(50)
+    // The browse-mode stylesheet must suppress native selection on .cm-content;
+    // edit mode leaves it selectable (no such rule for is-editable).
+    const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n')
+    const rule = /\.cm-viewer\.cm-readonly\s+\.cm-content\s*\{[^}]*user-select:\s*none/m
+    expect(css).toMatch(rule)
+    expect(css).not.toMatch(/\.cm-viewer\.is-editable\s+\.cm-content\s*\{[^}]*user-select:\s*none/)
+  })
+
+  it('prevents mousedown selection in browse mode but not edit mode', async () => {
+    const browse = mountViewer({ content: 'aaa bbb\n', editable: false })
+    await sleep(80)
+    const md1 = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
+    browse.vm.getView().contentDOM.dispatchEvent(md1)
+    expect(md1.defaultPrevented).toBe(true)
+
+    const edit = mountViewer({ content: 'aaa bbb\n', editable: true })
+    await sleep(80)
+    const md2 = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
+    edit.vm.getView().contentDOM.dispatchEvent(md2)
+    expect(md2.defaultPrevented).toBe(false)
   })
 })

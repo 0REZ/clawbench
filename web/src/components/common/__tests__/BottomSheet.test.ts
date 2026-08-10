@@ -72,6 +72,23 @@ describe('BottomSheet back gesture', () => {
     expect(wrapper!.emitted('close')).toBeTruthy()
   })
 
+  it('back gesture emits the custom backEvent instead of close', () => {
+    wrapper = mountSheet({ backEvent: 'back' })
+    handleBackNavigation()
+    vi.advanceTimersByTime(300)
+    expect(wrapper!.emitted('back')).toBeTruthy()
+    expect(wrapper!.emitted('close')).toBeFalsy()
+  })
+
+  it('backEvent does not affect overlay close (still emits close)', () => {
+    wrapper = mountSheet({ backEvent: 'back' })
+    const overlay = $('.bs-overlay')!
+    overlay.click()
+    vi.advanceTimersByTime(300)
+    expect(wrapper!.emitted('close')).toBeTruthy()
+    expect(wrapper!.emitted('back')).toBeFalsy()
+  })
+
   it('unregisters back handler when open changes to false', async () => {
     wrapper = mountSheet()
     expect(canNavigateBack()).toBe(true)
@@ -506,5 +523,26 @@ describe('BottomSheet width (all drawers share the same width)', () => {
     wideState.isWideScreen.value = true
     await nextTick()
     expect($('.bs-panel')?.classList.contains('bs-constrained')).toBe(true)
+  })
+
+  it('applies wide-auto class on overlay and panel when isWideScreen + auto', async () => {
+    wideState.isWideScreen.value = true
+    wrapper = mountSheet({ auto: true })
+    expect($('.bs-overlay')?.classList.contains('bs-overlay-wide-auto')).toBe(true)
+    expect($('.bs-panel')?.classList.contains('bs-wide-auto')).toBe(true)
+  })
+
+  it('does not apply wide-auto class when isWideScreen but not auto', async () => {
+    wideState.isWideScreen.value = true
+    wrapper = mountSheet({ auto: false })
+    expect($('.bs-overlay')?.classList.contains('bs-overlay-wide-auto')).toBe(false)
+    expect($('.bs-panel')?.classList.contains('bs-wide-auto')).toBe(false)
+  })
+
+  it('does not apply wide-auto class when auto but not isWideScreen', async () => {
+    wideState.isWideScreen.value = false
+    wrapper = mountSheet({ auto: true })
+    expect($('.bs-overlay')?.classList.contains('bs-overlay-wide-auto')).toBe(false)
+    expect($('.bs-panel')?.classList.contains('bs-wide-auto')).toBe(false)
   })
 })

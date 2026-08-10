@@ -4,15 +4,17 @@
       <div class="lightbox-backdrop" @click="close" />
       <div class="lightbox-toolbar">
         <div v-if="currentFileName" class="lb-filename">{{ currentFileName }}</div>
-        <button v-if="currentUrl || currentSvg" class="lb-btn" @click="handleDownload" title="Download">
-          <Download :size="20" />
-        </button>
-        <button class="lb-btn" @click="resetAndRefresh" title="Reset & Reload">
-          <RotateCcw :size="20" />
-        </button>
-        <button class="lb-btn lb-close" @click="close" title="Close">
-          <X :size="20" />
-        </button>
+        <div class="lb-actions">
+          <button v-if="currentUrl || currentSvg" class="lb-btn" @click="handleDownload" title="Download">
+            <Download :size="20" />
+          </button>
+          <button class="lb-btn" @click="resetAndRefresh" title="Reset & Reload">
+            <RotateCcw :size="20" />
+          </button>
+          <button class="lb-btn lb-close" @click="close" title="Close">
+            <X :size="20" />
+          </button>
+        </div>
       </div>
       <div
         class="lightbox-content"
@@ -320,6 +322,20 @@ function fullImgSrc(img) {
     return (img && img.dataset && img.dataset.fullSrc) || (img ? img.src : '')
 }
 
+/**
+ * Normalize a URL to a single clean form for the lightbox: strip any existing
+ * cache-buster t= params and clean up stray '?/'&' separators they leave behind.
+ * Sources may already carry a ?t= timestamp (e.g. ImagePreview.mediaUrl,
+ * MarkdownPreview.fixLocalImagePaths), so appending another t= directly would
+ * accumulate params and produce malformed URLs on refresh.
+ */
+function normalizeUrl(url) {
+    return url
+        .replace(/[?&]t=\d+/g, '')
+        .replace(/[?&]+$/g, '')
+        .replace(/\?&/g, '?')
+}
+
 function navigateMdImage(newIdx, direction) {
     const img = mdImages.value[newIdx]
     if (!img) return
@@ -339,12 +355,12 @@ function navigateMdImage(newIdx, direction) {
     lastTy.value = 0
 
     mdCurrentIndex.value = newIdx
-    currentUrl.value = fullImgSrc(img) + (fullImgSrc(img).includes('?') ? '&' : '?') + 't=' + Date.now()
+    currentUrl.value = normalizeUrl(fullImgSrc(img)) + '?t=' + Date.now()
     currentSvg.value = ''
 }
 
 function open(url, svg = '') {
-    currentUrl.value = svg ? '' : url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
+    currentUrl.value = svg ? '' : normalizeUrl(url) + '?t=' + Date.now()
     currentSvg.value = svg
     lightboxVisible.value = true
     imageLoading.value = !svg
@@ -385,7 +401,7 @@ function openMdImages(imgs, startIndex) {
     mdCurrentIndex.value = startIndex
 
     const img = imgs[startIndex]
-    currentUrl.value = fullImgSrc(img) + (fullImgSrc(img).includes('?') ? '&' : '?') + 't=' + Date.now()
+    currentUrl.value = normalizeUrl(fullImgSrc(img)) + '?t=' + Date.now()
     currentSvg.value = ''
     currentFilePath.value = ''
 
@@ -440,8 +456,7 @@ function resetAndRefresh() {
     lastTx.value = 0
     lastTy.value = 0
     if (currentUrl.value) {
-        const base = currentUrl.value.replace(/[?&]t=\d+/, '')
-        currentUrl.value = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now()
+        currentUrl.value = normalizeUrl(currentUrl.value) + '?t=' + Date.now()
     }
 }
 
@@ -474,7 +489,7 @@ function handleDownload() {
 
     // External URL — construct download link directly
     const a = document.createElement('a')
-    const baseUrl = currentUrl.value.replace(/[?&]t=\d+/, '')
+    const baseUrl = normalizeUrl(currentUrl.value)
     a.href = baseUrl
     a.download = currentFileName.value || ''
     document.body.appendChild(a)
@@ -656,55 +671,57 @@ watch(lightboxVisible, (visible) => {
     }
 })
 
+function handleLightboxClick(e) {
+    // Touch mode: direct click on .lightbox-img or .mermaid opens lightbox
+    // PC mode: only click on .lightbox-expand-icon opens lightbox
+    const isExpandIcon = !!e.target.closest('.lightbox-expand-icon')
+    // PC mode: only expand icon opens lightbox (not the image/mermaid itself)
+    if (!isExpandIcon && e.pointerType !== 'touch') return
+
+    // When clicking the expand icon, find the image from the wrapper
+    // (the icon is a sibling of the img, not a child)
+    let img
+    if (isExpandIcon) {
+        const wrap = e.target.closest('.lightbox-img-wrap')
+        img = wrap ? wrap.querySelector('.lightbox-img') : null
+    } else {
+        img = e.target.closest('.lightbox-img')
+    }
+    if (img) {
+        e.preventDefault()
+        // Check if the image is inside a markdown body — collect sibling images for navigation
+        const mdContainer = img.closest('.markdown-body, .chat-message')
+        if (mdContainer) {
+            const allImgs = mdContainer.querySelectorAll('img')
+            if (allImgs.length > 1) {
+                const { list, startIdx } = collectMdImages(mdContainer, img)
+                if (list.length > 1) {
+                    openMdImages(list, startIdx)
+                    return
+                }
+            }
+        }
+        open(fullImgSrc(img))
+        return
+    }
+    const mermaidDiv = e.target.closest('.markdown-body .mermaid, .chat-message .mermaid')
+    if (mermaidDiv) {
+        e.preventDefault()
+        const svg = mermaidDiv.querySelector('svg')
+        if (svg) openSvg(svg.outerHTML)
+    }
+}
+
 onMounted(() => {
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-    // Listen for clicks on images and mermaid diagrams to open lightbox
-    document.addEventListener('click', (e) => {
-        // Touch mode: direct click on .lightbox-img or .mermaid opens lightbox
-        // PC mode: only click on .lightbox-expand-icon opens lightbox
-        const isExpandIcon = !!e.target.closest('.lightbox-expand-icon')
-        // PC mode: only expand icon opens lightbox (not the image/mermaid itself)
-        if (!isExpandIcon && e.pointerType !== 'touch') return
-
-        // When clicking the expand icon, find the image from the wrapper
-        // (the icon is a sibling of the img, not a child)
-        let img
-        if (isExpandIcon) {
-            const wrap = e.target.closest('.lightbox-img-wrap')
-            img = wrap ? wrap.querySelector('.lightbox-img') : null
-        } else {
-            img = e.target.closest('.lightbox-img')
-        }
-        if (img) {
-            e.preventDefault()
-            // Check if the image is inside a markdown body — collect sibling images for navigation
-            const mdContainer = img.closest('.markdown-body, .chat-message')
-            if (mdContainer) {
-                const allImgs = mdContainer.querySelectorAll('img')
-                if (allImgs.length > 1) {
-                    const { list, startIdx } = collectMdImages(mdContainer, img)
-                    if (list.length > 1) {
-                        openMdImages(list, startIdx)
-                        return
-                    }
-                }
-            }
-            open(fullImgSrc(img))
-            return
-        }
-        const mermaidDiv = e.target.closest('.markdown-body .mermaid, .chat-message .mermaid')
-        if (mermaidDiv) {
-            e.preventDefault()
-            const svg = mermaidDiv.querySelector('svg')
-            if (svg) openSvg(svg.outerHTML)
-        }
-    })
+    document.addEventListener('click', handleLightboxClick)
 })
 
 onUnmounted(() => {
     document.removeEventListener('mousemove', handleMouseMove)
     document.removeEventListener('mouseup', handleMouseUp)
+    document.removeEventListener('click', handleLightboxClick)
     if (unregisterBack) {
         unregisterBack()
         unregisterBack = null
@@ -755,6 +772,14 @@ onUnmounted(() => {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.lb-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-left: auto;
+    flex-shrink: 0;
 }
 
 .lb-nav-btn {

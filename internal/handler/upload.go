@@ -210,9 +210,89 @@ func listRecentFiles(projectPath, dirPath string, limit int) []recentFile {
 	return files
 }
 
-// ShareInRecent handles GET /api/share-in/recent
-// Returns the 20 most recently modified files in .clawbench/share-in/.
+// deleteRecentFile handles DELETE requests scoped to a .clawbench/<subDir>
+// directory. It only deletes a regular file that lives inside that directory
+// (symlink-safe via isPathUnderBase), preventing the attachment drawer from
+// removing arbitrary project files. Writes an error and returns false on
+// failure.
+func deleteRecentFile(w http.ResponseWriter, r *http.Request, subDir string) {
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeLocalizedErrorf(w, r, http.StatusMethodNotAllowed, "MethodNotAllowed")
+		return
+	}
+
+	var req struct {
+		Path string `json:"path"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Path == "" {
+		writeLocalizedErrorf(w, r, http.StatusBadRequest, "MissingPath")
+		return
+	}
+
+	// Resolve the path against the project root. Unlike resolveAbsPath, we
+	// don't fail on non-existent paths here so we can return a proper 404.
+	var absPath string
+	if filepath.IsAbs(req.Path) {
+		ap, err := filepath.Abs(req.Path)
+		if err != nil || !isPathUnderAnyRoot(ap) {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return
+		}
+		absPath = ap
+	} else {
+		baseAbs, err := filepath.Abs(projectPath)
+		if err != nil {
+			model.WriteError(w, model.Internal(fmt.Errorf("failed to resolve project path: %w", err)))
+			return
+		}
+		absPath, ok = validateAndResolvePath(w, r, baseAbs, req.Path)
+		if !ok {
+			return
+		}
+	}
+
+	// Check existence first so a missing file returns 404 regardless of scope.
+	info, err := os.Stat(absPath)
+	if err != nil {
+		writeLocalizedError(w, r, model.NotFound(nil, "FileNotFoundShort"))
+		return
+	}
+	if info.IsDir() {
+		writeLocalizedErrorf(w, r, http.StatusBadRequest, "NotAFile")
+		return
+	}
+
+	// Scope check: the file must live inside .clawbench/<subDir>.
+	baseDir := filepath.Join(projectPath, ".clawbench", subDir)
+	if !isPathUnderBase(absPath, baseDir) {
+		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+		return
+	}
+
+	if err := os.Remove(absPath); err != nil {
+		model.WriteError(w, model.Internal(fmt.Errorf("delete failed: %w", err)))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ShareInRecent handles GET /api/share-in/recent (list) and
+// DELETE /api/share-in/recent (delete a file in .clawbench/share-in/).
+// GET returns the 20 most recently modified files in .clawbench/share-in/.
 func ShareInRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		deleteRecentFile(w, r, "share-in")
+		return
+	}
+
 	projectPath, ok := requireProject(w, r)
 	if !ok {
 		return
@@ -224,9 +304,15 @@ func ShareInRecent(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(files)
 }
 
-// UploadRecent handles GET /api/upload/recent
-// Returns the 20 most recently modified files in .clawbench/uploads/.
+// UploadRecent handles GET /api/upload/recent (list) and
+// DELETE /api/upload/recent (delete a file in .clawbench/uploads/).
+// GET returns the 20 most recently modified files in .clawbench/uploads/.
 func UploadRecent(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		deleteRecentFile(w, r, "uploads")
+		return
+	}
+
 	projectPath, ok := requireProject(w, r)
 	if !ok {
 		return

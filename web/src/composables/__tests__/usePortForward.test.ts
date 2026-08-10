@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 
 // ── Timer leak prevention ──
 
@@ -41,6 +41,11 @@ vi.mock('@/utils/api', () => ({
     apiPost: (...args: any[]) => mockApiPost(...args),
     apiPut: (...args: any[]) => mockApiPut(...args),
     apiDelete: (...args: any[]) => mockApiDelete(...args),
+}))
+
+const mockStore = vi.hoisted(() => ({ state: {} as Record<string, unknown> }))
+vi.mock('@/stores/app', () => ({
+    store: mockStore,
 }))
 
 const mockIsAppMode = ref(false)
@@ -136,6 +141,26 @@ describe('usePortForward', () => {
             expect(mockApiGet).toHaveBeenCalledWith('/api/proxy/ports')
             expect(ports.value).toHaveLength(1)
             expect(ports.value[0].port).toBe(3000)
+        })
+
+        it('counts enabled ports (not just active) for the dock badge', async () => {
+            const portsResponse = {
+                ports: [
+                    { port: 3000, localPort: 3000, name: 'A', protocol: 'http', active: true, enabled: true },
+                    { port: 4000, localPort: 4000, name: 'B', protocol: 'http', active: false, enabled: true },
+                    { port: 5000, localPort: 5000, name: 'C', protocol: 'http', active: true, enabled: false },
+                ],
+            }
+            mockApiGet.mockResolvedValue(portsResponse)
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { loadPorts } = usePortForward()
+
+            await loadPorts()
+            await nextTick()
+
+            // Enabled (3000 + 4000) even though 4000 is not active; 5000 excluded because disabled.
+            expect(mockStore.state.portForwardEnabledCount).toBe(2)
         })
 
         it('sets loading state when not silent', async () => {
@@ -238,7 +263,7 @@ describe('usePortForward', () => {
 
         it('sets ok when SSH reports disconnected but ports are active', async () => {
             mockApiGet.mockImplementation((url: string) => {
-                if (url === '/api/proxy/ports') return { ports: [{ port: 3000, name: 'App', protocol: 'http', active: true }] }
+                if (url === '/api/proxy/ports') return { ports: [{ port: 3000, name: 'App', protocol: 'http', active: true, enabled: true }] }
                 if (url === '/api/ssh/info') return {
                     enabled: true, host: 'test', port: 22, username: 'u', fingerprint: 'f', command: 'c',
                     connectionStats: { connected: false, clientCount: 0, activeChannels: 0 },
@@ -736,19 +761,150 @@ describe('usePortForward', () => {
             mockApiGet.mockResolvedValue({ ports: detected })
 
             const { usePortForward } = await import('@/composables/usePortForward')
-            const { detectPorts, detectedPorts } = usePortForward()
+            const { detectPorts, detectedPorts, hasScanned } = usePortForward()
 
             await detectPorts()
 
             expect(mockApiGet).toHaveBeenCalledWith('/api/proxy/detect')
             expect(detectedPorts.value).toHaveLength(1)
+            expect(hasScanned.value).toBe(true)
+        })
+    })
+
+    describe('scan drawer', () => {
+        it('openScanDrawer opens the drawer', async () => {
+            mockApiGet.mockResolvedValue({ ports: [] })
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { openScanDrawer, closeScanDrawer, scanDrawerOpen } = usePortForward()
+
+            await openScanDrawer()
+            expect(scanDrawerOpen.value).toBe(true)
+        })
+
+        it('openScanDrawer auto-scans on first open', async () => {
+            mockApiGet.mockResolvedValue({ ports: [{ port: 5173, protocol: 'http', processName: 'node', processArgs: '' }] })
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { openScanDrawer, detectedPorts, hasScanned } = usePortForward()
+
+            await openScanDrawer()
+
+            expect(mockApiGet).toHaveBeenCalledWith('/api/proxy/detect')
+            expect(detectedPorts.value).toHaveLength(1)
+            expect(hasScanned.value).toBe(true)
+        })
+
+        it('openScanDrawer does not re-scan if already scanned', async () => {
+            mockApiGet.mockResolvedValue({ ports: [{ port: 8080, protocol: 'http', processName: 'node', processArgs: '' }] })
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { openScanDrawer } = usePortForward()
+
+            await openScanDrawer()
+            const callsAfterFirstScan = mockApiGet.mock.calls.length
+            await openScanDrawer()
+            expect(mockApiGet.mock.calls.length).toBe(callsAfterFirstScan)
+        })
+
+        it('rescanPorts forces a new scan', async () => {
+            mockApiGet.mockResolvedValue({ ports: [] })
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { openScanDrawer, rescanPorts, detectedPorts } = usePortForward()
+
+            await openScanDrawer()
+            mockApiGet.mockResolvedValue({ ports: [{ port: 9090, protocol: 'http', processName: 'go', processArgs: '' }] })
+            await rescanPorts()
+            expect(detectedPorts.value).toHaveLength(1)
+        })
+
+        it('closeScanDrawer closes the drawer', async () => {
+            mockApiGet.mockResolvedValue({ ports: [] })
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { openScanDrawer, closeScanDrawer, scanDrawerOpen } = usePortForward()
+
+            await openScanDrawer()
+            closeScanDrawer()
+            expect(scanDrawerOpen.value).toBe(false)
+        })
+    })
+
+    describe('setPortEnabled', () => {
+        it('calls the enabled endpoint and refreshes ports', async () => {
+            mockApiPut.mockResolvedValue({ status: 'ok' })
+            mockApiGet.mockResolvedValue({ ports: [] })
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { setPortEnabled } = usePortForward()
+
+            await setPortEnabled(8080, false)
+
+            expect(mockApiPut).toHaveBeenCalledWith('/api/proxy/ports/enabled', { localPort: 8080, enabled: false })
+            expect(mockApiGet).toHaveBeenCalledWith('/api/proxy/ports')
+        })
+
+        it('removes the native forward when disabling in app mode', async () => {
+            mockIsAppMode.value = true
+            mockApiPut.mockResolvedValue({ status: 'ok' })
+            mockApiGet.mockResolvedValue({
+                ports: [{ port: 8080, localPort: 8080, host: '', name: 'API', protocol: 'http', active: true, enabled: false }],
+            })
+            const mockRemove = vi.fn()
+            ;(window as any).AndroidNative = { removeForwardedPort: mockRemove }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { setPortEnabled } = usePortForward()
+
+            await setPortEnabled(8080, false)
+
+            expect(mockRemove).toHaveBeenCalledWith(8080)
+
+            delete (window as any).AndroidNative
+            mockIsAppMode.value = false
+        })
+
+        it('adds the native forward when enabling in app mode', async () => {
+            mockIsAppMode.value = true
+            mockApiPut.mockResolvedValue({ status: 'ok' })
+            mockApiGet.mockResolvedValue({
+                ports: [{ port: 8080, localPort: 8080, host: '192.168.1.1', name: 'API', protocol: 'http', active: true, enabled: true }],
+            })
+            const mockAdd = vi.fn()
+            ;(window as any).AndroidNative = { addForwardedPort: mockAdd }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { setPortEnabled } = usePortForward()
+
+            await setPortEnabled(8080, true)
+
+            expect(mockAdd).toHaveBeenCalledWith(8080, 8080, '192.168.1.1')
+
+            delete (window as any).AndroidNative
+            mockIsAppMode.value = false
+        })
+
+        it('does not touch native layer in web mode', async () => {
+            mockIsAppMode.value = false
+            mockApiPut.mockResolvedValue({ status: 'ok' })
+            mockApiGet.mockResolvedValue({
+                ports: [{ port: 8080, localPort: 8080, host: '', name: 'API', protocol: 'http', active: true, enabled: false }],
+            })
+            const mockRemove = vi.fn()
+            ;(window as any).AndroidNative = { removeForwardedPort: mockRemove }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { setPortEnabled } = usePortForward()
+
+            await setPortEnabled(8080, false)
+
+            expect(mockRemove).not.toHaveBeenCalled()
+
+            delete (window as any).AndroidNative
         })
     })
 
     describe('ensurePortRegistered', () => {
         it('returns existing localPort if port already exists', async () => {
             mockApiGet.mockResolvedValue({
-                ports: [{ port: 3000, name: 'App', protocol: 'http', active: true, localPort: 3000, host: '' }],
+                ports: [{ port: 3000, name: 'App', protocol: 'http', active: true, enabled: true, localPort: 3000, host: '' }],
             })
 
             const { usePortForward } = await import('@/composables/usePortForward')
@@ -761,6 +917,40 @@ describe('usePortForward', () => {
             const result = await ensurePortRegistered(3000, 'http')
 
             expect(mockApiPost).not.toHaveBeenCalled()
+            expect(result).toBe(3000)
+        })
+
+        it('re-enables an existing port that is currently disabled', async () => {
+            mockApiGet.mockResolvedValue({
+                ports: [{ port: 3000, localPort: 3000, host: '', name: 'App', protocol: 'http', active: false, enabled: false }],
+            })
+            mockApiPut.mockResolvedValue({ status: 'ok' })
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { ensurePortRegistered, loadPorts } = usePortForward()
+
+            await loadPorts()
+
+            const result = await ensurePortRegistered(3000, 'http')
+
+            // Should not re-register, but re-enable the disabled port so it can be opened.
+            expect(mockApiPost).not.toHaveBeenCalled()
+            expect(mockApiPut).toHaveBeenCalledWith('/api/proxy/ports/enabled', { localPort: 3000, enabled: true })
+            expect(result).toBe(3000)
+        })
+
+        it('does not re-enable an already-enabled port', async () => {
+            mockApiGet.mockResolvedValue({
+                ports: [{ port: 3000, localPort: 3000, name: 'App', protocol: 'http', active: true, enabled: true }],
+            })
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { ensurePortRegistered, loadPorts } = usePortForward()
+
+            await loadPorts()
+            const result = await ensurePortRegistered(3000, 'http')
+
+            expect(mockApiPut).not.toHaveBeenCalled()
             expect(result).toBe(3000)
         })
 
@@ -782,8 +972,8 @@ describe('usePortForward', () => {
         it('matches both port and host when finding existing entry', async () => {
             mockApiGet.mockResolvedValue({
                 ports: [
-                    { port: 3000, localPort: 3000, host: '', name: 'Local', protocol: 'http', active: true },
-                    { port: 3000, localPort: 3001, host: '192.168.1.1', name: 'Remote', protocol: 'http', active: true },
+                    { port: 3000, localPort: 3000, host: '', name: 'Local', protocol: 'http', active: true, enabled: true },
+                    { port: 3000, localPort: 3001, host: '192.168.1.1', name: 'Remote', protocol: 'http', active: true, enabled: true },
                 ],
             })
 
@@ -824,8 +1014,8 @@ describe('usePortForward', () => {
             mockIsAppMode.value = true
             mockApiGet.mockResolvedValue({
                 ports: [
-                    { port: 3000, localPort: 3000, host: '', name: 'App', protocol: 'http', active: true },
-                    { port: 8080, localPort: 8080, host: '192.168.1.1', name: 'API', protocol: 'http', active: true },
+                    { port: 3000, localPort: 3000, host: '', name: 'App', protocol: 'http', active: true, enabled: true },
+                    { port: 8080, localPort: 8080, host: '192.168.1.1', name: 'API', protocol: 'http', active: true, enabled: true },
                 ],
             })
             const mockAdd = vi.fn()
@@ -843,6 +1033,29 @@ describe('usePortForward', () => {
             mockIsAppMode.value = false
         })
 
+        it('skips disabled ports when syncing to native layer', async () => {
+            mockIsAppMode.value = true
+            mockApiGet.mockResolvedValue({
+                ports: [
+                    { port: 3000, localPort: 3000, host: '', name: 'App', protocol: 'http', active: true, enabled: false },
+                    { port: 8080, localPort: 8080, host: '', name: 'API', protocol: 'http', active: true, enabled: true },
+                ],
+            })
+            const mockAdd = vi.fn()
+            ;(window as any).AndroidNative = { addForwardedPort: mockAdd }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { syncToNative } = usePortForward()
+
+            await syncToNative()
+
+            expect(mockAdd).not.toHaveBeenCalledWith(3000, 3000, '')
+            expect(mockAdd).toHaveBeenCalledWith(8080, 8080, '')
+
+            delete (window as any).AndroidNative
+            mockIsAppMode.value = false
+        })
+
         it('does nothing when not in app mode', async () => {
             mockIsAppMode.value = false
             mockApiGet.mockResolvedValue({ ports: [] })
@@ -854,6 +1067,62 @@ describe('usePortForward', () => {
             await syncToNative()
 
             expect(mockApiGet).not.toHaveBeenCalled()
+        })
+
+        it('removes stale native forwards that are no longer enabled on the server', async () => {
+            mockIsAppMode.value = true
+            mockApiGet.mockResolvedValue({
+                ports: [
+                    { port: 8080, localPort: 8080, host: '', name: 'API', protocol: 'http', active: true, enabled: true },
+                ],
+            })
+            const mockAdd = vi.fn()
+            const mockRemove = vi.fn()
+            // Native still has a stale 3000 forward from before it was disabled/removed.
+            ;(window as any).AndroidNative = {
+                addForwardedPort: mockAdd,
+                removeForwardedPort: mockRemove,
+                getForwardedPorts: () => JSON.stringify([{ port: 8080, host: '' }, { port: 3000, host: '' }]),
+            }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { syncToNative } = usePortForward()
+
+            await syncToNative()
+
+            // Stale 3000 is removed, 8080 (enabled) is added.
+            expect(mockRemove).toHaveBeenCalledWith(3000)
+            expect(mockRemove).not.toHaveBeenCalledWith(8080)
+            expect(mockAdd).toHaveBeenCalledWith(8080, 8080, '')
+
+            delete (window as any).AndroidNative
+            mockIsAppMode.value = false
+        })
+
+        it('tolerates malformed getForwardedPorts response', async () => {
+            mockIsAppMode.value = true
+            mockApiGet.mockResolvedValue({
+                ports: [
+                    { port: 8080, localPort: 8080, host: '', name: 'API', protocol: 'http', active: true, enabled: true },
+                ],
+            })
+            const mockAdd = vi.fn()
+            ;(window as any).AndroidNative = {
+                addForwardedPort: mockAdd,
+                removeForwardedPort: vi.fn(),
+                getForwardedPorts: () => 'not-json',
+            }
+
+            const { usePortForward } = await import('@/composables/usePortForward')
+            const { syncToNative } = usePortForward()
+
+            await syncToNative()
+
+            // Malformed JSON is ignored; enabled port is still added.
+            expect(mockAdd).toHaveBeenCalledWith(8080, 8080, '')
+
+            delete (window as any).AndroidNative
+            mockIsAppMode.value = false
         })
     })
 

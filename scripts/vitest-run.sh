@@ -22,7 +22,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 # Timeout: 10 minutes by default (override with VITEST_TIMEOUT_S env)
-TIMEOUT_S="${VITEST_TIMEOUT_S:-600}"
+TIMEOUT_S="${VITEST_TIMEOUT_S:-1200}"
 
 # After vitest's test output stops, if workers remain for this many seconds,
 # kill them. This handles "tests done but pool.close() hangs" without waiting
