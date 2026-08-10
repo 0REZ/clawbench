@@ -30,10 +30,8 @@ import { defaultKeymap, historyKeymap, history, undo, redo, undoDepth, redoDepth
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { buildLangExtension } from '@/utils/codeEditorLang'
-import { getWordRangeAt } from '@/utils/codeWordRange'
 import { diffMarkers, openDiffDrawer } from '@/composables/useMarkdownDiff.ts'
 import { flashRanges, flashType } from '@/composables/useFileRefresh.ts'
-import { copyText } from '@/utils/clipboard.ts'
 import { useQuoteQuestion } from '@/composables/useQuoteQuestion.ts'
 import { buildOverlayDecorations } from '@/utils/codeMirrorOverlay.ts'
 import { useDialog } from '@/composables/useDialog.ts'
@@ -189,41 +187,8 @@ function handleEditorClick(event) {
     return false
 }
 
-function handleEditorDblClick(event, editor) {
-    if (props.editable) return // double-click select+copy is for browse mode only
-    // Native selection is disabled in browse mode, so select the word at the
-    // click position ourselves, then copy it.
-    const pos = editor.posAtCoords({ x: event.clientX, y: event.clientY })
-    if (pos == null) return
-    const range = getWordRangeAt(editor.state, pos)
-    if (!range) return
-    editor.dispatch({ selection: { anchor: range.from, head: range.to } })
-    const text = editor.state.sliceDoc(range.from, range.to).trim()
-    if (!text) return
-    const startLine = editor.state.doc.lineAt(range.from).number
-    const endLine = editor.state.doc.lineAt(range.to).number
-    copyText(text)
-    quoteQuestion.showBar({
-        text,
-        filePath: props.file?.path || '',
-        language: props.language,
-        startLine,
-        endLine,
-    })
-}
-
 const interactionExtension = EditorView.domEventHandlers({
     click(event, editor) { return handleEditorClick(event, editor) },
-    dblclick(event, editor) { handleEditorDblClick(event, editor) },
-    // Browse mode: stop the browser AND CodeMirror from starting a drag or
-    // long-press text selection — selecting + copying is a deliberate
-    // double-click action. Returning true prevents the default mousedown
-    // (native selection) and skips CodeMirror's built-in MouseSelection.
-    mousedown(event, _editor) {
-        if (props.editable) return false
-        event.preventDefault()
-        return true
-    },
 })
 
 // ─── Selection-based quote question (read-only mode) ───
@@ -245,13 +210,15 @@ function handleSelectionChange(update) {
     const startLine = update.state.doc.lineAt(sel.from).number
     const endLine = update.state.doc.lineAt(sel.to).number
     selDebounceTimer = setTimeout(() => {
+        // delay: 0 — double-click is not used in code mode, so there is no
+        // pointerdown that could immediately close the bar (see useQuoteQuestion).
         quoteQuestion.showBar({
             text,
             filePath: props.file?.path || '',
             language: props.language,
             startLine,
             endLine,
-        })
+        }, { delay: 0 })
     }, 200)
 }
 
@@ -298,11 +265,17 @@ function recomputeOverlay() {
 // scrollDOM.scrollTop toward the target line to give a smooth scroll instead.
 let flashTimer = null
 let scrollRAF = null
-function smoothScrollToLine(editor, pos) {
+function centeredScrollTop(editor, pos) {
     const scroller = editor.scrollDOM
     const block = editor.lineBlockAt(pos)
     const viewportHeight = scroller.clientHeight
-    const targetTop = Math.max(0, block.top - (viewportHeight - block.height) / 2)
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - viewportHeight)
+    const centeredTop = block.top - (viewportHeight - block.height) / 2
+    return Math.min(maxScrollTop, Math.max(0, centeredTop))
+}
+function smoothScrollToLine(editor, pos) {
+    const scroller = editor.scrollDOM
+    const targetTop = centeredScrollTop(editor, pos)
     const startTop = scroller.scrollTop
     const delta = targetTop - startTop
     if (Math.abs(delta) < 0.5) return
@@ -315,7 +288,12 @@ function smoothScrollToLine(editor, pos) {
         const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
         scroller.scrollTop = startTop + delta * eased
         if (t < 1) scrollRAF = requestAnimationFrame(step)
-        else scrollRAF = null
+        else {
+            // Recalculate after the animation: CodeMirror may finish measuring
+            // the document while the smooth movement is in progress.
+            scroller.scrollTop = centeredScrollTop(editor, pos)
+            scrollRAF = null
+        }
     }
     scrollRAF = requestAnimationFrame(step)
 }
@@ -339,10 +317,43 @@ function scrollToLine(line, lineEnd) {
     }, 1500)
 }
 
+let pendingScrollRequestId = null
+let pendingScrollRAF = null
 function onScrollToLine(e) {
     const d = e.detail
     if (!d || typeof d.line !== 'number') return
-    scrollToLine(d.line, d.lineEnd)
+    if (d.path && d.path !== props.file?.path) return
+    if (!d.requestId) {
+        window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
+        scrollToLine(d.line, d.lineEnd)
+        return
+    }
+    if (pendingScrollRequestId === d.requestId) return
+    pendingScrollRequestId = d.requestId
+
+    const applyWhenLaidOut = () => {
+        if (pendingScrollRequestId !== d.requestId) return
+        const editor = view.value
+        if (!editor || (d.path && d.path !== props.file?.path)) {
+            pendingScrollRequestId = null
+            return
+        }
+        const scroller = editor.scrollDOM
+        // A newly mounted editor can have content but no measured viewport for
+        // one or more frames. Wait for layout before calculating the center.
+        if (scroller.clientHeight <= 0 && scroller.scrollHeight > 0) {
+            pendingScrollRAF = requestAnimationFrame(applyWhenLaidOut)
+            return
+        }
+        pendingScrollRequestId = null
+        pendingScrollRAF = null
+        window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
+        scrollToLine(d.line, d.lineEnd)
+        window.dispatchEvent(new CustomEvent('cm-scroll-to-line-handled', { detail: { requestId: d.requestId } }))
+    }
+    // Always defer the first measurement by one frame so the editor has its
+    // final height after a rendered/raw view transition.
+    pendingScrollRAF = requestAnimationFrame(applyWhenLaidOut)
 }
 
 // ─── Assemble extensions ───
@@ -407,6 +418,9 @@ onMounted(() => {
 
 onUnmounted(() => {
     window.removeEventListener('cm-scroll-to-line', onScrollToLine)
+    if (pendingScrollRAF) cancelAnimationFrame(pendingScrollRAF)
+    pendingScrollRAF = null
+    pendingScrollRequestId = null
     if (scrollRAF) cancelAnimationFrame(scrollRAF)
     if (flashTimer) clearTimeout(flashTimer)
     if (selDebounceTimer) clearTimeout(selDebounceTimer)
@@ -632,15 +646,10 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
     display: none;
 }
 
-/* Browse mode: suppress native text selection (mobile long-press / desktop drag)
-   so accidental selection handles don't appear. Selecting + copying is done
-   deliberately via double-click (see handleEditorDblClick). Edit mode keeps the
-   normal selectable behavior. */
-.cm-viewer.cm-readonly .cm-content {
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
-}
+/* Read-only mode keeps CodeMirror's default selection: text is selectable by
+   drag (desktop) / long-press (mobile) and copyable with Ctrl/Cmd+C. The
+   selection-driven quote bar reacts to CodeMirror's internal selection changes.
+   No user-select override is applied to the content. */
 
 /* Diff marker gutter label */
 .cm-diff-gutter-marker {

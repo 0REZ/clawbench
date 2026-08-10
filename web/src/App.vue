@@ -135,6 +135,8 @@
                       @close-git-history="fileHistoryDrawer.close()"
                       @open-file="handleOverlayOpenFile"
                       @overlay-close="handleOverlayClose"
+                      @navigate-back="handleFileHistoryBack"
+                      @navigate-forward="handleFileHistoryForward"
                     />
                     <div v-else class="view-panel-empty" :class="recentFileEntries.length ? 'has-recent' : 'no-recent'">
                       <template v-if="recentFileEntries.length">
@@ -148,8 +150,19 @@
                               @click="handleAppHeaderRecentFileSelect(entry.path)"
                             >
                               <FileIcon :path="entry.path" :size="16" />
-                              <span class="view-empty-recent-name">{{ baseName(entry.path) }}</span>
-                              <span class="view-empty-recent-dir">{{ dirName(entry.path) }}</span>
+                              <div class="view-empty-recent-text">
+                                <span class="view-empty-recent-name">{{ baseName(entry.path) }}</span>
+                                <span class="view-empty-recent-dir">{{ dirName(entry.path) }}</span>
+                              </div>
+                              <button
+                                class="view-empty-recent-remove"
+                                type="button"
+                                :title="t('appHeader.removeRecentFile')"
+                                :aria-label="t('appHeader.removeRecentFile')"
+                                @click.stop="removeRecentFile(entry.path)"
+                              >
+                                <X :size="14" />
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -389,7 +402,7 @@ import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
-import { MessageSquare, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText } from 'lucide-vue-next'
+import { MessageSquare, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
 import FileOverlay from './components/file/FileOverlay.vue'
@@ -440,6 +453,8 @@ import { useFileWatch } from './composables/useFileWatch.ts'
 import { useFileNavStack } from './composables/useFileNavStack'
 import { useFileEditor } from './composables/useFileEditor'
 import { openRecentFile, removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
+import { initLocalLinkGuard } from './composables/useLocalLinkGuard'
+import { openFilePath } from './composables/useFilePathAnnotation'
 import { refreshCurrentFile } from './composables/useFileRefresh.ts'
 import { useGlobalEvents } from './composables/useGlobalEvents'
 import ConnectionOverlay from './components/common/ConnectionOverlay.vue'
@@ -869,6 +884,8 @@ useFeatureBackHandler(
     }
     if (fileNav.canGoBack.value) {
       const prevPath = fileNav.goBack()
+      const location = fileNav.currentLocation.value
+      if (location?.viewMode) markdownViewMode.value = location.viewMode
       if (prevPath) store.selectFile(prevPath)
     } else {
       closeOverlayAndSync()
@@ -1221,7 +1238,7 @@ async function handleSelectFile(path) {
     const ok = await store.selectFile(path)
     if (ok) {
         switchTab('view')
-        fileNav.openFile(path)
+        fileNav.openFile(path, { viewMode: markdownViewMode.value })
     }
 }
 
@@ -1229,7 +1246,7 @@ async function handleBrowseSelectFile(path) {
     if (fileManagerRef.value?.multiSelectState?.active) return
     const ok = await store.selectFile(path)
     if (ok) {
-        fileNav.openFile(path)
+        fileNav.openFile(path, { viewMode: markdownViewMode.value })
         switchTab('view')
     }
 }
@@ -1238,8 +1255,9 @@ async function handleTaskOpenFile(filePath, lineStart) {
     const ok = await store.selectFile(filePath)
     if (ok) {
         switchTab('view')
-        fileNav.openFile(filePath)
-        if (lineStart) scrollToLine(lineStart)
+        if (lineStart) markdownViewMode.value = 'raw'
+        fileNav.openFile(filePath, { lineStart, viewMode: markdownViewMode.value })
+        if (lineStart) scrollToLine(lineStart, undefined, filePath)
     }
 }
 
@@ -1247,8 +1265,27 @@ function handleOverlayClose() {
     closeOverlayAndSync()
 }
 
+async function handleFileHistoryBack() {
+    const path = fileNav.goBack()
+    const location = fileNav.currentLocation.value
+    if (!path || !location) return
+    if (location.viewMode) markdownViewMode.value = location.viewMode
+    const ok = await store.selectFile(path)
+    if (ok && location.lineStart) scrollToLine(location.lineStart, location.lineEnd, path)
+}
+
+async function handleFileHistoryForward() {
+    const path = fileNav.goForward()
+    const location = fileNav.currentLocation.value
+    if (!path || !location) return
+    if (location.viewMode) markdownViewMode.value = location.viewMode
+    const ok = await store.selectFile(path)
+    if (ok && location.lineStart) scrollToLine(location.lineStart, location.lineEnd, path)
+}
+
 async function handleOverlayOpenFile(payload) {
     const { path, lineStart, lineEnd } = typeof payload === 'string' ? { path: payload } : payload
+    fileNav.updateCurrent({ viewMode: markdownViewMode.value })
     // Try as directory first — navigate into dir and close overlay
     if (!path.startsWith('/')) {
         try {
@@ -1268,8 +1305,8 @@ async function handleOverlayOpenFile(payload) {
     const ok = await store.selectFile(path)
     if (ok) {
         if (lineStart) markdownViewMode.value = 'raw'
-        fileNav.openFile(path)
-        if (lineStart) scrollToLine(lineStart, lineEnd)
+        fileNav.openFile(path, { lineStart, lineEnd, viewMode: markdownViewMode.value })
+        if (lineStart) scrollToLine(lineStart, lineEnd, path)
         if (isExternal) {
             toast.show(gt('file.toast.externalFile'), { icon: 'ℹ️', type: 'info', duration: 2000 })
         }
@@ -1277,20 +1314,22 @@ async function handleOverlayOpenFile(payload) {
 }
 
 async function handleAppHeaderRecentFileSelect(path) {
+    fileNav.updateCurrent({ viewMode: markdownViewMode.value })
     const ok = await openRecentFile(path, (p) => store.selectFile(p))
     if (ok) {
         switchTab('view')
-        fileNav.openFile(path)
+        fileNav.openFile(path, { viewMode: markdownViewMode.value })
     }
 }
 
 function handleOpenFileOverlay(e) {
     const { path, lineStart, lineEnd } = e.detail || {}
     if (!path) return
+    fileNav.updateCurrent({ viewMode: markdownViewMode.value })
     switchTab('view')
     if (lineStart) markdownViewMode.value = 'raw'
-    fileNav.openFile(path)
-    if (lineStart) scrollToLine(lineStart, lineEnd)
+    fileNav.openFile(path, { lineStart, lineEnd, viewMode: markdownViewMode.value })
+    if (lineStart) scrollToLine(lineStart, lineEnd, path)
 }
 
 function onTaskCardClick(taskId) {
@@ -1795,16 +1834,43 @@ function handleOpenTerminal(cwd) {
     switchTab('terminal')
 }
 
-function scrollToLine(line, lineEnd) {
+let activeLineScrollCancel = null
+let lineScrollRequestId = 0
+
+function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
     const startLine = Math.max(1, line)
     const endLine = Math.min(lineEnd && lineEnd > startLine ? lineEnd : startLine, startLine + 200)
-    // CodeMirror-based viewers (code/raw files) scroll internally via this event
-    window.dispatchEvent(new CustomEvent('cm-scroll-to-line', { detail: { line: startLine, lineEnd } }))
     const selector = `.code-line[data-line="${startLine}"]`
-    const maxAttempts = 30
+    const requestId = ++lineScrollRequestId
+    const maxAttempts = 60
     let attempts = 0
+    let handled = false
+
+    activeLineScrollCancel?.()
+
+    function cleanup() {
+        window.removeEventListener('cm-scroll-to-line-handled', onHandled)
+        if (activeLineScrollCancel === cleanup) activeLineScrollCancel = null
+    }
+
+    function onHandled(e) {
+        if (e.detail?.requestId !== requestId) return
+        handled = true
+        cleanup()
+    }
+
+    activeLineScrollCancel = cleanup
+    window.addEventListener('cm-scroll-to-line-handled', onHandled)
+
     function tryScroll() {
         attempts++
+        // CodeMirror may mount asynchronously when a rendered Markdown file is
+        // switched to source mode. Retry the same request until it acknowledges it.
+        window.dispatchEvent(new CustomEvent('cm-scroll-to-line', {
+            detail: { line: startLine, lineEnd, path, requestId },
+        }))
+        if (handled) return
+
         const firstEl = document.querySelector(selector)
         if (firstEl) {
             // Cancel any pending scroll-position restore in FileViewer
@@ -1819,13 +1885,16 @@ function scrollToLine(line, lineEnd) {
                     el.addEventListener('animationend', () => el.classList.remove('line-flash'), { once: true })
                 }
             }
+            cleanup()
             return
         }
         if (attempts < maxAttempts) {
-            nextTick(tryScroll)
+            requestAnimationFrame(tryScroll)
+        } else {
+            cleanup()
         }
     }
-    nextTick(tryScroll)
+    requestAnimationFrame(tryScroll)
 }
 
 
@@ -2118,9 +2187,17 @@ function handleCtrlF(e) {
 
 onMounted(() => {
     document.addEventListener('keydown', handleCtrlF)
+    stopLocalLinkGuard = initLocalLinkGuard((href) => {
+        openFilePath(href)
+    })
 })
 
+let stopLocalLinkGuard = null
+
 onUnmounted(() => {
+    stopLocalLinkGuard?.()
+    stopLocalLinkGuard = null
+    activeLineScrollCancel?.()
     stopDockResize()
     removeTaskHandler()
     window.removeEventListener('clawbench-foreground', handleForeground)
@@ -2239,7 +2316,7 @@ onUnmounted(() => {
 .view-empty-recent-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
@@ -2247,6 +2324,13 @@ onUnmounted(() => {
   transition: background 0.15s;
 }
 
+.view-empty-recent-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .view-empty-recent-item:hover {
   background: var(--bg-hover, rgba(128, 128, 128, 0.1));
 }
@@ -2258,21 +2342,49 @@ onUnmounted(() => {
 .view-empty-recent-name {
   color: var(--text-primary);
   font-size: 13px;
-  flex-shrink: 0;
-  max-width: 40%;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.view-empty-recent-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.view-empty-recent-item:hover .view-empty-recent-remove {
+  color: var(--text-secondary);
+}
+
+.view-empty-recent-remove:focus-visible {
+  color: var(--text-secondary);
+}
+
+.view-empty-recent-remove:hover,
+.view-empty-recent-remove:focus-visible {
+  color: var(--color-red, #ef4444);
+  background: color-mix(in srgb, var(--color-red, #ef4444) 12%, transparent);
+}
+
 .view-empty-recent-dir {
   color: var(--text-muted);
-  font-size: 12px;
-  flex: 1;
+  font-size: 11px;
+  line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl;
 }
 
 .view-empty-manager-btn {

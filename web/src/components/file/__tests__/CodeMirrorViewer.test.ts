@@ -143,6 +143,31 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     cancelSpy.mockRestore()
   })
 
+  it('acknowledges matching delayed line navigation and ignores another file', async () => {
+    const wrapper = mountViewer({
+      file: { path: '/tmp/current.ts', name: 'current.ts' },
+      content: 'line1\nline2\nline3\nline4\nline5\n',
+    })
+    await sleep(80)
+    const handled = vi.fn()
+    window.addEventListener('cm-scroll-to-line-handled', handled)
+
+    window.dispatchEvent(new CustomEvent('cm-scroll-to-line', {
+      detail: { line: 4, path: '/tmp/other.ts', requestId: 1 },
+    }))
+    expect(handled).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new CustomEvent('cm-scroll-to-line', {
+      detail: { line: 4, path: '/tmp/current.ts', requestId: 2 },
+    }))
+    await sleep(20)
+    expect(handled).toHaveBeenCalledTimes(1)
+    expect(handled.mock.calls[0][0].detail).toEqual({ requestId: 2 })
+
+    window.removeEventListener('cm-scroll-to-line-handled', handled)
+    wrapper.unmount()
+  })
+
   it('toggles line numbers via prop', async () => {
     const wrapper = mountViewer({ showLineNumbers: true })
     await sleep(50)
@@ -329,29 +354,15 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     expect(css).toMatch(/--code-bg-editing/)
   })
 
-  it('disables native text selection in browse mode only', async () => {
+  it('enables native text selection in read-only mode (no user-select suppression)', async () => {
     mountViewer({ content: 'x', editable: false })
     mountViewer({ content: 'x', editable: true })
     await sleep(50)
-    // The browse-mode stylesheet must suppress native selection on .cm-content;
-    // edit mode leaves it selectable (no such rule for is-editable).
+    // Read-only mode keeps CodeMirror's default selection (desktop drag, mobile
+    // long-press). Assert no user-select:none applies to .cm-content in either
+    // browse or edit mode.
     const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n')
-    const rule = /\.cm-viewer\.cm-readonly\s+\.cm-content\s*\{[^}]*user-select:\s*none/m
-    expect(css).toMatch(rule)
+    expect(css).not.toMatch(/\.cm-viewer\.cm-readonly\s+\.cm-content\s*\{[^}]*user-select:\s*none/)
     expect(css).not.toMatch(/\.cm-viewer\.is-editable\s+\.cm-content\s*\{[^}]*user-select:\s*none/)
-  })
-
-  it('prevents mousedown selection in browse mode but not edit mode', async () => {
-    const browse = mountViewer({ content: 'aaa bbb\n', editable: false })
-    await sleep(80)
-    const md1 = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
-    browse.vm.getView().contentDOM.dispatchEvent(md1)
-    expect(md1.defaultPrevented).toBe(true)
-
-    const edit = mountViewer({ content: 'aaa bbb\n', editable: true })
-    await sleep(80)
-    const md2 = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
-    edit.vm.getView().contentDOM.dispatchEvent(md2)
-    expect(md2.defaultPrevented).toBe(false)
   })
 })
