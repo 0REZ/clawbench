@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
@@ -79,6 +79,22 @@ describe('SearchInput', () => {
     expect(wrapper.emitted('enter')).toBeTruthy()
   })
 
+  it('emits down on ArrowDown keydown', async () => {
+    const wrapper = mountInput()
+
+    await wrapper.find('input').trigger('keydown', { key: 'ArrowDown' })
+
+    expect(wrapper.emitted('down')).toBeTruthy()
+  })
+
+  it('emits up on ArrowUp keydown', async () => {
+    const wrapper = mountInput()
+
+    await wrapper.find('input').trigger('keydown', { key: 'ArrowUp' })
+
+    expect(wrapper.emitted('up')).toBeTruthy()
+  })
+
   it('applies focused class on focus', async () => {
     const wrapper = mountInput()
     const vm = wrapper.vm as any
@@ -113,5 +129,26 @@ describe('SearchInput', () => {
   it('exposes inputRef', () => {
     const wrapper = mountInput()
     expect(wrapper.vm.inputRef).toBeDefined()
+  })
+
+  it('selects existing content when focused with a non-empty value', () => {
+    const wrapper = mountInput({ modelValue: 'hello' })
+    const el = wrapper.find('input').element as HTMLInputElement
+    ;(wrapper.vm as any).inputRef = el
+    const select = vi.spyOn(el, 'select')
+
+    wrapper.vm.focus()
+
+    expect(select).toHaveBeenCalled()
+  })
+
+  it('does not select content when focused with an empty value', () => {
+    const wrapper = mountInput()
+    const el = wrapper.find('input').element as HTMLInputElement
+    const select = vi.spyOn(el, 'select')
+
+    wrapper.vm.focus()
+
+    expect(select).not.toHaveBeenCalled()
   })
 })

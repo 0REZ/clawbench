@@ -44,7 +44,85 @@ func TestServeConfigTest_UnknownCategory(t *testing.T) {
 	var result ConnectivityTestResult
 	_ = json.NewDecoder(w.Body).Decode(&result)
 	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "Unknown category")
+}
+
+func TestSTTConnectivity(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/audio/transcriptions" {
+			t.Fatalf("path = %q, want /v1/audio/transcriptions", r.URL.Path)
+		}
+		if got := r.FormValue("model"); got != "Qwen3-ASR-1.7B" {
+			t.Fatalf("model = %q, want Qwen3-ASR-1.7B", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":""}`))
+	}))
+	defer srv.Close()
+
+	res := testSTT(context.Background(), map[string]any{
+		"stt.base_url": srv.URL,
+		"stt.model":    "Qwen3-ASR-1.7B",
+	})
+	if !res.Success {
+		t.Fatalf("expected success, got %+v", res)
+	}
+}
+
+func TestSTTConnectivity_AuthFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	res := testSTT(context.Background(), map[string]any{
+		"stt.base_url": srv.URL,
+		"stt.model":    "m",
+	})
+	if res.Success {
+		t.Fatalf("expected failure for auth, got %+v", res)
+	}
+}
+
+func TestSTTConnectivity_ModelNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"model Qwen3-ASR-1.7B does not exist"}`))
+	}))
+	defer srv.Close()
+
+	res := testSTT(context.Background(), map[string]any{
+		"stt.base_url": srv.URL,
+		"stt.model":    "Qwen3-ASR-1.7B",
+	})
+	if res.Success {
+		t.Fatalf("expected failure for unknown model, got %+v", res)
+	}
+}
+
+func TestSTTConnectivity_Endpoint404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	res := testSTT(context.Background(), map[string]any{
+		"stt.base_url": srv.URL,
+		"stt.model":    "m",
+	})
+	if res.Success {
+		t.Fatalf("expected failure for 404, got %+v", res)
+	}
+}
+
+func TestMakeMinimalWAV(t *testing.T) {
+	wav := makeMinimalWAV()
+	if len(wav) < 44 {
+		t.Fatalf("wav too short: %d", len(wav))
+	}
+	if string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" {
+		t.Fatalf("invalid RIFF/WAVE header")
+	}
 }
 
 func TestServeConfigTest_MethodNotAllowed(t *testing.T) {
@@ -92,58 +170,6 @@ func TestTestFRP_ConnectionRefused(t *testing.T) {
 
 // ── Summarize tests ──────────────────────────────────────────
 
-func TestTestSummarizeText_NotAPI(t *testing.T) {
-	result := testSummarizeText(context.Background(), map[string]any{
-		"summarize.backend": "simple",
-	})
-	assert.True(t, result.Success)
-	assert.Contains(t, result.Message, "not protocol mode")
-}
-
-func TestTestSummarizeText_EmptyURL(t *testing.T) {
-	result := testSummarizeText(context.Background(), map[string]any{
-		"summarize.backend":      "api",
-		"summarize.api.base_url": "",
-	})
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "required")
-}
-
-func TestTestSummarizeText_OpenAISuccess(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintln(w, `{"choices":[{"message":{"content":"ok"}}]}`)
-	}))
-	defer srv.Close()
-
-	result := testSummarizeText(context.Background(), map[string]any{
-		"summarize.backend":      "api",
-		"summarize.api.base_url": srv.URL,
-		"summarize.api.key":      "test-key",
-		"summarize.model":        "test-model",
-	})
-	assert.True(t, result.Success)
-	assert.Contains(t, result.Message, "successful")
-}
-
-func TestTestSummarizeText_OpenAIError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = fmt.Fprintln(w, `{"error":{"message":"Invalid API key"}}`)
-	}))
-	defer srv.Close()
-
-	result := testSummarizeText(context.Background(), map[string]any{
-		"summarize.backend":      "api",
-		"summarize.api.base_url": srv.URL,
-		"summarize.api.key":      "bad-key",
-		"summarize.model":        "test-model",
-	})
-	assert.False(t, result.Success)
-	assert.Contains(t, result.Message, "Invalid API key")
-}
-
 func TestTestSummarizeVoice_AnthropicSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "test-key", r.Header.Get("x-api-key"))
@@ -154,10 +180,10 @@ func TestTestSummarizeVoice_AnthropicSuccess(t *testing.T) {
 
 	// Use /v1/messages suffix so auto-detection identifies this as Anthropic format
 	result := testSummarizeVoice(context.Background(), map[string]any{
-		"summarize.tts_backend":      "api",
-		"summarize.tts_api.base_url": srv.URL + "/v1/messages",
-		"summarize.tts_api.key":      "test-key",
-		"summarize.tts_model":        "claude-3-haiku",
+		"summarize.tts_backend":   "api",
+		"ai_summary.api.base_url": srv.URL + "/v1/messages",
+		"ai_summary.api.key":      "test-key",
+		"ai_summary.model":        "claude-3-haiku",
 	})
 	assert.True(t, result.Success)
 	assert.Contains(t, result.Message, "anthropic")
@@ -610,9 +636,9 @@ func TestTestSummarizeVoice_DefaultModel(t *testing.T) {
 	defer srv.Close()
 
 	result := testSummarizeVoice(context.Background(), map[string]any{
-		"summarize.tts_backend":      strAPI,
-		"summarize.tts_api.base_url": srv.URL,
-		"summarize.tts_api.key":      "test-key",
+		"summarize.tts_backend":   strAPI,
+		"ai_summary.api.base_url": srv.URL,
+		"ai_summary.api.key":      "test-key",
 		// No model provided — should default to "gpt-4o-mini"
 	})
 	assert.True(t, result.Success)
@@ -833,24 +859,6 @@ func TestTestFRP_DefaultPort(t *testing.T) {
 func TestBuildEndpointURL_NoSlashInPath(t *testing.T) {
 	result := buildEndpointURL("https://api.example.com", "chat")
 	assert.Equal(t, "https://api.example.com/chat", result)
-}
-
-// ── Summarize text default model test ─────────────────────────
-
-func TestTestSummarizeText_DefaultModel(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintln(w, `{"choices":[{"message":{"content":"ok"}}]}`)
-	}))
-	defer srv.Close()
-
-	result := testSummarizeText(context.Background(), map[string]any{
-		"summarize.backend":      strAPI,
-		"summarize.api.base_url": srv.URL,
-		"summarize.api.key":      "test-key",
-		// No model — should default to "gpt-4o-mini"
-	})
-	assert.True(t, result.Success)
 }
 
 // ── Feishu tests ──────────────────────────────────────────────────

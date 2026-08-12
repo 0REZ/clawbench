@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"clawbench/internal/model"
 
@@ -816,44 +817,6 @@ func TestParseDecorateRefs_Tag(t *testing.T) {
 	assert.Equal(t, "tag: v1.0", refs[0])
 }
 
-func TestParseFileCountFromShortstat(t *testing.T) {
-	tests := []struct {
-		input string
-		want  int
-	}{
-		{" 2 files changed, 10 insertions(+), 5 deletions(-)", 2},
-		{" 1 file changed, 3 insertions(+)", 1},
-		{" 15 files changed, 200 insertions(+), 50 deletions(-)", 15},
-		{" 1 file changed, 2 deletions(-)", 1},
-		{"", 0},
-		{"some unrelated text", 0},
-	}
-	for _, tt := range tests {
-		got := parseFileCountFromShortstat(tt.input)
-		assert.Equal(t, tt.want, got, "parseFileCountFromShortstat(%q)", tt.input)
-	}
-}
-
-func TestParseGitLogWithStats(t *testing.T) {
-	// Simulate actual git log output with null byte separator and shortstat
-	output := "abc123|parent1|fix bug|2026-01-01|Author (HEAD -> main)\x00\n\n 2 files changed, 10 insertions(+), 5 deletions(-)\nsha456||initial commit|2026-01-02|Author\x00\n\n 1 file changed, 3 insertions(+)\n"
-	commits := parseGitLogWithStats(output)
-	assert.Len(t, commits, 2)
-	assert.Equal(t, 2, commits[0].FileCount)
-	assert.Equal(t, "fix bug", commits[0].Msg)
-	assert.Equal(t, 1, commits[1].FileCount)
-	assert.Equal(t, "initial commit", commits[1].Msg)
-}
-
-func TestParseGitLogWithStats_NoShortstat(t *testing.T) {
-	// When shortstat is missing (e.g. merge commit with no changes), fileCount should be 0
-	output := "abc123|parent1 parent2|merge commit|2026-01-01|Author\x00\n"
-	commits := parseGitLogWithStats(output)
-	assert.Len(t, commits, 1)
-	assert.Equal(t, 0, commits[0].FileCount)
-	assert.Equal(t, "merge commit", commits[0].Msg)
-}
-
 func TestServeGitProjectHistory_IncludesParents(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
@@ -876,16 +839,87 @@ func TestServeGitProjectHistory_IncludesParents(t *testing.T) {
 	assert.True(t, ok)
 	assert.GreaterOrEqual(t, len(commits), 2)
 
-	// First commit (most recent) should have parents
+	// First commit should have parents
 	first, _ := commits[0].(map[string]interface{})
 	parents, ok := first["parents"].([]interface{})
 	assert.True(t, ok)
 	assert.GreaterOrEqual(t, len(parents), 1)
+}
 
-	// First commit should have fileCount > 0 (it changed README.md)
-	fc, ok := first["fileCount"].(float64)
-	assert.True(t, ok)
-	assert.GreaterOrEqual(t, int(fc), 1)
+func TestGetProjectHistory_CacheHitsAndInvalidates(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	initGitRepo(t, env.ProjectDir)
+	createTestFile(t, env.ProjectDir, "README.md", "# Hello")
+	gitCommitAll(t, env.ProjectDir, "first commit")
+
+	// Prime the cache.
+	commits1, hasMore1 := getProjectHistory(env.ProjectDir, 0)
+	assert.GreaterOrEqual(t, len(commits1), 1)
+	assert.False(t, hasMore1)
+
+	// Repeated call must return the same data without re-running git.
+	commits2, _ := getProjectHistory(env.ProjectDir, 0)
+	assert.Equal(t, len(commits1), len(commits2))
+	if len(commits2) > 0 {
+		assert.Equal(t, commits1[0].SHA, commits2[0].SHA)
+	}
+
+	// A new commit changes HEAD, so the cache key changes and the cache is invalidated.
+	createTestFile(t, env.ProjectDir, "README.md", "# Hello Updated")
+	gitCommitAll(t, env.ProjectDir, "second commit")
+
+	// initGitRepo already created an initial commit, so total is 3.
+	commits3, _ := getProjectHistory(env.ProjectDir, 0)
+	assert.Equal(t, 3, len(commits3))
+}
+
+func TestProjectHistoryHeadSHA_NotGitRepo(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// env.ProjectDir is not a git repo → git rev-parse HEAD fails → "".
+	assert.Equal(t, "", projectHistoryHeadSHA(env.ProjectDir))
+}
+
+func TestGetProjectHistory_CacheEviction(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+	initGitRepo(t, env.ProjectDir)
+
+	// Save and replace the shared cache so the test is deterministic.
+	projectHistoryCache.Lock()
+	origEntries := projectHistoryCache.entries
+	projectHistoryCache.entries = make(map[string]projectHistoryCacheEntry)
+	// 100 fresh entries.
+	for i := range 100 {
+		key := fmt.Sprintf("%s|fresh%d|head", env.ProjectDir, i)
+		projectHistoryCache.entries[key] = projectHistoryCacheEntry{commits: nil, hasMore: false, loadedAt: time.Now()}
+	}
+	// One expired entry (older than the TTL) that must be evicted first.
+	expiredKey := fmt.Sprintf("%s|expired|head", env.ProjectDir)
+	projectHistoryCache.entries[expiredKey] = projectHistoryCacheEntry{commits: nil, hasMore: false, loadedAt: time.Now().Add(-time.Hour)}
+	projectHistoryCache.Unlock()
+
+	defer func() {
+		projectHistoryCache.Lock()
+		projectHistoryCache.entries = origEntries
+		projectHistoryCache.Unlock()
+	}()
+
+	// This call computes a fresh key (real HEAD sha, skip=0) and, before
+	// inserting it, triggers the eviction block because the cache is full.
+	commits, _ := getProjectHistory(env.ProjectDir, 0)
+	assert.GreaterOrEqual(t, len(commits), 1)
+
+	projectHistoryCache.Lock()
+	defer projectHistoryCache.Unlock()
+	// The expired entry should have been evicted by the expiry loop.
+	_, ok := projectHistoryCache.entries[expiredKey]
+	assert.False(t, ok, "expired cache entry should have been evicted")
+	// After evicting expired + oldest + inserting the new entry, size ≤ 100.
+	assert.LessOrEqual(t, len(projectHistoryCache.entries), 100)
 }
 
 // --- parseWorktreePorcelain ---

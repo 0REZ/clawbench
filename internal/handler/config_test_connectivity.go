@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -37,7 +40,7 @@ const (
 )
 
 type connectivityTestRequest struct {
-	Category string         `json:"category"` // "frp" | "summarize_text" | "summarize_voice" | "rag" | "dingtalk" | "port_forward" | "tts"
+	Category string         `json:"category"` // "frp" | "summarize_voice" | "rag" | "dingtalk" | "port_forward" | "tts"
 	Values   map[string]any `json:"values"`   // Flat dot-path key-value map from the form
 }
 
@@ -67,8 +70,6 @@ func ServeConfigTest(w http.ResponseWriter, r *http.Request) {
 	switch req.Category {
 	case "frp":
 		result = testFRP(ctx, req.Values)
-	case "summarize_text":
-		result = testSummarizeText(ctx, req.Values)
 	case "summarize_voice":
 		result = testSummarizeVoice(ctx, req.Values)
 	case "rag":
@@ -81,6 +82,8 @@ func ServeConfigTest(w http.ResponseWriter, r *http.Request) {
 		result = testPortForward(ctx, req.Values)
 	case "tts":
 		result = testTTS(ctx, req.Values)
+	case "stt":
+		result = testSTT(ctx, req.Values)
 	default:
 		result = ConnectivityTestResult{Success: false, Message: "Unknown category: " + req.Category}
 	}
@@ -196,28 +199,6 @@ func testFRP(ctx context.Context, values map[string]any) ConnectivityTestResult 
 	}
 }
 
-// ── Summarize Text ───────────────────────────────────────────
-
-func testSummarizeText(ctx context.Context, values map[string]any) ConnectivityTestResult {
-	backend := resolveStringValue(values, "summarize.backend", model.ConfigInstance.Summarize.Backend)
-	if backend != strAPI {
-		return ConnectivityTestResult{Success: true, Message: "Text summary backend is not protocol mode, no test needed"}
-	}
-
-	baseURL := resolveStringValue(values, "summarize.api.base_url", model.ConfigInstance.Summarize.API.BaseURL)
-	apiKey := resolveStringValue(values, "summarize.api.key", model.ConfigInstance.Summarize.API.Key)
-	modelName := resolveStringValue(values, "summarize.model", model.ConfigInstance.Summarize.Model)
-
-	if baseURL == "" {
-		return ConnectivityTestResult{Success: false, Message: "API base URL is required"}
-	}
-	if modelName == "" {
-		modelName = "gpt-4o-mini"
-	}
-
-	return testAPISummarizer(ctx, baseURL, apiKey, modelName)
-}
-
 // ── Summarize Voice ──────────────────────────────────────────
 
 func testSummarizeVoice(ctx context.Context, values map[string]any) ConnectivityTestResult {
@@ -226,9 +207,9 @@ func testSummarizeVoice(ctx context.Context, values map[string]any) Connectivity
 		return ConnectivityTestResult{Success: true, Message: "Voice summary backend is not protocol mode, no test needed"}
 	}
 
-	baseURL := resolveStringValue(values, "summarize.tts_api.base_url", model.ConfigInstance.Summarize.TTSAPI.BaseURL)
-	apiKey := resolveStringValue(values, "summarize.tts_api.key", model.ConfigInstance.Summarize.TTSAPI.Key)
-	modelName := resolveStringValue(values, "summarize.tts_model", model.ConfigInstance.Summarize.TTSModel)
+	baseURL := resolveStringValue(values, "ai_summary.api.base_url", model.ConfigInstance.AISummary.API.BaseURL)
+	apiKey := resolveStringValue(values, "ai_summary.api.key", model.ConfigInstance.AISummary.API.Key)
+	modelName := resolveStringValue(values, "ai_summary.model", model.ConfigInstance.AISummary.Model)
 
 	if baseURL == "" {
 		return ConnectivityTestResult{Success: false, Message: "TTS API base URL is required"}
@@ -404,6 +385,129 @@ func testRAG(ctx context.Context, values map[string]any) ConnectivityTestResult 
 		Success: false,
 		Message: fmt.Sprintf("RAG service reachable at %s, but model '%s' not found", baseURL, ragModel),
 	}
+}
+
+// ── STT ──────────────────────────────────────────────────────
+
+// testSTT tests connectivity to the vLLM STT (Whisper) service.
+func testSTT(ctx context.Context, values map[string]any) ConnectivityTestResult {
+	baseURL := resolveStringValue(values, "stt.base_url", model.ConfigInstance.STT.BaseURL)
+	sttModel := resolveStringValue(values, "stt.model", model.ConfigInstance.STT.Model)
+	apiKey := resolveStringValue(values, "stt.api_key", model.ConfigInstance.STT.APIKey)
+	language := resolveStringValue(values, "stt.language", model.ConfigInstance.STT.Language)
+
+	if baseURL == "" {
+		return ConnectivityTestResult{Success: false, Message: "STT base URL is required"}
+	}
+	if sttModel == "" {
+		sttModel = "openai/whisper-large-v3"
+	}
+
+	// Probe with a real transcription request instead of relying on
+	// /v1/models. Gateways (e.g. OneAPI) often don't enumerate every model in
+	// the models list even though the transcription endpoint accepts them, so
+	// a direct probe against /v1/audio/transcriptions is authoritative for the
+	// exact endpoint + model + auth the feature will actually use.
+	body, contentType, err := buildSTTProbe(sttModel, language)
+	if err != nil {
+		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("Failed to build probe: %v", err)}
+	}
+
+	url := strings.TrimRight(baseURL, "/") + "/v1/audio/transcriptions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+	if err != nil {
+		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("Failed to create request: %v", err)}
+	}
+	req.Header.Set("Content-Type", contentType)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("STT service unreachable at %s: %v", baseURL, err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("STT service reachable, transcription accepted for model '%s'", sttModel)}
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("STT auth failed (HTTP %d)", resp.StatusCode)}
+	case resp.StatusCode == http.StatusNotFound:
+		return ConnectivityTestResult{Success: false, Message: "STT endpoint or model not found (HTTP 404)"}
+	}
+
+	// Some servers reject an unknown model name with a 4xx body. Anything that
+	// isn't auth/404/model-not-found means the request reached the
+	// transcription handler with the model routed, which confirms connectivity.
+	if isSTTModelNotFound(respBody) {
+		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("STT service reachable, but model '%s' not recognized", sttModel)}
+	}
+	return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("STT service reachable at %s (probe returned HTTP %d)", baseURL, resp.StatusCode)}
+}
+
+// buildSTTProbe builds a multipart transcription probe body (silence WAV +
+// model/language fields) and returns the body and its Content-Type header.
+func buildSTTProbe(sttModel, language string) (*bytes.Buffer, string, error) {
+	audio := makeMinimalWAV()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "probe.wav")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := part.Write(audio); err != nil {
+		return nil, "", err
+	}
+	if err := writer.WriteField("model", sttModel); err != nil {
+		return nil, "", err
+	}
+	if language != "" {
+		if err := writer.WriteField("language", language); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return &body, writer.FormDataContentType(), nil
+}
+
+// isSTTModelNotFound reports whether an STT error body indicates an unknown model.
+func isSTTModelNotFound(body []byte) bool {
+	s := strings.ToLower(string(body))
+	for _, k := range []string{"model not found", "unknown model", "does not exist", "model_not_found", "no such model"} {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// makeMinimalWAV builds a tiny valid PCM WAV (16kHz mono 16-bit) with 0.5s of
+// silence, suitable as a connectivity probe payload.
+func makeMinimalWAV() []byte {
+	const sampleRate = 16000
+	dataBytes := sampleRate * 2 // 0.5s of 16-bit mono = 16000 bytes
+	buf := &bytes.Buffer{}
+	buf.WriteString("RIFF")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(36+dataBytes))
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(16))
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // PCM
+	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // mono
+	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate*2)) // byte rate
+	_ = binary.Write(buf, binary.LittleEndian, uint16(2))            // block align
+	_ = binary.Write(buf, binary.LittleEndian, uint16(16))           // bits per sample
+	buf.WriteString("data")
+	_ = binary.Write(buf, binary.LittleEndian, uint32(dataBytes))
+	buf.Write(make([]byte, dataBytes))
+	return buf.Bytes()
 }
 
 // dingtalkTokenURL is the DingTalk API URL for getting an access token.

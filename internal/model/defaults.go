@@ -124,6 +124,14 @@ func ApplyDefaults(cfg *Config, presence map[string]bool) string { //nolint:goco
 	if cfg.Chat.SystemPromptInterval <= 0 {
 		cfg.Chat.SystemPromptInterval = 10
 	}
+	// RecommendEnabled: bool zero-value (false) is the intentional default.
+	// Use presence map to distinguish "user wrote false" from "user omitted the field".
+	if p, ok := presence["chat.recommend_enabled"]; !ok || !p {
+		cfg.Chat.RecommendEnabled = false
+	}
+	if cfg.Chat.RecommendContextMessages <= 0 {
+		cfg.Chat.RecommendContextMessages = 10
+	}
 
 	// --- Session ---
 	if cfg.Session.MaxCount <= 0 {
@@ -172,19 +180,20 @@ func ApplyDefaults(cfg *Config, presence map[string]bool) string { //nolint:goco
 		"claude": true, "codebuddy": true, "opencode": true, "codex": true,
 		"qoder": true, "vecli": true, "deepseek": true, "pi": true, "mimo": true,
 	}
-	if agentBackends[cfg.Summarize.Backend] {
-		slog.Warn("summarize.backend is a legacy agent backend, migrating to \"api\"", slog.String("old", cfg.Summarize.Backend))
-		cfg.Summarize.Backend = "api"
-	}
 	if agentBackends[cfg.Summarize.TTSBackend] {
 		slog.Warn("summarize.tts_backend is a legacy agent backend, migrating to \"api\"", slog.String("old", cfg.Summarize.TTSBackend))
 		cfg.Summarize.TTSBackend = "api"
 	}
-	if cfg.Summarize.Backend == "" {
-		cfg.Summarize.Backend = "simple"
-	}
 	if cfg.Summarize.TTSBackend == "" {
 		cfg.Summarize.TTSBackend = "simple"
+	}
+
+	// --- AISummary (shared AI model config) ---
+	// Legacy TTS summary config (summarize.tts_model / summarize.tts_api) is
+	// migrated in main.go from the raw YAML map (fields removed from the typed
+	// struct, so they no longer unmarshal). Here we only ensure a format default.
+	if cfg.AISummary.API.BaseURL != "" && cfg.AISummary.Format == "" {
+		cfg.AISummary.Format = "openai"
 	}
 	if cfg.TTS.Speed <= 0 {
 		cfg.TTS.Speed = 1.0
@@ -200,6 +209,23 @@ func ApplyDefaults(cfg *Config, presence map[string]bool) string { //nolint:goco
 	// and -1 as explicitly unlimited.
 	if cfg.TTS.MaxCacheFiles == 0 {
 		cfg.TTS.MaxCacheFiles = 100
+	}
+
+	// --- STT ---
+	if cfg.STT.BaseURL == "" {
+		cfg.STT.BaseURL = "http://localhost:8000/v1"
+	}
+	if cfg.STT.Model == "" {
+		cfg.STT.Model = "openai/whisper-large-v3"
+	}
+	if cfg.STT.Language == "" {
+		cfg.STT.Language = "zh"
+	}
+	if cfg.STT.ChunkMs <= 0 {
+		cfg.STT.ChunkMs = 1000
+	}
+	if cfg.STT.ShortcutKey == "" {
+		cfg.STT.ShortcutKey = "F9"
 	}
 
 	// --- RAG ---
@@ -234,7 +260,7 @@ func ApplyDefaults(cfg *Config, presence map[string]bool) string { //nolint:goco
 		cfg.RAG.BatchSize = 50
 	}
 	if cfg.RAG.SearchLimit <= 0 {
-		cfg.RAG.SearchLimit = 20
+		cfg.RAG.SearchLimit = 100
 	}
 	if cfg.RAG.SearchPoolSize <= 0 {
 		cfg.RAG.SearchPoolSize = 20

@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS recent_projects (
 	accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 	is_default INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS project_meta (
+	project_path TEXT PRIMARY KEY,
+	next_session_number INTEGER NOT NULL DEFAULT 0,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS scheduled_tasks (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	project_path TEXT NOT NULL,
@@ -183,6 +189,19 @@ func helperCreateSession(t *testing.T, projectPath, backend, title string) strin
 		service.SetSessionRunning(id, false)
 	})
 	return id
+}
+
+// insertSessionWithTime inserts a chat session row with an explicit creation
+// time and archived flag, used by recent-session listing tests.
+func insertSessionWithTime(t *testing.T, projectPath, id, title, createdAt string, archived bool) {
+	t.Helper()
+	archivedInt := 0
+	if archived {
+		archivedInt = 1
+	}
+	_, err := service.UnsafeDBForTest().Exec("INSERT INTO chat_sessions (id, project_path, backend, title, archived, created_at, updated_at) VALUES (?, ?, 'claude', ?, ?, ?, ?)",
+		id, projectPath, title, archivedInt, createdAt, createdAt)
+	require.NoError(t, err)
 }
 
 // helperCreateScheduledSession creates a scheduled session and asserts success.
@@ -647,6 +666,51 @@ func TestArchiveSession_DeletedSessionNotInGetSessions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, sessions, 1)
 	assert.NotEqual(t, archivedSID, sessions[0].ID)
+}
+
+// ---------- NextSessionNumber ----------
+
+func TestNextSessionNumber_MonotonicAcrossBackends(t *testing.T) {
+	setupDB(t)
+
+	n1, err := service.NextSessionNumber("/proj")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, n1)
+
+	// Different backend must NOT reset the counter — numbering is per-project.
+	n2, err := service.NextSessionNumber("/proj")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, n2)
+
+	// A different project has its own independent counter.
+	m1, err := service.NextSessionNumber("/other")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, m1)
+
+	n3, err := service.NextSessionNumber("/proj")
+	assert.NoError(t, err)
+	assert.Equal(t, 3, n3)
+}
+
+func TestNextSessionNumber_DoesNotReuseNumberAfterArchive(t *testing.T) {
+	setupDB(t)
+
+	// Root cause regression: numbering used len(current sessions)+1, which
+	// dropped after archiving and caused duplicate "新会话 N" titles.
+	n1, err := service.NextSessionNumber("/proj")
+	assert.NoError(t, err)
+	assert.Equal(t, 1, n1)
+
+	sid := helperCreateSession(t, "/proj", "claude", "New Session 1")
+
+	err = service.ArchiveSession("/proj", "claude", sid)
+	assert.NoError(t, err)
+
+	// Even though there are now zero active sessions, the next number must be
+	// 2, not 1, so auto-titles never collide.
+	n2, err := service.NextSessionNumber("/proj")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, n2)
 }
 
 // ---------- GetSessions ----------
@@ -1660,6 +1724,66 @@ func TestGetSessionsPaged_LimitLessThanTotal_HasMore(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, sessions, 3)
 	assert.True(t, hasMore)
+}
+
+func TestGetRecentSessions_NewestFirstIncludesArchived(t *testing.T) {
+	setupDB(t)
+
+	// Insert with explicit created_at in non-chronological order.
+	insertSessionWithTime(t, "/project", "old", "Old", "2024-01-01 10:00:00", false)
+	insertSessionWithTime(t, "/project", "new", "New", "2024-03-01 10:00:00", false)
+	insertSessionWithTime(t, "/project", "arch", "Archived", "2024-02-01 10:00:00", true)
+
+	sessions, err := service.GetRecentSessions("/project", 0)
+	assert.NoError(t, err)
+	require.Len(t, sessions, 3)
+	// Reverse chronological order (newest first).
+	assert.Equal(t, "new", sessions[0].ID)
+	assert.Equal(t, "arch", sessions[1].ID)
+	assert.Equal(t, "old", sessions[2].ID)
+	// Archived sessions are included with the flag set.
+	assert.True(t, sessions[1].Archived)
+	assert.False(t, sessions[2].Archived)
+}
+
+func TestGetRecentSessions_ProjectScopedAndLimited(t *testing.T) {
+	setupDB(t)
+
+	insertSessionWithTime(t, "/project", "a", "A", "2024-01-01 10:00:00", false)
+	insertSessionWithTime(t, "/project", "b", "B", "2024-01-02 10:00:00", false)
+	insertSessionWithTime(t, "/other", "c", "C", "2024-01-03 10:00:00", false)
+
+	// Other project must be excluded.
+	sessions, err := service.GetRecentSessions("/project", 0)
+	assert.NoError(t, err)
+	require.Len(t, sessions, 2)
+
+	// Limit truncates the newest-first list.
+	sessions, err = service.GetRecentSessions("/project", 1)
+	assert.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "b", sessions[0].ID)
+}
+
+func TestGetRecentSessions_EmptyProjectBrowsesAll(t *testing.T) {
+	setupDB(t)
+
+	insertSessionWithTime(t, "/project", "a", "A", "2024-01-01 10:00:00", false)
+	insertSessionWithTime(t, "/other", "b", "B", "2024-01-02 10:00:00", false)
+
+	// Empty project path → across all projects (CLI global browse).
+	sessions, err := service.GetRecentSessions("", 0)
+	assert.NoError(t, err)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, "b", sessions[0].ID)
+}
+
+func TestGetRecentSessions_NoSessions(t *testing.T) {
+	setupDB(t)
+
+	sessions, err := service.GetRecentSessions("/project", 0)
+	assert.NoError(t, err)
+	assert.Len(t, sessions, 0)
 }
 
 func TestGetSessionsPaged_CursorSecondPage(t *testing.T) {
@@ -3636,7 +3760,7 @@ func TestGetChatHistoryPagedViewSummaryKeepsEmptySummaryContent(t *testing.T) {
 		`{"blocks":[{"type":"text","text":"too short to summarize"}]}`, nil, false, "")
 	assert.NoError(t, err)
 
-	// Empty summary = text too short. This is what AsyncSummarize persists for short replies.
+	// Empty summary — the frontend omits content for summarized messages.
 	assert.NoError(t, service.SaveSummaryWithCards("chat_message", asstID, "", nil))
 
 	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, true)

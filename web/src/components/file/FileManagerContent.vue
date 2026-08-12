@@ -53,6 +53,9 @@
           <button v-if="toolbarInlineIds.includes('upload')" class="toolbar-btn" :disabled="dirUploading" @click="triggerUpload()" :title="t('file.uploadHere')">
             <Upload :size="16" />
           </button>
+          <button v-if="!isAppMode && toolbarInlineIds.includes('uploadFolder')" class="toolbar-btn" :disabled="dirUploading" @click="triggerFolderUpload()" :title="t('file.uploadFolder')">
+            <FolderUp :size="16" />
+          </button>
           <button v-if="toolbarInlineIds.includes('viewToggle')" class="toolbar-btn" @click="viewMode = viewMode === 'grid' ? 'list' : 'grid'" :title="viewMode === 'grid' ? t('file.viewList') : t('file.viewGrid')">
             <LayoutGrid v-if="viewMode === 'list'" :size="16" />
             <LayoutList v-else :size="16" />
@@ -93,6 +96,12 @@
                 <button class="toolbar-dropdown-item" :disabled="dirUploading" @click="triggerUpload(); moreMenuOpen = false">
                   <Upload :size="14" />
                   <span>{{ t('file.uploadHere') }}</span>
+                </button>
+              </template>
+              <template v-if="!isAppMode && toolbarCollapsedIds.includes('uploadFolder')">
+                <button class="toolbar-dropdown-item" :disabled="dirUploading" @click="triggerFolderUpload(); moreMenuOpen = false">
+                  <FolderUp :size="14" />
+                  <span>{{ t('file.uploadFolder') }}</span>
                 </button>
               </template>
               <template v-if="toolbarCollapsedIds.includes('viewToggle')">
@@ -141,6 +150,9 @@
     <!-- Hidden file input for upload -->
     <input type="file" ref="uploadInputRef" @change="onUploadFileSelect" style="display:none" multiple />
 
+    <!-- Hidden directory input for folder upload (PC only, preserves structure) -->
+    <input v-if="!isAppMode" type="file" ref="folderInputRef" @change="onFolderUploadSelect" style="display:none" webkitdirectory multiple />
+
     <!-- Upload progress bar -->
     <div v-if="dirUploading" class="dir-upload-progress">
       <div class="dir-upload-progress-bar" :style="{ width: dirUploadProgress + '%' }"></div>
@@ -150,12 +162,14 @@
     <!-- File list -->
     <div v-if="viewMode === 'list'" class="file-list" ref="fileListRef"
       @click="handleItemClick"
+      @dblclick="handleItemDblClick"
       @contextmenu.prevent="handleCtxMenu"
       v-long-press="onContainerLongPress"
       @dragenter.prevent="onDragEnter"
-      @dragover.prevent
+      @dragover.prevent="onContainerDragOver"
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
+      @dragend="onDragEnd"
     >
       <div v-if="isDragOver" class="drop-overlay">
         <Upload :size="32" :stroke-width="1.5" />
@@ -188,7 +202,8 @@
             active: !multiSelect.active && selectedPath === itemPath(entry.name),
             'ms-selected': multiSelect.active && multiSelect.selected.has(itemPath(entry.name)),
             'ctx-highlight': ctxMenu.visible && ctxMenu.entry?.path === itemPath(entry.name),
-            'cut-item': isCutItem(itemPath(entry.name))
+            'cut-item': isCutItem(itemPath(entry.name)),
+            'drag-target': dropTargetPath === itemPath(entry.name) && entry.type === 'dir'
           }"
           :data-action="entry.type === 'dir' ? 'dir' : 'file'"
           :data-path="itemPath(entry.name)"
@@ -213,12 +228,14 @@
     <!-- File grid -->
     <div v-else class="file-grid" ref="fileGridRef"
       @click="handleItemClick"
+      @dblclick="handleItemDblClick"
       @contextmenu.prevent="handleCtxMenu"
       v-long-press="onContainerLongPress"
       @dragenter.prevent="onDragEnter"
-      @dragover.prevent
+      @dragover.prevent="onContainerDragOver"
       @dragleave="onDragLeave"
       @drop.prevent="onDrop"
+      @dragend="onDragEnd"
     >
       <div v-if="isDragOver" class="drop-overlay">
         <Upload :size="32" :stroke-width="1.5" />
@@ -250,7 +267,8 @@
           'grid-active': !multiSelect.active && selectedPath === itemPath(entry.name),
           'ms-selected': multiSelect.active && multiSelect.selected.has(itemPath(entry.name)),
           'ctx-highlight': ctxMenu.visible && ctxMenu.entry?.path === itemPath(entry.name),
-          'cut-item': isCutItem(itemPath(entry.name))
+          'cut-item': isCutItem(itemPath(entry.name)),
+          'drag-target': dropTargetPath === itemPath(entry.name) && entry.type === 'dir'
         }"
         :data-action="entry.type === 'dir' ? 'dir' : 'file'"
         :data-path="itemPath(entry.name)"
@@ -383,8 +401,9 @@ import '@/assets/loading-mask.css'
 import { ref, computed, reactive, inject, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
+import { getNative } from '@/utils/clawbenchNative'
 import { joinPath } from '@/utils/path'
-import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, Check, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search } from 'lucide-vue-next'
+import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, FolderUp, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, Check, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search } from 'lucide-vue-next'
 import {
   buildThumbUrl,
   isThumbable as isThumbableEntry, formatSize as formatFileSize,
@@ -399,6 +418,7 @@ import { useFeatureBackHandler, PRIORITY_PAGE } from '@/composables/useEdgeSwipe
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 import { useWideScreenLayout } from '@/composables/useWideScreenLayout'
+import { usePlatformDetect } from '@/composables/usePlatformDetect'
 import { setAttachDragData, hasAttachDragData, buildAttachDragImage } from '@/utils/attachDrag'
 import { downloadFileByPath } from '@/utils/download.ts'
 import { useToolbarOverflow } from '@/composables/useToolbarOverflow'
@@ -408,16 +428,22 @@ import FileSearchDrawer from './FileSearchDrawer.vue'
 
 const toast = inject('toast', null)
 const { isAppMode } = useAppMode()
+const { isPC } = usePlatformDetect()
 const { t, locale } = useI18n()
 const TAG = 'FileManager'
 
 // File upload to current directory
-const { dirUploading, dirUploadProgress, dirUploadTotal, dirUploadDone, handleFileSelectToDir, handleFileDropToDir } = useFileUpload()
+const { dirUploading, dirUploadProgress, dirUploadTotal, dirUploadDone, handleFileSelectToDir, handleFileDropToDir, handleFolderSelect, handleFileDropToDirStructured } = useFileUpload()
 const uploadInputRef = ref(null)
+const folderInputRef = ref(null)
 
 // Drag-and-drop state (shared between file-list and file-grid)
 const isDragOver = ref(false)
 const dragCounter = ref(0)
+
+// Internal file-manager move drag state
+const dragSourcePaths = ref(null)   // source entry paths being dragged (null = no internal move drag)
+const dropTargetPath = ref(null)    // directory item currently hovered as a drop target
 
 // Paste overlay feedback
 const isPasteOver = ref(false)
@@ -427,9 +453,18 @@ function triggerUpload() {
   uploadInputRef.value?.click()
 }
 
+function triggerFolderUpload() {
+  folderInputRef.value?.click()
+}
+
 async function onUploadFileSelect(e) {
   await handleFileSelectToDir(e, props.currentDir || '.')
   // Refresh directory listing after uploads complete
+  emit('refresh')
+}
+
+async function onFolderUploadSelect(e) {
+  await handleFolderSelect(e, props.currentDir || '.')
   emit('refresh')
 }
 
@@ -451,24 +486,77 @@ function onDragLeave() {
 }
 
 async function onDrop(e) {
-  dragCounter.value = 0
-  isDragOver.value = false
-  const files = Array.from(e.dataTransfer?.files || [])
-  if (files.length === 0) return
-  await handleFileDropToDir(files, props.currentDir || '.')
-  emit('refresh')
+    dragCounter.value = 0
+    isDragOver.value = false
+    dropTargetPath.value = null
+    const files = Array.from(e.dataTransfer?.files || [])
+    // Internal file-manager move drag (source dragged from this same list)
+    if (dragSourcePaths.value?.length) {
+        e.preventDefault()
+        await handleInternalMoveDrop(e)
+        return
+    }
+    if (files.length === 0) return
+    await handleFileDropToDirStructured(files, props.currentDir || '.')
+    emit('refresh')
 }
 
-/** Start an internal drag of a file/dir so it can be dropped onto the chat column. */
+/** Highlight a directory as the move-drop target while dragging over it. */
+function onContainerDragOver(e) {
+    e.preventDefault()
+    if (!dragSourcePaths.value?.length) return
+    const item = e.target.closest('.file-item, .grid-item')
+    dropTargetPath.value = item && item.dataset.action === 'dir' ? item.dataset.path : null
+}
+
+/** Reset internal move-drag state when the drag ends (drop or cancel). */
+function onDragEnd() {
+    dragSourcePaths.value = null
+    dropTargetPath.value = null
+    dragCounter.value = 0
+    isDragOver.value = false
+}
+
+/** Resolve the set of paths being dragged: a full multi-selection if the dragged item is selected. */
+function collectDraggedPaths(entry, path) {
+    if (multiSelect.active && multiSelect.selected.has(path)) {
+        return [...multiSelect.selected]
+    }
+    return [path]
+}
+
+/** Move the internal drag source(s) into the directory under the cursor (or the current dir). */
+async function handleInternalMoveDrop(e) {
+    const srcPaths = dragSourcePaths.value || []
+    dragSourcePaths.value = null
+    dropTargetPath.value = null
+    if (!srcPaths.length) return
+    const target = e.target.closest('.file-item, .grid-item')
+    const targetDir = target && target.dataset.action === 'dir'
+        ? target.dataset.path
+        : props.currentDir.replace(/^\/+/, '')
+    const entries = srcPaths.map(p => ({ name: p.split('/').pop(), path: p }))
+    const allOk = await transferEntries(entries, targetDir, true)
+    emit('refresh')
+    if (allOk) {
+        if (toast) toast.show(t('file.toast.moved'), { icon: '✅', type: 'success', duration: 1500 })
+    } else {
+        if (toast) toast.show(t('common.operationFailed'), { icon: '❌', type: 'error', duration: 2000 })
+    }
+}
+
+/** Start an internal drag of a file/dir so it can be dropped onto the chat column
+ * or moved onto another directory in the file manager. */
 function onItemDragStart(entry, e) {
-  if (!isWideScreen.value) return
-  const path = itemPath(entry.name)
-  setAttachDragData(e.dataTransfer, path, entry.type === 'dir')
-  e.dataTransfer.effectAllowed = 'copy'
-  // Use a flat, semi-transparent chip as the ghost instead of the OS snapshot,
-  // which bleeds the item's selected/accent background into a gradient fade.
-  const ghost = buildAttachDragImage(entry.name, entry.type === 'dir')
-  e.dataTransfer.setDragImage(ghost, 14, 16)
+    if (!isWideScreen.value) return
+    const path = itemPath(entry.name)
+    dragSourcePaths.value = collectDraggedPaths(entry, path)
+    setAttachDragData(e.dataTransfer, path, entry.type === 'dir')
+    e.dataTransfer.effectAllowed = 'move'
+    // Use a flat, semi-transparent chip as the ghost instead of the OS snapshot,
+    // which bleeds the item's selected/accent background into a gradient fade.
+    const ghost = buildAttachDragImage(entry.name, entry.type === 'dir')
+    e.dataTransfer.setDragImage(ghost, 14, 16)
 }
 
 // ── Clipboard paste handler ──
@@ -591,7 +679,7 @@ watch(moreMenuOpen, (open) => {
 const dirToolbarRef = ref(null)
 const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObserving: startToolbarResize, stopObserving: stopToolbarResize } = useToolbarOverflow(
   () => dirToolbarRef.value,
-  () => ['refresh', 'newFile', 'newFolder', 'upload', 'viewToggle', 'multiselect', 'hidden'],
+  () => ['refresh', 'newFile', 'newFolder', 'upload', 'uploadFolder', 'viewToggle', 'multiselect', 'hidden'],
   { inlineCount: 3, gap: 6 },
 )
 
@@ -644,33 +732,48 @@ const fileListRef = ref(null)
 const fileGridRef = ref(null)
 const fileSearchDrawerRef = ref(null)
 
-function handleHighlightFileItem(e) {
-  const { path } = e.detail
+/**
+ * Select the entry at `path` and scroll it into view, retrying the scroll until
+ * the entry is rendered (the dir listing may still be reloading after an async
+ * refresh). Selection is applied immediately so it never depends on scroll/DOM
+ * readiness. When `openFile` is true and the target is a file, it is also opened
+ * in the viewer. Shared by the external highlight-file-item event and the
+ * new-file/new-folder creation flow.
+ */
+function scrollToEntryAndSelect(path, { openFile = false } = {}) {
   if (!path) return
 
+  // Select the item visually (directories and files) right away
+  selectedPath.value = path
+  // Optionally also select the file in the viewer
+  const entry = props.entries?.find(en => joinPath(props.currentDir, en.name) === path)
+  if (openFile && entry && entry.type !== 'dir') {
+    store.selectFile(path)
+  }
+
   if (highlightRetryTimer) { clearTimeout(highlightRetryTimer); highlightRetryTimer = null }
+
+  // The listing container must already be rendered for a scroll to apply
+  const container = fileListRef.value || fileGridRef.value
+  if (!container) return
 
   // navigateToDir is async (API call + DOM render), so retry until the item appears
   let attempts = 0
   const maxAttempts = 20
   const tryHighlight = () => {
-    const container = fileListRef.value || fileGridRef.value
-    if (!container) { if (attempts++ < maxAttempts) { highlightRetryTimer = setTimeout(tryHighlight, 100) }; return }
-
     const item = container.querySelector(`.file-item[data-path="${CSS.escape(path)}"], .grid-item[data-path="${CSS.escape(path)}"]`)
     if (!item) { if (attempts++ < maxAttempts) { highlightRetryTimer = setTimeout(tryHighlight, 100) }; return }
 
-    item.scrollIntoView({ block: 'center', behavior: 'smooth' })
-
-    // Select the item visually (directories and files)
-    selectedPath.value = path
-    // For files, also select in the viewer
-    const entry = props.entries?.find(en => joinPath(props.currentDir, en.name) === path)
-    if (entry && entry.type !== 'dir') {
-      store.selectFile(path)
+    // jsdom (tests) may not implement scrollIntoView — guard it
+    if (typeof item.scrollIntoView === 'function') {
+      item.scrollIntoView({ block: 'center', behavior: 'smooth' })
     }
   }
   tryHighlight()
+}
+
+function handleHighlightFileItem(e) {
+  scrollToEntryAndSelect(e.detail?.path, { openFile: true })
 }
 
 onMounted(() => {
@@ -828,43 +931,8 @@ async function doPaste() {
     const entry = ctxMenu.entry
     closeCtxMenu()
     const destDir = getDestDir(entry)
-    const api = clipboard.isCut ? '/api/file/move' : '/api/file/copy'
-    appLog.d(TAG, '[doPaste] api:', api, 'destDir:', destDir, 'entries:', clipboard.entries.map(e => e.path))
-    let allOk = true
-    for (const srcEntry of clipboard.entries) {
-        try {
-            let destPath = (destDir ? destDir + '/' : '') + srcEntry.name
-            // Cut to same location is a no-op — skip the API call
-            if (clipboard.isCut && srcEntry.path === destPath) {
-                appLog.d(TAG, '[doPaste] same-path no-op, skipping:', srcEntry.path)
-                continue
-            }
-            appLog.d(TAG, '[doPaste] moving:', srcEntry.path, '→', destPath)
-            let resp = await fetch(api, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
-            })
-            if (resp.status === 409) {
-                const newName = await dialog.prompt(t('file.prompt.pasteNewName', { name: srcEntry.name }), { value: srcEntry.name })
-                if (!newName || !newName.trim()) continue
-                destPath = (destDir ? destDir + '/' : '') + newName.trim()
-                resp = await fetch(api, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
-                })
-            }
-            if (!resp.ok) {
-                const errBody = await resp.text().catch(() => '')
-                appLog.e(TAG, '[doPaste] API error:', resp.status, errBody, 'src:', srcEntry.path, 'dest:', destPath)
-                allOk = false
-            }
-        } catch (err) {
-            appLog.e(TAG, '[doPaste] exception:', err, 'src:', srcEntry.path)
-            allOk = false
-        }
-    }
+    appLog.d(TAG, '[doPaste] destDir:', destDir, 'entries:', clipboard.entries.map(e => e.path))
+    const allOk = await transferEntries(clipboard.entries, destDir, clipboard.isCut)
     // Only clear clipboard on successful cut-paste; on failure keep entries so user can retry
     if (clipboard.isCut && allOk) {
         // If the currently viewed file was moved, clear it to avoid
@@ -883,6 +951,56 @@ async function doPaste() {
     }
 }
 
+/**
+ * Move/copy a list of entries into a destination directory via the file API.
+ * Shared by clipboard paste (doPaste) and drag-and-drop move.
+ * Returns true if every transfer succeeded.
+ */
+async function transferEntries(entries, destDir, isMove) {
+    const api = isMove ? '/api/file/move' : '/api/file/copy'
+    let allOk = true
+    for (const srcEntry of entries) {
+        try {
+            let destPath = (destDir ? destDir + '/' : '') + srcEntry.name
+            // Move to the same location is a no-op — skip the API call
+            if (isMove && srcEntry.path === destPath) {
+                appLog.d(TAG, '[transfer] same-path no-op, skipping:', srcEntry.path)
+                continue
+            }
+            // Guard: don't move a directory into itself or one of its descendants
+            if (isMove && (srcEntry.path === destDir || destDir.startsWith(srcEntry.path + '/'))) {
+                appLog.d(TAG, '[transfer] skip self-nesting move:', srcEntry.path, '→', destDir)
+                continue
+            }
+            appLog.d(TAG, '[transfer]', isMove ? 'moving' : 'copying', srcEntry.path, '→', destPath)
+            let resp = await fetch(api, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
+            })
+            if (resp.status === 409) {
+                const newName = await dialog.prompt(t('file.prompt.pasteNewName', { name: srcEntry.name }), { value: srcEntry.name })
+                if (!newName || !newName.trim()) continue
+                destPath = (destDir ? destDir + '/' : '') + newName.trim()
+                resp = await fetch(api, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
+                })
+            }
+            if (!resp.ok) {
+                const errBody = await resp.text().catch(() => '')
+                appLog.e(TAG, '[transfer] API error:', resp.status, errBody, 'src:', srcEntry.path, 'dest:', destPath)
+                allOk = false
+            }
+        } catch (err) {
+            appLog.e(TAG, '[transfer] exception:', err, 'src:', srcEntry.path)
+            allOk = false
+        }
+    }
+    return allOk
+}
+
 async function doNewFile() {
     const entry = ctxMenu.entry
     closeCtxMenu()
@@ -898,6 +1016,8 @@ async function doNewFile() {
         })
         if (resp.ok) {
             emit('refresh')
+            // Scroll to the new file and select it (without opening it in the viewer)
+            scrollToEntryAndSelect(joinPath(dir, name.trim()))
             if (toast) toast.show(t('file.toast.fileCreated'), { icon: '📄', type: 'success', duration: 1500 })
         } else {
             const err = await resp.json()
@@ -923,6 +1043,8 @@ async function doNewFolder() {
         })
         if (resp.ok) {
             emit('refresh')
+            // Scroll to the new folder and select it
+            scrollToEntryAndSelect(joinPath(dir, name.trim()))
             if (toast) toast.show(t('file.toast.folderCreated'), { icon: '📁', type: 'success', duration: 1500 })
         } else {
             const err = await resp.json()
@@ -976,7 +1098,7 @@ const allSelectedAreFiles = computed(() => {
 })
 
 function doBatchShare() {
-    const native = window.AndroidNative
+    const native = getNative()
     if (!native || !native.shareFiles) return
     const paths = [...multiSelect.selected]
     if (!paths.length) return
@@ -992,7 +1114,7 @@ function doBatchShare() {
         if (ext === 'zip' || ext === 'tar' || ext === 'gz') return 'application/zip'
         return '*/*'
     })
-    native.shareFiles(JSON.stringify(paths), JSON.stringify(mimeTypes))
+    native.shareFiles(JSON.stringify(paths), JSON.stringify(mimeTypes))?.catch(() => {})
 }
 
 const MAX_VISIBLE_ENTRIES = 1000
@@ -1043,6 +1165,14 @@ function handleItemClick(e) {
     const action = item.dataset.action
     const path = item.dataset.path
 
+    // PC Ctrl/Cmd+click toggles multi-select without entering the explicit mode first
+    if (isPC.value && (e.ctrlKey || e.metaKey)) {
+        if (!multiSelect.active) enterMultiSelect()
+        selectedPath.value = path
+        toggleSelect(path)
+        return
+    }
+
     // Multi-select mode: toggle selection on click (also track last item for Space key)
     if (multiSelect.active) {
         selectedPath.value = path
@@ -1051,6 +1181,23 @@ function handleItemClick(e) {
     }
 
     selectedPath.value = path
+    // PC: single click only selects — opening requires a double-click (or Enter).
+    if (isPC.value) return
+    openItem(action, path)
+}
+
+function handleItemDblClick(e) {
+    if (props.dirLoading) return
+    const item = e.target.closest('.file-item, .grid-item')
+    if (!item) return
+    if (multiSelect.active) return
+    const action = item.dataset.action
+    const path = item.dataset.path
+    selectedPath.value = path
+    openItem(action, path)
+}
+
+function openItem(action, path) {
     if (action === 'dir') {
         emit('navigateDir', path)
     } else {
@@ -1133,7 +1280,7 @@ function doDownload() {
 function doShareExternal() {
     const path = ctxMenu.entry?.path
     closeCtxMenu()
-    const native = window.AndroidNative
+    const native = getNative()
     if (!native || !native.shareFile) return
     if (!path) return
     const ext = path.split('.').pop()?.toLowerCase()
@@ -1146,7 +1293,7 @@ function doShareExternal() {
     else if (audioExts.includes(ext)) mimeType = 'audio/*'
     else if (ext === 'pdf') mimeType = 'application/pdf'
     else if (ext === 'zip' || ext === 'tar' || ext === 'gz') mimeType = 'application/zip'
-    native.shareFile(path, mimeType)
+    native.shareFile(path, mimeType)?.catch(() => {})
 }
 
 // ── Archive download (zip) ──
@@ -1165,14 +1312,14 @@ async function doArchive(paths, zipName) {
             return
         }
         const blob = await resp.blob()
-        const native = window.AndroidNative
+        const native = getNative()
         if (isAppMode.value && native && native.downloadBlob) {
             // Android native: convert blob to base64 and pass to native bridge
             const reader = new FileReader()
             reader.onload = () => {
                 // reader.result is "data:application/zip;base64,XXXX..."
                 const base64 = reader.result.split(',')[1]
-                native.downloadBlob(base64, zipName || 'archive.zip')
+                native.downloadBlob(base64, zipName || 'archive.zip')?.catch(() => {})
             }
             reader.onerror = () => {
                 if (toast) toast.show(t('file.toast.archiveFailed'), { icon: '❌', type: 'error', duration: 2000 })
@@ -1830,6 +1977,11 @@ function currentFileForClipboard() {
     background: var(--bg-tertiary, #f0f0f0);
 }
 
+.file-item.dir-item.drag-target {
+    background: color-mix(in srgb, var(--accent-color, #4a90d9) 18%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
+}
+
 .file-item.dir-item.active {
     color: white;
 }
@@ -1849,10 +2001,11 @@ function currentFileForClipboard() {
 .file-item.active .file-icon-wrap,
 .file-item.ms-selected .file-icon-wrap,
 .file-item.ctx-highlight .file-icon-wrap {
+    box-sizing: border-box;
     border-radius: 6px;
     padding: 2px;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2024,6 +2177,11 @@ function currentFileForClipboard() {
 .grid-item.ctx-highlight .grid-thumb {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 15%, var(--bg-tertiary, #f5f5f5));
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 40%, transparent);
+}
+
+.grid-item.drag-target {
+    background: color-mix(in srgb, var(--accent-color, #4a90d9) 18%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
 }
 
 .grid-thumb {

@@ -167,9 +167,12 @@ func TestACPInitRegistration(t *testing.T) {
 
 	t.Run("pi", func(t *testing.T) {
 		p := mustLookup(t, "pi")
-		// Pi does not support ACP — ACP plugin should be nil
+		// Pi ACP is disabled (unstable) — ACP plugin should be nil.
 		if p.ACP != nil {
-			t.Fatal("expected pi ACP to be nil (ACP support removed)")
+			t.Fatal("expected pi ACP to be nil (ACP disabled)")
+		}
+		if p.Spec.AcpCommand != "" {
+			t.Errorf("expected pi AcpCommand to be empty (ACP disabled), got %q", p.Spec.AcpCommand)
 		}
 	})
 

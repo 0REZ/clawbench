@@ -5,6 +5,10 @@
       <template v-if="!selectedSession">
         <Search :size="16" class="bs-header-icon" />
         <span class="bs-header-title">{{ t('sessionSearch.title') }}</span>
+        <button class="acp-resume-header-btn" @click.stop="emit('open-acp-sessions')" :title="t('sessionSearch.loadExternalSession')">
+          <Import :size="13" />
+          <span>{{ t('sessionSearch.loadExternalSession') }}</span>
+        </button>
       </template>
       <!-- Drilldown detail view -->
       <template v-else>
@@ -19,7 +23,7 @@
     <!-- ═══ Search results list ═══ -->
     <div v-if="!selectedSession" class="session-search-body">
       <div class="session-search-input-row">
-        <SearchInput ref="inputRef" :model-value="searchState.query" :placeholder="t('sessionSearch.placeholder')" @update:model-value="search.setQuery" />
+        <SearchInput ref="inputRef" :model-value="searchState.query" :placeholder="t('sessionSearch.placeholder')" @update:model-value="search.setQuery" @enter="listNav.confirm" @down="listNav.down" @up="listNav.up" />
         <div class="mode-selector">
           <button class="mode-btn" :class="{ active: searchState.preferMode === 'hybrid' }" @click="setMode('hybrid')">{{ t('sessionSearch.modeHybrid') }}</button>
           <button class="mode-btn" :class="{ active: searchState.preferMode === 'fts' }" @click="setMode('fts')">{{ t('sessionSearch.modeFts') }}</button>
@@ -27,8 +31,7 @@
       </div>
 
       <div class="session-search-content">
-        <div v-if="!searchState.query.trim()" class="session-search-empty">{{ t('sessionSearch.noQuery') }}</div>
-        <div v-else-if="searchState.loading" class="session-search-empty">{{ t('sessionSearch.searching') }}</div>
+        <div v-if="searchState.loading" class="session-search-empty">{{ t('sessionSearch.searching') }}</div>
         <div v-else-if="searchState.error" class="session-search-error">{{ searchState.error }}</div>
         <div v-else-if="searchState.results.length === 0" class="session-search-empty">{{ t('sessionSearch.noResults') }}</div>
         <div v-else class="session-search-results">
@@ -36,7 +39,7 @@
             {{ t('sessionSearch.resultCount', { count: searchState.results.length }) }}
             <span v-if="searchState.searchMode" class="session-search-mode">{{ searchModeLabel }}</span>
           </div>
-          <div v-for="session in searchState.results" :key="session.session_id" class="session-search-item" @click="selectedSession = session">
+          <div v-for="(session, idx) in searchState.results" :key="session.session_id" class="session-search-item" :class="{ 'session-search-item-active': listNav.activeIndex.value === idx }" @click="selectedSession = session">
             <div class="session-search-item-header">
               <span class="session-search-item-title">{{ session.session_title || t('sessionSearch.untitledSession') }}</span>
               <span class="session-search-item-meta">{{ formatRelativeTime(session.created_at) }}</span>
@@ -45,7 +48,7 @@
             <div class="session-search-item-footer">
               <span v-if="session.archived" class="session-search-item-archived">{{ t('sessionSearch.archived') }}</span>
               <span v-if="session.backend" class="session-search-item-backend">{{ session.backend }}</span>
-              <span class="session-search-item-chunks">{{ t('sessionSearch.chunks', { count: session.match_count }) }}</span>
+              <span v-if="!isBrowseMode && session.chunks.length > 0" class="session-search-item-chunks">{{ t('sessionSearch.chunks', { count: session.match_count }) }}</span>
             </div>
           </div>
         </div>
@@ -57,7 +60,7 @@
       <!-- Session meta bar -->
       <div class="detail-meta-bar">
         <span v-if="selectedSession.backend" class="detail-meta-badge detail-meta-backend">{{ selectedSession.backend }}</span>
-        <span class="detail-meta-badge detail-meta-count">{{ t('sessionSearch.chunks', { count: selectedSession.match_count }) }}</span>
+        <span v-if="!isBrowseMode && selectedSession.chunks.length > 0" class="detail-meta-badge detail-meta-count">{{ t('sessionSearch.chunks', { count: selectedSession.match_count }) }}</span>
         <span class="detail-meta-time">{{ formatRelativeTime(selectedSession.created_at) }}</span>
       </div>
 
@@ -78,14 +81,20 @@
 
     <!-- Detail view footer (uses BottomSheet's footer slot — fixed at bottom) -->
     <template v-if="selectedSession" #footer>
-      <button v-if="selectedSession.archived" class="detail-resume-btn" @click="emit('resume', selectedSession)">
-        <RotateCcw :size="14" />
-        {{ t('sessionSearch.resume') }}
-      </button>
-      <button v-else class="detail-resume-btn" @click="emit('open', selectedSession)">
-        <MessageSquare :size="14" />
-        {{ t('sessionSearch.openSession') }}
-      </button>
+      <div class="detail-footer-row">
+        <button v-if="selectedSession.archived" class="detail-resume-btn" @click="emit('resume', selectedSession)">
+          <RotateCcw :size="14" />
+          {{ t('sessionSearch.resume') }}
+        </button>
+        <button v-else class="detail-resume-btn" @click="emit('open', selectedSession)">
+          <MessageSquare :size="14" />
+          {{ t('sessionSearch.openSession') }}
+        </button>
+        <button v-if="selectedSession.archived" class="detail-destroy-btn" @click="emit('destroy', selectedSession)">
+          <Trash2 :size="14" />
+          {{ t('sessionSearch.destroy') }}
+        </button>
+      </div>
     </template>
   </BottomSheet>
 </template>
@@ -93,10 +102,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUpdate, onBeforeUnmount, onUnmounted, type ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, ChevronLeft, User, Bot, RotateCcw, MessageSquare } from 'lucide-vue-next'
+import { Search, ChevronLeft, User, Bot, RotateCcw, Import, MessageSquare, Trash2 } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import { useSessionSearch, type SessionSearchResult } from '@/composables/useSessionSearch'
+import { useListNav } from '@/composables/useListNav'
+import { useListKeys } from '@/composables/useListKeys'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { highlightTextByPositions } from '@/utils/searchUtils'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
@@ -106,10 +117,10 @@ import { formatRelativeTime } from '@/utils/format'
 const { t } = useI18n()
 
 const props = defineProps<{ open: boolean }>()
-const emit = defineEmits<{ close: []; resume: [session: SessionSearchResult]; open: [session: SessionSearchResult] }>()
+const emit = defineEmits<{ close: []; resume: [session: SessionSearchResult]; open: [session: SessionSearchResult]; destroy: [session: SessionSearchResult]; 'open-acp-sessions': [] }>()
 
-const { state: searchState, setQuery, clear } = useSessionSearch()
-const search = { state: searchState, setQuery, clear }
+const { state: searchState, setQuery, browse, clear } = useSessionSearch()
+const search = { state: searchState, setQuery, browse, clear }
 
 const selectedSession = ref<SessionSearchResult | null>(null)
 const inputRef = ref<InstanceType<typeof SearchInput> | null>(null)
@@ -123,10 +134,35 @@ function setMode(mode: 'hybrid' | 'fts') {
   }
 }
 
+// ── Keyboard ↑/↓ + Enter navigation over results ──
+const listNav = useListNav({
+  getCount: () => searchState.results.length,
+  onConfirm: (idx) => {
+    selectedSession.value = searchState.results[idx]
+  },
+  onActiveChange: scrollActiveIntoView,
+})
+// Document-level keys so navigation also works when focus leaves the search box
+useListKeys({ isOpen: () => props.open, nav: listNav })
+
+function scrollActiveIntoView(index: number) {
+  const items = document.querySelectorAll('.session-search-item')
+  const el = items[index]
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+  }
+}
+
+watch(() => searchState.results, () => listNav.reset())
+
 const searchModeLabel = computed(() => {
   if (!searchState.searchMode) return ''
   return searchState.searchMode === 'hybrid' ? t('sessionSearch.modeHybrid') : t('sessionSearch.modeFts')
 })
+
+// Browse mode (empty query) lists all sessions newest-first; its preview chunk
+// is not a search hit, so the match count label is hidden.
+const isBrowseMode = computed(() => searchState.searchMode === 'recent')
 
 // ── Back handler for drilldown ──
 const unregisterBack = registerBackHandler({
@@ -274,6 +310,8 @@ watch(() => props.open, async (val) => {
     // Wait for BottomSheet slide-up animation (250ms) to complete before focusing
     await new Promise(r => setTimeout(r, 300))
     inputRef.value?.focus()
+    // Default to browsing all sessions newest-first (no query entered)
+    search.browse()
   } else {
     search.clear()
     selectedSession.value = null
@@ -404,6 +442,11 @@ defineExpose({ focusSearchInput })
   background: var(--bg-secondary, #f8f9fa);
 }
 
+.session-search-item-active {
+  background: var(--bg-secondary, #f8f9fa);
+  border-radius: 0;
+}
+
 .session-search-item-header {
   display: flex;
   align-items: center;
@@ -442,7 +485,7 @@ defineExpose({ focusSearchInput })
 }
 
 .session-search-item-preview :deep(mark) {
-  background: rgba(255, 230, 0, 0.5);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 40%, transparent);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
@@ -495,6 +538,30 @@ defineExpose({ focusSearchInput })
 
 .detail-back-btn:hover {
   background: rgba(0, 102, 204, 0.1);
+}
+
+/* ACP "load external session" button — right side of the search header */
+.acp-resume-header-btn {
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  background: none;
+  color: var(--text-secondary, #495057);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s;
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.acp-resume-header-btn:hover {
+  background: rgba(0, 102, 204, 0.1);
+  color: var(--accent-color, #4a90d9);
 }
 
 /* Higher specificity than .bs-header-title so flex:1 reliably wins, keeping the
@@ -593,47 +660,91 @@ defineExpose({ focusSearchInput })
 }
 
 .detail-chunk-text :deep(mark.search-hl) {
-  background: rgba(255, 230, 0, 0.5);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 40%, transparent);
   border-radius: 2px;
   padding: 0 1px;
   color: inherit;
 }
 
-.detail-resume-btn {
+.detail-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   width: 100%;
+  flex-shrink: 0;
+}
+
+/* Override BottomSheet's default footer padding/border to stay compact
+   (matches the task-exec-detail bottom action bar). */
+:deep(.bs-footer) {
+  padding: 6px 8px;
+  border-top: none;
+  gap: 6px;
+}
+
+.detail-footer-row .detail-resume-btn {
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 10px 16px;
+  gap: 4px;
+  padding: 0 16px;
   border: none;
-  border-radius: 8px;
+  border-radius: 15px;
   background: var(--accent-color, #4a90d9);
   color: #fff;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
   transition: opacity 0.15s;
 }
 
-.detail-resume-btn:hover {
+.detail-footer-row .detail-resume-btn:hover {
   opacity: 0.85;
 }
 
-.detail-resume-btn:active {
+.detail-footer-row .detail-resume-btn:active {
   opacity: 0.7;
+}
+
+.detail-destroy-btn {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 16px;
+  border: 1px solid var(--color-error, #e74c3c);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--color-error, #e74c3c);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+
+.detail-destroy-btn:hover {
+  opacity: 0.8;
+}
+
+.detail-destroy-btn:active {
+  opacity: 0.6;
 }
 </style>
 
 <style>
 /* Dark theme overrides — non-scoped for [data-theme] selector */
 [data-theme="dark"] .session-search-item-preview mark {
-  background: rgba(255, 230, 0, 0.35);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }
 
 [data-theme="dark"] .detail-chunk-text mark.search-hl {
-  background: rgba(255, 230, 0, 0.35);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }
 

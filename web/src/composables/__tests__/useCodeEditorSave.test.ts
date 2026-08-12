@@ -1,15 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { toastShow, selectFile } = vi.hoisted(() => ({
+const { toastShow, markSaved, markFileSaved } = vi.hoisted(() => ({
     toastShow: vi.fn(),
-    selectFile: vi.fn(),
+    markSaved: vi.fn(),
+    markFileSaved: vi.fn(),
 }))
 
 vi.mock('@/composables/useToast.ts', () => ({
     useToast: () => ({ show: toastShow }),
 }))
+vi.mock('@/composables/useFileRefresh.ts', () => ({
+    markFileSaved,
+}))
 vi.mock('@/stores/app.ts', () => ({
-    store: { state: {}, selectFile },
+    store: { state: {}, markSaved },
 }))
 vi.mock('vue-i18n', () => ({
     useI18n: () => ({ t: (k: string) => k }),
@@ -20,11 +24,12 @@ import { useCodeEditorSave } from '@/composables/useCodeEditorSave'
 describe('useCodeEditorSave', () => {
     beforeEach(() => {
         toastShow.mockReset()
-        selectFile.mockReset()
+        markSaved.mockReset()
+        markFileSaved.mockReset()
         vi.unstubAllGlobals()
     })
 
-    it('returns true and refreshes file on successful write', async () => {
+    it('returns true and updates file in memory on successful write', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
         const { saveFile } = useCodeEditorSave()
         const ok = await saveFile('/tmp/a.go', 'package main')
@@ -33,7 +38,8 @@ describe('useCodeEditorSave', () => {
             method: 'POST',
             body: JSON.stringify({ path: '/tmp/a.go', content: 'package main' }),
         }))
-        expect(selectFile).toHaveBeenCalledWith('/tmp/a.go', false, false, false)
+        expect(markSaved).toHaveBeenCalledWith('/tmp/a.go', 'package main')
+        expect(markFileSaved).toHaveBeenCalledWith('/tmp/a.go')
         expect(toastShow).toHaveBeenCalled()
     })
 
@@ -42,7 +48,8 @@ describe('useCodeEditorSave', () => {
         const { saveFile } = useCodeEditorSave()
         const ok = await saveFile('/tmp/a.go', 'package main')
         expect(ok).toBe(false)
-        expect(selectFile).not.toHaveBeenCalled()
+        expect(markSaved).not.toHaveBeenCalled()
+        expect(markFileSaved).not.toHaveBeenCalled()
         expect(toastShow).toHaveBeenCalled()
     })
 

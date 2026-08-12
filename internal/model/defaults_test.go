@@ -142,11 +142,26 @@ func TestApplyDefaultsEmptyConfig(t *testing.T) {
 	if cfg.TTS.Engine != "edge" {
 		t.Errorf("TTS.Engine = %q, want %q", cfg.TTS.Engine, "edge")
 	}
-	if cfg.Summarize.Backend != "simple" {
-		t.Errorf("Summarize.Backend = %q, want %q", cfg.Summarize.Backend, "simple")
+	if cfg.Summarize.TTSBackend != "simple" {
+		t.Errorf("Summarize.TTSBackend = %q, want %q", cfg.Summarize.TTSBackend, "simple")
 	}
 	if cfg.TTS.Speed != 1.0 {
 		t.Errorf("TTS.Speed = %v, want 1.0", cfg.TTS.Speed)
+	}
+	if cfg.STT.BaseURL != "http://localhost:8000/v1" {
+		t.Errorf("STT.BaseURL = %q, want default", cfg.STT.BaseURL)
+	}
+	if cfg.STT.Model != "openai/whisper-large-v3" {
+		t.Errorf("STT.Model = %q, want default", cfg.STT.Model)
+	}
+	if cfg.STT.Language != "zh" {
+		t.Errorf("STT.Language = %q, want default", cfg.STT.Language)
+	}
+	if cfg.STT.ChunkMs != 1000 {
+		t.Errorf("STT.ChunkMs = %d, want 1000", cfg.STT.ChunkMs)
+	}
+	if cfg.STT.ShortcutKey != "F9" {
+		t.Errorf("STT.ShortcutKey = %q, want F9", cfg.STT.ShortcutKey)
 	}
 	if cfg.RAG.SearchPoolSize != 20 {
 		t.Errorf("RAG.SearchPoolSize = %d, want 20", cfg.RAG.SearchPoolSize)
@@ -399,8 +414,8 @@ func TestApplyDefaults_RAGDefaults(t *testing.T) {
 	if cfg.RAG.BatchSize != 50 {
 		t.Errorf("RAG.BatchSize = %d, want 50", cfg.RAG.BatchSize)
 	}
-	if cfg.RAG.SearchLimit != 20 {
-		t.Errorf("RAG.SearchLimit = %d, want 20", cfg.RAG.SearchLimit)
+	if cfg.RAG.SearchLimit != 100 {
+		t.Errorf("RAG.SearchLimit = %d, want 100", cfg.RAG.SearchLimit)
 	}
 	if cfg.RAG.RetentionDays != 90 {
 		t.Errorf("RAG.RetentionDays = %d, want 90", cfg.RAG.RetentionDays)
@@ -567,22 +582,6 @@ func TestApplyDefaults_FRPDefaults(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_SummarizeBackendMigration(t *testing.T) {
-	setupTestBinDir(t)
-
-	// Test legacy agent backend migration for Summarize.Backend
-	for _, backend := range []string{"claude", "codebuddy", "opencode", "codex", "qoder", "vecli", "deepseek", "pi", "mimo"} {
-		t.Run("backend_"+backend, func(t *testing.T) {
-			cfg := Config{}
-			cfg.Summarize.Backend = backend
-			ApplyDefaults(&cfg, nil)
-			if cfg.Summarize.Backend != "api" {
-				t.Errorf("Summarize.Backend = %q after migration from %q, want %q", cfg.Summarize.Backend, backend, "api")
-			}
-		})
-	}
-}
-
 func TestApplyDefaults_SummarizeTTSBackendMigration(t *testing.T) {
 	setupTestBinDir(t)
 
@@ -599,19 +598,58 @@ func TestApplyDefaults_SummarizeTTSBackendMigration(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_SummarizeBackendNonAgent(t *testing.T) {
+func TestApplyDefaults_SummarizeTTSBackendNonAgent(t *testing.T) {
 	setupTestBinDir(t)
 
 	// Non-agent backends should NOT be migrated
 	cfg := Config{}
-	cfg.Summarize.Backend = "api"
 	cfg.Summarize.TTSBackend = "simple"
 	ApplyDefaults(&cfg, nil)
-	if cfg.Summarize.Backend != "api" {
-		t.Errorf("Summarize.Backend = %q, want %q (non-agent backend should not be migrated)", cfg.Summarize.Backend, "api")
-	}
 	if cfg.Summarize.TTSBackend != "simple" {
 		t.Errorf("Summarize.TTSBackend = %q, want %q (non-agent backend should not be migrated)", cfg.Summarize.TTSBackend, "simple")
+	}
+}
+
+func TestApplyDefaults_ChatRecommendEnabledDefaultFalse(t *testing.T) {
+	setupTestBinDir(t)
+
+	cfg := Config{}
+	ApplyDefaults(&cfg, nil)
+	if cfg.Chat.RecommendEnabled {
+		t.Error("Chat.RecommendEnabled should default to false")
+	}
+}
+
+func TestApplyDefaults_ChatRecommendEnabledPresenceTrue(t *testing.T) {
+	setupTestBinDir(t)
+
+	cfg := Config{}
+	presence := map[string]bool{"chat.recommend_enabled": true}
+	cfg.Chat.RecommendEnabled = true
+	ApplyDefaults(&cfg, presence)
+	if !cfg.Chat.RecommendEnabled {
+		t.Error("Chat.RecommendEnabled should stay true when explicitly set")
+	}
+}
+
+func TestApplyDefaults_AISummaryFormatDefault(t *testing.T) {
+	setupTestBinDir(t)
+
+	cfg := Config{}
+	cfg.AISummary.API.BaseURL = "https://api.openai.com/v1"
+	ApplyDefaults(&cfg, nil)
+	if cfg.AISummary.Format != "openai" {
+		t.Errorf("AISummary.Format = %q, want %q (defaulted when base_url set)", cfg.AISummary.Format, "openai")
+	}
+}
+
+func TestApplyDefaults_AISummaryEmptyBaseURLNoFormat(t *testing.T) {
+	setupTestBinDir(t)
+
+	cfg := Config{}
+	ApplyDefaults(&cfg, nil)
+	if cfg.AISummary.Format != "" {
+		t.Errorf("AISummary.Format = %q, want empty when no base_url", cfg.AISummary.Format)
 	}
 }
 

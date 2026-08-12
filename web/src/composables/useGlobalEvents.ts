@@ -6,6 +6,7 @@ import { playNotificationSound } from './useNotificationSound'
 import { gt } from './useLocale'
 import { serverConfig } from './useSettingsConfig'
 import { stripMarkdownPreview } from '@/utils/format'
+import { getNative } from '@/utils/clawbenchNative'
 
 // Event types from server
 interface ServerEvent {
@@ -160,8 +161,7 @@ async function fetchPendingEvents() {
             localStorage.setItem(LAST_SEEN_KEY, latestId)
             // Sync cursor to Android SharedPreferences
             try {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                ;(window as any).AndroidNative?.updateLastSeenEventId(latestId)
+                getNative()?.updateLastSeenEventId(latestId)
             } catch {}
         }
     } catch {
@@ -230,6 +230,11 @@ function connect() {
                     window.dispatchEvent(new CustomEvent('clawbench-summary-update', { detail: msg.data }))
                 }
 
+                // Dispatch chat_recommendation for the chat input bar to auto-fill / show a suggestion chip
+                if (msg.event === 'chat_recommendation') {
+                    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: msg.data }))
+                }
+
                 // Browser notification: when page is not focused, show browser
                 // notification for terminal events (completed/cancelled/failed/
                 // permission_pending).
@@ -249,8 +254,7 @@ function connect() {
                         // fetchPendingEvents() won't re-deliver these events when
                         // the app switches to background.
                         try {
-                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                            ;(window as any).AndroidNative?.updateLastSeenEventId(msg.id)
+                            getNative()?.updateLastSeenEventId(msg.id)
                         } catch {}
                     }
                 }
@@ -414,6 +418,12 @@ function showEventBrowserNotification(event: string, data: ServerEvent['data']) 
             showBrowserNotification(title, {
                 body: alert_,
                 tag: `clawbench-${event}-${data.session_id || data.task_id || Date.now()}`,
+                nav: {
+                    sessionId: data.session_id,
+                    taskId: data.task_id,
+                    executionId: data.execution_id,
+                    projectPath: data.project_path,
+                },
                 onClick,
             })
         }

@@ -49,6 +49,7 @@ import (
 	"clawbench/internal/speech"
 	"clawbench/internal/ssh"
 	"clawbench/internal/startup"
+	"clawbench/internal/stt"
 	"clawbench/internal/summarize"
 	"clawbench/internal/terminal"
 	"clawbench/internal/version"
@@ -446,6 +447,9 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	// Load configuration — config/config.yaml is optional
 	var cfg model.Config
 	var presence map[string]bool
+	// Legacy values extracted from the raw map for migration (summarize.tts_model
+	// / tts_api were removed from the typed struct).
+	var legacySummaryBaseURL, legacySummaryKey, legacySummaryModel, legacySummaryFormat string
 
 	// Search for config in priority order:
 	// 1. <DataDir>/config/config.yaml (data directory)
@@ -462,6 +466,24 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		}
 		presence = model.ParsePresenceMap(raw)
 
+		// Capture legacy summarize model/API config for migration.
+		if apiMap, ok := raw["summarize"].(map[string]any); ok {
+			if legacyBase, ok := apiMap["tts_api"].(map[string]any); ok {
+				if b, ok := legacyBase["base_url"].(string); ok && b != "" {
+					legacySummaryBaseURL = b
+				}
+				if k, ok := legacyBase["key"].(string); ok && k != "" {
+					legacySummaryKey = k
+				}
+				if f, ok := legacyBase["format"].(string); ok && f != "" {
+					legacySummaryFormat = f
+				}
+			}
+			if m, ok := apiMap["tts_model"].(string); ok && m != "" {
+				legacySummaryModel = m
+			}
+		}
+
 		// Parse into typed config struct
 		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to parse %s: %v\n", configPath, err)
@@ -473,6 +495,21 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		os.Exit(1)
 	}
 	// If file doesn't exist: cfg stays zero-value, presence is nil → all defaults apply
+
+	// Migrate legacy TTS summary model config (summarize.tts_model / tts_api)
+	// into the new shared ai_summary section so existing configs keep working.
+	if cfg.AISummary.API.BaseURL == "" && legacySummaryBaseURL != "" {
+		cfg.AISummary.API.BaseURL = legacySummaryBaseURL
+		cfg.AISummary.API.Key = legacySummaryKey
+	}
+	if cfg.AISummary.Model == "" {
+		cfg.AISummary.Model = legacySummaryModel
+	}
+	// Migrate the API format too, so anthropic endpoints are not defaulted to
+	// "openai" (which would cause the recommendation/summary call to fail).
+	if cfg.AISummary.Format == "" {
+		cfg.AISummary.Format = legacySummaryFormat
+	}
 
 	// Apply all defaults (returns auto-generated password if created)
 	autoPassword := model.ApplyDefaults(&cfg, presence)
@@ -612,6 +649,16 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	}
 	handler.SetSpeechProvider(ttsProvider)
 
+	// Initialize STT (speech-to-text) provider from config
+	sttProvider := newSTTProvider(cfg)
+	handler.SetSTTProvider(sttProvider)
+	slog.Info(
+		"stt provider configured",
+		slog.String("base_url", cfg.STT.BaseURL),
+		slog.String("model", cfg.STT.Model),
+		slog.Bool("streaming", cfg.STT.Streaming),
+	)
+
 	fileHandler, err := service.NewFileHandler(cfg.LogDir, "clawbench", cfg.LogMaxDays)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to initialize file logger, logging to stderr only: %v\n", err)
@@ -730,18 +777,10 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		ttsSummarizer = summarize.NewSimple()
 		slog.Info("tts summarizer configured", slog.String("backend", summarizeBackendSimple))
 	case summarizeBackendAPI:
-		if cfg.Summarize.TTSAPI.BaseURL == "" {
-			slog.Error("summarize.tts_backend is \"api\" but summarize.tts_api.base_url is not configured")
+		ttsSummarizer = buildAISummarizer(cfg)
+		if ttsSummarizer == nil {
+			slog.Error("summarize.tts_backend is \"api\" but ai_summary.api.base_url is not configured")
 			os.Exit(1)
-		}
-		if summarize.IsAnthropicURL(cfg.Summarize.TTSAPI.BaseURL) {
-			s := summarize.NewAnthropic(cfg.Summarize.TTSAPI.BaseURL, cfg.Summarize.TTSAPI.Key, cfg.Summarize.TTSModel)
-			ttsSummarizer = s
-			slog.Info("tts summarizer configured", slog.String("backend", summarizeBackendAPI), slog.String("format", "anthropic"), slog.String("model", s.Model))
-		} else {
-			s := summarize.NewOpenAI(cfg.Summarize.TTSAPI.BaseURL, cfg.Summarize.TTSAPI.Key, cfg.Summarize.TTSModel)
-			ttsSummarizer = s
-			slog.Info("tts summarizer configured", slog.String("backend", summarizeBackendAPI), slog.String("format", "openai"), slog.String("model", s.Model))
 		}
 	}
 	handler.SetSummarizer(ttsSummarizer)
@@ -827,44 +866,6 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 
 	// Initialize and start scheduler (MUST be after agents are loaded so model.Agents is populated)
 	scheduler := service.NewScheduler()
-
-	// Initialize task summarizer if summarization backend is configured (MUST be before scheduler.Start())
-	if cfg.Summarize.Backend == summarizeBackendSimple {
-		// Simple mode: extract final answer for chat, SimpleSummarizer for tasks
-		pipeline := summarize.NewPipelineWithOpts(
-			func(ctx context.Context, text, systemPrompt string, pass int) (string, error) {
-				return summarize.NewSimplePreserveMarkdown().Summarize(ctx, text, "")
-			},
-			"",
-			summarize.SummarizeOption{PreserveMarkdown: true},
-		)
-		taskSummarizer := summarize.NewTaskSummarizerFromPipeline(pipeline)
-		scheduler.SetTaskSummarizer(taskSummarizer)
-		service.SetTaskSummarizerInstance(taskSummarizer)
-		service.SetChatSummaryMode(summarizeBackendSimple)
-		service.SetChatSummaryEnabled(cfg.Summarize.IsChatSummaryEnabled())
-		slog.Info("task summarizer configured", slog.String("backend", summarizeBackendSimple))
-	} else if cfg.Summarize.Backend != "" {
-		taskSummarizer, err := initTaskSummarizer(cfg)
-		if err != nil {
-			slog.Warn(
-				"failed to create task summarizer, task summaries will be disabled",
-				slog.String("backend", cfg.Summarize.Backend),
-				slog.String("err", err.Error()),
-			)
-		} else {
-			scheduler.SetTaskSummarizer(taskSummarizer)
-			// Also set the global instance for AsyncSummarize (chat messages + task executions)
-			service.SetTaskSummarizerInstance(taskSummarizer)
-			service.SetChatSummaryMode("ai")
-			service.SetChatSummaryEnabled(cfg.Summarize.IsChatSummaryEnabled())
-			slog.Info(
-				"task summarizer configured",
-				slog.String("backend", cfg.Summarize.Backend),
-			)
-		}
-	}
-	// else: cfg.Summarize.Backend == "" — fully disabled, no taskSummarizerInstance
 
 	// Load all tasks from all projects
 	if err := scheduler.LoadTasksFromDB(""); err != nil {
@@ -1244,55 +1245,9 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	slog.Info("server stopped")
 }
 
-// initTaskSummarizer creates a TaskSummarizer based on the summarize.backend config.
-// Supports: "simple" (extract conclusion), "api" (OpenAI/Anthropic HTTP).
-func initTaskSummarizer(cfg model.Config) (*summarize.TaskSummarizer, error) {
-	backend := cfg.Summarize.Backend
-	modelName := cfg.Summarize.Model
-
-	switch backend {
-	case summarizeBackendSimple:
-		// Simple summarizer: truncate-only, no AI call. Wrap in pipeline with PreserveMarkdown.
-		pipeline := summarize.NewPipelineWithOpts(
-			func(ctx context.Context, text, systemPrompt string, pass int) (string, error) {
-				return summarize.NewSimplePreserveMarkdown().Summarize(ctx, text, "")
-			},
-			"", // use default prompt
-			summarize.SummarizeOption{PreserveMarkdown: true},
-		)
-		return summarize.NewTaskSummarizerFromPipeline(pipeline), nil
-
-	case summarizeBackendAPI:
-		if cfg.Summarize.API.BaseURL == "" {
-			return nil, fmt.Errorf("summarize.backend is \"api\" but summarize.api.base_url is not configured")
-		}
-		// For API backends, auto-detect OpenAI/Anthropic from URL and wrap in a pipeline
-		// with PreserveMarkdown=true and task-specific prompt.
-		if summarize.IsAnthropicURL(cfg.Summarize.API.BaseURL) {
-			s := summarize.NewAnthropic(cfg.Summarize.API.BaseURL, cfg.Summarize.API.Key, modelName)
-			pipeline := summarize.NewPipelineWithOpts(
-				s.DoSummarizePass,
-				summarize.TaskSummarizePrompt(),
-				summarize.SummarizeOption{PreserveMarkdown: true},
-			)
-			return summarize.NewTaskSummarizerFromPipeline(pipeline), nil
-		}
-		s := summarize.NewOpenAI(cfg.Summarize.API.BaseURL, cfg.Summarize.API.Key, modelName)
-		pipeline := summarize.NewPipelineWithOpts(
-			s.DoSummarizePass,
-			summarize.TaskSummarizePrompt(),
-			summarize.SummarizeOption{PreserveMarkdown: true},
-		)
-		return summarize.NewTaskSummarizerFromPipeline(pipeline), nil
-
-	default:
-		return nil, fmt.Errorf("unsupported summarize backend: %q (must be \"\", \"simple\", or \"api\")", backend)
-	}
-}
-
 // hotReloadReconfigure is called by applyHotReloadGlobals() after a successful
 // config PATCH to reconfigure subsystems that support hot-reload.
-// It recreates TTS provider, TTS/task summarizers, and reconfigures terminal.
+// It recreates TTS provider, TTS summarizer, and reconfigures terminal.
 func hotReloadReconfigure(port int) {
 	cfg := model.ConfigInstance
 
@@ -1301,12 +1256,14 @@ func hotReloadReconfigure(port int) {
 	handler.SetSpeechProvider(ttsProvider)
 	slog.Info("hot-reload: TTS provider reconfigured", slog.String("engine", cfg.TTS.Engine))
 
+	// --- STT: recreate provider on config change ---
+	sttProvider := newSTTProvider(cfg)
+	handler.SetSTTProvider(sttProvider)
+	slog.Info("hot-reload: STT provider reconfigured", slog.String("base_url", cfg.STT.BaseURL))
+
 	// --- Summarize: reconstruct TTS summarizer ---
 	ttsSummarizer := newTTSSummarizer(cfg)
 	handler.SetSummarizer(ttsSummarizer)
-
-	// --- Summarize: reconstruct task summarizer ---
-	hotReloadTaskSummarizer(cfg)
 
 	// --- Terminal: reconfigure or toggle enabled ---
 	hotReloadTerminal(cfg, port)
@@ -1492,51 +1449,32 @@ func newMossNanoTTSProvider(cfg model.Config) *speech.MossNanoProvider {
 	return m
 }
 
+// buildAISummarizer creates an LLM summarizer from the shared ai_summary config.
+// Returns nil if ai_summary.api.base_url is empty.
+func buildAISummarizer(cfg model.Config) summarize.Summarizer {
+	if cfg.AISummary.API.BaseURL == "" {
+		return nil
+	}
+	s := summarize.NewAISummarizer(cfg.AISummary)
+	slog.Info("ai summarizer configured", slog.String("format", cfg.AISummary.Format), slog.String("base_url", cfg.AISummary.API.BaseURL))
+	return s
+}
+
 // newTTSSummarizer creates a TTS summarizer from config for hot-reload.
 func newTTSSummarizer(cfg model.Config) summarize.Summarizer {
 	switch cfg.Summarize.TTSBackend {
 	case "", summarizeBackendSimple:
 		return summarize.NewSimple()
 	case summarizeBackendAPI:
-		if cfg.Summarize.TTSAPI.BaseURL == "" {
-			slog.Warn("hot-reload: summarize.tts_backend is \"api\" but tts_api.base_url is empty, falling back to simple")
+		s := buildAISummarizer(cfg)
+		if s == nil {
+			slog.Warn("hot-reload: summarize.tts_backend is \"api\" but ai_summary.api.base_url is empty, falling back to simple")
 			return summarize.NewSimple()
-		} else if summarize.IsAnthropicURL(cfg.Summarize.TTSAPI.BaseURL) {
-			return summarize.NewAnthropic(cfg.Summarize.TTSAPI.BaseURL, cfg.Summarize.TTSAPI.Key, cfg.Summarize.TTSModel)
 		}
-		return summarize.NewOpenAI(cfg.Summarize.TTSAPI.BaseURL, cfg.Summarize.TTSAPI.Key, cfg.Summarize.TTSModel)
+		return s
 	default:
 		slog.Warn("hot-reload: unsupported tts_backend, falling back to simple", slog.String("backend", cfg.Summarize.TTSBackend))
 		return summarize.NewSimple()
-	}
-}
-
-// hotReloadTaskSummarizer reconstructs the task summarizer on hot-reload.
-func hotReloadTaskSummarizer(cfg model.Config) {
-	if cfg.Summarize.Backend != "" {
-		taskSummarizer, err := initTaskSummarizer(cfg)
-		if err != nil {
-			slog.Warn("hot-reload: failed to recreate task summarizer",
-				slog.String("backend", cfg.Summarize.Backend), slog.String("error", err.Error()))
-			return
-		}
-		if sched := service.GlobalScheduler; sched != nil {
-			sched.SetTaskSummarizer(taskSummarizer)
-		}
-		service.SetTaskSummarizerInstance(taskSummarizer)
-		if cfg.Summarize.Backend == summarizeBackendSimple {
-			service.SetChatSummaryMode(summarizeBackendSimple)
-		} else {
-			service.SetChatSummaryMode("ai")
-		}
-		service.SetChatSummaryEnabled(cfg.Summarize.IsChatSummaryEnabled())
-		slog.Info("hot-reload: summarizer reconfigured", slog.String("backend", cfg.Summarize.Backend))
-	} else {
-		// Disabled
-		service.SetTaskSummarizerInstance(nil)
-		service.SetChatSummaryMode("")
-		service.SetChatSummaryEnabled(false)
-		slog.Info("hot-reload: summarizer disabled")
 	}
 }
 
@@ -1676,4 +1614,9 @@ func hotReloadFRP(cfg model.Config, port int) {
 			slog.Info("hot-reload: FRP disabled")
 		}
 	}
+}
+
+// newSTTProvider builds the STT provider from config.
+func newSTTProvider(cfg model.Config) stt.STTProvider {
+	return stt.NewVLLMProvider(cfg.STT.BaseURL, cfg.STT.Model, cfg.STT.APIKey, cfg.STT.Language)
 }

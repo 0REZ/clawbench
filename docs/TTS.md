@@ -16,22 +16,12 @@ ClawBench 支持 TTS 语音合成，自动将 AI 回复总结后朗读。需要�
 
 ## 总结后端
 
-长文本朗读前会自动总结，由 `summarize.backend` 控制（TTS 语音和定时任务共用同一配置）：
+长文本朗读前会自动总结，由 `summarize.tts_backend` 控制：
 
 | 后端 | 说明 | 网络要求 |
 |------|------|---------|
 | `simple` | 纯文本清洗（默认），零延迟 | 无 |
-| `mmx-cli` | mmx text chat（轻量快速） | 需要 mmx CLI |
-| `claude` | Claude CLI（总结质量高） | 需要 claude CLI |
-| `codebuddy` | CodeBuddy CLI | 需要 codebuddy CLI |
-| `opencode` | OpenCode CLI | 需要 opencode CLI |
-| `codex` | Codex CLI | 需要 codex CLI |
-| `qoder` | Qoder CLI（阿里编码智能体） | 需要 qoder CLI |
-| `vecli` | VeCLI（火山引擎 Doubao） | 需要 vecli CLI |
-| `deepseek` | CodeWhale（需 v0.8.33+） | 需要 deepseek CLI |
-| `pi` | Pi（极简编程智能体） | 需要 pi CLI |
 | `api` | 远程 AI API（OpenAI/Anthropic 格式） | 需配置 URL 和 API Key |
-| `ollama` | ~~已废弃，请用 `api` + `format: "openai"`~~ | — |
 
 ## 文本处理参数
 
@@ -222,12 +212,15 @@ tts:
   speed: 1
 
 summarize:
-  backend: "api"
+  tts_backend: "api"                # 语音摘要类型（""/simple/api）
+
+# 共享的 AI 模型配置（语音摘要 + 对话推荐共用）
+ai_summary:
   model: "gpt-4o-mini"
+  format: "openai"                  # openai / anthropic（留空自动识别）
   api:
     base_url: "https://api.openai.com/v1/chat/completions"  # 完整端点 URL
     key: "sk-xxx"                                             # API Key
-    format: "openai"                                          # API 格式（默认: openai）
 ```
 
 ### Anthropic 格式
@@ -239,12 +232,14 @@ tts:
   speed: 1
 
 summarize:
-  backend: "api"
+  tts_backend: "api"
+
+ai_summary:
   model: "claude-3-5-haiku-latest"
+  format: "anthropic"
   api:
     base_url: "https://api.anthropic.com/v1/messages"
     key: "sk-ant-xxx"
-    format: "anthropic"
 ```
 
 ### Ollama 本地推理（通过 API 后端）
@@ -260,11 +255,13 @@ tts:
   speed: 1
 
 summarize:
-  backend: "api"
+  tts_backend: "api"
+
+ai_summary:
   model: "gemma3:270m"
+  format: "openai"
   api:
     base_url: "http://localhost:11434/v1/chat/completions"  # Ollama 的 OpenAI 兼容端点
-    format: "openai"
 ```
 
 > 💡 `gemma3:270m` 模型仅 291MB，适合快速总结。如需更好质量，可换 `qwen3:0.6b` 或更大模型，只需修改 `model` 即可。

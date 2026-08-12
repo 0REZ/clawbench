@@ -160,11 +160,13 @@ import PopupMenu from '@/components/common/PopupMenu.vue'
 import SystemResourcesPanel from '@/components/common/SystemResourcesPanel.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
 import { useRecentFiles } from '@/composables/useRecentFiles'
+import { useMenuKeyboard } from '@/composables/useMenuKeyboard'
 import { useDialog } from '@/composables/useDialog.ts'
 import { apiGet, apiPost } from '@/utils/api'
 import { toFixedCSS } from '@/composables/useSettingsConfig'
 import { useSystemResources } from '@/composables/useSystemResources'
 import { appLog } from '@/utils/appLog'
+import { getNative } from '@/utils/clawbenchNative'
 
 const { t } = useI18n()
 const { wsStatus } = useGlobalEvents()
@@ -570,6 +572,9 @@ async function selectRecent(item: RecentItem) {
 }
 
 async function removeRecent(item: RecentItem) {
+    // Close the dropdown first: it is teleported with z-index 9999, higher than
+    // the confirm dialog overlay (3000), so leaving it open would cover the dialog.
+    dropdownOpen.value = false
     const confirmed = await dialog.confirm(
         t('appHeader.removeProjectConfirm', { name: item.name }),
         { dangerous: true },
@@ -645,8 +650,8 @@ function onPathClick(e: MouseEvent) {
 // --- Logout (APP mode) ---
 function handleLogout() {
     resourcesMenuOpen.value = false
-    if ((window as unknown as { AndroidNative?: { showServerDialog: () => void } }).AndroidNative?.showServerDialog) {
-        (window as unknown as { AndroidNative: { showServerDialog: () => void } }).AndroidNative.showServerDialog()
+    if (getNative()?.showServerDialog) {
+        getNative()?.showServerDialog()
     } else {
         window.location.href = '/login'
     }
@@ -685,6 +690,12 @@ onUnmounted(() => {
     stopBackgroundPolling()
     stopBlinking()
 })
+
+// Keyboard navigation (↑/↓ select, Enter confirm, Esc close) for the three
+// teleported dropdowns — project switch, recent files, branch quick-index.
+useMenuKeyboard({ panelRef: dropdownPanelRef, isOpen: dropdownOpen })
+useMenuKeyboard({ panelRef: fileDropdownPanelRef, isOpen: fileDropdownOpen })
+useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen })
 </script>
 
 <style scoped>
@@ -992,6 +1003,12 @@ onUnmounted(() => {
     background: var(--bg-tertiary);
 }
 
+/* Keyboard highlight (↑/↓ navigation) — mirrors the hover state so the
+   selected row stays visible even when the pointer isn't over it. */
+.app-menu-item.keyboard-hover {
+    background: var(--bg-tertiary);
+}
+
 .app-menu-item.active {
     background: var(--accent-color);
     color: #fff;
@@ -1009,6 +1026,14 @@ onUnmounted(() => {
 
 .app-menu-item.active .item-icon {
     color: #fff;
+}
+
+/* Selected state: give the file-type icon a background chip (file-manager style)
+   so its colored glyph stays readable instead of blending into the accent row. */
+.app-menu-item.active .item-icon.file-type-icon {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 3px;
+    padding: 1px;
 }
 
 .app-menu-item .item-label {

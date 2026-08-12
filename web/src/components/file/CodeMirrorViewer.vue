@@ -49,7 +49,7 @@ const props = defineProps({
     editable: { type: Boolean, default: false },
     saving: { type: Boolean, default: false },
 })
-const emit = defineEmits(['save', 'cancel', 'exitEdit'])
+const emit = defineEmits(['save', 'saveAndExit', 'cancel', 'exitEdit'])
 
 const { t } = useI18n()
 const editorHost = ref(null)
@@ -482,6 +482,11 @@ watch(() => props.content, (c) => {
         mountLang()
     }
     savedSnapshot = next
+    // Recompute dirty even when the doc already equals the new content (the
+    // common case after saving the exact text): savedSnapshot just changed, so
+    // the doc now matches the saved version and the editor must become clean.
+    // The `dirty.value = false` above only runs when the doc actually differed.
+    dirty.value = editor.state.doc.toString() !== next
     // Sticky def lines may have shifted; clear the highlight cache and recompute.
     if (view.value) sticky.refresh()
 })
@@ -529,8 +534,8 @@ async function handleExit() {
         onExtraAction: () => {},
     })
     if (choice === true) {
-        // Save and exit (FileViewer's handleSave reloads content and leaves edit mode).
-        emit('save', getValue())
+        // Save and exit (FileViewer's handleSaveAndExit reloads content and leaves edit mode).
+        emit('saveAndExit', getValue())
         return true
     } else if (choice === null) {
         // Discard changes and exit.

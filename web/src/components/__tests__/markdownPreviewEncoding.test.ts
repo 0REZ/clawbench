@@ -5,6 +5,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import MarkdownPreview from '@/components/file/MarkdownPreview.vue'
+import { isThumbExtension, buildThumbUrl } from '@/utils/chatRenderUtils.ts'
 
 const i18n = createI18n({ legacy: false, locale: 'zh', messages: { zh: {}, en: {} } })
 
@@ -21,7 +22,7 @@ const i18n = createI18n({ legacy: false, locale: 'zh', messages: { zh: {}, en: {
  * Replicate the fixLocalImagePaths logic from MarkdownPreview.vue
  * to test the encoding behavior independently.
  */
-function fixLocalImagePaths(html: string, currentDir: string, imageTimestamp: number): string {
+function fixLocalImagePaths(html: string, currentDir: string, imageTimestamp: number, thumbWidth = 800): string {
     return html.replace(/<img\s+([^>]*src=[^>]*)>/gi, (match, attrs) => {
         const srcMatch = attrs.match(/src="([^"]*)"/)
         if (!srcMatch) return match
@@ -40,7 +41,14 @@ function fixLocalImagePaths(html: string, currentDir: string, imageTimestamp: nu
             if (part === '..') { normalized.pop(); continue }
             normalized.push(encodeURIComponent(part))
         }
-        return match.replace(`src="${src}"`, `src="/api/local-file/${normalized.join('/')}?t=${imageTimestamp}"`)
+        const rel = normalized.join('/')
+        const fullSrc = `/api/local-file/${rel}?t=${imageTimestamp}`
+        // Raster formats the thumb endpoint can decode → inline thumbnail + full for lightbox.
+        const thumbSrc = isThumbExtension(src) ? buildThumbUrl(rel, thumbWidth) : null
+        const replacement = thumbSrc
+            ? `src="${thumbSrc}" data-full-src="${fullSrc}"`
+            : `src="${fullSrc}"`
+        return match.replace(`src="${src}"`, replacement)
     })
 }
 
@@ -137,6 +145,62 @@ describe('fixLocalImagePaths — Chinese path encoding', () => {
         const result = fixLocalImagePaths(html, '', timestamp)
         expect(result).toContain('/api/local-file/assets/%E5%B7%A5%E5%85%B7/logo.png')
         expect(result).not.toContain('%25')
+    })
+})
+
+describe('fixLocalImagePaths — thumbnail compression for raster images', () => {
+    const timestamp = 1234567890
+
+    it('uses /api/file/thumb for .png and keeps full src as data-full-src', () => {
+        const result = fixLocalImagePaths('<img src="assets/logo.png">', 'docs', timestamp)
+        // Inline src is the compressed thumbnail (stable URL, no ?t= so ETag revalidation works)
+        expect(result).toContain('src="/api/file/thumb?path=docs/assets/logo.png&w=800"')
+        // Original full-size kept for the lightbox, with the cache-buster timestamp
+        expect(result).toContain(`data-full-src="/api/local-file/docs/assets/logo.png?t=${timestamp}"`)
+    })
+
+    it('uses /api/file/thumb for .jpg', () => {
+        const result = fixLocalImagePaths('<img src="photo.jpg">', '', timestamp)
+        expect(result).toContain('src="/api/file/thumb?path=photo.jpg&w=800"')
+        expect(result).toContain(`data-full-src="/api/local-file/photo.jpg?t=${timestamp}"`)
+    })
+
+    it('does not add a ?t= cache-buster to the thumbnail src (stays revalidatable)', () => {
+        const result = fixLocalImagePaths('<img src="photo.png">', 'docs', timestamp)
+        const thumbSrc = result.match(/src="\/api\/file\/thumb[^"]*"/)?.[0] || ''
+        expect(thumbSrc).toContain('w=800')
+        expect(thumbSrc).not.toContain('t=')
+    })
+
+    it('keeps full-size /api/local-file/ src for SVG (no thumb support)', () => {
+        const result = fixLocalImagePaths('<img src="logo.svg">', 'docs', timestamp)
+        expect(result).toContain(`src="/api/local-file/docs/logo.svg?t=${timestamp}"`)
+        expect(result).not.toContain('/api/file/thumb')
+        expect(result).not.toContain('data-full-src')
+    })
+
+    it('keeps full-size /api/local-file/ src for GIF (preserve animation)', () => {
+        const result = fixLocalImagePaths('<img src="anim.gif">', 'docs', timestamp)
+        expect(result).toContain(`src="/api/local-file/docs/anim.gif?t=${timestamp}"`)
+        expect(result).not.toContain('/api/file/thumb')
+    })
+
+    it('keeps full-size /api/local-file/ src for webp (no thumb support)', () => {
+        const result = fixLocalImagePaths('<img src="photo.webp">', 'docs', timestamp)
+        expect(result).toContain(`src="/api/local-file/docs/photo.webp?t=${timestamp}"`)
+        expect(result).not.toContain('/api/file/thumb')
+    })
+
+    it('handles uppercase .PNG extension for thumbnail', () => {
+        const result = fixLocalImagePaths('<img src="logo.PNG">', '', timestamp)
+        expect(result).toContain('src="/api/file/thumb?path=logo.PNG&w=800"')
+        expect(result).toContain('data-full-src')
+    })
+
+    it('uses mobile thumbnail width when device is not PC', () => {
+        const result = fixLocalImagePaths('<img src="assets/logo.png">', 'docs', timestamp, 480)
+        expect(result).toContain('src="/api/file/thumb?path=docs/assets/logo.png&w=480"')
+        expect(result).toContain(`data-full-src="/api/local-file/docs/assets/logo.png?t=${timestamp}"`)
     })
 })
 

@@ -37,7 +37,6 @@ describe('settingsFieldMap', () => {
     expect(map['tts.piper.model_path']).toBeTruthy()
     expect(map['tts.kokoro.model_path']).toBeTruthy()
     expect(map['tts.moss_nano.model_dir']).toBeTruthy()
-    expect(map['summarize.api.base_url']).toBeTruthy()
   })
 
   it('includes previously missing rag.search_pool_size', () => {
@@ -72,7 +71,7 @@ describe('settingsFieldMap', () => {
     const expectedCategories = [
       'appearance', 'agents', 'projectFiles', 'chat', 'debug', 'security', 'about',
       'notification',
-      'terminal', 'tts', 'tts_engine', 'summarization_text', 'summarization_voice', 'rag', 'portForward', 'frp',
+      'terminal', 'tts', 'tts_engine', 'aiSummary', 'rag', 'portForward', 'frp',
     ]
     for (const cat of expectedCategories) {
       expect(categoryItems[cat]).toBeDefined()
@@ -99,8 +98,7 @@ describe('settingsFieldMap', () => {
   it('categoryHasPanels identifies panel categories', () => {
     expect(categoryHasPanels('terminal')).toBe(true)
     expect(categoryHasPanels('tts')).toBe(false)
-    expect(categoryHasPanels('summarization_text')).toBe(true)
-    expect(categoryHasPanels('summarization_voice')).toBe(true)
+    expect(categoryHasPanels('aiSummary')).toBe(true)
     expect(categoryHasPanels('rag')).toBe(true)
     expect(categoryHasPanels('portForward')).toBe(true)
     expect(categoryHasPanels('frp')).toBe(true)
@@ -113,8 +111,7 @@ describe('settingsFieldMap', () => {
   it('isPanelOnlyCategory identifies panel-only categories', () => {
     expect(isPanelOnlyCategory('terminal')).toBe(true)
     expect(isPanelOnlyCategory('tts')).toBe(false)
-    expect(isPanelOnlyCategory('summarization_text')).toBe(true)
-    expect(isPanelOnlyCategory('summarization_voice')).toBe(true)
+    expect(isPanelOnlyCategory('aiSummary')).toBe(true)
     expect(isPanelOnlyCategory('rag')).toBe(true)
     expect(isPanelOnlyCategory('portForward')).toBe(true)
     expect(isPanelOnlyCategory('frp')).toBe(true)
@@ -166,59 +163,51 @@ describe('settingsFieldMap', () => {
     expect(cfg.hasConnectivityTest).toBe(true)
   })
 
-  // ── Summarization panels ──
+  // ── Summarization (语音摘要) ──
 
-  it('summarization_text panel has text summary fields', () => {
-    const panels = getCategoryPanels('summarization_text')
-    expect(panels.length).toBe(1)
-    const cfg = panels[0]
-    expect(cfg.panelId).toBe('summarization_text')
-    expect(cfg.entrySelector).toBeUndefined()
-    expect(cfg.requiredFields).toEqual(['summarize.api.base_url'])
-    expect(typeof cfg.hasConnectivityTest === 'function').toBe(true)
-    expect((cfg.hasConnectivityTest as Function)({ 'summarize.backend': 'api' })).toBe(true)
-    expect((cfg.hasConnectivityTest as Function)({ 'summarize.backend': 'simple' })).toBe(false)
-    expect((cfg.hasConnectivityTest as Function)({ 'summarize.backend': '' })).toBe(false)
+  it('tts category exposes voice summary type as an immediate item', () => {
+    const items = categoryItems.tts
+    const ttsBackend = items.find(e => e.type === 'item' && e.spec.key === 'summarize.tts_backend')
+    expect(ttsBackend).toBeDefined()
+    expect(ttsBackend!.type).toBe('item')
+    const spec = (ttsBackend as { type: 'item'; spec: ItemSpec }).spec
+    expect(spec.type).toBe('select')
+    expect(spec.source).toBe('server')
+    // Only two options: simple (extract conclusion) and api (LLM). No "off".
+    const values = (spec.options ?? []).map(o => o.value)
+    expect(values).toEqual(['simple', 'api'])
 
-    const textBackend = cfg.commonFields.find(f => f.key === 'summarize.backend')
-    expect(textBackend).toBeDefined()
-    expect(textBackend!.type).toBe('select')
-
-    const apiBaseURL = cfg.commonFields.find(f => f.key === 'summarize.api.base_url')
-    expect(apiBaseURL).toBeDefined()
-    expect(apiBaseURL!.sectionHeader).toBe('settings.items.apiHeader')
-
-    const model = cfg.commonFields.find(f => f.key === 'summarize.model')
-    expect(model).toBeDefined()
-
-    const apiKey = cfg.commonFields.find(f => f.key === 'summarize.api.key')
-    expect(apiKey).toBeDefined()
+    // Jump link to the top-level aiSummary panel
+    const jump = items.find(e => e.type === 'item' && e.spec.key === 'navigateAiSummary')
+    expect(jump).toBeDefined()
+    const jumpSpec = (jump as { type: 'item'; spec: ItemSpec }).spec
+    expect(jumpSpec.navigateTo).toBe('aiSummary')
   })
 
-  it('summarization_voice panel has voice summary fields', () => {
-    const panels = getCategoryPanels('summarization_voice')
+  it('ai_summary panel has shared model fields', () => {
+    const panels = getCategoryPanels('aiSummary')
     expect(panels.length).toBe(1)
     const cfg = panels[0]
-    expect(cfg.panelId).toBe('summarization_voice')
-    expect(cfg.entrySelector).toBeUndefined()
-    expect(cfg.requiredFields).toEqual(['summarize.tts_api.base_url'])
+    expect(cfg.panelId).toBe('ai_summary')
+
+    const baseUrl = cfg.commonFields.find(f => f.key === 'ai_summary.api.base_url')
+    expect(baseUrl).toBeDefined()
+    expect(baseUrl!.type).toBe('text')
+
+    const model = cfg.commonFields.find(f => f.key === 'ai_summary.model')
+    expect(model).toBeDefined()
+
+    const format = cfg.commonFields.find(f => f.key === 'ai_summary.format')
+    expect(format).toBeDefined()
+    expect(format!.type).toBe('select')
+
+    const apiKey = cfg.commonFields.find(f => f.key === 'ai_summary.api.key')
+    expect(apiKey).toBeDefined()
+    expect(apiKey!.type).toBe('password')
+
     expect(typeof cfg.hasConnectivityTest === 'function').toBe(true)
-    expect((cfg.hasConnectivityTest as Function)({ 'summarize.tts_backend': 'api' })).toBe(true)
-    expect((cfg.hasConnectivityTest as Function)({ 'summarize.tts_backend': 'simple' })).toBe(false)
-
-    const ttsBackend = cfg.commonFields.find(f => f.key === 'summarize.tts_backend')
-    expect(ttsBackend).toBeDefined()
-    expect(ttsBackend!.type).toBe('select')
-
-    const ttsApiBaseURL = cfg.commonFields.find(f => f.key === 'summarize.tts_api.base_url')
-    expect(ttsApiBaseURL).toBeDefined()
-    expect(ttsApiBaseURL!.sectionHeader).toBe('settings.items.summarizeTtsApiHeader')
-
-    const ttsModel = cfg.commonFields.find(f => f.key === 'summarize.tts_model')
-    expect(ttsModel).toBeDefined()
-
-    const ttsApiKey = cfg.commonFields.find(f => f.key === 'summarize.tts_api.key')
-    expect(ttsApiKey).toBeDefined()
+    expect((cfg.hasConnectivityTest as Function)({ 'ai_summary.api.base_url': 'https://x' })).toBe(true)
+    expect((cfg.hasConnectivityTest as Function)({})).toBe(false)
   })
 
   // ── RAG panel ──
@@ -317,8 +306,6 @@ describe('settingsFieldMap', () => {
   // ── Sub-page route helpers (data-driven) ──
 
   it('isSubPageRoute identifies colon-separated IDs except agents', () => {
-    expect(isSubPageRoute('chat:summarization_text')).toBe(true)
-    expect(isSubPageRoute('tts:summarization_voice')).toBe(true)
     expect(isSubPageRoute('tts:tts_engine')).toBe(true)
     expect(isSubPageRoute('agents:codebuddy')).toBe(false)
     expect(isSubPageRoute('agents')).toBe(false)
@@ -327,14 +314,6 @@ describe('settingsFieldMap', () => {
   })
 
   it('getSubPagePanel returns panel config for valid sub-routes', () => {
-    const textPanel = getSubPagePanel('chat:summarization_text')
-    expect(textPanel).toBeDefined()
-    expect(textPanel!.panelId).toBe('summarization_text')
-
-    const voicePanel = getSubPagePanel('tts:summarization_voice')
-    expect(voicePanel).toBeDefined()
-    expect(voicePanel!.panelId).toBe('summarization_voice')
-
     const ttsPanel = getSubPagePanel('tts:tts_engine')
     expect(ttsPanel).toBeDefined()
     expect(ttsPanel!.panelId).toBe('tts')
@@ -346,19 +325,21 @@ describe('settingsFieldMap', () => {
   })
 
   it('getSubPageTitleKey returns title i18n key for valid sub-routes', () => {
-    expect(getSubPageTitleKey('chat:summarization_text')).toBe('settings.items.summarizeTextSection')
-    expect(getSubPageTitleKey('tts:summarization_voice')).toBe('settings.items.summarizeTtsSection')
     expect(getSubPageTitleKey('tts:tts_engine')).toBe('settings.items.ttsEngine')
   })
 
   it('subPagePanelMap has entry for every navigateTo action item', () => {
-    // Verify that all action items with navigateTo have a corresponding subPagePanelMap entry
+    // Verify that all colon-separated navigateTo action items have a
+    // corresponding subPagePanelMap entry. Top-level category jumps (no colon)
+    // target categoryItems directly and are excluded here.
     for (const entries of Object.values(categoryItems)) {
       for (const entry of entries) {
         if (entry.type === 'item' && entry.spec.navigateTo) {
-          expect(subPagePanelMap[entry.spec.navigateTo]).toBeDefined()
-          expect(subPagePanelMap[entry.spec.navigateTo].panelConfig).toBeDefined()
-          expect(subPagePanelMap[entry.spec.navigateTo].titleKey).toBeTruthy()
+          const nav = entry.spec.navigateTo
+          if (!nav.includes(':')) continue
+          expect(subPagePanelMap[nav]).toBeDefined()
+          expect(subPagePanelMap[nav].panelConfig).toBeDefined()
+          expect(subPagePanelMap[nav].titleKey).toBeTruthy()
         }
       }
     }

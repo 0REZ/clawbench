@@ -18,6 +18,7 @@ vi.mock('vue-i18n', () => ({
       'sessionSearch.roleUser': 'User',
       'sessionSearch.roleAssistant': 'Assistant',
       'sessionSearch.resume': 'Resume Session',
+      'sessionSearch.destroy': 'Delete permanently',
       'sessionSearch.openSession': 'Open',
       'sessionSearch.modeHybrid': 'Hybrid',
       'sessionSearch.modeFts': 'Full-text',
@@ -56,12 +57,14 @@ vi.mock('@/composables/useBackHandler', () => ({
 
 const mockClear = vi.fn()
 const mockSetQuery = vi.fn()
+const mockBrowse = vi.fn()
 const mockSearchState = vi.fn()
 
 vi.mock('@/composables/useSessionSearch', () => ({
   useSessionSearch: () => ({
     state: mockSearchState(),
     setQuery: mockSetQuery,
+    browse: mockBrowse,
     clear: mockClear,
   }),
 }))
@@ -136,10 +139,21 @@ describe('SessionSearchDrawer', () => {
     expect(wrapper.find('.session-search-body').exists()).toBe(true)
   })
 
-  it('shows no query message when query is empty', () => {
-    mockSearchState.mockReturnValue(createState({ query: '' }))
+  it('emits open-acp-sessions when the ACP resume button is clicked', async () => {
     const wrapper = mountDrawer()
-    expect(wrapper.find('.session-search-empty').text()).toContain('Enter a query')
+    const btn = wrapper.find('.acp-resume-header-btn')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    expect(wrapper.emitted('open-acp-sessions')).toBeTruthy()
+  })
+
+  it('lists browsed sessions when query is empty', () => {
+    mockSearchState.mockReturnValue(createState({ query: '', results: [sampleResult], total: 1 }))
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.session-search-item').exists()).toBe(true)
+    expect(wrapper.find('.session-search-item-title').text()).toBe('My Session')
+    // No "enter a query" placeholder blocks the browse list.
+    expect(wrapper.find('.session-search-empty').exists()).toBe(false)
   })
 
   it('shows searching state', () => {
@@ -287,6 +301,47 @@ describe('SessionSearchDrawer', () => {
     expect(wrapper.emitted('open')).toBeFalsy()
   })
 
+  it('shows destroy button only for archived session in detail view', async () => {
+    const archivedResult = { ...sampleResult, archived: true }
+    mockSearchState.mockReturnValue(createState({ query: 'test', results: [archivedResult] }))
+
+    const wrapper = mountDrawer()
+    const instance = (wrapper.vm as any).$
+    instance.setupState.selectedSession = archivedResult
+    instance.update()
+    await flushPromises()
+
+    expect(wrapper.find('.detail-destroy-btn').exists()).toBe(true)
+    expect(wrapper.find('.detail-destroy-btn').text()).toBe('Delete permanently')
+  })
+
+  it('does not show destroy button for non-archived session in detail view', async () => {
+    mockSearchState.mockReturnValue(createState({ query: 'test', results: [sampleResult] }))
+
+    const wrapper = mountDrawer()
+    const instance = (wrapper.vm as any).$
+    instance.setupState.selectedSession = sampleResult
+    instance.update()
+    await flushPromises()
+
+    expect(wrapper.find('.detail-destroy-btn').exists()).toBe(false)
+  })
+
+  it('emits destroy when destroy button is clicked on archived session', async () => {
+    const archivedResult = { ...sampleResult, archived: true }
+    mockSearchState.mockReturnValue(createState({ query: 'test', results: [archivedResult] }))
+
+    const wrapper = mountDrawer()
+    const instance = (wrapper.vm as any).$
+    instance.setupState.selectedSession = archivedResult
+    instance.update()
+    await flushPromises()
+
+    await wrapper.find('.detail-destroy-btn').trigger('click')
+    expect(wrapper.emitted('destroy')).toBeTruthy()
+    expect(wrapper.emitted('destroy')![0][0]).toStrictEqual(archivedResult)
+  })
+
   it('emits close when handleClose is triggered', async () => {
     const wrapper = mountDrawer()
     const bs = wrapper.findComponent({ name: 'BottomSheet' })
@@ -319,5 +374,66 @@ describe('SessionSearchDrawer', () => {
     mockSearchState.mockReturnValue(createState({ query: 'test', results: [sampleResult], searchMode: 'hybrid' }))
     const wrapper = mountDrawer()
     expect(wrapper.find('.session-search-mode').text()).toBe('Hybrid')
+  })
+
+  it('shows FTS mode badge label for fts search mode', async () => {
+    mockSearchState.mockReturnValue(createState({ query: 'test', results: [sampleResult], searchMode: 'fts' }))
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.session-search-mode').text()).toBe('Full-text')
+  })
+
+  it('does not show a mode badge when searchMode is empty', () => {
+    mockSearchState.mockReturnValue(createState({ query: 'test', results: [sampleResult], searchMode: '' }))
+    const wrapper = mountDrawer()
+    expect(wrapper.find('.session-search-mode').exists()).toBe(false)
+  })
+
+  it('shows an escaped preview when a chunk has no match positions', () => {
+    mockSearchState.mockReturnValue(createState({
+      query: 'test',
+      results: [{
+        ...sampleResult,
+        chunks: [{ ...sampleResult.chunks[0], match_positions: [] }],
+      }],
+    }))
+    const wrapper = mountDrawer()
+    // Preview renders via getPreviewHtml → escapeHtml when no match positions
+    expect(wrapper.find('.session-search-item-preview').exists()).toBe(true)
+  })
+
+  it('browses sessions when opened and clears when closed', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountDrawer({ open: false })
+    await wrapper.setProps({ open: true })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(mockBrowse).toHaveBeenCalled()
+
+    await wrapper.setProps({ open: false })
+    expect(mockClear).toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('focusSearchInput is callable without throwing', () => {
+    const wrapper = mountDrawer()
+    expect(() => wrapper.vm.focusSearchInput()).not.toThrow()
+  })
+
+  it('setMode re-searches when there is an active query', async () => {
+    const state = createState({ query: 'active' })
+    mockSearchState.mockReturnValue(state)
+    const wrapper = mountDrawer()
+    const ftsBtn = wrapper.findAll('.mode-btn')[1]
+    await ftsBtn.trigger('click')
+    expect(mockSetQuery).toHaveBeenCalledWith('active')
+  })
+
+  it('setMode does not re-search when query is blank', async () => {
+    mockSetQuery.mockClear()
+    const state = createState({ query: '' })
+    mockSearchState.mockReturnValue(state)
+    const wrapper = mountDrawer()
+    const ftsBtn = wrapper.findAll('.mode-btn')[1]
+    await ftsBtn.trigger('click')
+    expect(mockSetQuery).not.toHaveBeenCalled()
   })
 })

@@ -10,7 +10,7 @@
 
     <div class="search-body">
       <div class="search-input-row">
-        <SearchInput ref="inputRef" v-model="query" :placeholder="t('search.placeholder')" @enter="jumpToFirst" @dblclick="query = ''" />
+        <SearchInput ref="inputRef" v-model="query" :placeholder="t('search.placeholder')" @enter="onEnter" @down="listNav.down" @up="listNav.up" @dblclick="query = ''" />
       </div>
 
       <div class="search-content">
@@ -23,6 +23,7 @@
             v-for="(r, idx) in results"
             :key="isRenderedView ? idx : r.line"
             class="search-result-item"
+            :class="{ 'search-result-item-active': listNav.activeIndex.value === idx }"
             @click="jumpTo(r)"
           >
             <span class="search-result-lnum">{{ isRenderedView ? idx + 1 : r.line }}</span>
@@ -41,6 +42,8 @@ import { useI18n } from 'vue-i18n'
 import BottomSheet from './BottomSheet.vue'
 import HeaderMarquee from './HeaderMarquee.vue'
 import SearchInput from './SearchInput.vue'
+import { useListNav } from '@/composables/useListNav'
+import { useListKeys } from '@/composables/useListKeys'
 import { getFileType } from '@/utils/fileType.ts'
 import { searchRawContent, highlightText, BLOCK_TAGS, shouldCorrectAfterSettle } from '@/utils/searchUtils.ts'
 
@@ -155,6 +158,30 @@ function jumpTo(result) {
     emit('close')
   }
 }
+
+// ── Keyboard ↑/↓ + Enter navigation over search results ──
+const listNav = useListNav({
+  getCount: () => results.value.length,
+  onConfirm: (idx) => jumpTo(results.value[idx]),
+  onActiveChange: scrollActiveIntoView,
+})
+// Document-level keys so navigation also works when focus leaves the search box
+useListKeys({ isOpen: () => props.open, nav: listNav })
+
+function onEnter() {
+  listNav.confirm()
+}
+
+function scrollActiveIntoView(index) {
+  const items = document.querySelectorAll('.search-result-item')
+  const el = items[index]
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+  }
+}
+
+// Reset the highlight whenever the result set changes
+watch(results, () => listNav.reset())
 
 function scrollToRenderedMatch(result) {
   const textNode = result._textNode
@@ -277,12 +304,6 @@ function correctAfterSettle(anchor, scroller, onDone) {
   correctionTimers.add(timer)
 }
 
-function jumpToFirst() {
-  if (results.value.length > 0) {
-    jumpTo(results.value[0])
-  }
-}
-
 defineExpose({
   query,
   results,
@@ -291,12 +312,9 @@ defineExpose({
   _getQuery() { return query.value },
   _getResults() { return results.value },
   _jumpTo(result) { jumpTo(result) },
-  _jumpToFirst() { jumpToFirst() },
   focusSearchInput() { inputRef.value?.focus() },
 })
-</script>
-
-<style scoped>
+</script><style scoped>
 .search-title {
   display: flex;
   align-items: center;
@@ -373,6 +391,11 @@ defineExpose({
   background: var(--bg-secondary, #f8f9fa);
 }
 
+.search-result-item-active {
+  background: var(--bg-secondary, #f8f9fa);
+  border-radius: 0;
+}
+
 .search-result-lnum {
   color: var(--text-muted, #999);
   min-width: 32px;
@@ -417,7 +440,7 @@ defineExpose({
 .search-result-text :deep(.hljs-selector-class) { color: #c18401; }
 .search-result-text :deep(.hljs-selector-id) { color: #4078f2; }
 .search-result-text :deep(mark) {
-  background: rgba(255, 230, 0, 0.5);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 40%, transparent);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
@@ -453,7 +476,7 @@ defineExpose({
 [data-theme="dark"] .search-result-text .hljs-selector-class { color: #e5c07b; }
 [data-theme="dark"] .search-result-text .hljs-selector-id { color: #61afef; }
 [data-theme="dark"] .search-result-text mark {
-  background: rgba(255, 230, 0, 0.35);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }
 </style>

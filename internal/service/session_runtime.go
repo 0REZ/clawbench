@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -427,50 +429,11 @@ func ForceCancelSession(sessionID string) {
 	}()
 }
 
-// chatSummaryEnabled controls whether chat message auto-summarization is active.
-// Set during server startup based on config. Uses atomic.Bool for safe concurrent
-// access from HTTP handlers (write) and session completion goroutines (read).
-var chatSummaryEnabled atomic.Bool
-
-// chatSummaryMode controls how chat messages are summarized.
-// "simple" = extract last text after tool_use (no AI call)
-// "ai" = use AI summarizer via AsyncSummarize
-// "" = disabled (no summarization)
-var chatSummaryMode atomic.Value // stores string
-
-func init() {
-	chatSummaryEnabled.Store(true) // default enabled
-}
-
-// SetChatSummaryEnabled configures whether chat messages are auto-summarized on completion.
-func SetChatSummaryEnabled(enabled bool) {
-	chatSummaryEnabled.Store(enabled)
-}
-
-// SetChatSummaryMode sets the chat summarization mode.
-func SetChatSummaryMode(mode string) {
-	chatSummaryMode.Store(mode)
-}
-
-// GetChatSummaryMode returns the current chat summarization mode.
-func GetChatSummaryMode() string {
-	v := chatSummaryMode.Load()
-	if v == nil {
-		return ""
-	}
-	return v.(string) //nolint:errcheck // type assertion is safe: only string values are stored via chatSummaryMode.Store
-}
-
-// triggerChatSummarization triggers async summarization for the last assistant
+// triggerChatSummarization triggers summarization for the last assistant
 // message(s) in a session when it completes normally.
 // Skipped for cancelled/disconnected sessions (those use skipEvent=true in SetSessionRunning).
-// Delegates the mode-specific strategy to the shared summarizeTarget so that
-// interactive chat and scheduled tasks behave identically.
+// Reading summaries always extract the conclusion (no AI), matching scheduled tasks.
 func triggerChatSummarization(sessionID string) {
-	if GetChatSummaryMode() == "" || !chatSummaryEnabled.Load() {
-		return
-	}
-
 	lastAssistant, blocks := getLastAssistantBlocks(sessionID)
 	if lastAssistant == nil || len(blocks) == 0 {
 		return
@@ -484,6 +447,266 @@ func triggerChatSummarization(sessionID string) {
 
 	projectPath := GetSessionProjectPath(sessionID)
 	summarizeTarget("chat_message", lastAssistant.ID, blocks, projectPath, sessionID)
+
+	// 对话推荐: if enabled, generate a next-step recommendation from the
+	// assistant's conclusion and emit it to the frontend (auto-fill/建议 chip).
+	triggerChatRecommendation(sessionID, projectPath, blocks)
+}
+
+// triggerChatRecommendation generates a next-step recommendation (对话推荐) after
+// an assistant reply completes, using the shared ai_summary LLM config. Emits a
+// chat_recommendation WS event when a recommendation is produced.
+func triggerChatRecommendation(sessionID, projectPath string, blocks []model.ContentBlock) {
+	if !model.ConfigInstance.Chat.RecommendEnabled {
+		return
+	}
+	if model.ConfigInstance.AISummary.API.BaseURL == "" {
+		return
+	}
+	conclusion := summarize.ExtractLastAnswerFromBlocks(blocks)
+	if strings.TrimSpace(conclusion) == "" {
+		return
+	}
+
+	summarizer := summarize.NewAISummarizer(model.ConfigInstance.AISummary)
+	if summarizer == nil {
+		return
+	}
+
+	// Gather the most recent conversation turns (user messages in full,
+	// assistant messages as their conclusion) so the recommendation can account
+	// for the user's recent intent.
+	conversation := recentConversation(sessionID, model.ConfigInstance.Chat.RecommendContextMessages)
+	commands := quickCommandList(projectPath)
+	projContext := projectContext(projectPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	recommendation, err := summarize.RecommendNextStep(ctx, summarizer, conversation, commands, projContext, conclusion, "zh")
+	if err != nil {
+		slog.Debug("chat recommendation failed", slog.String("session_id", sessionID), slog.String("err", err.Error()))
+		return
+	}
+	recommendation = strings.TrimSpace(recommendation)
+	if recommendation == "" {
+		return
+	}
+
+	mgr := ws.GetManager()
+	if mgr == nil {
+		return
+	}
+	mgr.BroadcastEvent(ws.ServerMessage{
+		Type:  ws.MessageTypeEvent,
+		ID:    ws.GenerateEventID(),
+		Event: "chat_recommendation",
+		Data: ws.ChatRecommendationData{
+			SessionID:      sessionID,
+			ProjectPath:    projectPath,
+			Recommendation: recommendation,
+		},
+	})
+	slog.Info("chat recommendation emitted", slog.String("session_id", sessionID))
+
+	// Persist so the recommendation is available even if the client was offline
+	// when the session completed (e.g. APP not open at the time).
+	SaveChatRecommendation(sessionID, projectPath, recommendation)
+}
+
+// SaveChatRecommendation persists a conversation recommendation so it can be
+// fetched later (e.g. when a client that was offline opens the session).
+func SaveChatRecommendation(sessionID, projectPath, recommendation string) {
+	_, err := WriteExec(
+		"INSERT INTO chat_recommendations (session_id, project_path, recommendation) VALUES (?, ?, ?)",
+		sessionID, projectPath, recommendation,
+	)
+	if err != nil {
+		slog.Debug("failed to persist chat recommendation", slog.String("session_id", sessionID), slog.String("err", err.Error()))
+	}
+}
+
+// LatestChatRecommendation returns the most recent recommendation for a session.
+// Returns empty string if none exists.
+func LatestChatRecommendation(ctx context.Context, sessionID string) string {
+	var rec string
+	err := dbRead.QueryRowContext(ctx,
+		"SELECT recommendation FROM chat_recommendations WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&rec)
+	if err != nil {
+		return ""
+	}
+	return rec
+}
+
+// recentConversation returns the text of the most recent n messages in a
+// session. User messages are included in full; assistant messages are reduced
+// to their conclusion (text after the last tool_use). Limited to n messages
+// (0 or negative = no context).
+func recentConversation(sessionID string, n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	messages, err := GetMessagesBySessionID(sessionID)
+	if err != nil {
+		slog.Debug("chat recommendation: failed to load messages for context", slog.String("session_id", sessionID), slog.String("err", err.Error()))
+		return nil
+	}
+	var texts []string
+	for i := len(messages) - 1; i >= 0 && len(texts) < n; i-- {
+		var text string
+		switch messages[i].Role {
+		case "user":
+			text = ExtractPlainText(messages[i].Content)
+		case "assistant":
+			text = assistantConclusion(messages[i].Content)
+		default:
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		texts = append([]string{text}, texts...) // keep chronological order
+	}
+	return texts
+}
+
+// assistantConclusion extracts the conclusion text from an assistant message's
+// blocks content (text after the last tool_use), appending any AskUserQuestion
+// cards so the recommendation prompt can reference the options.
+func assistantConclusion(content string) string {
+	if !strings.HasPrefix(content, `{"blocks":`) {
+		return content
+	}
+	var wrapper struct {
+		Blocks []model.ContentBlock `json:"blocks"`
+	}
+	if json.Unmarshal([]byte(content), &wrapper) != nil {
+		return content
+	}
+	conclusion := summarize.ExtractLastAnswerFromBlocks(wrapper.Blocks)
+	if q := askQuestionText(wrapper.Blocks); q != "" {
+		conclusion += q
+	}
+	return conclusion
+}
+
+// askQuestionText renders any AskUserQuestion cards in the assistant blocks as
+// plain text, reusing extractSummaryCards to parse them. Covers both the
+// <ask-question> tag form (cards.AskQuestions) and the converted AskUserQuestion
+// tool_use form (cards.Tools[].Input["questions"]).
+func askQuestionText(blocks []model.ContentBlock) string {
+	cards := extractSummaryCards(blocks)
+	var qs []model.AskQuestionCard
+	qs = append(qs, cards.AskQuestions...)
+	for _, tool := range cards.Tools {
+		if !strings.EqualFold(tool.Name, "AskUserQuestion") {
+			continue
+		}
+		raw, ok := tool.Input["questions"]
+		if !ok {
+			continue
+		}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		var parsed []model.AskQuestionCard
+		if json.Unmarshal(data, &parsed) != nil {
+			continue
+		}
+		qs = append(qs, parsed...)
+	}
+	if len(qs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n[AI asks the user to choose]\n")
+	for _, q := range qs {
+		if q.Question != "" {
+			b.WriteString("Question: " + q.Question + "\n")
+		}
+		for _, o := range q.Options {
+			if o.Label == "" {
+				continue
+			}
+			if o.Description != "" {
+				b.WriteString("- " + o.Label + " (" + o.Description + ")\n")
+			} else {
+				b.WriteString("- " + o.Label + "\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// quickCommandList returns the quick-send command bodies available for a
+// project, so the recommendation can suggest the actual command to run.
+func quickCommandList(projectPath string) []string {
+	items, err := GetChatQuickSend(projectPath)
+	if err != nil {
+		slog.Debug("chat recommendation: failed to load quick commands", slog.String("project", projectPath), slog.String("err", err.Error()))
+		return nil
+	}
+	return quickCommandDetails(items)
+}
+
+// quickCommandDetails extracts just the command body from each item, omitting
+// the label, so the recommendation recommends the command itself rather than
+// its title.
+func quickCommandDetails(items []ChatQuickSendItem) []string {
+	commands := make([]string, 0, len(items))
+	for _, it := range items {
+		if cmd := strings.TrimSpace(it.Command); cmd != "" {
+			commands = append(commands, cmd)
+		}
+	}
+	return commands
+}
+
+// projectContextFiles are the project context files loaded (in order) as
+// stable recommendation context. Their content rarely changes, so it forms a
+// good prompt-cacheable prefix.
+var projectContextFiles = []string{"AGENTS.md", "CLAUDE.md", "CODEBUDDY.md", "GEMINI.md", "README.md"}
+
+// projectContextMaxBytes caps how much of the chosen file is injected, so a very
+// large AGENTS.md (or README.md) cannot bloat the cheap recommendation call.
+const projectContextMaxBytes = 4096
+
+// projectContext loads the project context files (AGENTS.md, CLAUDE.md,
+// CODEBUDDY.md, GEMINI.md, README.md) as a bounded, deterministic string for the
+// recommendation's stable context. Only the FIRST non-empty file in the chain is
+// used — files are never stacked. Missing, unreadable, or empty files are
+// skipped. The byte prefix stays stable across turns, which is what lets prompt
+// caching hit.
+func projectContext(projectPath string) []string {
+	if projectPath == "" {
+		return nil
+	}
+	for _, name := range projectContextFiles {
+		if text := readContextFile(projectPath, name); text != "" {
+			return []string{"--- " + name + " ---\n" + text}
+		}
+	}
+	return nil
+}
+
+// readContextFile reads a single project file, capped at projectContextMaxBytes,
+// returning "" if the file is missing, unreadable, or empty/whitespace-only.
+func readContextFile(projectPath, name string) string {
+	data, err := os.ReadFile(filepath.Join(projectPath, name))
+	if err != nil {
+		return ""
+	}
+	text := string(data)
+	if len(text) > projectContextMaxBytes {
+		text = text[:projectContextMaxBytes]
+	}
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return text
 }
 
 // getLastAssistantBlocks returns the last assistant message and its parsed content blocks.

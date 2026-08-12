@@ -14,6 +14,9 @@ func IsAnthropicURL(u string) bool {
 }
 
 const (
+	// roleUser is the standard "user" chat role used by all recommendation
+	// request builders (OpenAI + Anthropic compatible).
+	roleUser = "user"
 	// defaultTTSPrompt is the fallback prompt used when the external file is not found.
 	// A language directive (e.g. "Output in Chinese.") is appended at load time.
 	defaultTTSPrompt = `You are a text condenser for TTS voice playback. Your job is to faithfully condense the given text into natural spoken language that can be read aloud as-is.
@@ -196,7 +199,7 @@ func languageName(code string) string {
 
 // prepareTextForSummarization cleans and truncates text before sending to a summarizer.
 // Returns the cleaned text and true if summarization is needed,
-// or the cleaned text and false if the text is short enough to skip summarization.
+// or the cleaned text and false if the text is empty (nothing to summarize).
 func prepareTextForSummarization(text string, preserveMarkdown bool) (string, bool) {
 	var cleaned string
 	if preserveMarkdown {
@@ -205,13 +208,14 @@ func prepareTextForSummarization(text string, preserveMarkdown bool) (string, bo
 		cleaned = StripMarkdown(text)
 	}
 
-	runes := []rune(cleaned)
-	if len(runes) < ShortTextThreshold {
-		return cleaned, false // short text, skip summarization
+	// Empty (or whitespace-only) text has nothing to summarize.
+	// Short text is still sent to the summarizer so it can polish format.
+	if len([]rune(cleaned)) == 0 {
+		return cleaned, false
 	}
 
 	// Truncate to last MaxSummarizeRunes if too long
-	if len(runes) > MaxSummarizeRunes {
+	if runes := []rune(cleaned); len(runes) > MaxSummarizeRunes {
 		cleaned = string(runes[len(runes)-MaxSummarizeRunes:])
 	}
 

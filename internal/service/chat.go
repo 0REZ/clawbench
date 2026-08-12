@@ -835,6 +835,152 @@ func GetSessionCount(projectPath string) (int, error) {
 	return count, err
 }
 
+// NextSessionNumber atomically allocates the next auto-title number for a
+// project's chat sessions and returns it (1, 2, 3, ...).
+//
+// The returned number is the larger of (a) the persisted per-project monotonic
+// counter and (b) the current active session count, plus one. Two properties
+// follow:
+//
+//   - Monotonic: the counter only ever increases and is independent of the
+//     active count, so archiving/deleting a session never makes a later
+//     auto-titled session reuse an earlier number (no duplicate "新会话 N").
+//   - Unified across agents: the counter is per-project, not per-backend, so
+//     switching agents does not reset the numbering.
+//
+// Taking the max with the active count also keeps explicitly-named sessions
+// (created via CreateSession with a real title) counted, matching the legacy
+// "New Session N" numbering where N reflected how many sessions existed.
+func NextSessionNumber(projectPath string) (int, error) {
+	tx, err := WriteBegin()
+	if err != nil {
+		return 0, err
+	}
+	defer writeMu.Unlock()
+	defer tx.Rollback()
+
+	// Ensure a row exists so the UPDATE below is reliable. Not a data race:
+	// writeMu is held for the whole transaction.
+	if _, err := tx.Exec(
+		"INSERT INTO project_meta (project_path, next_session_number) VALUES (?, 0) ON CONFLICT(project_path) DO NOTHING",
+		projectPath,
+	); err != nil {
+		return 0, err
+	}
+
+	var counter int
+	if err := tx.QueryRow(
+		"SELECT next_session_number FROM project_meta WHERE project_path = ?",
+		projectPath,
+	).Scan(&counter); err != nil {
+		return 0, err
+	}
+
+	var activeCount int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM chat_sessions WHERE project_path = ? AND archived = 0 AND session_type = 'chat'",
+		projectPath,
+	).Scan(&activeCount); err != nil {
+		return 0, err
+	}
+
+	next := counter
+	if activeCount > next {
+		next = activeCount
+	}
+	next++
+
+	if _, err := tx.Exec(
+		"UPDATE project_meta SET next_session_number = ?, updated_at = CURRENT_TIMESTAMP WHERE project_path = ?",
+		next, projectPath,
+	); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return next, nil
+}
+
+// RecentSession is a lightweight listing row used by session search's "browse
+// all" mode (empty query): every chat session for the project, newest first,
+// including archived ones that can still be resumed/restored. First* fields
+// describe the session's first message, shown as the detail preview chunk.
+type RecentSession struct {
+	ID             string
+	Title          string
+	Backend        string
+	ProjectPath    string
+	Archived       bool
+	CreatedAt      time.Time
+	MessageCount   int
+	FirstContent   string
+	FirstRole      string
+	FirstMessageID int64
+	FirstCreatedAt time.Time
+}
+
+// GetRecentSessions returns all chat sessions for a project ordered newest-first
+// by creation time, including archived ones. When projectPath is empty it
+// returns sessions across all projects (CLI global browse). limit <= 0 returns
+// all sessions.
+func GetRecentSessions(projectPath string, limit int) ([]RecentSession, error) {
+	query := `SELECT s.id, s.title, s.backend, s.project_path, s.archived, s.created_at,
+		COUNT(h.id) AS message_count,
+		(SELECT h2.content FROM chat_history h2 WHERE h2.session_id = s.id ORDER BY h2.created_at ASC, h2.id ASC LIMIT 1) AS first_content,
+		(SELECT h2.role FROM chat_history h2 WHERE h2.session_id = s.id ORDER BY h2.created_at ASC, h2.id ASC LIMIT 1) AS first_role,
+		(SELECT h2.id FROM chat_history h2 WHERE h2.session_id = s.id ORDER BY h2.created_at ASC, h2.id ASC LIMIT 1) AS first_message_id,
+		(SELECT h2.created_at FROM chat_history h2 WHERE h2.session_id = s.id ORDER BY h2.created_at ASC, h2.id ASC LIMIT 1) AS first_created_at
+		FROM chat_sessions s
+		LEFT JOIN chat_history h ON h.session_id = s.id
+		WHERE s.session_type = 'chat'`
+	args := []interface{}{}
+	if projectPath != "" {
+		query += " AND s.project_path = ?"
+		args = append(args, projectPath)
+	}
+	query += " GROUP BY s.id ORDER BY s.created_at DESC, s.id DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := dbRead.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sessions := []RecentSession{}
+	for rows.Next() {
+		var s RecentSession
+		var archived int
+		var firstContent, firstRole sql.NullString
+		var firstMessageID sql.NullInt64
+		var firstCreatedAt sql.NullTime
+		if err := rows.Scan(&s.ID, &s.Title, &s.Backend, &s.ProjectPath, &archived, &s.CreatedAt, &s.MessageCount,
+			&firstContent, &firstRole, &firstMessageID, &firstCreatedAt); err != nil {
+			return nil, err
+		}
+		s.Archived = archived != 0
+		if firstContent.Valid {
+			s.FirstContent = firstContent.String
+		}
+		if firstRole.Valid {
+			s.FirstRole = firstRole.String
+		}
+		if firstMessageID.Valid {
+			s.FirstMessageID = firstMessageID.Int64
+		}
+		if firstCreatedAt.Valid {
+			s.FirstCreatedAt = firstCreatedAt.Time
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
 // GetSessionTitle returns the title of an active (non-archived) session.
 func GetSessionTitle(sessionID string) (string, error) {
 	var title string
@@ -1183,7 +1329,8 @@ func SessionHasRealAssistantContent(sessionID string) bool {
 	var content string
 	err := dbRead.QueryRow(
 		"SELECT content FROM chat_history WHERE session_id = ? AND role = 'assistant' AND streaming = 0 ORDER BY id ASC LIMIT 1",
-		sessionID).Scan(&content)
+		sessionID,
+	).Scan(&content)
 	if err != nil || content == "" {
 		return false
 	}

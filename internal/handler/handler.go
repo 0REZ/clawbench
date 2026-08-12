@@ -293,6 +293,8 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/tts/generate", middleware.Auth(TTSGenerate))
 	register("/api/tts/stream/", middleware.Auth(TTSStream))
 	register("/api/tts/audio/ws", middleware.Auth(TTSAudioWS))
+	register("/api/stt/transcribe", middleware.Auth(STTTranscribe))
+	register("/api/stt/transcribe/ws", middleware.Auth(STTTranscribeWS))
 	register("/api/tasks", middleware.Auth(ServeTasks))
 	register("/api/tasks/", middleware.Auth(ServeTaskByID))
 	register("/api/rag/search", middleware.Auth(ServeRAGSearch))
@@ -316,6 +318,9 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// Android APK download — intentionally unauthenticated:
 	// APK is a public resource; users need to download it before they can even log in.
 	register("/api/apk", ServeAPK)
+
+	// Desktop download info — intentionally unauthenticated (public resource).
+	register("/api/desktop/latest", ServeDesktopLatest)
 
 	// File watch SSE (auto-refresh on file changes)
 	register("/api/file/watch", middleware.Auth(FileWatchSSE))
@@ -376,6 +381,9 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/chat/message-clusters/compute", middleware.Auth(ServeMessageClustersCompute))
 	register("/api/chat/message-clusters/compute/cancel", middleware.Auth(ServeMessageClustersComputeCancel))
 	register("/api/chat/message-clusters/compute/status", middleware.Auth(ServeMessageClustersComputeStatus))
+
+	// Conversation recommendation (latest next-step suggestion for a session)
+	register("/api/chat/recommendation", middleware.Auth(ServeChatRecommendation))
 
 	// Self-upgrade
 	register("/api/upgrade/check", middleware.Auth(ServeUpgradeCheck))

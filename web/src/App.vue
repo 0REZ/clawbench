@@ -27,7 +27,7 @@
         <!-- Wide-screen vertical dock (non-chat tabs only) -->
         <div v-show="isWideScreen" class="wide-dock" ref="wideDockRef">
           <div class="wide-dock-center">
-            <div class="dock-active-indicator wide-dock-active-indicator" :style="wideDockIndicatorStyle"></div>
+            <div class="dock-active-indicator wide-dock-active-indicator" v-show="!leftCollapsed" :style="wideDockIndicatorStyle"></div>
             <!-- Primary tabs (always visible) -->
             <div v-for="tab in WIDE_SCREEN_PRIMARY_TABS" :key="tab" class="dock-btn-wrap">
               <button class="dock-btn" :class="wideDockBtnClass(tab)" @click.stop="handleWideDockTabClick(tab)" :title="wideDockTabTitle(tab)">
@@ -76,6 +76,7 @@
           <SplitView
             :enabled="isWideScreen"
             :ratio="splitRatio"
+            :collapsed="leftCollapsed"
             @update:ratio="onSplitRatioChange"
           >
             <template #left>
@@ -233,7 +234,6 @@
                     @open="switchTab('chat')"
                     @open-file="handleSelectFile"
                     @task-card-click="onTaskCardClick"
-                    @open-acp-sessions="acpSessionDrawer.open()"
                     @open-session-search="sessionSearchDrawer.open()"
                   />
                 </TabPanel>
@@ -260,11 +260,11 @@
         @close="detailsDrawer.close()"
       />
 
-      <!-- Quote question floating bar (narrow mode only; wide-screen uses ChatInputBar quote tag) -->
+      <!-- Quote question floating bar (shared by narrow and wide layouts) -->
       <QuoteQuestionBar
-        v-if="!isWideScreen"
         :visible="quoteQuestion.visible.value"
         :quoteData="quoteQuestion.quoteData.value"
+        @add="quoteQuestion.addToConversation($event)"
         @send="quoteQuestion.sendMessage($event)"
         @close="quoteQuestion.closeSheet()"
         @pin="quoteQuestion.pinBar()"
@@ -293,6 +293,8 @@
         @close="sessionSearchDrawer.close()"
         @open="handleOpenFromSearch"
         @resume="handleResumeFromSearch"
+        @destroy="handleDestroyFromSearch"
+        @open-acp-sessions="handleOpenAcpSessionsFromSearch"
       />
 
       <!-- ACP session resume drawer -->
@@ -399,6 +401,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick, defineAsyncComponent } from 'vue'
 import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
+import { getNative } from '@/utils/clawbenchNative'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
@@ -431,7 +434,7 @@ import HeaderMarquee from './components/common/HeaderMarquee.vue'
 import AgentIcon from './components/common/AgentIcon.vue'
 import SettingsPage from './components/settings/SettingsPage.vue'
 import TaskTab from '@/components/task/TaskTab.vue'
-import { useQuoteQuestion, restoreBarVisibility } from './composables/useQuoteQuestion.ts'
+import { useQuoteQuestion } from './composables/useQuoteQuestion.ts'
 import { useTaskTab, registerSwitchTab, onTaskEvent } from '@/composables/useTaskTab.ts'
 import { useTabDrawer, onTabSwitch, resetTabDrawerState } from '@/composables/useTabDrawer.ts'
 import { resetAgents, useAgents } from '@/composables/useAgents'
@@ -475,6 +478,7 @@ import {
   resolveActivePaneOnEnter,
   switchLeftTab,
   setSplitRatio,
+  setLeftCollapsed,
   registerWideScreenCallbacks,
 } from './composables/useWideScreenLayout'
 import 'highlight.js/styles/github.css'
@@ -578,7 +582,7 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
 const activeTab = ref('chat')
 
 // ── Wide-screen layout state ──
-const { isWideScreen, leftTab, splitRatio, activePane } = useWideScreenLayout()
+const { isWideScreen, leftTab, splitRatio, activePane, leftCollapsed } = useWideScreenLayout()
 
 const chatActive = computed(() => (isWideScreen.value ? 'chat' : activeTab.value))
 const leftPanelActive = computed(() => (isWideScreen.value ? leftTab.value : activeTab.value))
@@ -1024,9 +1028,30 @@ async function handleResumeFromSearch(session) {
   }
 }
 
+async function handleDestroyFromSearch(session) {
+  if (!session?.session_id) return
+  const title = session.session_title || gt('sessionSearch.untitledSession')
+  const confirmed = await searchConfirmDialog.confirm(
+    gt('sessionSearch.destroyConfirm', { title }),
+    {
+      title: gt('sessionSearch.destroy'),
+      confirmText: gt('common.confirm'),
+      dangerous: true,
+    }
+  )
+  if (!confirmed) return
+  sessionSearchDrawer.close()
+  sessionIdentity.destroySession(session.session_id)
+}
+
 async function handleAcpSessionSelect(sessionId) {
   await sessionIdentity.switchSession(sessionId)
   acpSessionDrawer.close()
+}
+
+function handleOpenAcpSessionsFromSearch() {
+  sessionSearchDrawer.close()
+  acpSessionDrawer.open()
 }
 
 /** Register global DOM event listeners (idempotent — safe to call multiple times). */
@@ -1093,7 +1118,7 @@ async function initializeApp() {
   loadSessionsOnce()
   if (isAppMode.value) syncToNative().catch(() => {})
   if (isAppMode.value && localConfig.logCapture) {
-    try { if (window.AndroidNative?.startLogCapture) window.AndroidNative.startLogCapture() } catch {}
+    try { if (getNative()?.startLogCapture) getNative()?.startLogCapture()?.catch(() => {}) } catch {}
   }
   if (localConfig.logCapture) startFlushTimer()
   loadSSHInfo().catch(() => {})
@@ -1198,10 +1223,16 @@ function handleJumpPdfPage(pageNum) {
     fileOverlayRef.value?.pdfScrollToPage(pageNum)
 }
 
-watch(() => currentFile.value, (_f) => {
+watch(() => currentFile.value, (file, prevFile) => {
     tocDrawer.close()
     detailsDrawer.close()
     markdownViewMode.value = 'rendered'
+    // When the open file is closed while the user is on the file-view tab,
+    // fall back to the file manager tab automatically.
+    if (!file && prevFile) {
+        const currentTab = isWideScreen.value ? leftTab.value : activeTab.value
+        if (currentTab === 'view') switchTab('browse')
+    }
 })
 
 function toggleHidden() {
@@ -1515,10 +1546,6 @@ watch(isWideScreen, (val) => {
     document.documentElement.style.setProperty('--dock-height', '0px')
   } else {
     onTabSwitch(activeTab.value)
-    // Restore QuoteQuestionBar visibility if a pinned quote exists
-    // (wide-screen auto-pin sets barVisible=false because the floating bar
-    // is hidden there; switching to narrow needs the bar back).
-    restoreBarVisibility()
     // Bottom dock visible again — re-measure (ResizeObserver may miss the
     // display:none → visible transition, see the keyboard safety-net comment).
     nextTick(() => {
@@ -1543,8 +1570,19 @@ registerWideScreenCallbacks({
 
 // ── Wide-screen vertical dock helpers ──
 function handleWideDockTabClick(tab) {
+  // Clicking the already-active tab toggles the left pane collapsed (VS Code-style).
+  // Clicking a different tab expands (if needed) and switches to it.
+  if (tab === leftTab.value) {
+    const collapsing = !leftCollapsed.value
+    setLeftCollapsed(collapsing)
+    // When collapsing, the visible pane is chat — route focus there so its
+    // global shortcuts (send, voice, etc.) stay active.
+    if (collapsing) setActivePane('right')
+    return
+  }
   // Clicking a dock item means the user intends to work in the left pane.
   setActivePane('left')
+  setLeftCollapsed(false)
   switchLeftTab(tab)
 }
 
@@ -1601,7 +1639,8 @@ function wideDockTabTitle(tab) {
 }
 function wideDockBtnClass(tab) {
   return {
-    active: leftTab.value === tab,
+    // When the left pane is collapsed no dock tab is active (VS Code-style).
+    active: leftTab.value === tab && !leftCollapsed.value,
     'has-unread': tab === 'tasks' && store.state.taskUnreadCount > 0 && leftTab.value !== 'tasks',
     'just-completed': tab === 'tasks' && store.state.taskJustCompleted && leftTab.value !== 'tasks',
     'has-running': tab === 'tasks' && store.state.taskRunning && leftTab.value !== 'tasks',
@@ -1761,7 +1800,7 @@ function handleOverflowOutsideClick(e) {
 
 // ── Wide-screen dock overflow state ──
 const wideOverflowMenuOpen = ref(false)
-const wideOverflowTabActive = computed(() => widePopupOverflowTabs.value.includes(leftTab.value))
+const wideOverflowTabActive = computed(() => !leftCollapsed.value && widePopupOverflowTabs.value.includes(leftTab.value))
 
 const wideOverflowPopupStyle = computed(() => {
   const btn = wideOverflowBtnRef.value
@@ -1807,6 +1846,7 @@ function toggleWideOverflowMenu() {
 
 function handleWideOverflowSelect(tab) {
   if (leftTab.value === tab) {
+    setLeftCollapsed(!leftCollapsed.value)
     wideOverflowMenuOpen.value = false
     return
   }
@@ -1903,14 +1943,15 @@ async function applyTheme(t) {
     document.documentElement.setAttribute('data-theme', t)
     setSetting('theme', t)
     document.documentElement.setAttribute('data-hljs-theme', t)
+    getNative()?.setTheme?.(t === 'light' ? 'light' : 'dark')
     const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
     await initMermaid()
     await reRenderMermaid()
 }
 
-/** Dismiss the native splash overlay in APP mode. */
+/** Dismiss the native splash overlay in APP mode (no-op in web/desktop). */
 function dismissSplash() {
-    window.AndroidNative?.dismissSplash?.()
+    try { getNative()?.dismissSplash?.() } catch { /* not in app mode */ }
 }
 
 provide('theme', theme)
@@ -1992,13 +2033,13 @@ onMounted(async () => {
     }
     if (!resp.ok) {
         if (resp.status === 401 || resp.status === 403) {
-            if (isAppMode.value && window.AndroidNative?.getPassword?.()) {
-                const savedPwd = window.AndroidNative.getPassword()
+            if (isAppMode.value && getNative()?.getPassword) {
+                const savedPwd = await getNative()?.getPassword?.()
                 if (savedPwd) {
                     try {
                         const loginRes = await fetch('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: savedPwd }) })
                         if (loginRes.ok) {
-                            if (window.AndroidNative?.setSSHPassword) window.AndroidNative.setSSHPassword(savedPwd)
+                            await getNative()?.setSSHPassword?.(savedPwd)
                         } else { isAuthenticated.value = false; return }
                     } catch { isAuthenticated.value = false; return }
                 } else { isAuthenticated.value = false; return }
@@ -2031,7 +2072,7 @@ onMounted(async () => {
     checkForUpgrade()
 
     // Handle pending navigation from push notification deep link
-    // (cross-project reload or cold start via AndroidNative bridge)
+    // (cross-project reload or cold start via native bridge)
     const processPendingSessionNav = (navSessionId) => {
       // Wait for sessions to load before switching (max 3 seconds)
       let attempts = 0
@@ -2076,43 +2117,45 @@ onMounted(async () => {
       } catch {} // for cold-start pending navigation
     }
 
-    // Check AndroidNative bridge for cold-start pending navigation
+    // Check native bridge for cold-start pending navigation
     // Also poll briefly in case CustomEvent was dispatched while WebView was paused
-    if (isAppMode.value && window.AndroidNative?.getPendingNavigation) {
+    if (isAppMode.value && getNative()?.getPendingNavigation) {
       let pollCleared = false
       const pollPendingNav = () => {
-        try {
-          const nav = window.AndroidNative.getPendingNavigation()
-          appLog.d(TAG, 'getPendingNavigation poll result:', nav)
-          if (nav) {
-            const parsed = JSON.parse(nav)
-            const { sessionId, taskId, executionId, projectPath } = parsed
-            if (taskId) {
-              // Task notification navigation
-              pollCleared = true
-              if (projectPath && projectPath !== store.state.projectRoot) {
-                localStorage.setItem('clawbenchPendingNav', JSON.stringify({ taskId, executionId }))
-                fetch('/api/project', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ path: projectPath }),
-                }).then(() => window.location.reload())
-              } else {
-                processPendingTaskNav(taskId, executionId)
-              }
-            } else if (sessionId) {
-              // Session notification navigation
-              // Navigation data found — stop polling
-              pollCleared = true
-              if (projectPath && projectPath !== store.state.projectRoot) {
-                // Need to switch project first — use hot switch instead of reload
-                hotSwitchProject(projectPath, sessionId)
-              } else {
-                processPendingSessionNav(sessionId)
+        void (async () => {
+          try {
+            const nav = await getNative()?.getPendingNavigation?.()
+            appLog.d(TAG, 'getPendingNavigation poll result:', nav)
+            if (nav) {
+              const parsed = JSON.parse(nav)
+              const { sessionId, taskId, executionId, projectPath } = parsed
+              if (taskId) {
+                // Task notification navigation
+                pollCleared = true
+                if (projectPath && projectPath !== store.state.projectRoot) {
+                  localStorage.setItem('clawbenchPendingNav', JSON.stringify({ taskId, executionId }))
+                  fetch('/api/project', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: projectPath }),
+                  }).then(() => window.location.reload())
+                } else {
+                  processPendingTaskNav(taskId, executionId)
+                }
+              } else if (sessionId) {
+                // Session notification navigation
+                // Navigation data found — stop polling
+                pollCleared = true
+                if (projectPath && projectPath !== store.state.projectRoot) {
+                  // Need to switch project first — use hot switch instead of reload
+                  hotSwitchProject(projectPath, sessionId)
+                } else {
+                  processPendingSessionNav(sessionId)
+                }
               }
             }
-          }
-        } catch {} // and then every 500ms for up to 3 seconds
+          } catch {} // and then every 500ms for up to 3 seconds
+        })()
       }
       // Poll immediately and then every 500ms for up to 3 seconds
       pollPendingNav()

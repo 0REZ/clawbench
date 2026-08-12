@@ -14,7 +14,7 @@
         <span v-else-if="!isGit" class="drilldown-count">{{ t('git.commitList.notInitialized') }}</span>
         <span v-else-if="!untracked" class="drilldown-count">{{ t('git.commitList.loading') }}</span>
       </div>
-      <SearchInput v-if="commits.length > 0" v-model="commitSearch" :placeholder="searchPlaceholder" class="commit-search-input" />
+      <SearchInput v-if="commits.length > 0" v-model="commitSearch" :placeholder="searchPlaceholder" class="commit-search-input" @enter="listNav.confirm" @down="listNav.down" @up="listNav.up" />
       <button
         v-if="commits.length > 0"
         class="drilldown-refresh-btn"
@@ -76,17 +76,16 @@
         <!-- Commit rows -->
         <div class="commit-list-content" ref="contentRef" @touchstart="onTouchStart" @touchend="onTouchEnd">
           <div
-            v-for="c in filteredCommits"
+            v-for="(c, idx) in filteredCommits"
             :key="c.sha"
             class="drilldown-item"
-            :class="{ 'drilldown-item-selected': c.sha === selectedSHA }"
+            :class="{ 'drilldown-item-selected': c.sha === selectedSHA, 'drilldown-item-active': listNav.activeIndex.value === idx }"
             @click="$emit('select', c)"
           >
             <div class="git-commit-info">
               <div class="git-commit-msg">{{ c.msg }}</div>
               <div class="git-commit-meta">
                 <span v-if="!c.isWT" class="git-commit-sha">{{ c.sha.slice(0, 7) }}</span>
-                <span v-if="c.fileCount > 0" class="git-commit-file-count">{{ c.fileCount }}</span>
                 <span v-if="c.refs && c.refs.length" class="git-commit-refs">
                   <span v-for="ref in c.refs" :key="ref" class="git-ref-tag" :class="refTagClass(ref)">{{ refLabelText(ref) }}</span>
                 </span>
@@ -112,6 +111,8 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import GitGraph from './GitGraph.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import { useListNav } from '@/composables/useListNav'
+import { useListKeys } from '@/composables/useListKeys'
 import { refLabelText } from '@/utils/gitGraph'
 import { formatRelativeTime, formatDateTime } from '@/utils/format'
 const { t } = useI18n()
@@ -172,11 +173,31 @@ function onTouchEnd(e) {
 
 const isSearching = computed(() => commitSearch.value.trim().length > 0)
 
+// ── Keyboard ↑/↓ + Enter navigation over commits ──
+const listNav = useListNav({
+  getCount: () => filteredCommits.value.length,
+  onConfirm: (idx) => emit('select', filteredCommits.value[idx]),
+  onActiveChange: scrollActiveIntoView,
+})
+// Document-level keys so navigation works regardless of where focus is inside the list.
+// The component is only mounted while the commit list is the active view.
+useListKeys({ isOpen: () => true, nav: listNav })
+
+function scrollActiveIntoView(index) {
+  const items = document.querySelectorAll('.commit-list-content .drilldown-item')
+  const el = items[index]
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+  }
+}
+
 const filteredCommits = computed(() => {
   const q = commitSearch.value.trim().toLowerCase()
   if (!q) return props.commits
   return props.commits.filter(c => c.msg.toLowerCase().includes(q))
 })
+
+watch(filteredCommits, () => listNav.reset())
 
 function formatDate(dateStr) {
   if (!dateStr) return ''
@@ -465,6 +486,12 @@ defineExpose({ observeList, unobserveList, commitSearch })
   padding-left: 11px;
 }
 
+/* Keyboard-navigation highlight */
+.drilldown-item-active {
+  background: var(--bg-secondary, #f8f9fa);
+  border-radius: 0;
+}
+
 /* Search graph hint */
 .commit-list-graph-hint {
   width: 24px;
@@ -483,17 +510,6 @@ defineExpose({ observeList, unobserveList, commitSearch })
   color: var(--text-muted, #999);
   background: var(--bg-tertiary, #f0f0f0);
   padding: 1px 4px;
-  border-radius: 3px;
-  margin-right: 4px;
-}
-
-/* File change count badge */
-.git-commit-file-count {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent-color, #4a90d9);
-  background: rgba(74, 144, 217, 0.12);
-  padding: 1px 5px;
   border-radius: 3px;
   margin-right: 4px;
 }

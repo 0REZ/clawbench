@@ -224,8 +224,24 @@ func TestFindExistingACPSessions_FindsActiveSession(t *testing.T) {
 	require.NoError(t, err)
 
 	result := findExistingACPSessions([]string{"test-acp-123", "test-acp-456"})
-	assert.True(t, result["acp:test-acp-123"], "should find existing session for test-acp-123")
-	assert.False(t, result["acp:test-acp-456"], "should not find session for test-acp-456")
+	assert.True(t, result["test-acp-123"], "should find existing session for test-acp-123")
+	assert.False(t, result["test-acp-456"], "should not find session for test-acp-456")
+}
+
+func TestFindExistingACPSessions_FindsExternalSessionID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// A session whose raw backend session id is stored in external_session_id
+	// (the common case for opencode ses_... ids) — no acp: prefix.
+	_, err := service.UnsafeDBForTest().Exec(
+		"INSERT INTO chat_sessions (id, project_path, backend, title, external_session_id) VALUES (?, ?, 'opencode', 'Native', ?)",
+		"cb-ext-1", env.ProjectDir, "ses_00c202c74ffeZdhwsMNwtbwPm5",
+	)
+	require.NoError(t, err)
+
+	result := findExistingACPSessions([]string{"ses_00c202c74ffeZdhwsMNwtbwPm5"})
+	assert.True(t, result["ses_00c202c74ffeZdhwsMNwtbwPm5"], "should find session via external_session_id")
 }
 
 func TestFindExistingACPSessions_FindsArchivedSession(t *testing.T) {
@@ -240,7 +256,7 @@ func TestFindExistingACPSessions_FindsArchivedSession(t *testing.T) {
 	require.NoError(t, err)
 
 	result := findExistingACPSessions([]string{"archived-acp-123"})
-	assert.True(t, result["acp:archived-acp-123"], "should find archived session")
+	assert.True(t, result["archived-acp-123"], "should find archived session")
 }
 
 func TestFindExistingACPSessions_EmptyInput(t *testing.T) {
@@ -705,6 +721,59 @@ func TestServeACPSessions_FilterExistingSessions(t *testing.T) {
 	assert.Len(t, sessions, 1, "existing ACP session should be filtered out")
 }
 
+func TestServeACPSessions_FilterExistingExternalSessionID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	agentID := "acp-list-filter-ext"
+	model.Agents = map[string]*model.Agent{
+		agentID: {ID: agentID, Backend: "opencode", Transport: "acp-stdio", AcpCommand: "echo"},
+	}
+	model.AgentList = []*model.Agent{model.Agents[agentID]}
+
+	ai.GetAgentCapabilityRegistry().ForceUpdateIfNeeded(agentID, nil, nil, nil, nil, nil, true, true)
+
+	// A session whose raw backend id (e.g. opencode ses_...) is stored only in
+	// external_session_id — source_session_id stays NULL (the common case).
+	_, err := service.UnsafeDBForTest().Exec(
+		"INSERT INTO chat_sessions (id, project_path, backend, title, external_session_id, session_type) VALUES (?, ?, 'opencode', 'Native', ?, 'chat')",
+		"cb-ext-1", env.ProjectDir, "ses_00c202c74ffeZdhwsMNwtbwPm5",
+	)
+	require.NoError(t, err)
+
+	mgr := ai.GetACPConnManager()
+	connKey := "__list_sessions__:" + agentID
+	agent := model.Agents[agentID]
+	conn := newACPConnForHandlerTest(agent, connKey)
+	conn.SetAliveForTest()
+	conn.SetSessionMappingForTest(connKey, "acp-sid-filter-ext")
+	conn.SetListSessionsFnForTest(func(ctx context.Context, cursor *string) ([]acp.SessionInfo, *string, error) {
+		return []acp.SessionInfo{
+			{SessionId: "ses_00c202c74ffeZdhwsMNwtbwPm5", Title: stringPtr("Already loaded")},
+			{SessionId: "ses_00otherNativeId1234567890", Title: stringPtr("New native")},
+		}, nil, nil
+	})
+	mgr.SetConnForTest(connKey, conn)
+	defer mgr.CloseConn(connKey)
+
+	req := newRequest(t, http.MethodGet, "/api/agents/"+agentID+"/acp-sessions", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := httptest.NewRecorder()
+	ServeACPSessions(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	sessions, ok := resp["sessions"].([]any)
+	require.True(t, ok, "sessions should be an array")
+	require.Len(t, sessions, 1, "session matching external_session_id should be filtered out")
+	first := sessions[0].(map[string]any)
+	assert.Equal(t, "ses_00otherNativeId1234567890", first["sessionId"])
+}
+
 // --- ServeACPLoadSession: replay path tests ---
 
 func TestServeACPLoadSession_SuccessWithReplay(t *testing.T) {
@@ -791,6 +860,94 @@ func TestServeACPLoadSession_SuccessWithReplay(t *testing.T) {
 	).Scan(&title)
 	assert.NoError(t, err)
 	assert.Equal(t, "Hello from replay", title)
+}
+
+func TestServeACPLoadSession_ReplayPersistsToolCalls(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	agentID := "acp-load-replay-tools"
+	acpSessionID := "acp-sid-replay-tools"
+	model.Agents = map[string]*model.Agent{
+		agentID: {ID: agentID, Name: "ACP Replay Tools", Backend: "claude", Transport: "acp-stdio", AcpCommand: "echo"},
+	}
+	model.AgentList = []*model.Agent{model.Agents[agentID]}
+
+	ai.GetAgentCapabilityRegistry().ForceUpdateIfNeeded(agentID, nil, nil, nil, nil, nil, true, false)
+
+	mgr := ai.GetACPConnManager()
+	agent := model.Agents[agentID]
+	mockConn := ai.NewACPConnForTest(agent, "mock-session-replay-tools")
+	mockConn.SetAliveForTest()
+	mockConn.SetSessionMappingForTest("mock-session-replay-tools", "acp-sid-replay-tools")
+	client := ai.NewClawBenchACPClient()
+	completed := acp.ToolCallStatusCompleted
+	client.SetLoadSessionBufForTest([]acp.SessionNotification{
+		{
+			Update: acp.SessionUpdate{
+				ToolCall: &acp.SessionUpdateToolCall{
+					ToolCallId: acp.ToolCallId("tc-replay-read"),
+					Title:      "Read file",
+					Kind:       acp.ToolKindRead,
+					RawInput:   map[string]any{"file_path": "/tmp/a.go"},
+				},
+			},
+		},
+		{
+			Update: acp.SessionUpdate{
+				ToolCallUpdate: &acp.SessionToolCallUpdate{
+					ToolCallId: acp.ToolCallId("tc-replay-read"),
+					Status:     &completed,
+					RawOutput:  "file contents here",
+				},
+			},
+		},
+	})
+	mockConn.SetClientForTest(client)
+
+	origFn := getOrCreateConnForLoad
+	getOrCreateConnForLoad = func(ctx context.Context, ag *model.Agent, clawbenchSID, acpSID, cwd string) (*ai.ACPConn, error) {
+		mgr.SetConnForTest(clawbenchSID, mockConn)
+		return mockConn, nil
+	}
+	defer func() { getOrCreateConnForLoad = origFn }()
+
+	body := fmt.Sprintf(`{"agentId":%q,"acpSessionId":%q}`, agentID, acpSessionID)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/session/acp-load", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withProjectCookie(req, env.ProjectDir)
+	w := httptest.NewRecorder()
+	ServeACPLoadSession(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	sid, ok := resp["sessionId"].(string)
+	require.True(t, ok, "response should contain sessionId")
+
+	// Wait for the async replay to persist the tool call to chat_tool_calls.
+	// Regression: replay slim-serializes tool blocks (no input/output) into
+	// chat_history but must still persist input/output to chat_tool_calls so the
+	// frontend can render tool details for restored ACP sessions.
+	require.Eventually(t, func() bool {
+		var cnt int
+		err := service.UnsafeDBForTest().QueryRow(
+			"SELECT COUNT(*) FROM chat_tool_calls WHERE session_id = ? AND tool_id = ?",
+			sid, "tc-replay-read",
+		).Scan(&cnt)
+		return err == nil && cnt == 1
+	}, 3*time.Second, 50*time.Millisecond, "replay should persist tool call to chat_tool_calls")
+
+	var input, output string
+	var done int
+	err := service.UnsafeDBForTest().QueryRow(
+		"SELECT input, output, done FROM chat_tool_calls WHERE session_id = ? AND tool_id = ?",
+		sid, "tc-replay-read",
+	).Scan(&input, &output, &done)
+	require.NoError(t, err)
+	assert.Contains(t, input, "file_path", "tool input should be captured from replay")
+	assert.Equal(t, "file contents here", output, "tool output should be captured from replay")
+	assert.Equal(t, 1, done, "completed tool should be marked done")
 }
 
 func TestServeACPLoadSession_SuccessWithEmptyReplay(t *testing.T) {

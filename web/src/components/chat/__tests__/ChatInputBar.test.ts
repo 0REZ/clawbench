@@ -1,8 +1,15 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ChatInputBar from '../ChatInputBar.vue'
+import { apiGet } from '@/utils/api'
+import enLocale from '@/i18n/locales/en'
+import zhLocale from '@/i18n/locales/zh'
+
+vi.mock('@/utils/api', () => ({
+  apiGet: vi.fn().mockResolvedValue(undefined),
+}))
 
 const i18n = createI18n({
   legacy: false,
@@ -65,6 +72,9 @@ const i18n = createI18n({
         },
       },
       common: { copy: 'Copy', remove: 'Remove', cancel: 'Cancel' },
+      tool: {
+        askUser: { recommendationFill: 'Fill' },
+      },
     },
   },
 })
@@ -243,7 +253,6 @@ vi.mock('@/composables/useSessionIdentity', () => ({
 
 // Mock useAgents — return enough functions to avoid TypeError
 const mockSupportsACP = vi.fn().mockReturnValue(false)
-const mockAgentCanResume = vi.fn().mockReturnValue(false)
 vi.mock('@/composables/useAgents', () => ({
   useAgents: () => ({
     agents: { value: [] },
@@ -264,7 +273,6 @@ vi.mock('@/composables/useAgents', () => ({
     updateAgentField: vi.fn(),
     setDefaultAgent: vi.fn(),
     canRefreshModels: () => false,
-    agentCanResume: mockAgentCanResume,
     supportsACP: mockSupportsACP,
     getAgentTransport: () => 'cli',
     invalidateACPStateCache: vi.fn(),
@@ -278,6 +286,30 @@ vi.mock('@/composables/useAgents', () => ({
 
 vi.mock('@/utils/appLog.ts', () => ({
   appLog: { d: vi.fn(), i: vi.fn(), w: vi.fn(), e: vi.fn() },
+}))
+
+// Mock useVoiceInput — controllable fake for voice input tests
+const mockVoiceToggle = vi.fn()
+const mockVoiceState = ref('idle')
+const mockVoiceInputText = ref('')
+const mockVoiceShortcutKey = vi.fn(() => 'F9')
+const mockVoiceCancel = vi.fn()
+vi.mock('@/composables/useVoiceInput', () => ({
+  useVoiceInput: () => ({
+    state: mockVoiceState,
+    inputText: mockVoiceInputText,
+    error: { value: '' },
+    isRecording: { value: false },
+    toggle: mockVoiceToggle,
+    start: vi.fn(),
+    stop: vi.fn(),
+    cancel: mockVoiceCancel,
+    reset: vi.fn(),
+    appendText: vi.fn(),
+    setState: vi.fn(),
+    setInputText: vi.fn(),
+    shortcutKey: mockVoiceShortcutKey,
+  }),
 }))
 
 // ── Timer leak prevention ───────────────────────────────────
@@ -1099,59 +1131,6 @@ describe('ChatInputBar', () => {
     })
   })
 
-  describe('showResumeBtn', () => {
-    afterEach(() => {
-      mockSessionTransport.value = ''
-      mockAgentCanResume.mockReturnValue(false)
-    })
-
-    it('shows resume button when ACP transport and agentCanResume', async () => {
-      mockSessionTransport.value = 'acp-stdio'
-      mockAgentCanResume.mockReturnValue(true)
-      const wrapper = mountBar({ currentAgentId: 'codex' })
-      await wrapper.vm.$nextTick()
-      expect(wrapper.vm.showResumeBtn).toBe(true)
-    })
-
-    it('hides resume button when not ACP transport', async () => {
-      mockSessionTransport.value = 'cli'
-      mockAgentCanResume.mockReturnValue(true)
-      const wrapper = mountBar({ currentAgentId: 'codex' })
-      await wrapper.vm.$nextTick()
-      expect(wrapper.vm.showResumeBtn).toBe(false)
-    })
-
-    it('hides resume button when agent cannot resume', async () => {
-      mockSessionTransport.value = 'acp-stdio'
-      mockAgentCanResume.mockReturnValue(false)
-      const wrapper = mountBar({ currentAgentId: 'codebuddy' })
-      await wrapper.vm.$nextTick()
-      expect(wrapper.vm.showResumeBtn).toBe(false)
-    })
-
-    it('hides resume button when no currentAgentId', async () => {
-      mockSessionTransport.value = 'acp-stdio'
-      mockAgentCanResume.mockReturnValue(true)
-      const wrapper = mountBar({ currentAgentId: '' })
-      await wrapper.vm.$nextTick()
-      expect(wrapper.vm.showResumeBtn).toBe(false)
-    })
-
-    it('emits open-acp-sessions when resume button is clicked', async () => {
-      mockSessionTransport.value = 'acp-stdio'
-      mockAgentCanResume.mockReturnValue(true)
-      const wrapper = mountBar({ currentAgentId: 'codex' })
-      await wrapper.vm.$nextTick()
-      // The resume button is the 4th action btn (after Sessions, Plus, Index)
-      const buttons = wrapper.findAll('.chat-action-btn')
-      // Find the button that emits open-acp-sessions
-      const resumeBtn = buttons.find(b => b.attributes('title') === 'ACP Sessions')
-      expect(resumeBtn).toBeTruthy()
-      await resumeBtn!.trigger('click')
-      expect(wrapper.emitted('open-acp-sessions')).toBeTruthy()
-    })
-  })
-
   describe('Image pasting in textarea', () => {
     beforeEach(() => {
       mockUploadAndAttach.mockClear()
@@ -1224,5 +1203,269 @@ describe('ChatInputBar', () => {
       expect(preventDefault).toHaveBeenCalled()
       expect(mockUploadAndAttach).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ type: 'image/png' })]))
     })
+  })
+
+  describe('voice input', () => {
+    beforeEach(() => {
+      mockVoiceToggle.mockReset()
+      mockVoiceShortcutKey.mockReset()
+      mockVoiceShortcutKey.mockReturnValue('F9')
+      mockVoiceInputText.value = ''
+      mockVoiceState.value = 'idle'
+    })
+
+    it('long-press on send does not open quick-send menu', async () => {
+      vi.useFakeTimers()
+      const wrapper = mountBar()
+      wrapper.vm.inputText = ''
+      await wrapper.vm.$nextTick()
+      const sendBtn = wrapper.find('.chat-send-btn')
+      // Long-press starts recording
+      await sendBtn.trigger('pointerdown')
+      vi.advanceTimersByTime(600)
+      expect(mockVoiceToggle).toHaveBeenCalled()
+      // Release + synthetic click must NOT pop the quick-send menu
+      await sendBtn.trigger('pointerup')
+      await sendBtn.trigger('click')
+      expect(wrapper.vm.showQuickMenu).toBe(false)
+      expect(wrapper.emitted('send')).toBeFalsy()
+      vi.useRealTimers()
+    })
+
+    it('F9 shortcut toggles voice input', async () => {
+      mockVoiceShortcutKey.mockReturnValue('F9')
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      const event = new KeyboardEvent('keydown', { code: 'F9' })
+      window.dispatchEvent(event)
+      expect(mockVoiceToggle).toHaveBeenCalled()
+    })
+
+    it('watch syncs recognized voice text into input', async () => {
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.inputText).toBe('')
+      mockVoiceInputText.value = 'hello voice'
+      await wrapper.vm.$nextTick()
+      await flushPromises()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.inputText).toBe('hello voice')
+    })
+
+    it('cleans up voice timer and recording on unmount', async () => {
+      vi.useFakeTimers()
+      const wrapper = mountBar()
+      const sendBtn = wrapper.find('.chat-send-btn')
+      await sendBtn.trigger('pointerdown')
+      wrapper.unmount()
+      expect(mockVoiceCancel).toHaveBeenCalled()
+      // Firing the pending long-press timer after unmount must not throw
+      vi.advanceTimersByTime(600)
+      vi.useRealTimers()
+    })
+  })
+
+  // ── Conversation recommendation (对话推荐) ─────────────────
+
+  function dispatchRecommendation(recommendation: string) {
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', recommendation } }))
+  }
+
+  // A conversation ending on an assistant reply — the precondition for showing
+  // the recommendation banner.
+  const ASSISTANT_LAST_MSG = [{ role: 'assistant', content: 'done' }]
+
+  it('shows the recommendation chip without modifying empty input', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.inputText).toBe('')
+    dispatchRecommendation('继续实现功能')
+    await wrapper.vm.$nextTick()
+    // The input is left untouched; the recommendation is captured for the chip.
+    expect(wrapper.vm.inputText).toBe('')
+    expect(wrapper.vm.recommendation).toBe('继续实现功能')
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows the recommendation chip with existing input preserved', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    wrapper.vm.inputText = 'existing draft'
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('下一步建议')
+    await wrapper.vm.$nextTick()
+    // Input is preserved, recommendation is captured for the chip.
+    expect(wrapper.vm.inputText).toBe('existing draft')
+    expect(wrapper.vm.recommendation).toBe('下一步建议')
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('ignores a recommendation belonging to a different session', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    // A background session finishes a reply → its recommendation is dispatched
+    // globally, but must not surface while the active session is s1.
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 'other-session', recommendation: 'B的建议' } }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.recommendation).toBe('')
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+    // A recommendation for the active session is shown.
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', recommendation: 'A的建议' } }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.recommendation).toBe('A的建议')
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('resolves the chip accept-button label under tool.askUser.recommendationFill in both locales', () => {
+    // The chip's accept button must show a translated label, not the raw key.
+    const en = createI18n({ legacy: false, locale: 'en', messages: { en: enLocale } })
+    const zh = createI18n({ legacy: false, locale: 'zh', messages: { zh: zhLocale } })
+    expect(en.global.t('tool.askUser.recommendationFill')).toBe('Fill')
+    expect(zh.global.t('tool.askUser.recommendationFill')).toBe('填入')
+  })
+
+  it('does not resolve the stale chat.recommendationFill key (would render the raw key)', () => {
+    const en = createI18n({ legacy: false, locale: 'en', messages: { en: enLocale } })
+    // The previous template used this non-existent key, which rendered the raw
+    // key string in the chip. A missing key must resolve to the key itself.
+    expect(en.global.t('chat.recommendationFill')).toBe('chat.recommendationFill')
+  })
+
+  it('fills the input when the recommendation is accepted', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    wrapper.vm.inputText = 'existing draft'
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('采纳的建议')
+    await wrapper.vm.$nextTick()
+    wrapper.vm.acceptRecommendation()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.inputText).toBe('采纳的建议')
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores recommendation with empty text', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1' })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('   ')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.inputText).toBe('')
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not surface a recommendation while the session is streaming', async () => {
+    const wrapper = mountBar({ loading: true, currentSessionId: 's1' })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('stale suggestion')
+    await wrapper.vm.$nextTick()
+    // While the assistant is still outputting, the previous reply's
+    // recommendation must not be surfaced (the banner is gated on loading).
+    expect(wrapper.vm.recommendation).toBe('stale suggestion')
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('clears the recommendation chip via clearRecommendation (used when streaming starts)', async () => {
+    const wrapper = mountBar({ loading: false, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('显示的建议')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+    wrapper.vm.clearRecommendation()
+    await wrapper.vm.$nextTick()
+    // Once a new assistant message begins streaming, the old recommendation is
+    // no longer relevant and must be hidden.
+    expect(wrapper.vm.recommendation).toBe('')
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('toggles the recommendation banner expanded state on click', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('一个很长的推荐内容')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.recommendationExpanded).toBe(false)
+    wrapper.vm.toggleRecommendationExpand()
+    expect(wrapper.vm.recommendationExpanded).toBe(true)
+    wrapper.vm.toggleRecommendationExpand()
+    expect(wrapper.vm.recommendationExpanded).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('starts collapsed when a new recommendation arrives', async () => {
+    const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('第一条')
+    await wrapper.vm.$nextTick()
+    wrapper.vm.toggleRecommendationExpand()
+    expect(wrapper.vm.recommendationExpanded).toBe(true)
+    dispatchRecommendation('第二条')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.recommendationExpanded).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('cleans up recommendation listener on unmount', async () => {
+    const wrapper = mountBar()
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    wrapper.unmount()
+    expect(removeSpy).toHaveBeenCalledWith('clawbench-recommendation', expect.any(Function))
+  })
+
+  it('reconciles the persisted recommendation after a completed reply when the live broadcast was missed', async () => {
+    // A mobile WebView that was suspended while the backend generated the
+    // recommendation misses the chat_recommendation broadcast. Because it stays
+    // on the same session (no session-switch re-fetch), it must re-fetch the
+    // persisted recommendation once the active session stops streaming.
+    vi.useFakeTimers()
+    const apiGetMock = apiGet as ReturnType<typeof vi.fn>
+    apiGetMock.mockResolvedValue({ recommendation: '离线补拉的建议' })
+    const wrapper = mountBar({ loading: false, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.showRecommendationChip).toBe(false)
+
+    // Simulate the stream-completed watcher: schedule the reconcile retries.
+    // (setProps doesn't trigger watchers in the test env, so we call the
+    // exposed reconcile entry point directly — the same path the loading
+    // watcher invokes in production.)
+    wrapper.vm.scheduleRecommendationReconcile()
+    await wrapper.vm.$nextTick()
+
+    // No broadcast was received; the first backoff retry fetches the store.
+    vi.advanceTimersByTime(2000)
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+    expect(apiGetMock).toHaveBeenCalledWith(expect.stringContaining('/api/chat/recommendation'))
+    expect(wrapper.vm.recommendation).toBe('离线补拉的建议')
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('does not re-fetch the recommendation when the live broadcast already delivered it', async () => {
+    vi.useFakeTimers()
+    const apiGetMock = apiGet as ReturnType<typeof vi.fn>
+    apiGetMock.mockClear()
+    const wrapper = mountBar({ loading: false, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    await wrapper.vm.$nextTick()
+    dispatchRecommendation('广播已送达')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+
+    wrapper.vm.scheduleRecommendationReconcile()
+    vi.advanceTimersByTime(2000)
+    await flushPromises()
+    // ensureFetched is a no-op when the slot is already cached — no extra fetch.
+    expect(apiGetMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/chat/recommendation'))
+    expect(wrapper.vm.recommendation).toBe('广播已送达')
+    expect(wrapper.vm.showRecommendationChip).toBe(true)
+
+    wrapper.unmount()
+    vi.useRealTimers()
   })
 })

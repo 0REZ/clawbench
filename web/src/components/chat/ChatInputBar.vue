@@ -27,11 +27,6 @@
           :title="t('chat.actions.userMsgIndex')">
           <MessagesSquare :size="14" />
         </button>
-        <button v-if="showResumeBtn" class="chat-action-btn"
-          @click="$emit('open-acp-sessions')"
-          :title="t('chat.acpSession.title')">
-          <RotateCcw :size="14" />
-        </button>
         <button class="chat-action-btn chat-action-btn-archive" :class="{ disabled: !currentSessionId }"
           @click="handleArchive"
           :title="currentSessionId ? t('chat.actions.archiveCurrentSession') : t('chat.actions.noSessionToArchive')">
@@ -45,6 +40,14 @@
         <span class="chat-action-label">{{ t('chat.actions.autoSpeech') }}</span>
       </button>
     </div>
+    <!-- Conversation recommendation banner (对话推荐) — sits above the input box so it never steals input space -->
+    <Transition name="paste-fade">
+      <div v-if="showRecommendationChip && recommendation" class="recommendation-chip">
+        <Sparkles :size="14" :stroke-width="1.5" class="recommendation-icon" />
+        <span class="recommendation-text" :class="{ expanded: recommendationExpanded }" @click="toggleRecommendationExpand" :title="recommendationExpanded ? t('chat.recommendationCollapse') : t('chat.recommendationExpand')">{{ recommendation }}</span>
+        <button class="recommendation-accept" @click.stop="acceptRecommendation" :title="t('tool.askUser.recommendationFill')">{{ t('tool.askUser.recommendationFill') }}</button>
+      </div>
+    </Transition>
     <!-- Input container -->
     <div class="chat-input-container"
       @dragenter="onDragEnter"
@@ -64,12 +67,12 @@
         </div>
       </Transition>
       <!-- Attachment tags (horizontal scrollable cards — quote + pending uploads + attached file refs) -->
-      <div v-if="quoteData || attachedFiles.length > 0 || pendingFiles.length > 0" class="chat-attachment-tags">
-        <!-- Quote selection card (same size as file cards, accent-colored) -->
-        <span v-if="quoteData" class="chat-file-attachment attachment-quote" :title="quoteData.filePath" @click="$emit('quote-click')">
+      <div v-if="quoteItems.length > 0 || attachedFiles.length > 0 || pendingFiles.length > 0" class="chat-attachment-tags">
+        <!-- Staged quote cards (same size as file cards, accent-colored) -->
+        <span v-for="(quote, quoteIndex) in quoteItems" :key="quote.id || quoteIndex" class="chat-file-attachment attachment-quote" :title="quote.note || quote.filePath" @click="$emit('quote-click', quote)">
           <Code2 :size="14" :stroke-width="1.5" class="attachment-quote-icon" />
-          <span class="attachment-filename">{{ quoteFileName }}{{ quoteLineRange }}</span>
-          <button class="attachment-close-btn" @click.stop="$emit('remove-quote')" :title="t('common.remove')">×</button>
+          <span class="attachment-filename">{{ quoteFileName(quote) }}{{ quoteLineRange(quote) }}</span>
+          <button class="attachment-close-btn" @click.stop="$emit('remove-quote', quote.id)" :title="t('common.remove')">×</button>
         </span>
         <!-- Attached file reference cards (shared component, includes pending uploads with local Blob preview) -->
         <AttachmentTags :files="attachedFiles" :pending-files="pendingFiles" @file-click="$emit('file-tag-click', $event)" @remove="handleRemoveAttached" @remove-pending="removeFile" />
@@ -95,9 +98,13 @@
           @focus="onTextareaFocus"
           @blur="onTextareaBlur"
           ></textarea>
-        <button v-if="!stopPrimed" class="chat-send-btn" ref="sendBtnRef" :class="{ queued: loading, shortcut: !hasInputContent }" @click.stop="handleSendClick" :title="!hasInputContent ? t('chat.input.quickMenu') : loading ? t('chat.input.enqueue') : t('chat.input.send')">
+        <button v-if="!stopPrimed" class="chat-send-btn" ref="sendBtnRef" :class="{ queued: loading, shortcut: !hasInputContent, recording: voiceState === 'recording', transcribing: voiceState === 'transcribing' }" @click.stop="handleSendClick" @pointerdown="onSendPointerDown" @pointerup="onSendPointerUp" @pointerleave="onSendPointerUp" :title="!hasInputContent ? t('chat.input.quickMenu') : loading ? t('chat.input.enqueue') : t('chat.input.send')">
+          <!-- Recording: red pulsing dot -->
+          <span v-if="voiceState === 'recording'" class="voice-recording-dot"></span>
+          <!-- Transcribing: loading spinner -->
+          <Loader2 v-else-if="voiceState === 'transcribing'" class="spin-icon" :size="16" />
           <!-- Empty input: green lightning (quick-menu shortcut) -->
-          <Zap v-if="!hasInputContent" :size="16" />
+          <Zap v-else-if="!hasInputContent" :size="16" />
           <!-- Queue mode: inbox with down arrow (enqueue) -->
           <Inbox v-else-if="loading" :size="16" />
           <!-- Normal mode: paper plane (send) -->
@@ -256,7 +263,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, RotateCcw, Minimize2 } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
@@ -274,11 +281,14 @@ import { useSessionIdentity } from '@/composables/useSessionIdentity'
 import { useAgents } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast'
 import { useFileUpload } from '@/composables/useFileUpload'
+import { useVoiceInput } from '@/composables/useVoiceInput'
+import { useChatRecommendation } from '@/composables/useChatRecommendation'
 import { appLog } from '@/utils/appLog'
+import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
 const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency } = useSessionIdentity()
-const { supportsACP, hasPreferredMode, agentCanResume } = useAgents()
+const { supportsACP, hasPreferredMode } = useAgents()
 const toast = useToast()
 const { uploadAndAttach, pendingFiles, removeFile } = useFileUpload()
 
@@ -296,7 +306,6 @@ const isACPTransport = computed(() => {
 })
 
 const showModeInfo = computed(() => isACP.value && (availableModes.value.length > 0 || hasPreferredMode(props.currentAgentId || '')))
-const showResumeBtn = computed(() => isACPTransport.value && !!props.currentAgentId && agentCanResume(props.currentAgentId))
 
 function onModeClick() {
   if (modeMouseLongFired) {
@@ -407,6 +416,8 @@ const props = defineProps({
   currentFile: Object,
   currentDir: String,
   attachedFiles: Array,
+  quotes: { type: Array, default: () => [] },
+  // Backward-compatible single quote prop for isolated consumers/tests.
   quoteData: Object,
   messages: Array,
   autoSpeechEnabled: Boolean,
@@ -438,7 +449,6 @@ const emit = defineEmits([
   'archive-session',
   'destroy-session',
   'open-user-msg-index',
-  'open-acp-sessions',
   'switch-model',
   'switch-thinking-effort',
   'switch-mode',
@@ -446,6 +456,138 @@ const emit = defineEmits([
 ])
 
 const inputText = ref('')
+
+// ── Conversation recommendation (对话推荐) ───────────────
+// Recommendation state is bound per session via useChatRecommendation: the
+// displayed value is derived from the currently active session's slot, so a
+// recommendation from another session can never leak into the active view.
+const rec = useChatRecommendation({
+  activeSessionId: () => props.currentSessionId || undefined,
+  loading: () => props.loading,
+  isLastMessageAssistant: () => {
+    const msgs = props.messages || []
+    const last = msgs[msgs.length - 1]
+    return !!last && last.role === 'assistant'
+  },
+  fetchRemote: async (sessionId) => {
+    const data = await apiGet(`/api/chat/recommendation?session_id=${encodeURIComponent(sessionId)}`)
+    return data?.recommendation || ''
+  },
+})
+const { current: recommendation, show: showRecommendationChip } = rec
+
+// Whether the recommendation banner is expanded to show its full text (default
+// collapsed to a single line). Reset whenever a new recommendation arrives.
+const recommendationExpanded = ref(false)
+
+function onRecommendationEvent(evt) {
+  const detail = evt.detail || {}
+  rec.upsert(detail.session_id, detail.recommendation)
+  recommendationExpanded.value = false
+}
+
+function toggleRecommendationExpand() {
+  recommendationExpanded.value = !recommendationExpanded.value
+}
+
+function acceptRecommendation() {
+  const text = rec.accept()
+  if (text) inputText.value = text
+}
+
+// Clear any currently surfaced recommendation (chip + stored text).
+function clearRecommendation() {
+  const id = props.currentSessionId
+  if (id) rec.invalidate(id)
+}
+
+// ── Recommendation reconcile after a completed reply ──
+// A device that missed the live chat_recommendation broadcast (e.g. a mobile
+// WebView suspended while the backend generated the recommendation) still needs
+// to surface it. The recommendation is persisted server-side and generated
+// asynchronously *after* the reply's 'done' event, so once the active session
+// stops streaming we re-fetch it a few times with backoff. ensureFetched() is
+// already idempotent — it no-ops when the slot is cached (live broadcast), when
+// the session is streaming, or when the fetch returns empty — so these retries
+// are harmless when the broadcast already delivered the value.
+const reconcileTimeouts = new Set()
+
+function stopRecommendationReconcile() {
+  for (const id of reconcileTimeouts) clearTimeout(id)
+  reconcileTimeouts.clear()
+}
+
+function scheduleRecommendationReconcile() {
+  const sid = props.currentSessionId
+  if (!sid) return
+  stopRecommendationReconcile()
+  const delays = [2000, 5000, 12000, 30000, 60000]
+  for (const delay of delays) {
+    const id = window.setTimeout(() => {
+      reconcileTimeouts.delete(id)
+      // Only reconcile while still viewing the same, non-streaming session.
+      if (props.currentSessionId !== sid || props.loading) return
+      void rec.ensureFetched(sid)
+    }, delay)
+    reconcileTimeouts.add(id)
+  }
+}
+
+// ── Voice input (ASR) ───────────────────────────────
+const voiceInput = useVoiceInput()
+const { state: voiceState, inputText: voiceInputText, toggle: toggleVoice, shortcutKey: voiceShortcutKey } = voiceInput
+
+const VOICE_LONG_PRESS_MS = 500
+let voicePressTimer = null
+let voicePointerDown = false
+let voiceLongPressActive = false
+// Set when a long-press starts recording so the synthetic click fired on release
+// is suppressed in handleSendClick (mirrors quickSendJustTriggered).
+let voiceJustRecorded = false
+
+function onSendPointerDown() {
+  voicePointerDown = true
+  voiceLongPressActive = false
+  voiceJustRecorded = false
+  if (voicePressTimer) { clearTimeout(voicePressTimer) }
+  voicePressTimer = setTimeout(() => {
+    if (voicePointerDown && !hasInputContent.value) {
+      voiceLongPressActive = true
+      voiceJustRecorded = true
+      void toggleVoice()
+    }
+  }, VOICE_LONG_PRESS_MS)
+}
+
+function onSendPointerUp() {
+  voicePointerDown = false
+  if (voicePressTimer) { clearTimeout(voicePressTimer); voicePressTimer = null }
+  if (voiceLongPressActive) {
+    voiceLongPressActive = false
+    void toggleVoice()
+  }
+}
+
+// Sync recognized voice text into the input box (never auto-sends).
+watch(voiceInputText, (val) => {
+  if (val && val !== inputText.value) {
+    inputText.value = val
+  }
+})
+
+function onVoiceShortcut(e) {
+  // NOTE: Only the hardcoded F9 shortcut is currently supported.
+  // stt.shortcut_key may hold other values; matching those is out of scope
+  // and would require a lookup table of key/alt/ctrl/meta/shift combos.
+  const sc = voiceShortcutKey()
+  if (sc === 'F9') {
+    if (e.code === 'F9' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault()
+      void toggleVoice()
+    }
+  }
+}
+
 const rootRef = ref(null)
 const textareaRef = ref(null)
 const isDragOver = ref(false)
@@ -662,7 +804,33 @@ watch(() => props.currentSessionId, (newId, oldId) => {
   // autoResizeTextarea is called automatically by the inputText watcher
 })
 
-const hasInputContent = computed(() => inputText.value.trim() || props.attachedFiles.length > 0 || props.quoteData)
+// On session switch, restore the persisted recommendation for that session into
+// its own slot (immediate if already cached, otherwise fetched) — the displayed
+// value is derived from the active session's slot, so no cross-session leakage.
+watch(() => props.currentSessionId, (newId) => {
+  // A new conversation starts with a collapsed banner.
+  recommendationExpanded.value = false
+  stopRecommendationReconcile()
+  if (newId) rec.ensureFetched(newId)
+})
+
+const quoteItems = computed(() => props.quotes.length > 0
+  ? props.quotes
+  : props.quoteData ? [props.quoteData] : [])
+
+// When a new assistant message starts streaming, any previously surfaced
+// recommendation belongs to the last completed reply and is stale — invalidate
+// the active session's slot so the in-flight value can't be reused.
+watch(() => props.loading, (val, oldVal) => {
+  if (val && props.currentSessionId) {
+    rec.invalidate(props.currentSessionId)
+    stopRecommendationReconcile()
+  } else if (!val && oldVal && props.currentSessionId) {
+    scheduleRecommendationReconcile()
+  }
+})
+
+const hasInputContent = computed(() => inputText.value.trim() || props.attachedFiles.length > 0 || quoteItems.value.length > 0)
 
 // Extract recently referenced files from message history
 const recentReferencedFiles = computed(() => {
@@ -688,18 +856,18 @@ async function handleArchive() {
   }
 }
 
-const quoteFileName = computed(() => {
-  if (!props.quoteData?.filePath) return ''
-  return props.quoteData.filePath.split('/').pop() || props.quoteData.filePath
-})
+function quoteFileName(quote) {
+  if (!quote?.filePath) return ''
+  return quote.filePath.split('/').pop() || quote.filePath
+}
 
-const quoteLineRange = computed(() => {
-  if (!props.quoteData?.startLine) return ''
-  const s = props.quoteData.startLine
-  const e = props.quoteData.endLine
+function quoteLineRange(quote) {
+  if (!quote?.startLine) return ''
+  const s = quote.startLine
+  const e = quote.endLine
   if (e && e !== s) return `:${s}-${e}`
   return `:${s}`
-})
+}
 
 function autoResizeTextarea() {
   const el = textareaRef.value
@@ -967,9 +1135,13 @@ async function toggleAttachMenu() {
 }
 
 function handleSendClick() {
+  if (voiceJustRecorded) {
+    voiceJustRecorded = false
+    return
+  }
   if (inputText.value.trim()) {
     emit('send', inputText.value.trim())
-  } else if (props.attachedFiles.length > 0) {
+  } else if (props.attachedFiles.length > 0 || quoteItems.value.length > 0) {
     emit('send', '')
   } else {
     toggleQuickMenu()
@@ -1098,16 +1270,26 @@ onMounted(() => {
   fetchItems()
   startPlaceholderRotation()
   window.addEventListener('paste', handleWindowPaste, true)
+  window.addEventListener('keydown', onVoiceShortcut)
+  window.addEventListener('clawbench-recommendation', onRecommendationEvent)
 })
 
 onBeforeUnmount(() => {
   pasteUploadGeneration++
+  stopRecommendationReconcile()
   window.removeEventListener('paste', handleWindowPaste, true)
+  window.removeEventListener('keydown', onVoiceShortcut)
+  window.removeEventListener('clawbench-recommendation', onRecommendationEvent)
   stopMachine.destroy()
   if (quickSendPressTimer) {
     clearTimeout(quickSendPressTimer)
     quickSendPressTimer = null
   }
+  if (voicePressTimer) {
+    clearTimeout(voicePressTimer)
+    voicePressTimer = null
+  }
+  voiceInput.cancel()
   clearTimeout(pasteOverlayTimer)
 
   stopPlaceholderRotation()
@@ -1126,6 +1308,9 @@ defineExpose({
   clearInput,
   saveDraft,
   clearInputPreserveDraft,
+  clearRecommendation,
+  scheduleRecommendationReconcile,
+  stopRecommendationReconcile,
   inputText,
   deleteDraft: (sessionId) => { draftCache.delete(sessionId) },
   hasDraft: (sessionId) => draftCache.has(sessionId),
@@ -1587,6 +1772,57 @@ defineExpose({
   display: none;
 }
 
+/* The nested container rendered by AttachmentTags adds its own 4px 6px padding,
+   which would push normal attachment cards below the quote card. Zero it so the
+   quote and file cards sit on the same horizontal line. */
+.chat-attachment-tags :deep(.chat-attachment-tags) {
+  padding: 0;
+}
+
+/* Conversation recommendation banner (对话推荐) — rendered above the input box */
+.recommendation-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--color-accent-soft, rgba(88, 120, 255, 0.12));
+  border: 1px solid rgba(88, 120, 255, 0.35);
+  font-size: 12px;
+  color: var(--color-text-primary);
+}
+
+.recommendation-icon {
+  flex-shrink: 0;
+  color: var(--color-accent, #5878ff);
+}
+
+.recommendation-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  word-break: break-word;
+}
+
+.recommendation-text.expanded {
+  white-space: normal;
+}
+
+.recommendation-accept {
+  flex-shrink: 0;
+  border: none;
+  background: var(--color-accent, #5878ff);
+  color: #fff;
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 /* Base attachment card styles */
 .chat-file-attachment {
   display: inline-flex;
@@ -1826,6 +2062,24 @@ defineExpose({
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+.voice-recording-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { transform: scale(0.8); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.6; }
+}
+.chat-send-btn.recording {
+  background: #ff3b30 !important;
+}
+.chat-send-btn.transcribing .spin-icon {
+  animation: spin 1s linear infinite;
 }
 
 .chat-action-label {

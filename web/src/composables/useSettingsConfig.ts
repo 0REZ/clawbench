@@ -2,6 +2,7 @@ import { reactive, ref } from 'vue'
 import { apiGet, apiPatch, apiPost } from '@/utils/api'
 import i18n, { STORAGE_KEY as LOCALE_KEY, setLocaleCookie } from '@/i18n'
 import { useAgents } from '@/composables/useAgents'
+import { getNative } from '@/utils/clawbenchNative'
 
 const LOCAL_PREFIX = 'clawbench-settings-'
 
@@ -108,6 +109,10 @@ const legacyKeys: Record<string, {
   },
   terminalFontSize: {
     key: 'clawbench-terminal-font-size',
+    format: 'raw',
+  },
+  terminalTheme: {
+    key: '',
     format: 'raw',
   },
   androidLogCapture: {
@@ -239,6 +244,7 @@ export function getZoomedViewport(): { width: number; height: number } {
 
 const localDefaults: Record<string, string | boolean | number | null> = {
   theme: 'auto',
+  terminalTheme: 'auto',
   locale: 'zh',
   autoSpeech: false,
   showHidden: false,
@@ -301,6 +307,8 @@ const serverDefaults: Record<string, unknown> = {
   'chat.initial_messages': 20,
   'chat.page_size': 20,
   'chat.system_prompt_interval': 10,
+  'chat.recommend_enabled': false,
+  'chat.recommend_context_messages': 3,
   'session.max_count': 10,
   'session.archive_retention_enabled': false,
   'session.archive_retention_days': 30,
@@ -317,6 +325,13 @@ const serverDefaults: Record<string, unknown> = {
   'tts.format': '',
   'tts.speed': 1.0,
   'tts.max_cache_files': 100,
+  'stt.base_url': 'http://localhost:8000/v1',
+  'stt.api_key': '',
+  'stt.model': 'openai/whisper-large-v3',
+  'stt.language': 'zh',
+  'stt.streaming': false,
+  'stt.chunk_ms': 1000,
+  'stt.shortcut_key': 'F9',
   'rag.base_url': 'http://localhost:11434',
   'rag.model': 'bge-m3',
   'rag.api_key': '',
@@ -330,12 +345,9 @@ const serverDefaults: Record<string, unknown> = {
   'tts.piper.sentence_silence': 0.2,
   'tts.kokoro.lang': 'cmn',
   'tts.moss_nano.backend': 'onnx',
-  'summarize.backend': 'simple',
   'summarize.tts_backend': 'simple',
-  'summarize.model': '',
-  'summarize.tts_model': '',
-  'summarize.api.format': 'openai',
-  'summarize.tts_api.format': 'openai',
+  'ai_summary.model': '',
+  'ai_summary.format': 'openai',
   'port_forward.allowed_ports': '1024-65535',
   'frp.enabled': false,
   'frp.server_port': 7000,
@@ -409,8 +421,7 @@ export function useSettingsConfig() {
   function syncPushModeToNative() {
     try {
       const pushMode = serverConfig.value.push_mode as string || 'native'
-      const native = (window as unknown as { AndroidNative?: { setNativePushEnabled?: (v: boolean) => void } }).AndroidNative
-      native?.setNativePushEnabled?.(pushMode === 'native')
+      getNative()?.setNativePushEnabled?.(pushMode === 'native')
     } catch { /* not in app mode */ }
   }
 
