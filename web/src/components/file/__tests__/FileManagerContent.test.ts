@@ -82,6 +82,9 @@ const mockHandleFileSelectToDir = vi.fn()
 const mockHandleFileDropToDir = vi.fn()
 const mockHandleFileDropToDirStructured = vi.fn()
 const mockHandleFolderSelect = vi.fn()
+const mockHandleFolderDropExpanded = vi.fn()
+const mockDownloadDirAsTree = vi.fn()
+const mockCancelDirUpload = vi.fn()
 const mockDirUploading = ref(false)
 const mockDirUploadProgress = ref(0)
 const mockDirUploadTotal = ref(0)
@@ -97,6 +100,9 @@ vi.mock('@/composables/useFileUpload', () => ({
     handleFileDropToDir: mockHandleFileDropToDir,
     handleFileDropToDirStructured: mockHandleFileDropToDirStructured,
     handleFolderSelect: mockHandleFolderSelect,
+    handleFolderDropExpanded: mockHandleFolderDropExpanded,
+    downloadDirAsTree: mockDownloadDirAsTree,
+    cancelDirUpload: mockCancelDirUpload,
   }),
 }))
 
@@ -110,7 +116,7 @@ const mockToolbarCollapsedIds = vi.hoisted(() => ([]))
 
 vi.mock('@/composables/useToolbarOverflow', () => ({
   useToolbarOverflow: () => ({
-    inlineIds: computed(() => ['refresh', 'newFile', 'newFolder', 'upload', 'viewToggle', 'multiselect', 'hidden']),
+    inlineIds: computed(() => ['refresh', 'newFile', 'newFolder', 'upload', 'viewToggle', 'multiselect', 'hidden', 'jump']),
     collapsedIds: computed(() => mockToolbarCollapsedIds),
     contentWidth: ref(800),
     startObserving: vi.fn(),
@@ -126,6 +132,7 @@ vi.mock('@/composables/useSettingsConfig', () => ({
   toFixedCSS: (v: number) => Math.round(v * 100) / 100,
 }))
 
+const mockNavigateToDir = vi.hoisted(() => vi.fn())
 vi.mock('@/stores/app', () => ({
   store: {
     state: { projectRoot: '/project', currentDir: '', currentFile: null, dirEntries: [] },
@@ -133,6 +140,7 @@ vi.mock('@/stores/app', () => ({
     loadFiles: vi.fn(),
     selectFile: vi.fn(),
     setProject: vi.fn(),
+    navigateToDir: mockNavigateToDir,
   },
 }))
 
@@ -188,6 +196,14 @@ vi.mock('@/components/file/DirBreadcrumb.vue', () => ({
   default: { template: '<div class="dir-breadcrumb-stub" />' },
 }))
 
+vi.mock('@/components/file/JumpDirDialog.vue', () => ({
+  default: defineComponent({
+    props: ['open'],
+    emits: ['close', 'confirm'],
+    template: '<div v-if="open" class="jump-dialog-stub" />',
+  }),
+}))
+
 // ── i18n ──
 const i18n = createI18n({
   legacy: false,
@@ -223,6 +239,14 @@ const i18n = createI18n({
       common: { remove: '移除', copied: '已复制', delete: '删除', operationFailed: '操作失败', rename: '重命名', download: '下载', cancel: '取消' },
       nav: { refresh: '刷新', more: '更多' },
       search: { defaultPlaceholder: '搜索' },
+      jump: {
+        title: '跳转到目录',
+        placeholder: '输入目录路径',
+        confirm: '跳转',
+        cancel: '取消',
+        button: '跳转',
+        copyPath: '复制路径',
+      },
     },
   },
 })
@@ -283,6 +307,7 @@ beforeEach(() => {
   mockDialogPrompt.mockResolvedValue('newfile.txt')
   mockDialogAlert.mockReset()
   mockDownloadFileByPath.mockReset()
+  mockNavigateToDir.mockReset()
 })
 
 // ── Rendering ──
@@ -1189,7 +1214,7 @@ describe('FileManagerContent — batch share', () => {
 // ── Drag-and-drop upload ──
 
 describe('FileManagerContent — drag-and-drop upload', () => {
-  it('calls handleFileDropToDir when files are dropped on file-list', async () => {
+  it('calls handleFolderDropExpanded when files are dropped on file-list', async () => {
     const wrapper = mountContent()
     const fileList = wrapper.find('.file-list')
 
@@ -1202,7 +1227,7 @@ describe('FileManagerContent — drag-and-drop upload', () => {
     await fileList.trigger('drop', dropEvent)
     await nextTick()
 
-    expect(mockHandleFileDropToDirStructured).toHaveBeenCalled()
+    expect(mockHandleFolderDropExpanded).toHaveBeenCalled()
     expect(wrapper.emitted('refresh')).toBeTruthy()
   })
 
@@ -1268,7 +1293,10 @@ describe('FileManagerContent — drag-and-drop upload', () => {
     })
     await nextTick()
 
-    expect(mockHandleFileDropToDirStructured).toHaveBeenCalledWith([mockFile], 'src')
+    expect(mockHandleFolderDropExpanded).toHaveBeenCalledWith(
+      expect.objectContaining({ dataTransfer: { files: [mockFile] } }),
+      'src',
+    )
   })
 
   it('uses "." as upload target when currentDir is empty', async () => {
@@ -1282,10 +1310,13 @@ describe('FileManagerContent — drag-and-drop upload', () => {
     })
     await nextTick()
 
-    expect(mockHandleFileDropToDirStructured).toHaveBeenCalledWith([mockFile], '.')
+    expect(mockHandleFolderDropExpanded).toHaveBeenCalledWith(
+      expect.objectContaining({ dataTransfer: { files: [mockFile] } }),
+      '.',
+    )
   })
 
-  it('does not call handleFileDropToDir when drop has no files', async () => {
+  it('delegates empty drops to handleFolderDropExpanded (which no-ops)', async () => {
     const wrapper = mountContent()
     const fileList = wrapper.find('.file-list')
 
@@ -1293,6 +1324,9 @@ describe('FileManagerContent — drag-and-drop upload', () => {
       dataTransfer: { files: [] },
       preventDefault: vi.fn(),
     })
+    await nextTick()
+
+    expect(mockHandleFolderDropExpanded).toHaveBeenCalled()
     expect(mockHandleFileDropToDir).not.toHaveBeenCalled()
   })
 })
@@ -2006,7 +2040,21 @@ describe('FileManagerContent — upload', () => {
     await nextTick()
 
     expect(wrapper.find('.dir-upload-progress').exists()).toBe(true)
-    expect(wrapper.find('.dir-upload-progress-text').text()).toContain('2/4')
+    expect(wrapper.find('.dir-upload-progress-count').text()).toContain('2/4')
+  })
+
+  it('renders a cancel button and calls cancelDirUpload on click', async () => {
+    mockDirUploading.value = true
+    mockDirUploadProgress.value = 50
+    mockDirUploadTotal.value = 4
+    mockDirUploadDone.value = 1
+    const wrapper = mountContent()
+    await nextTick()
+
+    const cancelBtn = wrapper.find('.dir-upload-cancel')
+    expect(cancelBtn.exists()).toBe(true)
+    await cancelBtn.trigger('click')
+    expect(mockCancelDirUpload).toHaveBeenCalledTimes(1)
   })
 })
 // ── Long-press & container drag state ──
@@ -2262,5 +2310,47 @@ describe('FileManagerContent — empty state text', () => {
   it('shows noFiles message when no currentDir and no entries', () => {
     const wrapper = mountContent({ entries: [], currentDir: '' })
     expect(wrapper.find('.empty-state').exists()).toBe(true)
+  })
+})
+
+describe('FileManagerContent — jump to dir', () => {
+  it('opens jump dialog when jump button clicked', async () => {
+    const wrapper = mountContent()
+    const jumpBtn = wrapper.find('.toolbar-btn.jump-btn')
+    expect(jumpBtn.exists()).toBe(true)
+    await jumpBtn.trigger('click')
+    await nextTick()
+    expect(wrapper.find('.jump-dialog-stub').exists()).toBe(true)
+  })
+
+  it('navigates to dir on jump confirm', async () => {
+    mockNavigateToDir.mockResolvedValue(undefined)
+    const wrapper = mountContent()
+    const vm = wrapper.vm as any
+    vm.$.setupState.handleJumpConfirm('src/utils')
+    await nextTick()
+    expect(mockNavigateToDir).toHaveBeenCalledWith('src/utils')
+  })
+
+  it('renders jump item in more dropdown when collapsed', async () => {
+    mockToolbarCollapsedIds.push('jump')
+    const wrapper = mountContent()
+    wrapper.vm.moreMenuOpen = true
+    await nextTick()
+    const items = wrapper.findAll('.toolbar-dropdown-item')
+    const jumpItem = items.find(i => i.text().includes('跳转'))
+    expect(jumpItem).toBeTruthy()
+  })
+
+  it('opens jump dialog from more dropdown item', async () => {
+    mockToolbarCollapsedIds.push('jump')
+    const wrapper = mountContent()
+    wrapper.vm.moreMenuOpen = true
+    await nextTick()
+    const items = wrapper.findAll('.toolbar-dropdown-item')
+    const jumpItem = items.find(i => i.text().includes('跳转'))
+    await jumpItem!.trigger('click')
+    await nextTick()
+    expect(wrapper.find('.jump-dialog-stub').exists()).toBe(true)
   })
 })

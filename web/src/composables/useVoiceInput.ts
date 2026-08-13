@@ -94,6 +94,10 @@ export function useVoiceInput() {
       return
     }
 
+    // A new recording starts fresh — never echo transcriptions from earlier
+    // recordings (appendText would otherwise pile them up with '\n' separators).
+    inputText.value = ''
+
     if (streaming()) {
       startStreaming()
     } else {
@@ -126,6 +130,8 @@ export function useVoiceInput() {
         state.value = 'done'
         isRecording.value = false
         stopMediaStream()
+        // Complete the documented 'done' → 'idle' transition so a new recording can start.
+        state.value = 'idle'
       }
     }
     mediaRecorder.start()
@@ -174,6 +180,8 @@ export function useVoiceInput() {
     stopMediaStream()
     state.value = 'done'
     isRecording.value = false
+    // Complete the documented 'done' → 'idle' transition so a new recording can start.
+    state.value = 'idle'
   }
 
   async function stop() {

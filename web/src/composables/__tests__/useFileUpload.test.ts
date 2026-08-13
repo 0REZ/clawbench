@@ -126,6 +126,7 @@ describe('useFileUpload', () => {
       expect(typeof upload.handleFileDropToDir).toBe('function')
       expect(typeof upload.handleFolderSelect).toBe('function')
       expect(typeof upload.handleFileDropToDirStructured).toBe('function')
+      expect(typeof upload.cancelDirUpload).toBe('function')
       expect(typeof upload.removeFile).toBe('function')
       expect(typeof upload.addAttachedFile).toBe('function')
       expect(typeof upload.removeAttachedFile).toBe('function')
@@ -636,6 +637,218 @@ describe('useFileUpload', () => {
       )
       expect(upload.pendingFiles.value).toHaveLength(0)
       expect(upload.attachedFiles.value).toHaveLength(0)
+    })
+  })
+
+  describe('expanded folder drop (webkitGetAsEntry traversal)', () => {
+    // ── Fake FileSystemEntry helpers ──
+    function makeFileEntry(fullPath: string, content = 'x') {
+      const name = fullPath.split('/').pop() || 'file'
+      return {
+        isFile: true,
+        isDirectory: false,
+        name,
+        fullPath,
+        file: (cb: (f: File) => void) => cb(new File([content], name, { type: 'text/plain' })),
+      }
+    }
+    function makeDirEntry(name: string, fullPath: string, children: any[]) {
+      let done = false
+      return {
+        isFile: false,
+        isDirectory: true,
+        name,
+        fullPath,
+        createReader: () => ({
+          readEntries: (cb: (e: any[]) => void) => {
+            if (done) { cb([]); return }
+            done = true
+            cb(children)
+          },
+        }),
+      }
+    }
+    function dropEventWith(entries: any[]) {
+      return {
+        dataTransfer: {
+          items: entries.map((e) => ({ webkitGetAsEntry: () => e })),
+          files: [] as any[],
+        },
+      }
+    }
+
+    it('uploads each folder file with its relPath', async () => {
+      const captured: FormData[] = []
+      xhrSendHandler = (xhr, formData) => {
+        captured.push(formData)
+        respondSuccess(xhr, 'dir/proj/src/a.ts')
+      }
+      const root = makeDirEntry('proj', '/proj', [makeFileEntry('/proj/src/a.ts', 'A')])
+      const upload = useFileUpload()
+      await upload.handleFolderDropExpanded(dropEventWith([root]) as any, '/dir')
+
+      expect(captured).toHaveLength(1)
+      expect(captured[0].get('dir')).toBe('/dir')
+      expect(captured[0].get('relpath')).toBe('proj/src')
+      expect(upload.dirUploading.value).toBe(false)
+    })
+
+    it('creates empty directories via /api/dir/create', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+      vi.stubGlobal('fetch', fetchMock)
+
+      xhrSendHandler = (xhr) => respondSuccess(xhr, 'dir/proj/main.go')
+      const root = makeDirEntry('proj', '/proj', [
+        makeDirEntry('empty', '/proj/empty', []),
+        makeFileEntry('/proj/main.go', 'M'),
+      ])
+      const upload = useFileUpload()
+      await upload.handleFolderDropExpanded(dropEventWith([root]) as any, '/dir')
+
+      const createCalls = fetchMock.mock.calls.filter((c: any[]) => String(c[0]).includes('/api/dir/create'))
+      expect(createCalls.length).toBe(1)
+      const body = JSON.parse(createCalls[0][1].body)
+      expect(body.path).toBe('/dir')
+      expect(body.name).toBe('proj/empty')
+      // 1 file + 1 empty dir
+      expect(upload.dirUploadDone.value).toBe(2)
+      expect(upload.dirUploadTotal.value).toBe(2)
+      expect(upload.dirUploading.value).toBe(false)
+      vi.unstubAllGlobals()
+    })
+
+    it('does nothing when the drop has no files or directories', async () => {
+      const upload = useFileUpload()
+      upload.dirUploadDone.value = 0
+      upload.dirUploadTotal.value = 0
+      await upload.handleFolderDropExpanded({ dataTransfer: { items: [], files: [] } } as any, '/dir')
+      expect(upload.dirUploading.value).toBe(false)
+      expect(upload.dirUploadDone.value).toBe(0)
+      expect(upload.dirUploadTotal.value).toBe(0)
+    })
+
+    it('cancels an in-progress folder upload and shows cancelled toast', async () => {
+      let xhrInstance: any
+      xhrSendHandler = (xhr) => { xhrInstance = xhr } // never respond → upload stays in-flight
+      const root = makeDirEntry('proj', '/proj', [makeFileEntry('/proj/a.ts', 'A')])
+      const upload = useFileUpload()
+      const p = upload.handleFolderDropExpanded(dropEventWith([root]) as any, '/dir')
+      await vi.waitFor(() => { expect(upload.dirUploading.value).toBe(true) })
+      upload.cancelDirUpload()
+      await p
+      expect(xhrInstance.abort).toHaveBeenCalled()
+      expect(upload.dirUploading.value).toBe(false)
+      expect(mockToastShow).toHaveBeenCalledWith(
+        expect.stringContaining('upload.cancelled'),
+        expect.any(Object),
+      )
+    })
+
+    it('shows completed toast when folder upload finishes', async () => {
+      xhrSendHandler = (xhr) => respondSuccess(xhr, 'dir/proj/a.ts')
+      const root = makeDirEntry('proj', '/proj', [makeFileEntry('/proj/a.ts', 'A')])
+      const upload = useFileUpload()
+      await upload.handleFolderDropExpanded(dropEventWith([root]) as any, '/dir')
+      expect(upload.dirUploadDone.value).toBe(1)
+      expect(mockToastShow).toHaveBeenCalledWith(
+        expect.stringContaining('upload.completed'),
+        expect.any(Object),
+      )
+    })
+  })
+
+  describe('downloadDirAsTree (File System Access API)', () => {
+    const originalPicker = (globalThis as any).showDirectoryPicker
+
+    function fakeBody(bytes: number[]) {
+      let idx = 0
+      return {
+        getReader: () => ({
+          read: async () => {
+            if (idx >= bytes.length) return { done: true, value: undefined }
+            const value = new Uint8Array(bytes.slice(idx, idx + 2))
+            idx += 2
+            return { done: false, value }
+          },
+        }),
+      }
+    }
+
+    function fakeRootHandle() {
+      const dirs = new Map<string, any>()
+      const files = new Map<string, any>()
+      const handle: any = {
+        dirs,
+        files,
+        getDirectoryHandle: async (name: string, opts?: any) => {
+          if (!dirs.has(name)) {
+            if (!opts?.create) throw new Error('not found')
+            dirs.set(name, fakeRootHandle())
+          }
+          return dirs.get(name)
+        },
+        getFileHandle: async (name: string, opts?: any) => {
+          if (!files.has(name)) {
+            if (!opts?.create) throw new Error('not found')
+            files.set(name, { writes: [], createWritable: async () => ({ write: async () => {}, close: async () => {} }) })
+          }
+          return files.get(name)
+        },
+      }
+      return handle
+    }
+
+    afterEach(() => {
+      if (originalPicker) (globalThis as any).showDirectoryPicker = originalPicker
+      vi.unstubAllGlobals()
+    })
+
+    it('downloads each file under its relative subdirectory', async () => {
+      const root = fakeRootHandle()
+      ;(globalThis as any).showDirectoryPicker = vi.fn().mockResolvedValue(root)
+
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/api/file/list-tree')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ files: [{ rel: 'a.txt', size: 4 }, { rel: 'sub/b.txt', size: 4 }] }),
+          })
+        }
+        if (url.includes('/api/local-file/')) {
+          return Promise.resolve({ ok: true, body: fakeBody([1, 2, 3, 4]) })
+        }
+        return Promise.resolve({ ok: false })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const upload = useFileUpload()
+      await upload.downloadDirAsTree('src')
+
+      expect(root.files.has('a.txt')).toBe(true)
+      expect(root.dirs.has('sub')).toBe(true)
+      expect(root.dirs.get('sub').files.has('b.txt')).toBe(true)
+      expect(upload.dirUploading.value).toBe(false)
+      expect(upload.dirUploadTotal.value).toBe(2)
+      expect(upload.dirUploadDone.value).toBe(2)
+    })
+
+    it('shows an error and does nothing when showDirectoryPicker is unavailable', async () => {
+      ;(globalThis as any).showDirectoryPicker = undefined
+      const upload = useFileUpload()
+      await upload.downloadDirAsTree('src')
+      expect(upload.dirUploading.value).toBe(false)
+      expect(mockToastShow).toHaveBeenCalledWith(
+        expect.stringContaining('upload.dirDownloadUnsupported'),
+        expect.any(Object),
+      )
+    })
+
+    it('does nothing when user cancels the directory picker', async () => {
+      ;(globalThis as any).showDirectoryPicker = vi.fn().mockRejectedValue(new DOMException('abort', 'AbortError'))
+      const upload = useFileUpload()
+      await upload.downloadDirAsTree('src')
+      expect(upload.dirUploading.value).toBe(false)
+      expect(upload.dirUploadDone.value).toBe(0)
     })
   })
 })

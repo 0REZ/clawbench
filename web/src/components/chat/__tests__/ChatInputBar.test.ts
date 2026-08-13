@@ -291,6 +291,8 @@ vi.mock('@/utils/appLog.ts', () => ({
 
 // Mock useVoiceInput — controllable fake for voice input tests
 const mockVoiceToggle = vi.fn()
+const mockVoiceStart = vi.fn()
+const mockVoiceStop = vi.fn()
 const mockVoiceState = ref('idle')
 const mockVoiceInputText = ref('')
 const mockVoiceShortcutKey = vi.fn(() => 'F9')
@@ -302,8 +304,8 @@ vi.mock('@/composables/useVoiceInput', () => ({
     error: { value: '' },
     isRecording: { value: false },
     toggle: mockVoiceToggle,
-    start: vi.fn(),
-    stop: vi.fn(),
+    start: mockVoiceStart,
+    stop: mockVoiceStop,
     cancel: mockVoiceCancel,
     reset: vi.fn(),
     appendText: vi.fn(),
@@ -1244,6 +1246,8 @@ describe('ChatInputBar', () => {
   describe('voice input', () => {
     beforeEach(() => {
       mockVoiceToggle.mockReset()
+      mockVoiceStart.mockReset()
+      mockVoiceStop.mockReset()
       mockVoiceShortcutKey.mockReset()
       mockVoiceShortcutKey.mockReturnValue('F9')
       mockVoiceInputText.value = ''
@@ -1265,17 +1269,92 @@ describe('ChatInputBar', () => {
       await sendBtn.trigger('click')
       expect(wrapper.vm.showQuickMenu).toBe(false)
       expect(wrapper.emitted('send')).toBeFalsy()
+      wrapper.unmount()
       vi.useRealTimers()
     })
 
-    it('F9 shortcut toggles voice input', async () => {
+    it('F9 press-and-hold: keydown starts recording, keyup stops it', async () => {
       mockVoiceShortcutKey.mockReturnValue('F9')
       const wrapper = mountBar()
       await wrapper.vm.$nextTick()
-      const event = new KeyboardEvent('keydown', { code: 'F9' })
-      window.dispatchEvent(event)
-      expect(mockVoiceToggle).toHaveBeenCalled()
+      const down = new KeyboardEvent('keydown', { code: 'F9' })
+      window.dispatchEvent(down)
+      expect(mockVoiceStart).toHaveBeenCalled()
+      const up = new KeyboardEvent('keyup', { code: 'F9' })
+      window.dispatchEvent(up)
+      expect(mockVoiceStop).toHaveBeenCalled()
+      wrapper.unmount()
     })
+
+    it('F9 keydown auto-repeat does not restart recording', async () => {
+      mockVoiceShortcutKey.mockReturnValue('F9')
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F9' }))
+      const afterFirst = mockVoiceStart.mock.calls.length
+      // Auto-repeat keydown events must be ignored (no additional start calls).
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F9', repeat: true }))
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'F9', repeat: true }))
+      expect(mockVoiceStart.mock.calls.length).toBe(afterFirst)
+      wrapper.unmount()
+    })
+
+    it('F9 with modifiers does not trigger recording', async () => {
+      mockVoiceShortcutKey.mockReturnValue('F9')
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      const down = new KeyboardEvent('keydown', { code: 'F9', ctrlKey: true })
+      window.dispatchEvent(down)
+      expect(mockVoiceStart).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('window blur stops an in-progress recording (F9 keyup safety)', async () => {
+      mockVoiceShortcutKey.mockReturnValue('F9')
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      const down = new KeyboardEvent('keydown', { code: 'F9' })
+      window.dispatchEvent(down)
+      expect(mockVoiceStart).toHaveBeenCalled()
+      // In production start() transitions state to 'recording'; mirror it here.
+      mockVoiceState.value = 'recording'
+      window.dispatchEvent(new Event('blur'))
+      expect(mockVoiceStop).toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('renders red circular recording indicator with audio wave in the attach slot', async () => {
+      mockVoiceState.value = 'recording'
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      const recBtn = wrapper.find('.chat-attach-btn.voice-rec-btn.recording')
+      expect(recBtn.exists()).toBe(true)
+      expect(wrapper.find('.voice-wave').exists()).toBe(true)
+      // no text
+      expect(wrapper.find('.voice-banner').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('renders transcribing indicator with spinner in the attach slot', async () => {
+      mockVoiceState.value = 'transcribing'
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      const transBtn = wrapper.find('.chat-attach-btn.voice-rec-btn.transcribing')
+      expect(transBtn.exists()).toBe(true)
+      expect(transBtn.find('.spin-icon').exists()).toBe(true)
+      expect(wrapper.find('.voice-banner').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('shows the plain paperclip attach button when idle', async () => {
+      mockVoiceState.value = 'idle'
+      const wrapper = mountBar()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.voice-rec-btn').exists()).toBe(false)
+      expect(wrapper.find('.chat-attach-btn').exists()).toBe(true)
+      wrapper.unmount()
+    })
+
 
     it('watch syncs recognized voice text into input', async () => {
       const wrapper = mountBar()

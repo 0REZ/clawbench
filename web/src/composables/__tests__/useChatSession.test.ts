@@ -243,6 +243,28 @@ vi.mock('@/composables/useSessionIdentity.ts', () => ({
   clearModeState: vi.fn(),
   updateCommandState: vi.fn(),
   clearCommandState: vi.fn(),
+  reconcileRunningSessions: vi.fn((sessions: Array<{ id?: string; running?: boolean }>, full = false) => {
+    if (!sessions) return false
+    let changed = false
+    if (full) {
+      if (mockState.runningSessions.size > 0) { mockState.runningSessions.clear(); changed = true }
+      for (const s of sessions) {
+        if (s?.id && s.running && !mockState.runningSessions.has(s.id)) { mockState.runningSessions.add(s.id); changed = true }
+      }
+    } else {
+      if (sessions.length === 0) return false
+      for (const s of sessions) {
+        if (!s || !s.id) continue
+        if (s.running) {
+          if (!mockState.runningSessions.has(s.id)) { mockState.runningSessions.add(s.id); changed = true }
+        } else {
+          if (mockState.runningSessions.delete(s.id)) changed = true
+        }
+      }
+    }
+    if (changed) mockState.runningSessionsVersion++
+    return changed
+  }),
   updateThinkingEffortState: vi.fn(),
   updateAvailableThinkingEfforts: vi.fn(),
   clearThinkingEffortState: vi.fn(),
@@ -2190,8 +2212,11 @@ describe('loadHistory', () => {
     await session.loadHistory(true, false, false)
 
     expect(loading.value).toBe(true)
-    // onConnectStream is called with currentSessionId.value which has been set to data.sessionId
-    expect(onConnectStream).toHaveBeenCalledWith('s1')
+    // onConnectStream is called with currentSessionId.value (set to data.sessionId),
+    // reconnecting to the SAME live stream — must reuse the existing streaming
+    // message so connectStream doesn't finalize it and open a duplicate empty
+    // "outputting" segment (regression for the split-reply bug).
+    expect(onConnectStream).toHaveBeenCalledWith('s1', { reuseExistingStreaming: true })
   })
 
   it('when data.running=false: sets loading=false', async () => {

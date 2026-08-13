@@ -67,6 +67,9 @@
             <EyeOff v-if="!showHidden" :size="16" />
             <Eye v-else :size="16" />
           </button>
+          <button v-if="toolbarInlineIds.includes('jump')" class="toolbar-btn jump-btn" @click="jumpOpen = true" :title="t('jump.button')">
+            <LocateFixed :size="16" />
+          </button>
           <template v-if="showMoreDropdown">
           <div ref="moreDropdownWrapRef" class="toolbar-dropdown-wrap">
             <button class="toolbar-btn" @click="moreMenuOpen = !moreMenuOpen" :title="t('nav.more')">
@@ -124,6 +127,12 @@
                   <span>{{ showHidden ? t('file.hideHiddenFiles') : t('file.showHiddenFiles') }}</span>
                 </button>
               </template>
+              <template v-if="toolbarCollapsedIds.includes('jump')">
+                <button class="toolbar-dropdown-item" @click="jumpOpen = true; moreMenuOpen = false">
+                  <LocateFixed :size="14" />
+                  <span>{{ t('jump.button') }}</span>
+                </button>
+              </template>
             </div>
             </Teleport>
           </div>
@@ -153,10 +162,15 @@
     <!-- Hidden directory input for folder upload (PC only, preserves structure) -->
     <input v-if="!isAppMode" type="file" ref="folderInputRef" @change="onFolderUploadSelect" style="display:none" webkitdirectory multiple />
 
-    <!-- Upload progress bar -->
+    <!-- Upload progress bar (byte-based bar + count progress below) -->
     <div v-if="dirUploading" class="dir-upload-progress">
-      <div class="dir-upload-progress-bar" :style="{ width: dirUploadProgress + '%' }"></div>
-      <span class="dir-upload-progress-text">{{ dirUploadDone }}/{{ dirUploadTotal }}</span>
+      <div class="dir-upload-progress-main">
+        <div class="dir-upload-progress-bar" :style="{ width: dirUploadProgress + '%' }"></div>
+        <button class="dir-upload-cancel" title="取消" @click="cancelDirUpload">
+          <X :size="12" />
+        </button>
+      </div>
+      <div class="dir-upload-progress-count">{{ dirUploadDone }}/{{ dirUploadTotal }}</div>
     </div>
 
     <!-- File list -->
@@ -171,10 +185,6 @@
       @drop.prevent="onDrop"
       @dragend="onDragEnd"
     >
-      <div v-if="isDragOver" class="drop-overlay">
-        <Upload :size="32" :stroke-width="1.5" />
-        <span>{{ t('file.dropToUpload') }}</span>
-      </div>
       <Transition name="paste-fade">
         <div v-if="isPasteOver" class="paste-overlay">
           <ClipboardPaste :size="32" :stroke-width="1.5" />
@@ -199,8 +209,7 @@
           @dragstart="onItemDragStart(entry, $event)"
           :class="{
             'dir-item': entry.type === 'dir',
-            active: !multiSelect.active && selectedPath === itemPath(entry.name),
-            'ms-selected': multiSelect.active && multiSelect.selected.has(itemPath(entry.name)),
+            active: (!multiSelect.active && selectedPath === itemPath(entry.name)) || (multiSelect.active && multiSelect.selected.has(itemPath(entry.name))),
             'ctx-highlight': ctxMenu.visible && ctxMenu.entry?.path === itemPath(entry.name),
             'cut-item': isCutItem(itemPath(entry.name)),
             'drag-target': dropTargetPath === itemPath(entry.name) && entry.type === 'dir'
@@ -208,9 +217,6 @@
           :data-action="entry.type === 'dir' ? 'dir' : 'file'"
           :data-path="itemPath(entry.name)"
         >
-          <div v-if="multiSelect.active" class="ms-check" :class="{ checked: multiSelect.selected.has(itemPath(entry.name)) }">
-            <Check v-if="multiSelect.selected.has(itemPath(entry.name))" :size="12" />
-          </div>
           <div class="file-icon-wrap" :class="{ 'has-attach': hasAttachedFile(itemPath(entry.name)) }">
             <img v-if="entry.type !== 'dir' && isThumbLoaded(entry)" class="file-thumb" :src="thumbUrl(entry)" :alt="entry.name" loading="lazy" @error="onThumbError(entry)" />
             <FileIcon v-else :path="entry.name" :is-dir="entry.type === 'dir'" :size="28" class="file-icon" />
@@ -237,10 +243,6 @@
       @drop.prevent="onDrop"
       @dragend="onDragEnd"
     >
-      <div v-if="isDragOver" class="drop-overlay">
-        <Upload :size="32" :stroke-width="1.5" />
-        <span>{{ t('file.dropToUpload') }}</span>
-      </div>
       <Transition name="paste-fade">
         <div v-if="isPasteOver" class="paste-overlay">
           <ClipboardPaste :size="32" :stroke-width="1.5" />
@@ -264,8 +266,7 @@
         @dragstart="onItemDragStart(entry, $event)"
         :class="{
           'grid-dir': entry.type === 'dir',
-          'grid-active': !multiSelect.active && selectedPath === itemPath(entry.name),
-          'ms-selected': multiSelect.active && multiSelect.selected.has(itemPath(entry.name)),
+          'grid-active': (!multiSelect.active && selectedPath === itemPath(entry.name)) || (multiSelect.active && multiSelect.selected.has(itemPath(entry.name))),
           'ctx-highlight': ctxMenu.visible && ctxMenu.entry?.path === itemPath(entry.name),
           'cut-item': isCutItem(itemPath(entry.name)),
           'drag-target': dropTargetPath === itemPath(entry.name) && entry.type === 'dir'
@@ -273,9 +274,6 @@
         :data-action="entry.type === 'dir' ? 'dir' : 'file'"
         :data-path="itemPath(entry.name)"
       >
-        <div v-if="multiSelect.active" class="grid-ms-check" :class="{ checked: multiSelect.selected.has(itemPath(entry.name)) }">
-          <Check v-if="multiSelect.selected.has(itemPath(entry.name))" :size="12" />
-        </div>
         <div class="grid-thumb" :class="{ 'has-attach': hasAttachedFile(itemPath(entry.name)) }">
           <img v-if="isThumbLoaded(entry)" :src="thumbUrl(entry)" :alt="entry.name" loading="lazy" @error="onThumbError(entry)" />
           <FileIcon v-else :path="entry.name" :is-dir="entry.type === 'dir'" :size="32" class="grid-icon" />
@@ -361,6 +359,10 @@
             <Package :size="14" />
             {{ t('file.context.archiveDir') }}
           </div>
+          <div class="context-menu-item" v-if="ctxMenu.entry.type === 'dir'" @click.stop="doDownloadTree">
+            <FolderDown :size="14" />
+            {{ t('file.context.downloadTree') }}
+          </div>
           <div class="context-menu-item" @click.stop="doAttachToChat">
             <Paperclip :size="14" />
             {{ ctxMenu.entry && hasAttachedFile(ctxMenu.entry.path) ? t('chat.attach.removeFromChat') : t('chat.actions.attachToChat') }}
@@ -393,6 +395,15 @@
       @navigateDir="onSearchNavigateDir"
       @selectFile="onSearchSelectFile"
     />
+    <JumpDirDialog :open="jumpOpen" @close="jumpOpen = false" @confirm="handleJumpConfirm" />
+
+    <!-- Drop upload overlay — covers the whole file manager panel -->
+    <Transition name="paste-fade">
+      <div v-if="isDragOver" class="drop-overlay">
+        <Upload :size="32" :stroke-width="1.5" />
+        <span>{{ t('file.dropToUpload') }}</span>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -403,7 +414,7 @@ import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { joinPath } from '@/utils/path'
-import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, FolderUp, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, Check, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search } from 'lucide-vue-next'
+import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, FolderUp, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search, FolderDown, LocateFixed } from 'lucide-vue-next'
 import {
   buildThumbUrl,
   isThumbable as isThumbableEntry, formatSize as formatFileSize,
@@ -425,6 +436,7 @@ import { useToolbarOverflow } from '@/composables/useToolbarOverflow'
 import DirBreadcrumb from './DirBreadcrumb.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
 import FileSearchDrawer from './FileSearchDrawer.vue'
+import JumpDirDialog from './JumpDirDialog.vue'
 
 const toast = inject('toast', null)
 const { isAppMode } = useAppMode()
@@ -433,7 +445,7 @@ const { t, locale } = useI18n()
 const TAG = 'FileManager'
 
 // File upload to current directory
-const { dirUploading, dirUploadProgress, dirUploadTotal, dirUploadDone, handleFileSelectToDir, handleFileDropToDir, handleFolderSelect, handleFileDropToDirStructured } = useFileUpload()
+const { dirUploading, dirUploadProgress, dirUploadTotal, dirUploadDone, cancelDirUpload, handleFileSelectToDir, handleFileDropToDir, handleFolderSelect, handleFolderDropExpanded, downloadDirAsTree } = useFileUpload()
 const uploadInputRef = ref(null)
 const folderInputRef = ref(null)
 
@@ -489,15 +501,14 @@ async function onDrop(e) {
     dragCounter.value = 0
     isDragOver.value = false
     dropTargetPath.value = null
-    const files = Array.from(e.dataTransfer?.files || [])
     // Internal file-manager move drag (source dragged from this same list)
     if (dragSourcePaths.value?.length) {
         e.preventDefault()
         await handleInternalMoveDrop(e)
         return
     }
-    if (files.length === 0) return
-    await handleFileDropToDirStructured(files, props.currentDir || '.')
+    if (!e.dataTransfer) return
+    await handleFolderDropExpanded(e, props.currentDir || '.')
     emit('refresh')
 }
 
@@ -604,6 +615,11 @@ function onPaste(e) {
   }
 }
 const dialog = useDialog()
+const jumpOpen = ref(false)
+async function handleJumpConfirm(path) {
+  jumpOpen.value = false
+  await store.navigateToDir(path)
+}
 const { addAttachedFile, hasAttachedFile, removeAttachedFileByPath } = useChatContext()
 const { terminalRuntimeEnabled } = useTerminalStatus()
 const isTerminalDisabled = computed(() => terminalRuntimeEnabled.value !== true)
@@ -679,7 +695,7 @@ watch(moreMenuOpen, (open) => {
 const dirToolbarRef = ref(null)
 const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObserving: startToolbarResize, stopObserving: stopToolbarResize } = useToolbarOverflow(
   () => dirToolbarRef.value,
-  () => ['refresh', 'newFile', 'newFolder', 'upload', 'uploadFolder', 'viewToggle', 'multiselect', 'hidden'],
+  () => ['refresh', 'newFile', 'newFolder', 'upload', 'uploadFolder', 'viewToggle', 'multiselect', 'hidden', 'jump'],
   { inlineCount: 3, gap: 6 },
 )
 
@@ -1350,6 +1366,13 @@ function doArchiveDir() {
     doArchive([entry.path], zipName)
 }
 
+function doDownloadTree() {
+    if (!ctxMenu.entry || ctxMenu.entry.type !== 'dir') return
+    const path = ctxMenu.entry.path
+    closeCtxMenu()
+    downloadDirAsTree(path)
+}
+
 function doBatchArchive() {
     const paths = [...multiSelect.selected]
     if (!paths.length) return
@@ -1659,6 +1682,7 @@ function currentFileForClipboard() {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 /* ── File manager specific ── */
@@ -1779,29 +1803,6 @@ function currentFileForClipboard() {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-/* ── Multi-select checkbox ── */
-.ms-check {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    border: 2px solid var(--border-color, #d0d0d0);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.15s;
-}
-
-.ms-check.checked {
-    background: var(--accent-color, #4a90d9);
-    border-color: var(--accent-color, #4a90d9);
-    color: #fff;
-}
-
-.file-item.ms-selected {
-    background: color-mix(in srgb, var(--accent-color, #4a90d9) 8%, transparent);
 }
 
 .file-item.ctx-highlight {
@@ -1999,7 +2000,6 @@ function currentFileForClipboard() {
 }
 
 .file-item.active .file-icon-wrap,
-.file-item.ms-selected .file-icon-wrap,
 .file-item.ctx-highlight .file-icon-wrap {
     box-sizing: border-box;
     border-radius: 6px;
@@ -2015,13 +2015,11 @@ function currentFileForClipboard() {
     background: color-mix(in srgb, white 50%, var(--accent-color, #4a90d9));
 }
 
-.file-item.ms-selected .file-icon-wrap,
 .file-item.ctx-highlight .file-icon-wrap {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, transparent);
 }
 
 .file-item.active .file-icon-wrap .file-icon,
-.file-item.ms-selected .file-icon-wrap .file-icon,
 .file-item.ctx-highlight .file-icon-wrap .file-icon {
     width: 28px;
     height: 28px;
@@ -2156,10 +2154,6 @@ function currentFileForClipboard() {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, transparent);
 }
 
-.grid-item.ms-selected {
-    background: color-mix(in srgb, var(--accent-color, #4a90d9) 8%, transparent);
-}
-
 .grid-item.ctx-highlight {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, transparent);
 }
@@ -2167,11 +2161,6 @@ function currentFileForClipboard() {
 .grid-item.grid-active .grid-thumb {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 15%, var(--bg-tertiary, #f5f5f5));
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 40%, transparent);
-}
-
-.grid-item.ms-selected .grid-thumb {
-    background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, var(--bg-tertiary, #f5f5f5));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 30%, transparent);
 }
 
 .grid-item.ctx-highlight .grid-thumb {
@@ -2255,28 +2244,6 @@ function currentFileForClipboard() {
 }
 
 /* Grid multi-select check */
-.grid-ms-check {
-    position: absolute;
-    top: 4px;
-    left: 4px;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    border: 2px solid var(--border-color, #d0d0d0);
-    background: var(--bg-primary, #fff);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 2;
-    transition: all 0.15s;
-}
-
-.grid-ms-check.checked {
-    background: var(--accent-color, #4a90d9);
-    border-color: var(--accent-color, #4a90d9);
-    color: #fff;
-}
-
 [data-theme="dark"] .grid-thumb {
     background: var(--bg-secondary, #2a2a2a);
 }
@@ -2291,16 +2258,10 @@ function currentFileForClipboard() {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 50%, transparent);
 }
 
-[data-theme="dark"] .grid-item.ms-selected .grid-thumb {
-    background: color-mix(in srgb, var(--accent-color, #4a90d9) 14%, var(--bg-secondary, #2a2a2a));
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 35%, transparent);
-}
-
 [data-theme="dark"] .file-item.active .file-icon-wrap {
     background: color-mix(in srgb, white 30%, var(--accent-color, #4a90d9));
 }
 
-[data-theme="dark"] .file-item.ms-selected .file-icon-wrap,
 [data-theme="dark"] .file-item.ctx-highlight .file-icon-wrap {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 18%, transparent);
 }
@@ -2308,26 +2269,54 @@ function currentFileForClipboard() {
 /* Upload progress bar */
 .dir-upload-progress {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    height: 20px;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 12px;
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 8%, transparent);
     flex-shrink: 0;
+}
+
+.dir-upload-progress-main {
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .dir-upload-progress-bar {
     flex: 1;
     height: 3px;
+    min-width: 0;
     background: var(--accent-color, #4a90d9);
     border-radius: 2px;
     transition: width 0.15s ease;
 }
 
-.dir-upload-progress-text {
+.dir-upload-cancel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--bg-tertiary, #f0f0f0);
+    color: var(--text-secondary, #666);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.dir-upload-cancel:hover {
+    background: var(--danger-color, #ef4444);
+    color: #fff;
+}
+
+.dir-upload-progress-count {
     font-size: 11px;
     color: var(--text-secondary, #666);
     white-space: nowrap;
+    line-height: 1.2;
 }
 
 /* ── Drop overlay ── */

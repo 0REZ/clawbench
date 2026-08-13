@@ -124,6 +124,10 @@ export default {
       actionSearch: '全局搜索',
       contextSwitchSession: '聊天页 · 聚焦任意处',
       actionSwitchSession: '切换聊天会话',
+      contextJumpUnread: '聊天页 · 聚焦任意处',
+      actionJumpUnread: '跳转到下一个未读会话',
+      contextOpenSessionList: '聊天页 · 聚焦任意处',
+      actionOpenSessionList: '打开会话列表',
       contextRecommend: '聊天页 · 上一条为助手回复时',
       actionRecommend: '输入框上方出现「推荐回复」建议，点「填入」可直接采纳下一步操作',
       contextRecommendEnable: '推荐回复 · 开启方法',
@@ -147,6 +151,9 @@ export default {
   chat: {
     title: 'AI 对话',
     sendError: '错误: {error}',
+    shortcutJumpUnread: {
+      none: '没有未读会话',
+    },
     input: {
       placeholder: '输入消息...',
       placeholderQueue: '输入消息加入队列...',
@@ -365,6 +372,10 @@ export default {
       playing: '朗读中',
       speak: '朗读',
       speaking: '朗读中',
+    },
+    voice: {
+      recording: '录音中',
+      transcribing: '识别中',
     },
     archive: {
       confirm: '确认归档当前会话？归档后可通过会话搜索恢复。',
@@ -706,6 +717,7 @@ export default {
       openAsProject: '打开为项目',
       openTerminal: '在此打开终端',
       archiveDir: '打包下载',
+      downloadTree: '下载',
       shareExternal: '分享',
     },
     multiSelect: {
@@ -733,7 +745,9 @@ export default {
       switchProjectFailed: '切换项目失败: {error}',
       switchProjectFailedShort: '切换项目失败',
       dirLoadFailed: '目录不存在或无法访问',
+      dirRemoved: '当前目录已被移除',
       fileNotFound: '文件不存在',
+      fileRemoved: '文件不存在，可能已被移除',
       externalFile: '此文件位于项目目录之外',
       externalDirNotSupported: '暂不支持打开项目外目录',
       archiving: '正在打包 {n} 个文件...',
@@ -950,6 +964,14 @@ export default {
     deleteFailed: '删除失败',
     setProjectFailedDetail: '设置项目失败: {error}',
   },
+  jump: {
+    title: '跳转到目录',
+    placeholder: '输入目录路径，如 src/utils',
+    confirm: '跳转',
+    cancel: '取消',
+    button: '跳转',
+    copyPath: '复制路径',
+  },
   search: {
     title: '文件内容搜索',
     placeholder: '输入关键字搜索…',
@@ -1116,6 +1138,11 @@ export default {
     maxFiles: '最多上传 {max} 个文件',
     tooManyFiles: '已选择 {total} 个文件，但仅剩 {remaining} 个名额',
     fileTooLarge: '{name} 超过 {max}MB 限制',
+    completed: '已上传 {count} 项',
+    cancelled: '已取消上传',
+    downloaded: '已下载 {count} 项',
+    dirDownloadUnsupported: '当前浏览器不支持按文件树下载，请使用 Chrome/Edge 并开启 HTTPS 访问',
+    dirDownloadFailed: '获取文件列表失败',
   },
   autoSpeech: {
     generateFailed: '语音生成失败 (HTTP {status})',

@@ -124,6 +124,10 @@ export default {
       actionSearch: 'Global search',
       contextSwitchSession: 'Chat · anywhere focused',
       actionSwitchSession: 'Switch chat session',
+      contextJumpUnread: 'Chat · anywhere focused',
+      actionJumpUnread: 'Jump to the next unread session',
+      contextOpenSessionList: 'Chat · anywhere focused',
+      actionOpenSessionList: 'Open session list',
       contextRecommend: 'Chat · when the last message is an assistant reply',
       actionRecommend: 'A "recommended reply" appears above the input box; click "Fill" to accept the suggested next step',
       contextRecommendEnable: 'Recommended reply · how to enable',
@@ -146,6 +150,9 @@ export default {
   },
   chat: {
     title: 'AI Chat',
+    shortcutJumpUnread: {
+      none: 'No unread sessions',
+    },
     sendError: 'Error: {error}',
     input: {
       placeholder: 'Type a message...',
@@ -365,6 +372,10 @@ export default {
       playing: 'Playing',
       speak: 'Read',
       speaking: 'Speaking',
+    },
+    voice: {
+      recording: 'Recording',
+      transcribing: 'Transcribing',
     },
     archive: {
       confirm: 'Archive current session? You can restore archived sessions via session search.',
@@ -705,6 +716,7 @@ export default {
       openAsProject: 'Open as project',
       openTerminal: 'Open terminal here',
       archiveDir: 'Pack & download',
+      downloadTree: 'Download',
       shareExternal: 'Share',
     },
     multiSelect: {
@@ -732,7 +744,9 @@ export default {
       switchProjectFailed: 'Switch project failed: {error}',
       switchProjectFailedShort: 'Switch project failed',
       dirLoadFailed: 'Directory not found or inaccessible',
+      dirRemoved: 'The current directory may have been removed',
       fileNotFound: 'File not found',
+      fileRemoved: 'File does not exist; it may have been removed',
       externalFile: 'This file is outside the project directory',
       externalDirNotSupported: 'Opening external directories is not supported',
       archiving: 'Packing {n} items...',
@@ -949,6 +963,14 @@ export default {
     deleteFailed: 'Delete failed',
     setProjectFailedDetail: 'Set project failed: {error}',
   },
+  jump: {
+    title: 'Jump to Directory',
+    placeholder: 'Enter a directory path, e.g. src/utils',
+    confirm: 'Jump',
+    cancel: 'Cancel',
+    button: 'Jump',
+    copyPath: 'Copy path',
+  },
   search: {
     title: 'Search in file',
     placeholder: 'Enter keyword to search…',
@@ -1115,6 +1137,11 @@ export default {
     maxFiles: 'Maximum {max} files',
     tooManyFiles: '{total} files selected, but only {remaining} slots remaining',
     fileTooLarge: '{name} exceeds {max}MB limit',
+    completed: 'Uploaded {count} item(s)',
+    cancelled: 'Upload cancelled',
+    downloaded: 'Downloaded {count} item(s)',
+    dirDownloadUnsupported: 'Tree download is not supported in this browser. Use Chrome/Edge with HTTPS.',
+    dirDownloadFailed: 'Failed to fetch file list',
   },
   autoSpeech: {
     generateFailed: 'Speech generation failed (HTTP {status})',

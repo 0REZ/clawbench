@@ -5,7 +5,7 @@ import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
 import { appLog } from '@/utils/appLog'
 
 const TAG = 'ChatSession'
-import { updateAvailableModes, updateCommandState, updateAvailableThinkingEfforts, clearUsageStateById, updateUsageState, currentAgentId as _currentAgentId, clearSessionIdentity } from '@/composables/useSessionIdentity.ts'
+import { updateAvailableModes, updateCommandState, updateAvailableThinkingEfforts, clearUsageStateById, updateUsageState, currentAgentId as _currentAgentId, clearSessionIdentity, reconcileRunningSessions } from '@/composables/useSessionIdentity.ts'
 import { clearPlanState, updatePlanEntries } from '@/composables/usePlanProgress'
 import { useAgents, restoreOriginalModels, getAgentThinkingEffortLevels, populateACPStateFromCache } from '@/composables/useAgents'
 import { store } from '@/stores/app.ts'
@@ -38,12 +38,8 @@ export async function loadSessionsOnce(): Promise<void> {
         if (typeof data.totalCount === 'number') {
           store.state.sessionCount = data.totalCount
         }
-        // Populate runningSessions set from API data
-        identity.runningSessions.value.clear()
-        for (const s of sessions) {
-          if (s.running) identity.runningSessions.value.add(s.id)
-        }
-        identity.runningSessionsVersion.value++
+        // Populate runningSessions set from API data (full authoritative list)
+        reconcileRunningSessions(sessions, true)
       }
     } catch { /* ignore */ }
     finally {
@@ -71,7 +67,7 @@ export interface UseChatSessionOptions {
   onExtractScheduledTasks: (msgs: Array<Record<string, unknown>>) => void
   onRenderUpdate: (forceFull: boolean) => void
   onScrollBottom: (force?: boolean) => void
-  onConnectStream: (sessionId: string, options?: { subscribeOnly?: boolean }) => void
+  onConnectStream: (sessionId: string, options?: { subscribeOnly?: boolean; reuseExistingStreaming?: boolean }) => void
   onDisconnectStream: () => void
   onOpen: () => void
   onStreamDone?: () => void
@@ -208,7 +204,11 @@ export function useChatSession(options: UseChatSessionOptions) {
     if (isRunning) {
       loading.value = true
       onScrollBottom(forceScrollBottom)
-      onConnectStream(currentSessionId.value)
+      // This loadHistory is reconnecting to the SAME live stream (e.g. after a
+      // WS reconnect, tab-visibility change, or stream timeout) — NOT starting a
+      // new turn. Reuse the existing streaming message so connectStream doesn't
+      // finalize it and open a duplicate empty "outputting" segment.
+      onConnectStream(currentSessionId.value, { reuseExistingStreaming: true })
     } else if (isReplayPending) {
       loading.value = true
       if (immediate) keepInputDisabled = true

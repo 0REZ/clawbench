@@ -318,7 +318,7 @@ const session = useChatSession({
   onExtractScheduledTasks: (msgs) => render.extractScheduledTasks(msgs),
   onRenderUpdate: (forceFull) => render.updateRenderedContents(forceFull),
   onScrollBottom: (force) => scrollBottom(force),
-  onConnectStream: (sessionId) => stream.connectStream(sessionId),
+  onConnectStream: (sessionId, options) => stream.connectStream(sessionId, options),
   onDisconnectStream: () => stream.disconnectStream(),
   onOpen: () => emit('open'),
   onStreamDone: playNotificationSound,
@@ -783,7 +783,7 @@ async function sendMessageNow(text, filePaths, files) {
             if (localIdx !== -1) {
                 messages.value[localIdx].pending = true
             }
-            stream.connectStream(identity.currentSessionId.value)
+            stream.connectStream(identity.currentSessionId.value, { reuseExistingStreaming: true })
             // Proactively sync ACP state for the running session
             if (effectiveAgentId && agentsComposable.supportsACP(effectiveAgentId)) {
                 populateACPStateFromCache(effectiveAgentId)
@@ -981,6 +981,32 @@ function handleCtrlArrowSessionSwitch(e) {
   }
 }
 
+// Desktop: Ctrl+U/Cmd+U to jump to the next unread session
+function handleJumpUnread(e) {
+  if (!props.keyboardActive) return
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  if (e.target?.closest?.('.terminal-panel')) return
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (e.key !== 'u' && e.key !== 'U') return
+  e.preventDefault()
+  swipeSession.jumpToNextUnread().then(target => {
+    if (!target) toast.show(t('chat.shortcutJumpUnread.none'), { icon: '📭', type: 'info', duration: 2500 })
+  })
+}
+
+// Desktop: Ctrl+K/Cmd+K to open the global session list drawer
+function handleOpenSessionList(e) {
+  if (!props.keyboardActive) return
+  const tag = e.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  if (e.target?.closest?.('.terminal-panel')) return
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (e.key !== 'k' && e.key !== 'K') return
+  e.preventDefault()
+  identity.openSessionTab()
+}
+
 // Desktop: Ctrl+Delete to archive current session
 function handleDeleteKey(e) {
   if (!props.keyboardActive) return
@@ -1000,6 +1026,8 @@ onMounted(() => {
     window.addEventListener('clawbench-reconnect', session.handleWsReconnect)
     window.addEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.addEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.addEventListener('keydown', handleJumpUnread)
+    document.addEventListener('keydown', handleOpenSessionList)
     document.addEventListener('keydown', handleDeleteKey)
 })
 
@@ -1015,6 +1043,8 @@ onUnmounted(() => {
     window.removeEventListener('clawbench-reconnect', session.handleWsReconnect)
     window.removeEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.removeEventListener('keydown', handleCtrlArrowSessionSwitch)
+    document.removeEventListener('keydown', handleJumpUnread)
+    document.removeEventListener('keydown', handleOpenSessionList)
     document.removeEventListener('keydown', handleDeleteKey)
     notification.closeAll()
 })
