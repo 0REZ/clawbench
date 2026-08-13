@@ -40,7 +40,7 @@
         <span class="chat-action-label">{{ t('chat.actions.autoSpeech') }}</span>
       </button>
     </div>
-    <!-- Conversation recommendation banner (对话推荐) — sits above the input box so it never steals input space -->
+    <!-- Conversation recommendation banner (推荐回复) — sits above the input box so it never steals input space -->
     <Transition name="paste-fade">
       <div v-if="showRecommendationChip && recommendation" class="recommendation-chip">
         <Sparkles :size="14" :stroke-width="1.5" class="recommendation-icon" />
@@ -271,7 +271,8 @@ import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import AttachmentTags from '@/components/chat/AttachmentTags.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
-const QuickSendDrawer = defineAsyncComponent(() => import('@/components/chat/QuickSendDrawer.vue'))
+import AsyncComponentLoader from '@/components/common/AsyncComponentLoader.vue'
+const QuickSendDrawer = defineAsyncComponent({ loader: () => import('@/components/chat/QuickSendDrawer.vue'), loadingComponent: AsyncComponentLoader })
 import SessionDrawer from '@/components/chat/SessionDrawer.vue'
 import { createStopButtonMachine } from '@/utils/stopButtonMachine.ts'
 import { useDialog } from '@/composables/useDialog.ts'
@@ -457,10 +458,31 @@ const emit = defineEmits([
 
 const inputText = ref('')
 
-// ── Conversation recommendation (对话推荐) ───────────────
+// ── Conversation recommendation (推荐回复) ───────────────
 // Recommendation state is bound per session via useChatRecommendation: the
 // displayed value is derived from the currently active session's slot, so a
 // recommendation from another session can never leak into the active view.
+//
+// Each recommendation is also bound to the assistant message it was generated
+// for, and only surfaced when that message is the session's current last
+// completed assistant message. This prevents briefly flashing a stale
+// recommendation (from an earlier reply) while the current reply's
+// recommendation is still being generated asynchronously.
+//
+// Only a non-streaming assistant message with a real numeric DB id is eligible:
+// during streaming the placeholder message carries a temporary "drain-…" id (or
+// a still-streaming row), which would never match the persisted recommendation's
+// message_id and would silently hide every recommendation.
+const lastAssistantMessageId = () => {
+  const msgs = props.messages || []
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role !== 'assistant' || msgs[i].streaming) continue
+    const id = Number(msgs[i].id)
+    if (Number.isInteger(id) && id > 0) return id
+  }
+  return undefined
+}
+
 const rec = useChatRecommendation({
   activeSessionId: () => props.currentSessionId || undefined,
   loading: () => props.loading,
@@ -469,8 +491,9 @@ const rec = useChatRecommendation({
     const last = msgs[msgs.length - 1]
     return !!last && last.role === 'assistant'
   },
-  fetchRemote: async (sessionId) => {
-    const data = await apiGet(`/api/chat/recommendation?session_id=${encodeURIComponent(sessionId)}`)
+  lastAssistantMessageId,
+  fetchRemote: async (sessionId, messageId) => {
+    const data = await apiGet(`/api/chat/recommendation?session_id=${encodeURIComponent(sessionId)}&message_id=${encodeURIComponent(String(messageId))}`)
     return data?.recommendation || ''
   },
 })
@@ -482,7 +505,8 @@ const recommendationExpanded = ref(false)
 
 function onRecommendationEvent(evt) {
   const detail = evt.detail || {}
-  rec.upsert(detail.session_id, detail.recommendation)
+  if (detail.session_id == null || detail.message_id == null) return
+  rec.upsert(detail.session_id, detail.recommendation, detail.message_id)
   recommendationExpanded.value = false
 }
 
@@ -505,33 +529,19 @@ function clearRecommendation() {
 // A device that missed the live chat_recommendation broadcast (e.g. a mobile
 // WebView suspended while the backend generated the recommendation) still needs
 // to surface it. The recommendation is persisted server-side and generated
-// asynchronously *after* the reply's 'done' event, so once the active session
-// stops streaming we re-fetch it a few times with backoff. ensureFetched() is
-// already idempotent — it no-ops when the slot is cached (live broadcast), when
-// the session is streaming, or when the fetch returns empty — so these retries
-// are harmless when the broadcast already delivered the value.
-const reconcileTimeouts = new Set()
-
-function stopRecommendationReconcile() {
-  for (const id of reconcileTimeouts) clearTimeout(id)
-  reconcileTimeouts.clear()
-}
-
-function scheduleRecommendationReconcile() {
+// asynchronously *after* the reply's 'done' event. Once the reply is finalized
+// (its placeholder becomes a real non-streaming DB message), we fetch the
+// recommendation bound to that exact message. This fires both on session switch
+// (history loads) and right after a reply completes, and is a no-op when the
+// live broadcast already cached a value. ensureFetched() is idempotent — it
+// no-ops when the slot is cached, when the session is streaming, or when the
+// fetch returns empty.
+const lastAssistantMsgId = computed(() => lastAssistantMessageId())
+watch(lastAssistantMsgId, (mid) => {
   const sid = props.currentSessionId
-  if (!sid) return
-  stopRecommendationReconcile()
-  const delays = [2000, 5000, 12000, 30000, 60000]
-  for (const delay of delays) {
-    const id = window.setTimeout(() => {
-      reconcileTimeouts.delete(id)
-      // Only reconcile while still viewing the same, non-streaming session.
-      if (props.currentSessionId !== sid || props.loading) return
-      void rec.ensureFetched(sid)
-    }, delay)
-    reconcileTimeouts.add(id)
-  }
-}
+  if (!sid || mid === undefined) return
+  void rec.ensureFetched(sid, mid)
+})
 
 // ── Voice input (ASR) ───────────────────────────────
 const voiceInput = useVoiceInput()
@@ -681,14 +691,16 @@ watch(atMenuItems, () => { atMenuIndex.value = -1 })
 watch(slashMenuIndex, (idx) => {
   if (idx < 0) return
   nextTick(() => {
-    const el = rootRef.value?.querySelector('[data-slash-idx="' + idx + '"]')
+    // Menus are teleported to <body>, so query from document, not rootRef.
+    const el = document.querySelector('[data-slash-idx="' + idx + '"]')
     el?.scrollIntoView({ block: 'nearest' })
   })
 })
 watch(atMenuIndex, (idx) => {
   if (idx < 0) return
   nextTick(() => {
-    const el = rootRef.value?.querySelector('[data-at-idx="' + idx + '"]')
+    // Menus are teleported to <body>, so query from document, not rootRef.
+    const el = document.querySelector('[data-at-idx="' + idx + '"]')
     el?.scrollIntoView({ block: 'nearest' })
   })
 })
@@ -807,11 +819,12 @@ watch(() => props.currentSessionId, (newId, oldId) => {
 // On session switch, restore the persisted recommendation for that session into
 // its own slot (immediate if already cached, otherwise fetched) — the displayed
 // value is derived from the active session's slot, so no cross-session leakage.
-watch(() => props.currentSessionId, (newId) => {
+watch(() => props.currentSessionId, () => {
   // A new conversation starts with a collapsed banner.
   recommendationExpanded.value = false
-  stopRecommendationReconcile()
-  if (newId) rec.ensureFetched(newId)
+  // The recommendation for the new session is fetched once its last assistant
+  // message is loaded (see the lastAssistantMsgId watcher), so we don't need to
+  // fetch here with a possibly-unloaded message id.
 })
 
 const quoteItems = computed(() => props.quotes.length > 0
@@ -821,12 +834,9 @@ const quoteItems = computed(() => props.quotes.length > 0
 // When a new assistant message starts streaming, any previously surfaced
 // recommendation belongs to the last completed reply and is stale — invalidate
 // the active session's slot so the in-flight value can't be reused.
-watch(() => props.loading, (val, oldVal) => {
+watch(() => props.loading, (val) => {
   if (val && props.currentSessionId) {
     rec.invalidate(props.currentSessionId)
-    stopRecommendationReconcile()
-  } else if (!val && oldVal && props.currentSessionId) {
-    scheduleRecommendationReconcile()
   }
 })
 
@@ -1276,7 +1286,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   pasteUploadGeneration++
-  stopRecommendationReconcile()
   window.removeEventListener('paste', handleWindowPaste, true)
   window.removeEventListener('keydown', onVoiceShortcut)
   window.removeEventListener('clawbench-recommendation', onRecommendationEvent)
@@ -1309,8 +1318,6 @@ defineExpose({
   saveDraft,
   clearInputPreserveDraft,
   clearRecommendation,
-  scheduleRecommendationReconcile,
-  stopRecommendationReconcile,
   inputText,
   deleteDraft: (sessionId) => { draftCache.delete(sessionId) },
   hasDraft: (sessionId) => draftCache.has(sessionId),
@@ -1779,7 +1786,7 @@ defineExpose({
   padding: 0;
 }
 
-/* Conversation recommendation banner (对话推荐) — rendered above the input box */
+/* Conversation recommendation banner (推荐回复) — rendered above the input box */
 .recommendation-chip {
   display: flex;
   align-items: center;

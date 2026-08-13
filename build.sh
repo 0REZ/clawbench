@@ -27,6 +27,10 @@ for arg in "$@"; do
             TARGET_OS="linux"
             TARGET_ARCH="amd64"
             ;;
+        --linux-arm64)
+            TARGET_OS="linux"
+            TARGET_ARCH="arm64"
+            ;;
         --darwin)
             TARGET_OS="darwin"
             TARGET_ARCH="arm64"
@@ -153,7 +157,7 @@ elif command -v go >/dev/null 2>&1; then
         if [ "$TARGET_OS" = "windows" ]; then
             BINARY_NAME="${NAME}.exe"
         fi
-        GOOS=$TARGET_OS GOARCH=$TARGET_ARCH go build -ldflags "$LDFLAGS" -o "$BINARY_NAME" ./cmd/server || { echo "ERROR: Go cross-compile failed" >&2; exit 1; }
+        GOOS=$TARGET_OS GOARCH=$TARGET_ARCH CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$BINARY_NAME" ./cmd/server || { echo "ERROR: Go cross-compile failed" >&2; exit 1; }
         echo "  Cross-compiled: $BINARY_NAME ($TARGET_OS/$TARGET_ARCH)"
     else
         go build -ldflags "$LDFLAGS" -o "$NAME" ./cmd/server || { echo "ERROR: Go build failed" >&2; exit 1; }
@@ -258,8 +262,13 @@ if [[ -n "$DO_RESTART" ]]; then
         PORT_ARGS="--port $RESTART_PORT"
     fi
 
-    # setsid ensures the new ClawBench is in its own session, fully detached
-    setsid "$BIN" $PORT_ARGS >> "$LOG" 2>&1 &
+    # setsid ensures the new ClawBench is in its own session, fully detached.
+    # Strip the orphan markers inherited from the spawning shell: when build.sh
+    # runs inside a ClawBench PTY, its environment carries CLAWBENCH_CHILD=1,
+    # which would otherwise propagate to the new server and make it look like an
+    # orphan AI subprocess to another instance's CleanupOrphans (leading to the
+    # new server being killed on startup).
+    env -u CLAWBENCH_CHILD -u CLAWBENCH_NO_SUPERVISOR setsid "$BIN" $PORT_ARGS >> "$LOG" 2>&1 &
     NEW_PID=$!
     echo "  New PID: $NEW_PID"
 
@@ -298,6 +307,7 @@ else
     echo "Build options:"
     echo "  ./build.sh --windows        # Windows amd64"
     echo "  ./build.sh --linux          # Linux amd64"
+    echo "  ./build.sh --linux-arm64    # Linux arm64"
     echo "  ./build.sh --darwin         # macOS arm64 (Apple Silicon)"
     echo "  ./build.sh --darwin-amd64   # macOS amd64 (Intel)"
     echo "  ./build.sh --target=darwin/arm64"

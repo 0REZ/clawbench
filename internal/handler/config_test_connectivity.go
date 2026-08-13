@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"clawbench/internal/model"
+	"clawbench/internal/rag"
 	"clawbench/internal/speech"
 	"clawbench/internal/summarize"
 )
@@ -31,7 +31,6 @@ type ConnectivityTestResult struct {
 
 // JSON key constants for goconst compliance.
 const (
-	strAPI      = "api"
 	strMessages = "messages"
 	strPiper    = "piper"
 	strKokoro   = "kokoro"
@@ -201,18 +200,17 @@ func testFRP(ctx context.Context, values map[string]any) ConnectivityTestResult 
 
 // ── Summarize Voice ──────────────────────────────────────────
 
+// testSummarizeVoice verifies the shared AI summary API connectivity. It is
+// decoupled from the voice-summary (TTS) backend: the shared ai_summary config
+// feeds both voice summarization and conversation recommendation, so the test
+// always probes the ai_summary.api endpoint regardless of summarize.tts_backend.
 func testSummarizeVoice(ctx context.Context, values map[string]any) ConnectivityTestResult {
-	ttsBackend := resolveStringValue(values, "summarize.tts_backend", model.ConfigInstance.Summarize.TTSBackend)
-	if ttsBackend != strAPI {
-		return ConnectivityTestResult{Success: true, Message: "Voice summary backend is not protocol mode, no test needed"}
-	}
-
 	baseURL := resolveStringValue(values, "ai_summary.api.base_url", model.ConfigInstance.AISummary.API.BaseURL)
 	apiKey := resolveStringValue(values, "ai_summary.api.key", model.ConfigInstance.AISummary.API.Key)
 	modelName := resolveStringValue(values, "ai_summary.model", model.ConfigInstance.AISummary.Model)
 
 	if baseURL == "" {
-		return ConnectivityTestResult{Success: false, Message: "TTS API base URL is required"}
+		return ConnectivityTestResult{Success: false, Message: "AI summary API base URL is required"}
 	}
 	if modelName == "" {
 		modelName = "gpt-4o-mini"
@@ -340,10 +338,56 @@ func testRAG(ctx context.Context, values map[string]any) ConnectivityTestResult 
 		ragModel = "bge-m3"
 	}
 
+	normalized, normErr := rag.NormalizeEmbeddingBaseURL(baseURL)
+	if normErr != nil {
+		return ConnectivityTestResult{Success: false, Message: normErr.Error()}
+	}
+	baseURL = normalized
+
+	// First probe /v1/models to verify the server is reachable and the configured
+	// model is available, so a model-not-found error is reported distinctly from
+	// an actual embedding failure. Some servers (older Ollama) don't implement
+	// /v1/models and return 404 — we treat that as reachable and continue to the
+	// real embedding probe below.
+	modelStatus := probeRAGModels(ctx, baseURL, ragModel, apiKey)
+	if modelStatus.Err != "" {
+		return ConnectivityTestResult{Success: false, Message: modelStatus.Err}
+	}
+
+	// Actually run a real embedding to verify the endpoint returns a valid vector,
+	// not just that the host is reachable.
+	client := rag.NewEmbeddingClient(baseURL, ragModel, apiKey)
+	vector, err := client.Embed(ctx, "connectivity test")
+	if err != nil {
+		return ConnectivityTestResult{
+			Success: false,
+			Message: fmt.Sprintf("RAG embedding failed: %v", err),
+		}
+	}
+	if len(vector) == 0 {
+		return ConnectivityTestResult{Success: false, Message: "RAG embedding returned an empty vector"}
+	}
+
+	msg := fmt.Sprintf("RAG embedding succeeded for model '%s' (dim %d)", ragModel, len(vector))
+	if !modelStatus.ModelChecked {
+		msg += " (server does not implement /v1/models)"
+	}
+	return ConnectivityTestResult{Success: true, Message: msg}
+}
+
+// ragModelStatus reports whether the /v1/models probe confirmed the model.
+type ragModelStatus struct {
+	Err          string // non-empty means the probe failed hard (unreachable / HTTP error)
+	ModelChecked bool   // true when the model list was successfully queried and matched
+}
+
+// probeRAGModels issues GET <baseURL>/v1/models and verifies the model is listed.
+// A 404 (server without /v1/models) is treated as reachable-but-unverifiable.
+func probeRAGModels(ctx context.Context, baseURL, ragModel, apiKey string) ragModelStatus {
 	url := strings.TrimRight(baseURL, "/") + "/v1/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
-		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("Failed to create request: %v", err)}
+		return ragModelStatus{Err: fmt.Sprintf("Failed to create request: %v", err)}
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -352,39 +396,35 @@ func testRAG(ctx context.Context, values map[string]any) ConnectivityTestResult 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("RAG service unreachable at %s", baseURL)}
+		return ragModelStatus{Err: fmt.Sprintf("RAG service unreachable at %s", baseURL)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Server doesn't implement /v1/models (some Ollama versions)
-		return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("RAG service reachable at %s (model check not supported by server)", baseURL)}
+		// Server doesn't implement /v1/models (some Ollama versions).
+		return ragModelStatus{ModelChecked: false}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return ConnectivityTestResult{Success: false, Message: fmt.Sprintf("RAG service returned HTTP %d", resp.StatusCode)}
+		return ragModelStatus{Err: fmt.Sprintf("RAG service returned HTTP %d", resp.StatusCode)}
 	}
 
-	// Check if the model is available
 	var modelsResp struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
-		return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("RAG service reachable at %s, but could not parse models list", baseURL)}
+		return ragModelStatus{ModelChecked: false}
 	}
 
 	for _, m := range modelsResp.Data {
 		if m.ID == ragModel || strings.HasPrefix(m.ID, ragModel+":") {
-			return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("RAG service reachable, model '%s' available", ragModel)}
+			return ragModelStatus{ModelChecked: true}
 		}
 	}
 
-	return ConnectivityTestResult{
-		Success: false,
-		Message: fmt.Sprintf("RAG service reachable at %s, but model '%s' not found", baseURL, ragModel),
-	}
+	return ragModelStatus{Err: fmt.Sprintf("RAG service reachable at %s, but model '%s' not found", baseURL, ragModel)}
 }
 
 // ── STT ──────────────────────────────────────────────────────
@@ -449,13 +489,14 @@ func testSTT(ctx context.Context, values map[string]any) ConnectivityTestResult 
 	return ConnectivityTestResult{Success: true, Message: fmt.Sprintf("STT service reachable at %s (probe returned HTTP %d)", baseURL, resp.StatusCode)}
 }
 
-// buildSTTProbe builds a multipart transcription probe body (silence WAV +
-// model/language fields) and returns the body and its Content-Type header.
+// buildSTTProbe builds a multipart transcription probe body (embedded "你好"
+// mp3 + model/language fields) and returns the body and its Content-Type
+// header.
 func buildSTTProbe(sttModel, language string) (*bytes.Buffer, string, error) {
-	audio := makeMinimalWAV()
+	audio := sttProbeAudio
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("file", "probe.wav")
+	part, err := writer.CreateFormFile("file", "probe.mp3")
 	if err != nil {
 		return nil, "", err
 	}
@@ -487,28 +528,8 @@ func isSTTModelNotFound(body []byte) bool {
 	return false
 }
 
-// makeMinimalWAV builds a tiny valid PCM WAV (16kHz mono 16-bit) with 0.5s of
-// silence, suitable as a connectivity probe payload.
-func makeMinimalWAV() []byte {
-	const sampleRate = 16000
-	dataBytes := sampleRate * 2 // 0.5s of 16-bit mono = 16000 bytes
-	buf := &bytes.Buffer{}
-	buf.WriteString("RIFF")
-	_ = binary.Write(buf, binary.LittleEndian, uint32(36+dataBytes))
-	buf.WriteString("WAVE")
-	buf.WriteString("fmt ")
-	_ = binary.Write(buf, binary.LittleEndian, uint32(16))
-	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // PCM
-	_ = binary.Write(buf, binary.LittleEndian, uint16(1)) // mono
-	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate))
-	_ = binary.Write(buf, binary.LittleEndian, uint32(sampleRate*2)) // byte rate
-	_ = binary.Write(buf, binary.LittleEndian, uint16(2))            // block align
-	_ = binary.Write(buf, binary.LittleEndian, uint16(16))           // bits per sample
-	buf.WriteString("data")
-	_ = binary.Write(buf, binary.LittleEndian, uint32(dataBytes))
-	buf.Write(make([]byte, dataBytes))
-	return buf.Bytes()
-}
+// makeMinimalWAV was removed — the STT probe now uses the embedded "你好" mp3
+// (sttProbeAudio) so connectivity tests exercise real speech recognition.
 
 // dingtalkTokenURL is the DingTalk API URL for getting an access token.
 // Can be overridden in tests.

@@ -273,6 +273,7 @@ vi.mock('@/composables/useAgents', () => ({
     updateAgentField: vi.fn(),
     setDefaultAgent: vi.fn(),
     canRefreshModels: () => false,
+    hasPreferredMode: () => false,
     supportsACP: mockSupportsACP,
     getAgentTransport: () => 'cli',
     invalidateACPStateCache: vi.fn(),
@@ -988,6 +989,41 @@ describe('ChatInputBar', () => {
     expect(true).toBe(true)
   })
 
+  it('keyboard nav scrolls highlighted @ item into view even when menu is teleported', async () => {
+    // Production PopupMenu Teleports the slot to <body>, so menu items are NOT
+    // descendants of the component root — the scroll watcher must query from
+    // document instead of rootRef (regression: scrollbar didn't follow highlight).
+    const qs = vi.spyOn(document, 'querySelector')
+    const wrapper = mountBar()
+    wrapper.vm.inputText = '@'
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.chat-textarea').trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+    expect(qs).toHaveBeenCalledWith('[data-at-idx="0"]')
+    qs.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keyboard nav scrolls highlighted slash item into view even when menu is teleported', async () => {
+    mockSupportsACP.mockReturnValue(true)
+    mockSessionTransport.value = 'acp-stdio'
+    mockAvailableCommands.value = Array.from({ length: 30 }, (_, i) => ({ name: `cmd${i}`, description: 'desc', inputHint: '' }))
+    const qs = vi.spyOn(document, 'querySelector')
+    const wrapper = mountBar()
+    wrapper.vm.inputText = '/'
+    await wrapper.vm.$nextTick()
+    await wrapper.find('.chat-textarea').trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+    expect(qs).toHaveBeenCalledWith('[data-slash-idx="0"]')
+    qs.mockRestore()
+    wrapper.unmount()
+    mockAvailableCommands.value = []
+    mockSessionTransport.value = ''
+    mockSupportsACP.mockReturnValue(false)
+  })
+
   it('quick menu opening triggers menu exclusion watcher', async () => {
     const wrapper = mountBar()
     // First open the quick menu by clicking send with empty input
@@ -1265,15 +1301,16 @@ describe('ChatInputBar', () => {
     })
   })
 
-  // ── Conversation recommendation (对话推荐) ─────────────────
+  // ── Conversation recommendation (推荐回复) ─────────────────
 
-  function dispatchRecommendation(recommendation: string) {
-    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', recommendation } }))
+  function dispatchRecommendation(recommendation: string, messageId = 1001) {
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', message_id: messageId, recommendation } }))
   }
 
   // A conversation ending on an assistant reply — the precondition for showing
-  // the recommendation banner.
-  const ASSISTANT_LAST_MSG = [{ role: 'assistant', content: 'done' }]
+  // the recommendation banner. The message carries the id the recommendation is
+  // bound to.
+  const ASSISTANT_LAST_MSG = [{ role: 'assistant', id: 1001, content: 'done' }]
 
   it('shows the recommendation chip without modifying empty input', async () => {
     const wrapper = mountBar({ currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
@@ -1306,12 +1343,12 @@ describe('ChatInputBar', () => {
     await wrapper.vm.$nextTick()
     // A background session finishes a reply → its recommendation is dispatched
     // globally, but must not surface while the active session is s1.
-    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 'other-session', recommendation: 'B的建议' } }))
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 'other-session', message_id: 999, recommendation: 'B的建议' } }))
     await wrapper.vm.$nextTick()
     expect(wrapper.vm.recommendation).toBe('')
     expect(wrapper.vm.showRecommendationChip).toBe(false)
     // A recommendation for the active session is shown.
-    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', recommendation: 'A的建议' } }))
+    window.dispatchEvent(new CustomEvent('clawbench-recommendation', { detail: { session_id: 's1', message_id: 1001, recommendation: 'A的建议' } }))
     await wrapper.vm.$nextTick()
     expect(wrapper.vm.recommendation).toBe('A的建议')
     expect(wrapper.vm.showRecommendationChip).toBe(true)
@@ -1357,7 +1394,7 @@ describe('ChatInputBar', () => {
   })
 
   it('does not surface a recommendation while the session is streaming', async () => {
-    const wrapper = mountBar({ loading: true, currentSessionId: 's1' })
+    const wrapper = mountBar({ loading: true, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
     await wrapper.vm.$nextTick()
     dispatchRecommendation('stale suggestion')
     await wrapper.vm.$nextTick()
@@ -1418,25 +1455,17 @@ describe('ChatInputBar', () => {
 
   it('reconciles the persisted recommendation after a completed reply when the live broadcast was missed', async () => {
     // A mobile WebView that was suspended while the backend generated the
-    // recommendation misses the chat_recommendation broadcast. Because it stays
-    // on the same session (no session-switch re-fetch), it must re-fetch the
-    // persisted recommendation once the active session stops streaming.
-    vi.useFakeTimers()
+    // recommendation misses the chat_recommendation broadcast. Once the reply is
+    // finalized (last assistant message id becomes available), the input bar
+    // re-fetches the persisted recommendation bound to that exact message.
     const apiGetMock = apiGet as ReturnType<typeof vi.fn>
     apiGetMock.mockResolvedValue({ recommendation: '离线补拉的建议' })
-    const wrapper = mountBar({ loading: false, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    const wrapper = mountBar({ loading: false, currentSessionId: 's1' })
     await wrapper.vm.$nextTick()
     expect(wrapper.vm.showRecommendationChip).toBe(false)
 
-    // Simulate the stream-completed watcher: schedule the reconcile retries.
-    // (setProps doesn't trigger watchers in the test env, so we call the
-    // exposed reconcile entry point directly — the same path the loading
-    // watcher invokes in production.)
-    wrapper.vm.scheduleRecommendationReconcile()
-    await wrapper.vm.$nextTick()
-
-    // No broadcast was received; the first backoff retry fetches the store.
-    vi.advanceTimersByTime(2000)
+    // Finalize the assistant reply — this triggers the lastAssistantMsgId watcher.
+    await wrapper.setProps({ messages: ASSISTANT_LAST_MSG })
     await flushPromises()
     await wrapper.vm.$nextTick()
     expect(apiGetMock).toHaveBeenCalledWith(expect.stringContaining('/api/chat/recommendation'))
@@ -1444,28 +1473,24 @@ describe('ChatInputBar', () => {
     expect(wrapper.vm.showRecommendationChip).toBe(true)
 
     wrapper.unmount()
-    vi.useRealTimers()
   })
 
   it('does not re-fetch the recommendation when the live broadcast already delivered it', async () => {
-    vi.useFakeTimers()
     const apiGetMock = apiGet as ReturnType<typeof vi.fn>
     apiGetMock.mockClear()
-    const wrapper = mountBar({ loading: false, currentSessionId: 's1', messages: ASSISTANT_LAST_MSG })
+    const wrapper = mountBar({ loading: false, currentSessionId: 's1' })
     await wrapper.vm.$nextTick()
     dispatchRecommendation('广播已送达')
     await wrapper.vm.$nextTick()
-    expect(wrapper.vm.showRecommendationChip).toBe(true)
 
-    wrapper.vm.scheduleRecommendationReconcile()
-    vi.advanceTimersByTime(2000)
+    // Finalize the reply: the lastAssistantMsgId watcher calls ensureFetched,
+    // which is a no-op when the slot is already cached (live broadcast).
+    await wrapper.setProps({ messages: ASSISTANT_LAST_MSG })
     await flushPromises()
-    // ensureFetched is a no-op when the slot is already cached — no extra fetch.
     expect(apiGetMock).not.toHaveBeenCalledWith(expect.stringContaining('/api/chat/recommendation'))
     expect(wrapper.vm.recommendation).toBe('广播已送达')
     expect(wrapper.vm.showRecommendationChip).toBe(true)
 
     wrapper.unmount()
-    vi.useRealTimers()
   })
 })

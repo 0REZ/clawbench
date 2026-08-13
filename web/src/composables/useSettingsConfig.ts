@@ -260,6 +260,7 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   sortDir: 'asc',
   uiScale: 1,
   recentFilesCount: 10,
+  headerShortcutTips: true,
 }
 
 // Build reactive local config from legacy localStorage + defaults
@@ -356,6 +357,7 @@ const serverDefaults: Record<string, unknown> = {
   'frp.ssh_remote_port': 0,
   'push_mode': 'native',
   'file_search.display_limit': 100,
+  'tls.cert_dir': '',
 }
 
 // ── Agent preference helpers ──────────────────────────────
