@@ -194,6 +194,7 @@ export function resetIdentity(): void {
   _continueFromExecution = null
   _checkContinueSession = null
   _sessionDrawerRef = null
+  _openSessionTabOverride = null
   // Clean up E2E test bridge
   if (typeof window !== 'undefined') {
     const bridge = (window as unknown as { __clawbench?: Record<string, unknown> }).__clawbench
@@ -361,6 +362,28 @@ export function toggleAutoApprove(enabled: boolean) {
   }
 }
 
+/** Rename the current session title and persist to server. */
+export async function renameSession(title: string): Promise<boolean> {
+  const sid = currentSessionId.value
+  if (!sid) return false
+  try {
+    const resp = await fetch('/api/ai/session/update', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, title }),
+    })
+    if (!resp.ok) {
+      appLog.e(TAG, 'Failed to rename session:', resp.status)
+      return false
+    }
+    currentSessionTitle.value = title
+    return true
+  } catch (err) {
+    appLog.e(TAG, 'Failed to rename session:', err)
+    return false
+  }
+}
+
 // ───────────────────────────────────────────────────────────
 // Action callbacks — registered by ChatPanel on mount.
 // Inversion of control: singleton owns the identity refs, but
@@ -380,6 +403,9 @@ let _checkContinueSession: ((taskId: number, execId: number) => Promise<{ exists
 // SessionDrawer component ref — set by App.vue. Allows any component to
 // trigger openAgentSelector() on the global drawer without coupling.
 let _sessionDrawerRef: { openAgentSelector: () => void } | null = null
+// Optional override for openSessionTab — set by App.vue so the session
+// sidebar can route the entry (e.g. Ctrl+K) through its own state bridge.
+let _openSessionTabOverride: (() => void) | null = null
 
 export interface SessionActions {
   switchSession: (sessionId: string) => Promise<void>
@@ -426,6 +452,11 @@ export function registerSessionActions(actions: SessionActions) {
 /** Register the SessionDrawer component ref so openAgentSelector() works. */
 export function registerSessionDrawerRef(drawerRef: { openAgentSelector: () => void }) {
   _sessionDrawerRef = drawerRef
+}
+
+/** Register an override for openSessionTab (e.g. route through the session sidebar bridge). */
+export function registerOpenSessionTabOverride(fn: (() => void) | null) {
+  _openSessionTabOverride = fn
 }
 
 /**
@@ -693,6 +724,10 @@ export function useSessionIdentity() {
 
   /** Open the global session drawer. */
   function openSessionTab() {
+    if (_openSessionTabOverride) {
+      _openSessionTabOverride()
+      return
+    }
     sessionDrawer.open()
   }
 
@@ -761,6 +796,7 @@ export function useSessionIdentity() {
     loadThinkingPref,
     loadModePref,
     toggleAutoApprove,
+    renameSession,
     // SelectState instances (for unified access)
     modeState,
     thinkingEffortState,

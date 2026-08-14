@@ -122,14 +122,11 @@ func ServeSessions(w http.ResponseWriter, r *http.Request) { //nolint:gocognit,g
 		}
 		title := req.Title
 		if title == "" {
-			// Numbering is unified across agents per project and monotonic, so
-			// switching agents does not reset the counter (e.g. two claude
-			// sessions then a codebuddy session should be "New Session 3", not
-			// "New Session 1"). The counter is persisted per project rather than
-			// derived from the active session count, so archiving/deleting
-			// sessions never causes a later session to reuse an earlier number
-			// (which previously produced duplicate "新会话 N" titles).
-			n, err := service.NextSessionNumber(projectPath)
+			// Numbering is per project: the new unnamed session takes
+			// max(existing numbered unnamed sessions) + 1, so unnamed sessions
+			// are numbered 1, 2, 3, ... regardless of agent. Explicitly-named
+			// sessions don't affect it.
+			n, err := service.NextSessionNumber(projectPath, T(r, "NewSession"))
 			if err == nil {
 				title = T(r, "NewSessionN", map[string]any{"N": n})
 			} else {
@@ -306,6 +303,7 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		ModelID        string `json:"modelId"`
 		Transport      string `json:"transport"`
 		AutoApprove    *bool  `json:"autoApprove"` // pointer: distinguish "not sent" from false
+		Title          string `json:"title"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -356,6 +354,10 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		if conn := ai.GetACPConnManager().GetConn(sessionID); conn != nil {
 			conn.SetAutoApprove(*req.AutoApprove)
 		}
+	}
+	if req.Title != "" {
+		//nolint:errcheck,gosec // best-effort persistence; failure is non-fatal for an idempotent update
+		service.UpdateSessionTitle(sessionID, req.Title)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true})
 }

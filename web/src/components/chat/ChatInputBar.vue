@@ -6,7 +6,9 @@
         <span class="chat-group-label" :title="t('chat.actions.session')">
           {{ t('chat.actions.session') }}
         </span>
-        <button class="chat-action-btn" :class="{ 'has-unread': chatUnreadCount > 0, 'has-running': chatRunning }"
+        <button class="chat-action-btn" data-action="session"
+          :class="{ 'has-unread': chatUnreadCount > 0, 'has-running': chatRunning, 'is-disabled': sessionPanelOpen }"
+          :disabled="sessionPanelOpen"
           @click="$emit('open-session-tab', 'sessions')"
           :title="t('chat.actions.session')">
           <List :size="14" />
@@ -26,6 +28,18 @@
           @click="$emit('open-user-msg-index')"
           :title="t('chat.actions.userMsgIndex')">
           <MessagesSquare :size="14" />
+        </button>
+        <button
+          v-if="isACPTransport"
+          class="chat-action-btn acp-sync-btn"
+          :class="{ disabled: acpSyncDisabled }"
+          :disabled="acpSyncDisabled"
+          @click="!acpSyncDisabled && $emit('sync-acp-session')"
+          :title="acpSyncTitle"
+          :aria-label="t('chat.actions.acpSync')"
+        >
+          <LoadingIndicator v-if="props.acpSyncing" size="sm" inline />
+          <ArrowRightLeft v-else :size="14" :stroke-width="1.5" />
         </button>
         <button class="chat-action-btn chat-action-btn-archive" :class="{ disabled: !currentSessionId }"
           @click="handleArchive"
@@ -49,16 +63,7 @@
       </div>
     </Transition>
     <!-- Input container -->
-    <div class="chat-input-container"
-      @dragenter="onDragEnter"
-      @dragover="onDragOver"
-      @dragleave="onDragLeave"
-      @drop="onDrop">
-      <!-- Drop overlay (opens the attach drawer on drop) -->
-      <div v-if="isDragOver" class="drop-overlay">
-        <Upload :size="24" :stroke-width="1.5" />
-        <span>{{ t('chat.attach.dropToUpload') }}</span>
-      </div>
+    <div class="chat-input-container">
       <!-- Paste overlay (dynamic feedback while uploading pasted files from clipboard) -->
       <Transition name="paste-fade">
         <div v-if="isPasteOver" class="paste-overlay">
@@ -263,10 +268,11 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Upload, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import AttachmentTags from '@/components/chat/AttachmentTags.vue'
@@ -304,6 +310,17 @@ const isACP = computed(() => supportsACP(props.currentAgentId || ''))
 const isACPTransport = computed(() => {
   if (sessionTransport.value) return sessionTransport.value === 'acp-stdio'
   return props.currentTransport === 'acp-stdio'
+})
+
+// ACP 同步按钮的禁用状态与提示：空会话（无 ACP 会话）或当前会话运行中时不可同步。
+const currentSessionRunning = computed(() => !!props.currentSessionRunning)
+const sessionEmpty = computed(() => !props.messages || props.messages.length === 0)
+const acpSyncDisabled = computed(() => props.acpSyncing || currentSessionRunning.value || sessionEmpty.value)
+const acpSyncTitle = computed(() => {
+  if (props.acpSyncing) return t('chat.actions.acpSyncSyncing')
+  if (currentSessionRunning.value) return t('chat.actions.acpSyncRunning')
+  if (sessionEmpty.value) return t('chat.actions.acpSyncEmpty')
+  return t('chat.actions.acpSync')
 })
 
 const showModeInfo = computed(() => isACP.value && (availableModes.value.length > 0 || hasPreferredMode(props.currentAgentId || '')))
@@ -425,12 +442,15 @@ const props = defineProps({
   currentSessionId: String,
   chatUnreadCount: Number,
   chatRunning: Boolean,
+  acpSyncing: Boolean,
   currentModelId: String,
   currentModelName: String,
   currentModeName: String,
   currentTransport: String,
   currentAgentId: String,
+  currentSessionRunning: Boolean,
   active: Boolean,
+  sessionPanelOpen: Boolean,
 })
 
 const emit = defineEmits([
@@ -454,6 +474,7 @@ const emit = defineEmits([
   'switch-thinking-effort',
   'switch-mode',
   'switch-transport',
+  'sync-acp-session',
 ])
 
 const inputText = ref('')
@@ -614,8 +635,6 @@ function onVoiceBlurStop() {
 
 const rootRef = ref(null)
 const textareaRef = ref(null)
-const isDragOver = ref(false)
-const dragCounter = ref(0)
 const isPasteOver = ref(false)
 let pasteOverlayTimer = 0
 const attachDrawer = useTabDrawer('chat')
@@ -932,35 +951,6 @@ function onTextareaBlur() {
 // Watch inputText changes (both user input and programmatic changes like draft restore)
 // to ensure textarea height stays in sync with content
 watch(inputText, () => nextTick(() => autoResizeTextarea()))
-
-function onDragEnter(e) {
-  e.preventDefault()
-  dragCounter.value++
-  isDragOver.value = true
-}
-
-function onDragOver(e) {
-  e.preventDefault()
-}
-
-function onDragLeave(e) {
-  e.preventDefault()
-  dragCounter.value--
-  if (dragCounter.value <= 0) {
-    dragCounter.value = 0
-    isDragOver.value = false
-  }
-}
-
-function onDrop(e) {
-  e.preventDefault()
-  dragCounter.value = 0
-  isDragOver.value = false
-  const files = Array.from(e.dataTransfer?.files || [])
-  if (files.length > 0) {
-    uploadAndAttach(files)
-  }
-}
 
 function onPaste(e) {
   const now = Date.now()
@@ -1573,6 +1563,13 @@ defineExpose({
   transform: scale(0.92);
 }
 
+.chat-action-btn:disabled,
+.chat-action-btn.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  color: var(--text-muted, #999);
+}
+
 .chat-action-btn-archive:not(.disabled) {
   color: var(--text-muted, #999);
 }
@@ -1591,6 +1588,11 @@ defineExpose({
 }
 
 .chat-action-btn-archive.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.acp-sync-btn.disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -1680,28 +1682,6 @@ defineExpose({
 .chat-input-container:focus-within {
   background: var(--bg-primary, #fff);
   box-shadow: 0 0 0 1px var(--accent-color, #0066cc);
-}
-
-.chat-input-container.drag-over {
-  background: var(--bg-primary, #fff);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #0066cc) 40%, transparent);
-}
-
-/* Drop overlay */
-.drop-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 8%, var(--bg-primary, #fff));
-  color: var(--accent-color, #0066cc);
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 20px;
-  pointer-events: none;
 }
 
 .paste-overlay {

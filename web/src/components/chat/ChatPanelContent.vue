@@ -81,11 +81,14 @@
       :currentSessionId="identity.currentSessionId.value"
       :chatUnreadCount="store.state.chatUnreadCount"
       :chatRunning="identity.runningSessions.value.size > 0"
+      :currentSessionRunning="identity.runningSessions.value.has(identity.currentSessionId.value)"
       :currentModelId="identity.currentModelId.value"
       :currentModelName="identity.currentModelName.value"
       :currentModeName="identity.currentModeName.value"
       :currentTransport="identity.currentTransport.value"
       :currentAgentId="identity.currentAgentId.value"
+      :acpSyncing="acpSyncing"
+      :session-panel-open="sessionSidebarOpen"
       :active="props.active"
       @send="sendMessage"
       @cancel="stream.cancelStream"
@@ -107,6 +110,7 @@
       @switch-thinking-effort="handleSwitchThinkingEffort"
       @switch-mode="handleSwitchMode"
       @switch-transport="handleSwitchTransport"
+      @sync-acp-session="handleSyncAcpSession"
     />
 
   </div>
@@ -175,12 +179,14 @@ import { useChatStream } from '@/composables/useChatStream.ts'
 import { useChatSession, loadSessionsOnce } from '@/composables/useChatSession.ts'
 import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
 import { useSessionManager } from '@/composables/useSessionManager.ts'
+import { useAcpSession } from '@/composables/useAcpSession'
 
 import { useAgents, populateACPStateFromCache } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useNotification } from '@/composables/useNotification.ts'
 import { applySummaryUpdate, shouldShowSummary } from '@/utils/chatSessionUtils.ts'
+import { nextClientSeq, sortMessages } from '@/utils/chatStreamUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 import { buildMultiQuoteMessage, relativizeProjectPath } from '@/utils/quoteQuestionUtils.ts'
@@ -211,6 +217,7 @@ const props = defineProps({
     keyboardActive: { type: Boolean, default: true },
     currentFile: Object,
     currentDir: String,
+    sessionSidebarOpen: Boolean,
 })
 const emit = defineEmits(['open', 'message', 'open-file', 'task-card-click', 'open-session-search'])
 
@@ -243,6 +250,32 @@ const metadataDrawer = useTabDrawer('chat')
 const forkAgentSelectorDrawer = useTabDrawer('chat', { autoRestore: false })
 const forkPending = ref(null) // { sessionId, beforeMessageId }
 const toast = useToast()
+const acpSyncing = ref(false)
+const acpSession = useAcpSession({ currentAgentId: identity.currentAgentId })
+
+async function handleSyncAcpSession() {
+  const sid = identity.currentSessionId.value
+  if (!sid) return
+  acpSyncing.value = true
+  // 同步期间禁用输入：避免用户在 LoadSession 回放窗口内发消息，导致回复通知被
+  // 改路由进回放缓冲（而非实时流）。
+  const prevInputDisabled = inputDisabled.value
+  inputDisabled.value = true
+  try {
+    const res = await acpSession.acpSyncSession(sid)
+    if (res) {
+      await session.loadHistory(false, true, true)
+      toast.show(t('chat.acpSession.synced', { count: res.added }), {
+        type: res.added > 0 ? 'success' : 'info',
+        icon: '🔄',
+      })
+    }
+  } finally {
+    inputDisabled.value = prevInputDisabled
+    acpSyncing.value = false
+  }
+}
+
 const dialog = useDialog()
 const notification = useNotification()
 const autoSpeech = useAutoSpeech()
@@ -738,8 +771,10 @@ async function sendMessageNow(text, filePaths, files) {
         blocks: text ? [{ type: 'text', text: text || '' }] : [],
         filePath: filePaths.length > 0 ? filePaths[0] : '',
         files: (files || []).map(f => typeof f === 'string' ? { path: f, isDir: false } : f),
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        seq: nextClientSeq()
     })
+    sortMessages(messages.value)
 
     render.updateRenderedContents()
     loading.value = true

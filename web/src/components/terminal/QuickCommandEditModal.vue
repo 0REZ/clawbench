@@ -36,7 +36,7 @@
 
     <template #footer>
       <button class="modal-btn" @click="$emit('close')">{{ t('common.cancel') }}</button>
-      <button class="modal-btn primary" :disabled="saving" @click="saveCommand">{{ saving ? '...' : t('common.save') }}</button>
+      <button class="modal-btn primary" :disabled="saving" @click="saveCommand"><LoadingIndicator v-if="saving" size="sm" inline /><span v-else>{{ t('common.save') }}</span></button>
     </template>
   </ModalDialog>
 </template>
@@ -45,6 +45,7 @@
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ModalDialog from '@/components/common/ModalDialog.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { PencilIcon, PlusIcon } from 'lucide-vue-next'
 import { useQuickCommands, type QuickCommand } from '@/composables/useQuickCommands'
 import { useToast } from '@/composables/useToast'
@@ -184,9 +185,40 @@ async function saveCommand() {
 }
 
 .form-checkbox input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
   width: 16px;
   height: 16px;
-  accent-color: var(--accent-color, #0066cc);
+  margin: 0;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border-color, #999);
+  border-radius: 4px;
+  background: var(--bg-secondary, #fff);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.form-checkbox input[type="checkbox"]:checked {
+  background: var(--accent-color, #0066cc);
+  border-color: var(--accent-color, #0066cc);
+}
+
+.form-checkbox input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.form-checkbox input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent-color, #0066cc);
+  outline-offset: 1px;
 }
 
 .form-hint {

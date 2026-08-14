@@ -27,6 +27,15 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 		slog.Info("acp perf: Prompt.total", "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(promptTotalStart))
 	}()
 
+	// If a LoadSession replay (sync or acp-load) is in progress, wait for it to
+	// finish before sending this prompt. Otherwise loadSessionActive would hijack
+	// this prompt's SessionUpdate notifications into the replay buffer instead of
+	// routing them to the live stream (streamCh), so the user's reply would never
+	// surface. Wait, then proceed — do not corrupt the ongoing replay.
+	if err := c.waitForLoadSessionDone(); err != nil {
+		return err
+	}
+
 	// Clear stale plan state from the previous turn
 	c.mu.Lock()
 	c.cachedPlanState = nil
@@ -148,21 +157,33 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- Stre
 	// Emit metadata event for persistence (SessionExecutor captures these)
 	forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
 
-	// Also update UsageState so the context chip shows input/output tokens
+	// Also update UsageState so the context chip shows input/output tokens.
+	// cachedUsageState may be nil on the first prompt that returns a Usage
+	// before any UsageUpdate notification (UNSTABLE feature) — fall back to
+	// zero values to avoid a nil pointer dereference.
 	c.mu.Lock()
 	cached := c.cachedUsageState
 	c.mu.Unlock()
+	var used, size int
+	var cost float64
+	var currency string
+	if cached != nil {
+		used = cached.Used
+		size = cached.Size
+		cost = cached.Cost
+		currency = cached.Currency
+	}
 	usageState := &UsageState{
-		Used:              cached.Used,
-		Size:              cached.Size,
+		Used:              used,
+		Size:              size,
 		InputTokens:       usage.InputTokens,
 		OutputTokens:      usage.OutputTokens,
 		TotalTokens:       usage.TotalTokens,
 		CachedReadTokens:  ptrIntVal(usage.CachedReadTokens),
 		CachedWriteTokens: ptrIntVal(usage.CachedWriteTokens),
 		ThoughtTokens:     ptrIntVal(usage.ThoughtTokens),
-		Cost:              cached.Cost,
-		Currency:          cached.Currency,
+		Cost:              cost,
+		Currency:          currency,
 	}
 	forwardACPEvent(streamCh, StreamEvent{Type: "usage_update", Usage: usageState})
 	c.SetCachedUsageState(usageState)
@@ -214,5 +235,23 @@ func (c *ACPConn) setConfigOptionWithCrashCheck(ctx context.Context, acpSID stri
 		c.UpdateCachedCurrent("mode", cfg.value)
 	}
 
+	return nil
+}
+
+// loadWaitTimeout bounds how long Prompt will wait for a LoadSession replay to
+// finish before failing. Package-level so tests can shrink it.
+var loadWaitTimeout = 10 * time.Second
+
+// waitForLoadSessionDone blocks until loadSessionActive is cleared (a LoadSession
+// replay finished), up to loadWaitTimeout. It prevents a user prompt's
+// notifications from being hijacked into the replay buffer during sync/acp-load.
+func (c *ACPConn) waitForLoadSessionDone() error {
+	deadline := time.Now().Add(loadWaitTimeout)
+	for c.loadSessionActive.Load() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("acp: session is still loading (LoadSession replay in progress), try again shortly")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	return nil
 }
