@@ -1667,6 +1667,100 @@ func HardDeleteSession(sessionID string) error {
 	return tx.Commit()
 }
 
+// ReplayMessage is a single message from a LoadSession replay, ready to persist.
+type ReplayMessage struct {
+	Role      string
+	Content   string // JSON: {"blocks":[...], "metadata":{...}}
+	ExtMsgID  string // external ACP messageId
+	ToolCalls []model.ContentBlock
+}
+
+// ReplaceSessionHistory atomically replaces a session's chat history with the
+// given messages (and their tool calls). It deletes the session's prior history
+// and child rows (tool calls, thinking, summaries, raw responses) then inserts
+// the new messages, all in one transaction — on any error the transaction rolls
+// back so the original history is preserved. Returns the number of messages
+// inserted.
+func ReplaceSessionHistory(sessionID, projectPath, backend string, messages []ReplayMessage) (int, error) {
+	tx, err := WriteBegin()
+	if err != nil {
+		return 0, err
+	}
+	defer writeMu.Unlock()
+	defer tx.Rollback()
+
+	_, _ = tx.Exec("DELETE FROM ai_raw_responses WHERE session_id = ?", sessionID)
+	_, _ = tx.Exec("DELETE FROM chat_tool_calls WHERE session_id = ?", sessionID)
+	_, _ = tx.Exec("DELETE FROM chat_thinking WHERE session_id = ?", sessionID)
+	_, _ = tx.Exec("DELETE FROM summaries WHERE target_type = 'chat_message' AND target_id IN (SELECT id FROM chat_history WHERE session_id = ?)", sessionID)
+	_, _ = tx.Exec("DELETE FROM tts_summaries WHERE message_id IN (SELECT id FROM chat_history WHERE session_id = ?)", sessionID)
+	if _, err := tx.Exec("DELETE FROM chat_history WHERE session_id = ?", sessionID); err != nil {
+		return 0, err
+	}
+
+	for _, m := range messages {
+		res, err := tx.Exec(
+			"INSERT INTO chat_history (project_path, backend, session_id, role, content, streaming, indexed, external_message_id) VALUES (?, ?, ?, ?, ?, 0, 0, ?)",
+			projectPath, backend, sessionID, m.Role, m.Content, m.ExtMsgID,
+		)
+		if err != nil {
+			return 0, err
+		}
+		msgID, _ := res.LastInsertId()
+		for i := range m.ToolCalls {
+			tc := &m.ToolCalls[i]
+			inputJSON, _ := json.Marshal(tc.Input)
+			// Inline the tool-call upsert on tx (not UpsertToolCall, which acquires
+			// writeMu and writes via the global db handle — both would deadlock and
+			// break the transaction's atomicity).
+			if _, err := tx.Exec(`
+				INSERT INTO chat_tool_calls (message_id, session_id, tool_id, name, input, output, status, done, summary, duration_ms)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(tool_id, message_id) DO UPDATE SET
+					input = excluded.input,
+					output = CASE WHEN excluded.output != '' THEN excluded.output ELSE chat_tool_calls.output END,
+					status = excluded.status,
+					done = excluded.done,
+					summary = excluded.summary,
+					duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE chat_tool_calls.duration_ms END
+			`, msgID, sessionID, tc.ID, tc.Name, string(inputJSON), tc.Output, tc.Status, tc.Done, tc.Summary, tc.DurationMs); err != nil {
+				slog.Warn("service: failed to persist replay tool call", "session_id", sessionID, "tool_id", tc.ID, "error", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(messages), nil
+}
+
+// summarizeContentForView strips the heavy blocks from assistant message content
+// but preserves the metadata (and cancelled flag) so the frontend message-detail
+// panel can still show model/token/cost/duration/session info for summarized
+// messages in summary view. Returns "" when content isn't parseable JSON
+// (matching the previous empty-content behavior).
+func summarizeContentForView(content string) string {
+	var parsed struct {
+		Metadata  json.RawMessage `json:"metadata"`
+		Cancelled bool            `json:"cancelled"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return ""
+	}
+	out := map[string]any{"blocks": []any{}}
+	if len(parsed.Metadata) > 0 && string(parsed.Metadata) != "null" {
+		out["metadata"] = parsed.Metadata
+	}
+	if parsed.Cancelled {
+		out["cancelled"] = true
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // enrichMessagesWithSummaries populates the Summary and SummaryCards fields for
 // assistant messages by batch-querying the summaries table. Only messages with
 // role "assistant" are queried. When summaryView is true, the heavy content of
@@ -1730,7 +1824,7 @@ func enrichMessagesWithSummaries(messages []model.ChatMessage, summaryView bool)
 				messages[i].SummaryCards = cards
 			}
 			if summaryView && messages[i].Summary != nil && *messages[i].Summary != "" && !messages[i].Streaming {
-				messages[i].Content = ""
+				messages[i].Content = summarizeContentForView(messages[i].Content)
 			}
 		}
 	}

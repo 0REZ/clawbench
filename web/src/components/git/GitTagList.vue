@@ -1,7 +1,7 @@
 <template>
   <div class="git-tag-list">
     <div v-if="loading" class="section-loading">
-      <div class="spinner" style="width:18px;height:18px;border-width:2px;" />
+      <LoadingIndicator size="sm" inline />
     </div>
     <div v-else-if="error" class="section-error">
       <span>{{ t('git.manage.loadError') }}</span>
@@ -10,7 +10,7 @@
     <div v-else-if="tags.length === 0" class="section-empty">{{ t('git.manage.noTags') }}</div>
     <template v-else>
       <div
-        v-for="tag in tags"
+        v-for="tag in sortedTags"
         :key="tag.name"
         class="tag-row"
         @click="$emit('switch-tag', tag)"
@@ -38,18 +38,29 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Tag, Trash2 } from 'lucide-vue-next'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 const { t } = useI18n()
 
-defineProps<{
+const props = defineProps<{
   tags: Array<Record<string, unknown> & { name: string; msg?: string; date?: string }>
   loading?: boolean
   error?: boolean
 }>()
 
 defineEmits(['retry', 'switch-tag', 'delete-tag'])
+
+// Most recent tags first
+const sortedTags = computed(() =>
+  [...props.tags].sort((a, b) => {
+    const da = a.date ? new Date(a.date).getTime() : 0
+    const db = b.date ? new Date(b.date).getTime() : 0
+    return db - da
+  }),
+)
 
 function shortDate(dateStr: string) {
   if (!dateStr) return ''
@@ -195,15 +206,4 @@ function shortDate(dateStr: string) {
   color: var(--text-muted, #999);
 }
 
-.spinner {
-  border: 2px solid var(--border-color, #dee2e6);
-  border-top-color: var(--accent-color, #4a90d9);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
 </style>

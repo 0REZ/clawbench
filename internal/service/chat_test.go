@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS chat_history (
 	backend TEXT NOT NULL DEFAULT 'claude',
 	streaming INTEGER NOT NULL DEFAULT 0,
 	indexed INTEGER NOT NULL DEFAULT 0,
+	external_message_id TEXT DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -3751,7 +3752,7 @@ func TestGetChatHistoryPagedViewSummaryOmitsContent(t *testing.T) {
 	assert.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "assistant", msgs[0].Role)
-	assert.Equal(t, "", msgs[0].Content, "summary view must omit content for summarized, non-streaming messages")
+	assert.Equal(t, `{"blocks":[]}`, msgs[0].Content, "summary view must strip blocks but keep a valid empty-blocks JSON")
 	require.NotNil(t, msgs[0].Summary)
 	assert.Equal(t, "reading summary", *msgs[0].Summary)
 	require.NotNil(t, msgs[0].SummaryCards)
@@ -3762,6 +3763,38 @@ func TestGetChatHistoryPagedViewSummaryOmitsContent(t *testing.T) {
 	assert.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.NotEqual(t, "", msgs[0].Content, "full view must keep content")
+}
+
+func TestGetChatHistoryPagedViewSummaryPreservesMetadata(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Summary View Metadata")
+
+	asstID, err := service.AddChatMessage("/project", "claude", sid, "assistant",
+		`{"blocks":[{"type":"text","text":"answer"}],"metadata":{"transport":"cli","model":"glm-5.1","inputTokens":54494,"outputTokens":16,"durationMs":2965,"wallMs":7890,"sessionId":"ext-123"},"cancelled":true}`, nil, false, "")
+	assert.NoError(t, err)
+	assert.NoError(t, service.SaveSummaryWithCards("chat_message", asstID, "reading summary", nil))
+
+	msgs, _, err := service.GetChatHistoryPaged("/project", "claude", sid, 0, 0, true)
+	assert.NoError(t, err)
+	require.Len(t, msgs, 1)
+
+	var parsed struct {
+		Blocks    []any          `json:"blocks"`
+		Metadata  map[string]any `json:"metadata"`
+		Cancelled bool           `json:"cancelled"`
+	}
+	assert.NoError(t, json.Unmarshal([]byte(msgs[0].Content), &parsed))
+	assert.Empty(t, parsed.Blocks, "blocks must be stripped in summary view")
+	assert.True(t, parsed.Cancelled, "cancelled flag must be preserved")
+
+	require.NotNil(t, parsed.Metadata, "metadata must be preserved in summary view")
+	assert.Equal(t, "cli", parsed.Metadata["transport"])
+	assert.Equal(t, "glm-5.1", parsed.Metadata["model"])
+	assert.Equal(t, float64(54494), parsed.Metadata["inputTokens"])
+	assert.Equal(t, float64(16), parsed.Metadata["outputTokens"])
+	assert.Equal(t, float64(7890), parsed.Metadata["wallMs"])
+	assert.Equal(t, "ext-123", parsed.Metadata["sessionId"])
 }
 
 func TestGetChatHistoryPagedViewSummaryKeepsStreamingContent(t *testing.T) {
@@ -3802,4 +3835,97 @@ func TestGetChatHistoryPagedViewSummaryKeepsEmptySummaryContent(t *testing.T) {
 	assert.NotEqual(t, "", msgs[0].Content, "messages with an empty summary must keep content so they remain visible")
 	require.NotNil(t, msgs[0].Summary)
 	assert.Equal(t, "", *msgs[0].Summary)
+}
+
+func TestReplaceSessionHistory_ReplacesMessages(t *testing.T) {
+	db := setupDB(t)
+	projectPath := "/proj"
+	sid := helperCreateSession(t, projectPath, "claude", "Test")
+
+	_, err := db.Exec("INSERT INTO chat_history (project_path, backend, session_id, role, content, external_message_id) VALUES (?, 'claude', ?, 'user', 'old1', 'm1')", projectPath, sid)
+	require.NoError(t, err)
+	_, err = db.Exec("INSERT INTO chat_history (project_path, backend, session_id, role, content, external_message_id) VALUES (?, 'claude', ?, 'assistant', 'old2', 'm2')", projectPath, sid)
+	require.NoError(t, err)
+
+	// Replace with a single new message.
+	msgs := []service.ReplayMessage{{Role: "user", Content: `{"blocks":[{"type":"text","text":"new"}]}`, ExtMsgID: "n1"}}
+	n, err := service.ReplaceSessionHistory(sid, projectPath, "claude", msgs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	// Old messages are gone; only the new one remains.
+	var cnt int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sid).Scan(&cnt))
+	assert.Equal(t, 1, cnt)
+
+	var content string
+	require.NoError(t, db.QueryRow("SELECT content FROM chat_history WHERE session_id = ?", sid).Scan(&content))
+	assert.Contains(t, content, `"text":"new"`)
+}
+
+func TestReplaceSessionHistory_PersistsToolCalls(t *testing.T) {
+	db := setupDB(t)
+	projectPath := "/proj"
+	sid := helperCreateSession(t, projectPath, "claude", "Test")
+
+	msgs := []service.ReplayMessage{{
+		Role:     "assistant",
+		Content:  `{"blocks":[{"type":"tool_use","id":"tc1","name":"Bash","input":{"cmd":"ls"}}]}`,
+		ExtMsgID: "n1",
+		ToolCalls: []model.ContentBlock{{
+			Type:   "tool_use",
+			ID:     "tc1",
+			Name:   "Bash",
+			Input:  map[string]any{"cmd": "ls"},
+			Output: "out",
+			Status: "completed",
+			Done:   true,
+		}},
+	}}
+
+	// Regression: must not deadlock (nested writeMu acquisition) and tool calls
+	// must be persisted inside the same transaction as the message.
+	n, err := service.ReplaceSessionHistory(sid, projectPath, "claude", msgs)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	var msgID int64
+	require.NoError(t, db.QueryRow("SELECT id FROM chat_history WHERE session_id = ?", sid).Scan(&msgID))
+	var tcCount int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chat_tool_calls WHERE message_id = ? AND session_id = ?", msgID, sid).Scan(&tcCount))
+	assert.Equal(t, 1, tcCount)
+
+	var output, status string
+	var doneInt int
+	require.NoError(t, db.QueryRow("SELECT output, status, done FROM chat_tool_calls WHERE message_id = ? AND tool_id = ?", msgID, "tc1").Scan(&output, &status, &doneInt))
+	assert.Equal(t, "out", output)
+	assert.Equal(t, "completed", status)
+	assert.Equal(t, 1, doneInt)
+}
+
+func TestReplaceSessionHistory_RollbackRestoresHistory(t *testing.T) {
+	db := setupDB(t)
+	projectPath := "/proj"
+	sid := helperCreateSession(t, projectPath, "claude", "Test")
+
+	_, err := db.Exec("INSERT INTO chat_history (project_path, backend, session_id, role, content, external_message_id) VALUES (?, 'claude', ?, 'user', 'old', 'm1')", projectPath, sid)
+	require.NoError(t, err)
+
+	// Force the transaction to fail AFTER the DELETE has removed the old rows: an
+	// invalid role violates the CHECK(role IN ('user','assistant')) constraint.
+	// The transaction must roll back, restoring the original history intact.
+	msgs := []service.ReplayMessage{{
+		Role:    "system", // violates CHECK constraint
+		Content: `{"blocks":[{"type":"text","text":"new"}]}`,
+	}}
+	n, err := service.ReplaceSessionHistory(sid, projectPath, "claude", msgs)
+	require.Error(t, err)
+	assert.Equal(t, 0, n)
+
+	var cnt int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sid).Scan(&cnt))
+	assert.Equal(t, 1, cnt)
+	var content string
+	require.NoError(t, db.QueryRow("SELECT content FROM chat_history WHERE session_id = ?", sid).Scan(&content))
+	assert.Equal(t, "old", content)
 }

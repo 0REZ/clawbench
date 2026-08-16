@@ -32,9 +32,7 @@
 
     <!-- Session switching overlay — placed here to cover the entire message area -->
     <Transition name="loading-fade">
-      <div v-if="session.switching.value" class="loading-mask">
-        <div class="loading-mask-spinner"></div>
-      </div>
+      <LoadingIndicator v-if="session.switching.value" overlay size="md" />
     </Transition>
 
     <!-- Session swipe indicator — floats above the message area -->
@@ -88,7 +86,6 @@
       :currentTransport="identity.currentTransport.value"
       :currentAgentId="identity.currentAgentId.value"
       :acpSyncing="acpSyncing"
-      :session-panel-open="sessionSidebarOpen"
       :active="props.active"
       @send="sendMessage"
       @cancel="stream.cancelStream"
@@ -164,7 +161,7 @@
 import { ref, computed, watch, onUnmounted, onMounted, inject, provide, toRef, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
-import { apiGet } from '@/utils/api'
+import { apiGet, apiPost } from '@/utils/api'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import ChatMetadataModal from './ChatMetadataModal.vue'
@@ -203,8 +200,8 @@ import { store } from '@/stores/app.ts'
 import { useDialog } from '@/composables/useDialog'
 
 import AgentSelectorDrawer from '@/components/common/AgentSelectorDrawer.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
-import '@/assets/loading-mask.css'
 import { useToolDetailDrawer } from '@/composables/useToolDetailDrawer.ts'
 
 const { t } = useI18n()
@@ -217,7 +214,6 @@ const props = defineProps({
     keyboardActive: { type: Boolean, default: true },
     currentFile: Object,
     currentDir: String,
-    sessionSidebarOpen: Boolean,
 })
 const emit = defineEmits(['open', 'message', 'open-file', 'task-card-click', 'open-session-search'])
 
@@ -256,6 +252,14 @@ const acpSession = useAcpSession({ currentAgentId: identity.currentAgentId })
 async function handleSyncAcpSession() {
   const sid = identity.currentSessionId.value
   if (!sid) return
+
+  // 同步会重写历史记录，可能与现有消息有出入，需用户确认后才执行。
+  const confirmed = await dialog.confirm(t('chat.acpSession.syncConfirm'), {
+    title: t('chat.acpSession.syncConfirmTitle'),
+    dangerous: true,
+  })
+  if (!confirmed) return
+
   acpSyncing.value = true
   // 同步期间禁用输入：避免用户在 LoadSession 回放窗口内发消息，导致回复通知被
   // 改路由进回放缓冲（而非实时流）。
@@ -947,6 +951,11 @@ function handleSummaryUpdate(e) {
 async function handleToggleSummary(msgId) {
     const msg = messages.value.find(m => m.id === msgId)
     if (!msg) return
+    // Historical messages with no summary: generate one on demand first.
+    if (msg.summary == null || msg.summary === '') {
+        await generateMessageSummary(msg)
+        return
+    }
     const showingNow = shouldShowSummary(msg)
     // Switching FROM summary TO original: if blocks weren't loaded (content omitted in view=summary), fetch the full message.
     if (showingNow && (!msg.blocks || msg.blocks.length === 0)) {
@@ -955,6 +964,25 @@ async function handleToggleSummary(msgId) {
     // Record the user's explicit preference. If they were showing the summary,
     // toggle to original; otherwise toggle to summary.
     msg.showingSummary = !showingNow
+}
+
+// Generate a reading summary for a historical message on demand, then switch to
+// the summary view so the freshly-generated summary is displayed.
+async function generateMessageSummary(msg) {
+    if (msg._summarizing) return
+    msg._summarizing = true
+    try {
+        const data = await apiPost(`/api/rag/message/summarize?id=${msg.id}`, {})
+        if (data.summary) {
+            msg.summary = data.summary
+            if (data.summaryCards) msg.summaryCards = data.summaryCards
+            msg.showingSummary = true
+        }
+    } catch (err) {
+        appLog.w(TAG, 'failed to generate summary on demand', err)
+    } finally {
+        msg._summarizing = false
+    }
 }
 
 // Lazily fetch the full message content when the original view is requested but

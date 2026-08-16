@@ -192,9 +192,7 @@
         </div>
       </Transition>
       <Transition name="loading-fade">
-        <div v-if="dirLoading" class="loading-mask">
-          <div class="loading-mask-spinner"></div>
-        </div>
+        <LoadingIndicator v-if="dirLoading" overlay size="md" />
       </Transition>
       <div v-if="filteredEntries.length === 0 && !dirLoading" class="empty-state">
         <FileIcon path="" :is-dir="true" :size="48" />
@@ -220,7 +218,12 @@
           <div class="file-icon-wrap" :class="{ 'has-attach': hasAttachedFile(itemPath(entry.name)) }">
             <img v-if="entry.type !== 'dir' && isThumbLoaded(entry)" class="file-thumb" :src="thumbUrl(entry)" :alt="entry.name" loading="lazy" @error="onThumbError(entry)" />
             <FileIcon v-else :path="entry.name" :is-dir="entry.type === 'dir'" :size="28" class="file-icon" />
-            <Paperclip v-if="hasAttachedFile(itemPath(entry.name))" class="attach-badge" :size="15" @click.stop="toggleAttach(itemPath(entry.name))" />
+            <span v-if="entry.symlink" class="symlink-badge" :class="{ broken: entry.broken }" :title="entry.broken ? t('file.symlinkBroken') : t('file.symlink')">
+              <Link2 :size="12" />
+            </span>
+            <span v-if="hasAttachedFile(itemPath(entry.name))" class="attach-badge" @click.stop="toggleAttach(itemPath(entry.name))">
+              <Paperclip :size="12" />
+            </span>
           </div>
           <span class="file-name">{{ entry.name }}</span>
           <span class="file-meta">{{ entry.type === 'dir' ? formatDate(entry.modified) : `${formatFileSize(entry.size)} · ${formatDate(entry.modified)}` }}</span>
@@ -250,9 +253,7 @@
         </div>
       </Transition>
       <Transition name="loading-fade">
-        <div v-if="dirLoading" class="loading-mask">
-          <div class="loading-mask-spinner"></div>
-        </div>
+        <LoadingIndicator v-if="dirLoading" overlay size="md" />
       </Transition>
       <div v-if="filteredEntries.length === 0 && !dirLoading" class="empty-state">
         <FileIcon path="" :is-dir="true" :size="48" />
@@ -277,7 +278,12 @@
         <div class="grid-thumb" :class="{ 'has-attach': hasAttachedFile(itemPath(entry.name)) }">
           <img v-if="isThumbLoaded(entry)" :src="thumbUrl(entry)" :alt="entry.name" loading="lazy" @error="onThumbError(entry)" />
           <FileIcon v-else :path="entry.name" :is-dir="entry.type === 'dir'" :size="32" class="grid-icon" />
-          <Paperclip v-if="hasAttachedFile(itemPath(entry.name))" class="attach-badge" :size="15" @click.stop="toggleAttach(itemPath(entry.name))" />
+          <span v-if="entry.symlink" class="symlink-badge" :class="{ broken: entry.broken }" :title="entry.broken ? t('file.symlinkBroken') : t('file.symlink')">
+            <Link2 :size="12" />
+          </span>
+          <span v-if="hasAttachedFile(itemPath(entry.name))" class="attach-badge" @click.stop="toggleAttach(itemPath(entry.name))">
+            <Paperclip :size="12" />
+          </span>
         </div>
         <div class="grid-name">{{ entry.name }}</div>
       </div>
@@ -408,13 +414,13 @@
 </template>
 
 <script setup>
-import '@/assets/loading-mask.css'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { ref, computed, reactive, inject, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { joinPath } from '@/utils/path'
-import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, FolderUp, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search, FolderDown, LocateFixed } from 'lucide-vue-next'
+import { FileText, ArrowDownAz, ArrowUpZa, ChevronDown, ChevronUp, Clock, HardDrive, Eye, EyeOff, Copy, Scissors, ClipboardPaste, FilePlus, FolderPlus, FolderUp, Pencil, Download, Trash2, FolderOpen, RotateCw, Terminal as TerminalIcon, CheckSquare, X, LayoutList, LayoutGrid, Package, Upload, MoreHorizontal, Paperclip, Share2, Search, FolderDown, LocateFixed, Link2 } from 'lucide-vue-next'
 import {
   buildThumbUrl,
   isThumbable as isThumbableEntry, formatSize as formatFileSize,
@@ -2052,11 +2058,14 @@ function currentFileForClipboard() {
 .attach-badge {
     position: absolute;
     bottom: -5px;
-    right: -5px;
+    left: -5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: var(--accent-color, #4a90d9);
     color: #fff;
     border-radius: 50%;
-    padding: 3px;
+    padding: 2px;
     cursor: pointer;
     z-index: 2;
     transition: transform 0.15s, background 0.15s;
@@ -2065,6 +2074,29 @@ function currentFileForClipboard() {
 .attach-badge:hover {
     transform: scale(1.2);
     background: #ef4444;
+}
+
+.symlink-badge {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-color, #4a90d9);
+    color: #fff;
+    border-radius: 50%;
+    padding: 2px;
+    z-index: 2;
+}
+
+.symlink-badge.broken {
+    background: #ef4444;
+}
+
+.grid-thumb .symlink-badge {
+    top: 5px;
+    right: 5px;
 }
 
 .file-thumb {
@@ -2190,10 +2222,13 @@ function currentFileForClipboard() {
     position: absolute;
     bottom: 4px;
     right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: var(--accent-color, #4a90d9);
     color: #fff;
     border-radius: 50%;
-    padding: 3px;
+    padding: 2px;
     cursor: pointer;
     z-index: 2;
     transition: transform 0.15s, background 0.15s;

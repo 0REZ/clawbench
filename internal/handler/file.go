@@ -90,7 +90,8 @@ func ListDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := buildDirEntries(entries)
+	within := func(absPath string) bool { return isPathUnderBase(absPath, basePath) }
+	items := buildDirEntries(absPath, entries, within)
 
 	relFromBase, _ := filepath.Rel(basePath, absPath)
 	relFromBase = filepath.ToSlash(relFromBase)
@@ -315,13 +316,16 @@ func GetFile(w http.ResponseWriter, r *http.Request) {
 		}
 		if isBinary {
 			respPath := responsePath(absPath, projectPath, isExternal)
+			linkTarget, isSymlink := resolveLinkTarget(absPath, projectPath, isExternal)
 			writeJSON(w, http.StatusOK, FileContent{
-				Content:   "",
-				Name:      info.Name(),
-				Path:      respPath,
-				Supported: false,
-				IsBinary:  true,
-				Size:      info.Size(),
+				Content:    "",
+				Name:       info.Name(),
+				Path:       respPath,
+				Supported:  false,
+				IsBinary:   true,
+				Size:       info.Size(),
+				LinkTarget: linkTarget,
+				IsSymlink:  isSymlink,
 			})
 			return
 		}
@@ -352,16 +356,45 @@ func GetFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	linkTarget, isSymlink := resolveLinkTarget(absPath, projectPath, isExternal)
+
 	writeJSON(w, http.StatusOK, FileContent{
-		Content:   string(content),
-		Name:      info.Name(),
-		Path:      respPath,
-		Supported: model.IsSupportedFile(info.Name()),
-		Size:      info.Size(),
-		Truncated: truncated,
-		Subtype:   subtype,
-		SpecJSON:  specJSON,
+		Content:    string(content),
+		Name:       info.Name(),
+		Path:       respPath,
+		Supported:  model.IsSupportedFile(info.Name()),
+		Size:       info.Size(),
+		Truncated:  truncated,
+		Subtype:    subtype,
+		SpecJSON:   specJSON,
+		LinkTarget: linkTarget,
+		IsSymlink:  isSymlink,
 	})
+}
+
+// resolveLinkTarget returns the symlink target path (relative to projectPath when
+// the link is project-internal, absolute otherwise) for a symlink at absPath,
+// plus whether the entry is a symlink. Returns ("", false) for non-symlinks and
+// when the target cannot be read.
+func resolveLinkTarget(absPath, projectPath string, isExternal bool) (string, bool) {
+	linfo, err := os.Lstat(absPath)
+	if err != nil || linfo.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := os.Readlink(absPath)
+	if err != nil {
+		return "", true
+	}
+	// Resolve a relative link target against the link's directory, then present
+	// it project-relative (or absolute for external files), matching respPath.
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(absPath), target)
+	}
+	resp := responsePath(target, projectPath, isExternal)
+	if resp == "" {
+		resp = target
+	}
+	return resp, true
 }
 
 // handleStatError writes an appropriate error response for os.Stat failures,
@@ -575,7 +608,7 @@ func ServeProjects(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo //
 		return
 	}
 
-	items := buildDirEntries(entries)
+	items := buildDirEntries(absPath, entries, isPathUnderAnyRoot)
 
 	// Compute parent — stop at root level (no parent above root/drives)
 	var parent *string
@@ -838,6 +871,8 @@ type DirEntry struct {
 	Modified  string `json:"modified,omitempty"`
 	Size      int64  `json:"size"`
 	Supported bool   `json:"supported"`
+	Symlink   bool   `json:"symlink,omitempty"`
+	Broken    bool   `json:"broken,omitempty"`
 }
 
 // FileInfo represents file information in API responses
@@ -852,15 +887,17 @@ type FileInfo struct {
 
 // FileContent represents file content in API responses
 type FileContent struct {
-	Content   string `json:"content"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Supported bool   `json:"supported"`
-	IsBinary  bool   `json:"isBinary,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-	Size      int64  `json:"size"`
-	Subtype   string `json:"subtype,omitempty"`
-	SpecJSON  string `json:"specJson,omitempty"`
+	Content    string `json:"content"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Supported  bool   `json:"supported"`
+	IsBinary   bool   `json:"isBinary,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	Size       int64  `json:"size"`
+	Subtype    string `json:"subtype,omitempty"`
+	SpecJSON   string `json:"specJson,omitempty"`
+	LinkTarget string `json:"linkTarget,omitempty"`
+	IsSymlink  bool   `json:"isSymlink,omitempty"`
 }
 
 // buildDirEntries builds a sorted list of directory entries
@@ -884,20 +921,35 @@ func isNotDirError(err error) bool {
 	return false
 }
 
-func buildDirEntries(entries []os.DirEntry) []DirEntry {
+// buildDirEntries builds a sorted list of directory entries. parentDir is the
+// absolute directory being listed, and within resolves a symlink target's
+// absolute path to whether it is allowed (stays within the configured base),
+// preventing symlink traversal. A symlink-to-directory is typed as "dir" so the
+// frontend can navigate into it; symlinks whose target escapes the base or is
+// dangling stay listed but non-navigable.
+func buildDirEntries(parentDir string, entries []os.DirEntry, within func(absPath string) bool) []DirEntry {
 	var items []DirEntry
 	for _, entry := range entries {
+		name := entry.Name()
+		isSymlink := entry.Type()&os.ModeSymlink != 0
+
+		// Resolve symlink-to-directory before classifying so linked dirs can be
+		// entered (entry.IsDir()/Info() use lstat and would misclassify them).
+		if isSymlink {
+			items = append(items, classifySymlinkEntry(parentDir, entry, within))
+			continue
+		}
+
 		// Try to get file info with a timeout to avoid blocking on
 		// unresponsive network mounts (e.g. NFS hard mounts).
 		info, infoErr := fileInfoWithTimeout(entry)
 		if infoErr != nil {
 			// Timeout or error — use DirEntry.IsDir() as a fallback
 			// so the entry still appears in the listing (without size/modTime).
-			slog.Warn("failed to get file info, using fallback", slog.String("name", entry.Name()), slog.String("err", infoErr.Error()))
+			slog.Warn("failed to get file info, using fallback", slog.String("name", name), slog.String("err", infoErr.Error()))
 			if entry.IsDir() {
-				items = append(items, DirEntry{Name: entry.Name(), Type: "dir"})
+				items = append(items, DirEntry{Name: name, Type: "dir"})
 			} else {
-				name := entry.Name()
 				entryType := "file"
 				if model.IsImageFile(name) {
 					entryType = "image"
@@ -912,9 +964,8 @@ func buildDirEntries(entries []os.DirEntry) []DirEntry {
 		}
 		if entry.IsDir() {
 			modified := info.ModTime().Format(time.RFC3339)
-			items = append(items, DirEntry{Name: entry.Name(), Type: "dir", Modified: modified})
+			items = append(items, DirEntry{Name: name, Type: "dir", Modified: modified})
 		} else {
-			name := entry.Name()
 			entryType := "file"
 			if model.IsImageFile(name) {
 				entryType = "image"
@@ -935,6 +986,46 @@ func buildDirEntries(entries []os.DirEntry) []DirEntry {
 		return items[i].Name < items[j].Name
 	})
 	return items
+}
+
+// classifySymlinkEntry classifies a symlink entry by following its target.
+// Returns a "dir" entry when the target is a directory within the allowed base;
+// otherwise a non-navigable file entry (dangling or escaping targets stay
+// listed but cannot be entered). Always sets Symlink, and Broken for dangling.
+func classifySymlinkEntry(parentDir string, entry os.DirEntry, within func(absPath string) bool) DirEntry {
+	name := entry.Name()
+	fullPath := filepath.Join(parentDir, name)
+
+	// Following stat resolves the symlink target. Dangling links fail here.
+	target, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Dangling/broken symlink — list it, but non-navigable.
+			slog.Warn("broken symlink", slog.String("path", fullPath))
+			return DirEntry{Name: name, Type: "file", Symlink: true, Broken: true}
+		}
+		slog.Warn("failed to stat symlink target", slog.String("path", fullPath), slog.String("err", err.Error()))
+		return DirEntry{Name: name, Type: "file", Symlink: true}
+	}
+
+	if target.IsDir() && within(fullPath) {
+		return DirEntry{Name: name, Type: "dir", Symlink: true, Modified: target.ModTime().Format(time.RFC3339)}
+	}
+
+	// File symlink, or directory symlink escaping the allowed base (shown as a
+	// non-navigable file, consistent with copy/archive handling).
+	entryType := "file"
+	if model.IsImageFile(name) {
+		entryType = "image"
+	}
+	return DirEntry{
+		Name:      name,
+		Type:      entryType,
+		Symlink:   true,
+		Modified:  target.ModTime().Format(time.RFC3339),
+		Size:      target.Size(),
+		Supported: model.IsSupportedFile(name),
+	}
 }
 
 const fileInfoTimeout = 3 * time.Second
