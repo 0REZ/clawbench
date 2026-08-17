@@ -212,7 +212,14 @@ export default defineConfig({
       output: {
         manualChunks: {
           'vendor-vue': ['vue', 'vue-i18n'],
-          'vendor-pdf': ['pdfjs-dist'],
+          // Keep the legacy pdfjs module in the vendor-pdf chunk (matching
+          // subpath, not the bare 'pdfjs-dist' specifier) so the library
+          // stays in one cacheable, separately-testable chunk instead of
+          // being inlined into the per-component pdf chunk.
+          // 让 legacy 版 pdfjs 落入 vendor-pdf 独立 chunk（匹配子路径而非裸
+          // 'pdfjs-dist' 指定符），使库保持单个可缓存、可独立测试的 chunk，
+          // 而不是内联进组件级 pdf chunk。
+          'vendor-pdf': ['pdfjs-dist', 'pdfjs-dist/legacy/build/pdf.mjs'],
           'vendor-diff': ['diff'],
           'vendor-purify': ['dompurify'],
           'vendor-redoc': ['redoc'],
