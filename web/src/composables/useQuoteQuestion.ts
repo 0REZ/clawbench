@@ -23,49 +23,111 @@ const barPinned = ref(false)  // When pinned, selection loss won't auto-hide the
 const sheetOpen = ref(false)
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let pointerReleaseTimer: ReturnType<typeof setTimeout> | null = null
+
+// Active pointer (mouse/touch) tracking. Browsers fire selectionchange while the
+// user is still dragging, so a debounced evaluation can run mid-drag and surface
+// the bar before the pointer is released — on desktop the bar then auto-expands
+// and focuses its input, stealing focus and cutting the selection short. While
+// any pointer button is held the bar is held back; pointerup re-runs the check.
+let pointerCount = 0
+
+function evaluateSelection() {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+    // Drop only the active selection. Staged quotes remain in the chat draft.
+    if (!barPinned.value) {
+      barVisible.value = false
+      setQuoteData(null)
+    }
+    return
+  }
+
+  // The pointer is still pressed — the selection is mid-drag and not final yet.
+  if (pointerCount > 0) return
+
+  // CodeMirror viewers (CodeMirrorViewer) manage their own selection + quote
+  // bar via an internal selection listener. This DOM selection is only a
+  // shadow of CM's internal one, so skip it — otherwise it would hide/show
+  // the bar in parallel with the editor's own handler.
+  if (closestElement(sel.anchorNode, '.cm-editor')) return
+
+  // Check if selection is within a code, markdown, or office preview area
+  const container = closestElement(sel.anchorNode, '.raw-content-pre, .markdown-body, .office-preview-body')
+  if (!container) {
+    if (!barPinned.value) {
+      barVisible.value = false
+    }
+    return
+  }
+
+  const text = sel.toString().trim()
+  if (!text) {
+    if (!barPinned.value) {
+      barVisible.value = false
+    }
+    return
+  }
+
+  const { filePath, language } = getFileInfo(container)
+  const { startLine, endLine } = getLineInfo(sel)
+
+  setQuoteData({ text, filePath, language, startLine, endLine })
+  barVisible.value = true
+}
 
 function onSelectionChange() {
   if (debounceTimer) clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => {
-    const sel = window.getSelection()
-    if (!sel || sel.isCollapsed || !sel.toString().trim()) {
-      // Drop only the active selection. Staged quotes remain in the chat draft.
-      if (!barPinned.value) {
-        barVisible.value = false
-        setQuoteData(null)
-      }
-      return
+  debounceTimer = setTimeout(evaluateSelection, 150)
+}
+
+function onPointerDown() {
+  pointerCount++
+  // Safety net: mobile native selection UI can swallow the matching pointerup/
+  // touchend, which would leave the guard held forever and block the quote bar
+  // from appearing. Release it after a short window so a settling selection can
+  // still surface the bar (the collapsed bar no longer steals focus mid-drag).
+  if (pointerReleaseTimer) clearTimeout(pointerReleaseTimer)
+  pointerReleaseTimer = setTimeout(() => {
+    pointerCount = 0
+    pointerReleaseTimer = null
+    // Re-evaluate: a selection that settled while the guard was stuck can now
+    // surface the bar.
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
     }
+    debounceTimer = setTimeout(evaluateSelection, 0)
+  }, 700)
+}
 
-    // CodeMirror viewers (CodeMirrorViewer) manage their own selection + quote
-    // bar via an internal selection listener. This DOM selection is only a
-    // shadow of CM's internal one, so skip it — otherwise it would hide/show
-    // the bar in parallel with the editor's own handler.
-    if (closestElement(sel.anchorNode, '.cm-editor')) return
-
-    // Check if selection is within a code, markdown, or office preview area
-    const container = closestElement(sel.anchorNode, '.raw-content-pre, .markdown-body, .office-preview-body')
-    if (!container) {
-      if (!barPinned.value) {
-        barVisible.value = false
-      }
-      return
+function releasePointer() {
+  if (pointerReleaseTimer) {
+    clearTimeout(pointerReleaseTimer)
+    pointerReleaseTimer = null
+  }
+  if (pointerCount > 0) pointerCount--
+  if (pointerCount === 0) {
+    // Re-run the check, but deferred: on touch the final selection often settles
+    // only after the pointer is released, so an immediate evaluate can see an
+    // empty/collapsed selection and hide the bar (and, by clearing the debounce
+    // timer, leave it hidden). On desktop the selection is already final, so the
+    // short delay is harmless.
+    if (debounceTimer) {
+      clearTimeout(debounceTimer)
+      debounceTimer = null
     }
+    debounceTimer = setTimeout(evaluateSelection, 120)
+  }
+}
 
-    const text = sel.toString().trim()
-    if (!text) {
-      if (!barPinned.value) {
-        barVisible.value = false
-      }
-      return
-    }
+function onPointerUp() {
+  releasePointer()
+}
 
-    const { filePath, language } = getFileInfo(container)
-    const { startLine, endLine } = getLineInfo(sel)
-
-    setQuoteData({ text, filePath, language, startLine, endLine })
-    barVisible.value = true
-  }, 150)
+/** True while any pointer button is held (used to gate mid-drag selection UI). */
+export function isPointerPressed() {
+  return pointerCount > 0
 }
 
 // Global listener management
@@ -84,6 +146,11 @@ export function useQuoteQuestion() {
     listenerCount++
     if (listenerCount === 1) {
       document.addEventListener('selectionchange', onSelectionChange)
+      document.addEventListener('pointerdown', onPointerDown)
+      document.addEventListener('pointerup', onPointerUp)
+      document.addEventListener('pointercancel', onPointerUp)
+      document.addEventListener('touchend', onPointerUp)
+      document.addEventListener('touchcancel', onPointerUp)
     }
   })
 
@@ -91,6 +158,16 @@ export function useQuoteQuestion() {
     listenerCount--
     if (listenerCount === 0) {
       document.removeEventListener('selectionchange', onSelectionChange)
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('pointerup', onPointerUp)
+      document.removeEventListener('pointercancel', onPointerUp)
+      document.removeEventListener('touchend', onPointerUp)
+      document.removeEventListener('touchcancel', onPointerUp)
+      pointerCount = 0
+      if (pointerReleaseTimer) {
+        clearTimeout(pointerReleaseTimer)
+        pointerReleaseTimer = null
+      }
     }
   })
 

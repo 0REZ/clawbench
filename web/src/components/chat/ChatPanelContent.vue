@@ -26,6 +26,7 @@
       @remove-pending="handleRemovePending"
       @render-flush="scrollBottom()"
       @toggle-summary="handleToggleSummary"
+      @ensure-content="(msg) => ensureMessageContent(msg)"
       @resume-session="handleResumeSession"
       @fork-from-message="handleForkFromMessage"
     />
@@ -182,7 +183,8 @@ import { useAgents, populateACPStateFromCache } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useNotification } from '@/composables/useNotification.ts'
-import { applySummaryUpdate, shouldShowSummary } from '@/utils/chatSessionUtils.ts'
+import { applySummaryUpdate, isShowingSummary } from '@/utils/chatSessionUtils.ts'
+import { localConfig } from '@/composables/useSettingsConfig'
 import { nextClientSeq, sortMessages } from '@/utils/chatStreamUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
@@ -553,7 +555,7 @@ provide('chatRender', {
   truncate: render.truncate,
   hasImagesInContent: render.hasImagesInContent,
 })
-provide('chatSession', { getAgentBackend, getAgentName })
+provide('chatSession', { getAgentBackend, getAgentName, sessionId: () => identity.currentSessionId.value })
 // openFilePath (via open-file-overlay / open-file-manager events) already routes to
 // the correct tab (file → view, dir → browse), so this is a no-op to avoid overriding.
 provide('chatUI', { navigateToFileViewer: () => {} })
@@ -956,9 +958,12 @@ async function handleToggleSummary(msgId) {
         await generateMessageSummary(msg)
         return
     }
-    const showingNow = shouldShowSummary(msg)
+    const mode = (localConfig.messageDisplayMode === 'original' ? 'original' : 'summary')
+    const showingNow = isShowingSummary(msg, mode)
     // Switching FROM summary TO original: if blocks weren't loaded (content omitted in view=summary), fetch the full message.
+    // Reset _loadAttempted so a previously failed load can be retried on explicit user action.
     if (showingNow && (!msg.blocks || msg.blocks.length === 0)) {
+        msg._loadAttempted = false
         await ensureMessageContent(msg)
     }
     // Record the user's explicit preference. If they were showing the summary,
@@ -999,6 +1004,7 @@ async function ensureMessageContent(msg) {
         appLog.w(TAG, 'failed to load original content', err)
     } finally {
         msg._loadingOriginal = false
+        msg._loadAttempted = true
     }
 }
 

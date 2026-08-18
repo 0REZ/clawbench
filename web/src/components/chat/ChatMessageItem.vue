@@ -120,6 +120,7 @@
       :blocks="msg.blocks || []"
       :msg-id="msg.id"
       :tool-ids="selectedFile?.toolIds || []"
+      :session-id="sessionId"
       :format-tool-input="formatToolInput"
       @close="fileDiffsDrawer.close()"
       @file-open="handleOpenFilePayload"
@@ -129,14 +130,15 @@
 </template>
 
 <script setup>
-import { ref, inject, computed, nextTick } from 'vue'
+import { ref, inject, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Clock, Pause, Volume2, Info, FileDiff, Copy, Split } from 'lucide-vue-next'
 import { formatDuration } from '@/utils/format.ts'
 import { copyText } from '@/utils/clipboard.ts'
 import { extractSpeakableText } from '@/composables/useAutoSpeech.ts'
 import { extractFileChanges } from '@/utils/chatStreamUtils.ts'
-import { shouldShowSummary } from '@/utils/chatSessionUtils.ts'
+import { isShowingSummary } from '@/utils/chatSessionUtils.ts'
+import { localConfig } from '@/composables/useSettingsConfig'
 import { openFilePath } from '@/composables/useFilePathAnnotation.ts'
 import { store } from '@/stores/app.ts'
 import ContentBlocks from './ContentBlocks.vue'
@@ -160,7 +162,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'resume-session', 'remove-pending', 'fork-from-message'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'remove-pending', 'fork-from-message'])
 
 const autoSpeech = inject('autoSpeech')
 const wrapperRef = ref(null)
@@ -206,18 +208,39 @@ function handleToggleSummary() {
 // Uses extractSpeakableText to include AskUserQuestion blocks.
 // Falls back to the summary text when blocks are empty (summary-first loading
 // strips content), so the read-aloud button stays available in summary view.
+const displayMode = computed(() => (localConfig.messageDisplayMode === 'original' ? 'original' : 'summary'))
+
 const msgText = computed(() => {
   if (props.msg?.role !== 'assistant') return ''
   const text = extractSpeakableText(props.msg?.blocks || [])
   if (text) return text
-  if (shouldShowSummary(props.msg) && props.msg?.summary) return props.msg.summary
+  if (showSummary.value && props.msg?.summary) return props.msg.summary
   return ''
 })
 
 // Whether to render the summary view. Computed from message state (summary
-// exists, content stripped) plus the user's explicit preference, rather than
-// reading the raw showingSummary field which only stores the user's choice.
-const showSummary = computed(() => !!props.msg && shouldShowSummary(props.msg))
+// exists, content stripped), the user's explicit preference, and the global
+// default display mode. While the full text is being lazily fetched in
+// original mode, keep showing the summary as a placeholder so the message
+// bubble is never blank.
+const showSummary = computed(() => (props.msg ? isShowingSummary(props.msg, displayMode.value) : false))
+
+// In global original mode, a summarized message whose content was stripped by
+// view=summary has nothing to render in original view — request the full text
+// once. Guarded by _loadingOriginal, blocks-present, and _loadAttempted (latch
+// set after the first fetch completes) to fire exactly once even on failure.
+const needsLazyOriginal = computed(() =>
+  displayMode.value === 'original' &&
+  props.msg?.summary != null && props.msg.summary !== '' &&
+  (!props.msg.blocks || props.msg.blocks.length === 0) &&
+  props.msg.showingSummary === undefined &&
+  props.msg._loadingOriginal !== true &&
+  props.msg._loadAttempted !== true
+)
+
+watch(needsLazyOriginal, (needs) => {
+  if (needs && props.msg) emit('ensure-content', props.msg)
+}, { immediate: true })
 
 // Handle speak button click: play or stop (no popover)
 function handleSpeak() {
@@ -233,6 +256,7 @@ const chatSession = inject('chatSession', {})
 
 const { renderTextBlock, toolCallSummary, formatToolInput, humanizeCron, repeatLabel, truncate, hasImagesInContent } = chatRender
 const { getAgentBackend, getAgentName } = chatSession
+const sessionId = computed(() => chatSession.sessionId?.() || '')
 
 // File changes extraction (Write → created, Edit → modified).
 // Uses summaryCards as fallback when blocks are empty (summary-only view).
@@ -800,6 +824,7 @@ function handleCopyMessage() {
 }
 
 .chat-message.user code {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
     padding: 2px 6px;
     font-size: 13px;
     background: rgba(0, 0, 0, 0.15);
@@ -954,6 +979,7 @@ function handleCopyMessage() {
 }
 
 .chat-message.assistant code {
+    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
     padding: 2px 6px;
     font-size: 13px;
 }

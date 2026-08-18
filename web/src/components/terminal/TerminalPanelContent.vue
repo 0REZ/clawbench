@@ -1,5 +1,6 @@
 <template>
-  <div class="terminal-panel" :style="panelStyle">
+  <div class="terminal-panel">
+
     <!-- Platform unsupported state (top priority) -->
     <div v-if="platformUnsupported" class="terminal-empty-state terminal-platform-unsupported">
       <TerminalIcon :size="40" class="terminal-empty-icon" />
@@ -708,10 +709,6 @@ watch(() => tabs.value.length, (count) => {
   }
 }, { immediate: true })
 
-const panelStyle = computed(() => ({
-  '--keyboard-height': `${viewport.keyboardHeight.value}px`,
-}))
-
 // Per-tab error state helpers
 // NOTE: tab is a reactive() proxy which auto-unwraps Refs, so we MUST
 // access tab.session.connectionState directly (no .value). TypeScript
@@ -1003,6 +1000,11 @@ watch(() => props.active, async (isActive) => {
      emit('open')
      enableVolumeKeys()
      await nextTick()
+    // Attach the visualViewport keyboard listener whenever the panel becomes
+    // active — even if every session tab is closed (activeTab is null). Otherwise
+    // re-opening the terminal with no sessions skips startWatching and the Dock
+    // never hides when the soft keyboard opens on mobile.
+    viewport.startWatching()
     const tab = activeTab.value
     if (tab) {
       const container = tabContainerRefs.get(tab.id)
@@ -1023,7 +1025,6 @@ watch(() => props.active, async (isActive) => {
           tabManager.syncTabSessionId(tab.id)
         } catch { /* error shown via overlay */ }
       }
-      viewport.startWatching()
       gestures.attach()
       focusTerminal()
     }
@@ -1093,6 +1094,7 @@ onMounted(async () => {
     enableVolumeKeys()
     // Wait for v-for :ref callbacks to populate tabContainerRefs
     await nextTick()
+    viewport.startWatching()
     const tab = activeTab.value
     if (tab) {
       const container = tabContainerRefs.get(tab.id)
@@ -1108,7 +1110,6 @@ onMounted(async () => {
           tabManager.syncTabSessionId(tab.id)
         } catch { /* error shown via overlay */ }
       }
-      viewport.startWatching()
       gestures.attach()
       focusTerminal()
     }
@@ -1124,7 +1125,7 @@ onBeforeUnmount(() => {
   tabManager.disposeAll()
 })
 
-defineExpose({ activate: () => {}, deactivate: () => {}, keyboardHeight: viewport.keyboardHeight })
+defineExpose({ activate: () => {}, deactivate: () => {} })
 </script>
 
 <style scoped>

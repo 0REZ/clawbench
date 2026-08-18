@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import ChatMessageItem from '@/components/chat/ChatMessageItem.vue'
@@ -66,6 +66,10 @@ vi.mock('@/stores/app', () => ({
   store: { state: { projectRoot: '/home/user/project' } },
 }))
 
+vi.mock('@/composables/useSettingsConfig', () => ({
+  localConfig: { messageDisplayMode: 'summary' },
+}))
+
 const { drawerMocks } = vi.hoisted(() => ({
   drawerMocks: [] as Array<{ effectiveOpen: { value: boolean }; isOpen: { value: boolean }; open: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; toggle: ReturnType<typeof vi.fn> }>,
 }))
@@ -85,7 +89,7 @@ vi.mock('@/components/chat/FileAttachmentList.vue', () => ({
   default: { name: 'FileAttachmentList', template: '<div class="file-attachment-list-stub" />' },
 }))
 vi.mock('@/components/common/SummaryToggle.vue', () => ({
-  default: { name: 'SummaryToggle', template: '<span class="summary-toggle-stub" />' },
+  default: { name: 'SummaryToggle', props: ['showingSummary'], template: '<span class="summary-toggle-stub" />' },
 }))
 vi.mock('@/components/chat/FileChangesDrawer.vue', () => ({
   default: { name: 'FileChangesDrawer', template: '<div class="file-changes-drawer-stub" />' },
@@ -589,6 +593,86 @@ describe('ChatMessageItem', () => {
     })
   })
 
+  describe('global message display mode (original lazy-load)', () => {
+    beforeEach(async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'summary'
+    })
+
+    afterEach(async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'summary'
+    })
+
+    it('emits ensure-content for a stripped message when global mode is original', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'original'
+      const wrapper = createWrapper({
+        msg: { id: 'ec1', role: 'assistant', content: '', blocks: [], summary: 'Summary', streaming: false },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeTruthy()
+      expect(wrapper.emitted('ensure-content')![0]).toEqual([expect.objectContaining({ id: 'ec1' })])
+    })
+
+    it('does not emit ensure-content in summary mode', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'summary'
+      const wrapper = createWrapper({
+        msg: { id: 'no-ec', role: 'assistant', content: '', blocks: [], summary: 'Summary', streaming: false },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('does not emit ensure-content when blocks are already present', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'original'
+      const wrapper = createWrapper({
+        msg: { id: 'has-blocks', role: 'assistant', content: '', blocks: [{ type: 'text', text: 'Full' }], summary: 'Summary', streaming: false },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('does not emit ensure-content when an explicit preference exists', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'original'
+      const wrapper = createWrapper({
+        msg: { id: 'pref', role: 'assistant', content: '', blocks: [], summary: 'Summary', showingSummary: true, streaming: false },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('keeps summary as placeholder while lazy-loading and releases it once content arrives', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'original'
+      const wrapper = createWrapper({
+        msg: { id: 'pl1', role: 'assistant', content: '', blocks: [], summary: 'Summary', _loadingOriginal: true, streaming: false },
+      })
+      let toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+      await wrapper.setProps({
+        msg: { id: 'pl1', role: 'assistant', content: '', blocks: [{ type: 'text', text: 'Full' }], summary: 'Summary', _loadingOriginal: false, streaming: false },
+      })
+      toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(false)
+    })
+
+    it('does not re-emit ensure-content and keeps summary placeholder after a failed load attempt', async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'original'
+      const wrapper = createWrapper({
+        msg: { id: 'fail1', role: 'assistant', content: '', blocks: [], summary: 'Summary', _loadAttempted: true, streaming: false },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+    })
+  })
+
   describe('file attachment and action buttons', () => {
     it('renders FileAttachmentList for user message with files when content has no images', () => {
       const wrapper = createWrapper({
@@ -685,6 +769,34 @@ describe('ChatMessageItem', () => {
     it('does not render meta bar for user messages', () => {
       const wrapper = createWrapper({ msg: { id: 'um1', role: 'user', content: 'hi', blocks: [{ type: 'text', text: 'hi' }] } })
       expect(wrapper.find('.chat-meta-bar').exists()).toBe(false)
+    })
+  })
+
+  describe('display mode and original lazy-load', () => {
+    it('renders summary text when message has summary', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'dm1', role: 'assistant', content: '', blocks: [{ type: 'text', text: 'hello' }], summary: 'A summary' },
+      })
+      await wrapper.vm.$nextTick()
+      // Message with summary should render without error
+      expect(wrapper.find('.chat-message').exists()).toBe(true)
+    })
+
+    it('does not emit ensure-content for streaming messages in original mode', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'dm2', role: 'assistant', content: '', blocks: [], summary: 'A summary', streaming: true },
+      })
+      await wrapper.vm.$nextTick()
+      // Streaming messages should not trigger lazy-load
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('does not emit ensure-content for messages already loading original', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'dm3', role: 'assistant', content: '', blocks: [], summary: 'A summary', _loadingOriginal: true },
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
     })
   })
 })

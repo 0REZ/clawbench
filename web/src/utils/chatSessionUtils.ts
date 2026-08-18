@@ -85,6 +85,8 @@ export function parseMessages(
   })
 }
 
+export type MessageDisplayMode = 'summary' | 'original'
+
 /**
  * Decide whether a message should render its summary view.
  *
@@ -100,15 +102,53 @@ export function parseMessages(
  *    interrupted: the summary is generated asynchronously AFTER the message
  *    was already marked showingSummary=false.
  *  - Otherwise (content present), respect the user's preference, defaulting
- *    to summary when a summary exists and the user has not chosen.
+ *    to the global `defaultMode` when a summary exists and the user has not
+ *    chosen. In 'original' mode with stripped content, this returns false so
+ *    the component can lazily fetch the full content.
  */
-export function shouldShowSummary(msg: Record<string, unknown> | { summary?: unknown; blocks?: unknown; showingSummary?: unknown }): boolean {
+export function shouldShowSummary(
+  msg: Record<string, unknown> | { summary?: unknown; blocks?: unknown; showingSummary?: unknown },
+  defaultMode: MessageDisplayMode = 'summary',
+): boolean {
   const hasSummary = msg.summary != null && msg.summary !== ''
   if (!hasSummary) return false
   const blocksArr = msg.blocks as unknown as Array<unknown> | undefined
   const blocksEmpty = !blocksArr || blocksArr.length === 0
-  if (blocksEmpty) return true // content stripped — only summary is available
-  return msg.showingSummary !== false // undefined → default to summary
+  // Explicit per-message preference wins whenever content is available. When
+  // content was stripped (view=summary) the summary is the only thing we can
+  // render, so fall back to it regardless of preference (stream-interruption
+  // regression, see comment above the function).
+  if (msg.showingSummary !== undefined) {
+    if (blocksEmpty) return true
+    return msg.showingSummary !== false
+  }
+  // No explicit preference: use the global default. In original mode with
+  // stripped content this returns false so the component triggers a lazy
+  // fetch of the full content.
+  return defaultMode === 'summary'
+}
+
+/**
+ * Effective summary-visibility decision used by the UI. Wraps
+ * `shouldShowSummary` with the lazy-load placeholder state: while the full
+ * content is being fetched (`_loadingOriginal`), or a fetch attempt already
+ * ended without content (`_loadAttempted`, e.g. a failed load or genuinely
+ * empty content), the summary stays visible so the message bubble is never
+ * blank. Components must use this (not `shouldShowSummary` directly) so the
+ * toggle button and the rendered view never disagree.
+ */
+export function isShowingSummary(
+  msg: Record<string, unknown> | {
+    summary?: unknown; blocks?: unknown; showingSummary?: unknown; _loadingOriginal?: unknown; _loadAttempted?: unknown
+  },
+  defaultMode: MessageDisplayMode = 'summary',
+): boolean {
+  const hasSummary = msg.summary != null && msg.summary !== ''
+  if (!hasSummary) return false
+  const blocksArr = msg.blocks as unknown as Array<unknown> | undefined
+  const blocksEmpty = !blocksArr || blocksArr.length === 0
+  if (blocksEmpty && hasSummary && (msg._loadingOriginal === true || msg._loadAttempted === true)) return true
+  return shouldShowSummary(msg, defaultMode)
 }
 
 /**

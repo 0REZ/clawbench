@@ -54,14 +54,15 @@ describe('useQuoteQuestion', () => {
   })
 
   afterEach(() => {
-    // Drain all pending timers before switching to real timers
-    vi.runAllTimers()
-    vi.useRealTimers()
-    // Clean up DOM
+    // Clean up DOM first, then flush pending timers while fake timers are still
+    // active. jsdom's removeAllRanges() schedules an async selectionchange via
+    // setTimeout; draining it here keeps that event from leaking into the next
+    // test as a real timer (which races the listener and flakes assertions).
     document.body.innerHTML = ''
-    // Clear window selection (suppress jsdom's async selectionchange)
     const sel = window.getSelection()
     if (sel) sel.removeAllRanges()
+    vi.runAllTimers()
+    vi.useRealTimers()
   })
 
   describe('pinBar', () => {
@@ -549,6 +550,112 @@ describe('useQuoteQuestion', () => {
       expect(qq.visible.value).toBe(true)
 
       wrapper.unmount()
+    })
+
+    describe('pointer-drag guard', () => {
+      // Track the mounted wrapper so it is always unmounted even when an
+      // assertion fails mid-test (a leaked listener otherwise bleeds into the
+      // next test and breaks listenerCount bookkeeping).
+      let guardWrapper: ReturnType<typeof mountWithComposable> | null = null
+      afterEach(() => {
+        guardWrapper?.unmount()
+        guardWrapper = null
+      })
+
+      it('does not show the bar while the pointer is still pressed (mid-drag)', () => {
+        guardWrapper = mountWithComposable()
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/drag.md' })
+
+        // User is still dragging: pointer down + selection built up so far.
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        document.dispatchEvent(new Event('selectionchange'))
+        vi.advanceTimersByTime(150)
+
+        const qq = useQuoteQuestion()
+        expect(qq.visible.value).toBe(false)
+        expect(ctx.quoteData.value).toBeNull()
+
+        // Release so the pointer count does not leak into other tests.
+        document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+      })
+
+      it('suppresses a debounced evaluation that fires while the user pauses mid-drag', () => {
+        guardWrapper = mountWithComposable()
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/drag.md' })
+
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        document.dispatchEvent(new Event('selectionchange'))
+        vi.advanceTimersByTime(150) // debounce fires while dragging -> must be suppressed
+        expect(useQuoteQuestion().visible.value).toBe(false)
+
+        // Finishing the drag re-evaluates the final selection (deferred 120ms).
+        document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+        vi.advanceTimersByTime(120)
+        expect(useQuoteQuestion().visible.value).toBe(true)
+        expect(ctx.quoteData.value?.text).toBe('selected code text')
+      })
+
+      it('shows the bar after pointerup even without a trailing selectionchange', () => {
+        guardWrapper = mountWithComposable()
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/drag.md' })
+
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        document.dispatchEvent(new Event('selectionchange'))
+        vi.advanceTimersByTime(150)
+        expect(useQuoteQuestion().visible.value).toBe(false)
+
+        document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+        vi.advanceTimersByTime(120)
+
+        expect(useQuoteQuestion().visible.value).toBe(true)
+        expect(ctx.quoteData.value?.text).toBe('selected code text')
+      })
+
+      it('shows the bar on mobile when the selection finalizes just after pointerup', () => {
+        // Touch: at pointerup the browser has not registered the selection yet,
+        // so an immediate evaluate would hide the bar. The deferred evaluate must
+        // wait and pick up the selection once it settles.
+        guardWrapper = mountWithComposable()
+        // Selection is empty when the pointer is released (still settling).
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        document.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+
+        // The final selection registers right after pointerup.
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/settle.md' })
+        // The pointerup deferred evaluate may be rescheduled by the late
+        // selectionchange; advance past the debounce so it runs.
+        vi.advanceTimersByTime(200)
+
+        expect(useQuoteQuestion().visible.value).toBe(true)
+        expect(ctx.quoteData.value?.text).toBe('selected code text')
+      })
+
+      it('releases the guard on touchend when pointerup is swallowed (mobile)', () => {
+        // Mobile native selection UI can swallow pointerup, leaving pointerCount
+        // held. touchend still fires and must release the guard so the bar shows.
+        guardWrapper = mountWithComposable()
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/touch.md' })
+        // No pointerup — it is swallowed by the native selection UI.
+        document.dispatchEvent(new Event('touchend'))
+        vi.advanceTimersByTime(120)
+
+        expect(useQuoteQuestion().visible.value).toBe(true)
+        expect(ctx.quoteData.value?.text).toBe('selected code text')
+      })
+
+      it('self-heals the guard when neither pointerup nor touchend fires', () => {
+        // Worst case: both release events are swallowed. The 700ms safety timer
+        // must drop the guard so a settling selection still surfaces the bar.
+        guardWrapper = mountWithComposable()
+        document.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, bubbles: true }))
+        createSelectionInContainer('markdown-body', { 'data-file-path': '/stale.md' })
+        // Advance past the safety timer (no release event fired).
+        vi.advanceTimersByTime(800)
+
+        expect(useQuoteQuestion().visible.value).toBe(true)
+        expect(ctx.quoteData.value?.text).toBe('selected code text')
+      })
     })
 
     it('removes listener when component unmounts (listenerCount goes to 0)', () => {

@@ -19,7 +19,7 @@ const {
   closeCurrentFileFn: vi.fn(),
   dialogConfirmFn: vi.fn(),
   removeRecentFileFn: vi.fn(),
-  mockState: { gitBranch: '' },
+  mockState: { gitBranch: '', gitDirty: false, gitWorkingTreeChangeCount: 0 },
   wsConfig: { value: 'connected' as string },
   isAppModeConfig: { value: false as boolean },
 }))
@@ -51,6 +51,24 @@ vi.mock('@/composables/useCommitNavigation.ts', () => ({
 vi.mock('@/composables/useDialog', () => ({
   useDialog: () => ({ confirm: dialogConfirmFn }),
 }))
+vi.mock('@/composables/useSystemResources', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const vue = require('vue')
+  return {
+    useSystemResources: () => ({
+      resources: vue.ref({
+        cpu: { percent: 0, core_count: 4 },
+        memory: { used: 0, total: 0, percent: 0 },
+        disk: { used: 0, total: 0, percent: 0 },
+        disk_io: { read_rate: 0, write_rate: 0 },
+        network: { upload_rate: 0, download_rate: 0 },
+        load: { load1: 0, load5: 0, load15: 0 },
+      }),
+      startBackgroundPolling: vi.fn(),
+      stopBackgroundPolling: vi.fn(),
+    }),
+  }
+})
 vi.mock('@/composables/useRecentFiles', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { ref } = require('vue')
@@ -76,7 +94,7 @@ const i18n = createI18n({
     openFileManager: 'Open file manager',
     branches: 'Branches', moreBranches: 'Manage branches',
     switchBranchConfirm: 'Switch to branch "{branch}"?',
-    branchDirtyWorktree: 'dirty', switchBranchFailed: 'Failed: {error}', switchBranchNetworkError: 'network',
+    switchBranchFailed: 'Failed: {error}', switchBranchNetworkError: 'network',
     removeProject: 'Remove project',
     removeProjectConfirm: 'Remove "{name}" from recent projects?',
     projectRemoved: 'Project removed',
@@ -140,6 +158,8 @@ describe('AppHeader', () => {
     wsConfig.value = 'connected'
     isAppModeConfig.value = false
     mockState.gitBranch = ''
+    mockState.gitDirty = false
+    mockState.gitWorkingTreeChangeCount = 0
     loadGitBranchFn.mockReset()
     setPendingManageNavigationFn.mockReset()
     dialogConfirmFn.mockReset()
@@ -845,6 +865,168 @@ describe('AppHeader', () => {
     await (wrapper.vm as any).selectBranch({ name: 'main' })
     expect(wrapper.emitted('selectRecentFile')).toBeFalsy()
     expect(wrapper.vm.branchDropdownOpen).toBe(false)
+  })
+
+  it('selectBranch calls doCheckout on clean worktree after confirm', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = false
+    dialogConfirmFn.mockResolvedValueOnce(true)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountAndTrack()
+
+    await (wrapper.vm as any).selectBranch({ name: 'feature' })
+
+    expect(dialogConfirmFn).toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith('/api/git/checkout', expect.objectContaining({ method: 'POST' }))
+    expect(loadGitBranchFn).toHaveBeenCalled()
+
+    vi.unstubAllGlobals()
+  })
+
+  it('doCheckout shows error toast on non-dirty checkout failure', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = false
+    dialogConfirmFn.mockResolvedValueOnce(true)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: false, error: 'branch_not_found', errorDetail: 'Branch does not exist' }) })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountAndTrack()
+
+    await (wrapper.vm as any).selectBranch({ name: 'nonexistent' })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/git/checkout', expect.objectContaining({ method: 'POST' }))
+    // Should not show dirty modal for non-dirty errors
+    expect(wrapper.vm.dirtyModalOpen).toBe(false)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('doCheckout shows error toast on network failure', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = false
+    dialogConfirmFn.mockResolvedValueOnce(true)
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Network error'))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountAndTrack()
+
+    await (wrapper.vm as any).selectBranch({ name: 'feature' })
+
+    // Should not throw, should handle gracefully
+    expect(wrapper.vm.dirtyModalOpen).toBe(false)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('selectBranch warns about dirty worktree immediately, before the confirm step', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = true
+    mockState.gitWorkingTreeChangeCount = 5
+    const wrapper = mountAndTrack()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await (wrapper.vm as any).selectBranch({ name: 'dev' })
+
+    expect(dialogConfirmFn).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(wrapper.vm.dirtyModalOpen).toBe(true)
+    expect(wrapper.vm.dirtyBranch).toBe('dev')
+    expect(wrapper.vm.dirtyCount).toBe(5)
+
+    vi.unstubAllGlobals()
+  })
+
+  it('selectBranch shows dirty modal instead of jumping to history on dirty_worktree', async () => {
+    mockState.gitBranch = 'main'
+    const wrapper = mountAndTrack()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: false, error: 'dirty_worktree', untrackedCount: 2 }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await (wrapper.vm as any).selectBranch({ name: 'dev' })
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/git/checkout', expect.objectContaining({ method: 'POST' }))
+    expect(wrapper.vm.dirtyModalOpen).toBe(true)
+    expect(wrapper.vm.dirtyCount).toBe(2)
+    expect(setPendingManageNavigationFn).not.toHaveBeenCalled()
+
+    vi.unstubAllGlobals()
+  })
+
+  it('doDirtyCheckout performs a stash checkout and refreshes', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = true
+    const wrapper = mountAndTrack()
+    wrapper.vm.dirtyBranch = 'dev'
+    wrapper.vm.dirtyModalOpen = true
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await (wrapper.vm as any).doDirtyCheckout('stash')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/git/checkout', expect.objectContaining({ body: expect.stringContaining('"stash":true') }))
+    expect(loadGitBranchFn).toHaveBeenCalled()
+    expect(wrapper.vm.dirtyModalOpen).toBe(false)
+    expect(wrapper.vm.dirtyBranch).toBe('')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('doDirtyCheckout performs a force checkout and refreshes', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = true
+    const wrapper = mountAndTrack()
+    wrapper.vm.dirtyBranch = 'feature'
+    wrapper.vm.dirtyModalOpen = true
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: true }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await (wrapper.vm as any).doDirtyCheckout('force')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/git/checkout', expect.objectContaining({ body: expect.stringContaining('"force":true') }))
+    expect(loadGitBranchFn).toHaveBeenCalled()
+    expect(wrapper.vm.dirtyModalOpen).toBe(false)
+    expect(wrapper.vm.dirtyBranch).toBe('')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('doDirtyCheckout handles API failure gracefully', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = true
+    const wrapper = mountAndTrack()
+    wrapper.vm.dirtyBranch = 'dev'
+    wrapper.vm.dirtyModalOpen = true
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ success: false, error: 'checkout failed' }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await (wrapper.vm as any).doDirtyCheckout('stash')
+
+    // Modal should still close even on failure
+    expect(wrapper.vm.dirtyModalOpen).toBe(false)
+    expect(wrapper.vm.dirtyBranch).toBe('')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('dirty worktree modal renders with stash and force buttons', async () => {
+    mockState.gitBranch = 'main'
+    mockState.gitDirty = true
+    mockState.gitWorkingTreeChangeCount = 3
+    const wrapper = mountAndTrack()
+    wrapper.vm.dirtyModalOpen = true
+    wrapper.vm.dirtyBranch = 'dev'
+    wrapper.vm.dirtyCount = 3
+    await wrapper.vm.$nextTick()
+
+    // The modal should be teleported to body
+    const overlay = document.body.querySelector('.ht-dirty-overlay')
+    expect(overlay).toBeTruthy()
+    const stashBtn = overlay?.querySelector('.ht-dirty-stash')
+    const forceBtn = overlay?.querySelector('.ht-dirty-force')
+    expect(stashBtn).toBeTruthy()
+    expect(forceBtn).toBeTruthy()
+
+    wrapper.vm.dirtyModalOpen = false
   })
 
   // ── handleLogout ──

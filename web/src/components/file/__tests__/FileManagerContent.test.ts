@@ -365,6 +365,26 @@ describe('FileManagerContent — rendering', () => {
     expect(wrapper.find('.loading-indicator.overlay').exists()).toBe(true)
   })
 
+  it('keeps the loading overlay outside the scrollable list so it covers the whole viewport when scrolled', () => {
+    const wrapper = mountContent({ dirLoading: true })
+    const overlay = wrapper.find('.loading-indicator.overlay')
+    expect(overlay.exists()).toBe(true)
+    // The overlay must not live inside the scrollable list/grid container —
+    // an absolutely-positioned child of a scroll container scrolls with its
+    // content, leaving only a partial mask and hiding the spinner when the
+    // listing is scrolled.
+    expect(wrapper.find('.file-list .loading-indicator.overlay').exists()).toBe(false)
+    expect(wrapper.find('.file-grid .loading-indicator.overlay').exists()).toBe(false)
+  })
+
+  it('keeps the loading overlay outside the scrollable grid in grid view', async () => {
+    const wrapper = mountContent({ dirLoading: true })
+    wrapper.vm._setViewMode('grid')
+    await nextTick()
+    expect(wrapper.find('.file-grid').exists()).toBe(true)
+    expect(wrapper.find('.file-grid .loading-indicator.overlay').exists()).toBe(false)
+  })
+
   it('renders toolbar buttons', () => {
     const wrapper = mountContent()
     const toolbarBtns = wrapper.findAll('.toolbar-btn')
@@ -846,15 +866,43 @@ describe('FileManagerContent — keyboard shortcuts', () => {
     expect(wrapper.emitted('navigateBack')).toBeTruthy()
   })
 
-  it('F2 emits rename for the current file', async () => {
+  it('F2 opens the rename dialog and emits rename with the new name', async () => {
+    mockDialogPrompt.mockResolvedValue('renamed.ts')
     const wrapper = mountContent({ currentFile: { path: 'test.ts', name: 'test.ts' } })
     await nextTick()
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
     await nextTick()
+    await nextTick()
 
+    expect(mockDialogPrompt).toHaveBeenCalled()
     expect(wrapper.emitted('rename')).toBeTruthy()
-    expect(wrapper.emitted('rename')![0]).toEqual([{ path: 'test.ts', name: 'test.ts' }])
+    expect(wrapper.emitted('rename')![0]).toEqual([{ path: 'test.ts', name: 'renamed.ts' }])
+  })
+
+  it('F2 does not emit rename when the dialog is cancelled', async () => {
+    mockDialogPrompt.mockResolvedValue('')
+    const wrapper = mountContent({ currentFile: { path: 'test.ts', name: 'test.ts' } })
+    await nextTick()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+    await nextTick()
+    await nextTick()
+
+    expect(mockDialogPrompt).toHaveBeenCalled()
+    expect(wrapper.emitted('rename')).toBeFalsy()
+  })
+
+  it('F2 does not emit rename when the name is unchanged', async () => {
+    mockDialogPrompt.mockResolvedValue('test.ts')
+    const wrapper = mountContent({ currentFile: { path: 'test.ts', name: 'test.ts' } })
+    await nextTick()
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }))
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.emitted('rename')).toBeFalsy()
   })
 
   it('Ctrl+R emits refresh', async () => {

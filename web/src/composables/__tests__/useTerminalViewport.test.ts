@@ -3,47 +3,26 @@ import { ref, nextTick } from 'vue'
 import { useTerminalViewport } from '@/composables/useTerminalViewport'
 
 // Shared refs for the mocked module — exposed so tests can assert on the
-// module-level singleton state that App.vue reads (not just the local ref).
+// module-level singleton state that App.vue reads.
 const mockShared = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { ref } = require('vue') as typeof import('vue')
   return { keyboardHeight: ref(0), isAdjustResize: ref(false) }
 })
 
-// Mock useTerminalKeyboard to avoid module-level side effects
 vi.mock('@/composables/useTerminalKeyboard', () => {
+  const fullScreenHeight = { value: 800 }
   return {
     useTerminalKeyboard: () => ({
       keyboardHeight: mockShared.keyboardHeight,
       setKeyboardHeight: (h: number) => { mockShared.keyboardHeight.value = h },
       isAdjustResize: mockShared.isAdjustResize,
       setAdjustResize: (v: boolean) => { mockShared.isAdjustResize.value = v },
-      fullScreenHeight: 800,
+      getFullScreenHeight: () => fullScreenHeight.value,
+      noteFullScreenHeight: (h: number) => { if (h > fullScreenHeight.value) fullScreenHeight.value = h },
     }),
   }
 })
-
-// Mock platform detection: default to non-PC (mobile) to keep existing
-// keyboard-detection tests valid; flip to true to test the PC path.
-const mockIsPC = ref(false)
-vi.mock('@/composables/usePlatformDetect', () => {
-  return {
-    usePlatformDetect: () => ({ isPC: mockIsPC }),
-  }
-})
-
-// Mock ResizeObserver (not available in jsdom by default)
-class MockResizeObserver {
-  private callback: ResizeObserverCallback
-  constructor(callback: ResizeObserverCallback) {
-    this.callback = callback
-  }
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-vi.stubGlobal('ResizeObserver', MockResizeObserver)
 
 function createMockTerminal() {
   return {
@@ -55,7 +34,6 @@ function createMockTerminal() {
 
 describe('useTerminalViewport', () => {
   let container: HTMLElement
-  let mockResizeObserver: ResizeObserver | null
   let originalVisualViewport: VisualViewport | null
   let originalInnerHeight: number
 
@@ -63,12 +41,9 @@ describe('useTerminalViewport', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
 
-    // Reset mock state
     mockShared.isAdjustResize.value = false
     mockShared.keyboardHeight.value = 0
-    mockIsPC.value = false
 
-    // Save originals
     originalInnerHeight = window.innerHeight
     originalVisualViewport = window.visualViewport
   })
@@ -77,7 +52,6 @@ describe('useTerminalViewport', () => {
     document.body.removeChild(container)
     vi.restoreAllMocks()
 
-    // Restore originals
     Object.defineProperty(window, 'innerHeight', {
       value: originalInnerHeight,
       writable: true,
@@ -101,12 +75,11 @@ describe('useTerminalViewport', () => {
     expect(viewport.keyboardHeight.value).toBe(0)
   })
 
-  it('calculates viewport height from visualViewport when available', () => {
+  it('calculates viewport height and keyboard height from visualViewport when available', () => {
     const terminal = ref(null)
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Mock visualViewport
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 600,
@@ -127,22 +100,33 @@ describe('useTerminalViewport', () => {
 
     expect(viewport.viewportHeight.value).toBe(600)
     // keyboardHeight = innerHeight - vv.height - offsetTop = 800 - 600 - 0 = 200
-    // But also compared with fullScreenHeight(800) - innerHeight(800) = 0
-    // So max(200, 0, 0) = 200
     expect(viewport.keyboardHeight.value).toBe(200)
+    // And it propagates to the shared singleton App.vue reads.
+    expect(mockShared.keyboardHeight.value).toBe(200)
 
     viewport.stopWatching()
   })
 
-  it('resets the shared keyboard height to 0 on stopWatching', () => {
+  it('detects keyboard via the container ResizeObserver (Android adjustResize)', async () => {
+    let resizeCb: ResizeObserverCallback | null = null
+    const mockObserve = vi.fn((el: Element) => { /* store nothing */ })
+    const mockRO = class {
+      static cb: ResizeObserverCallback | null = null
+      constructor(cb: ResizeObserverCallback) { mockRO.cb = cb }
+      observe(el: Element) { mockObserve(el) }
+      unobserve() {}
+      disconnect() {}
+    }
+    // @ts-expect-error override global
+    globalThis.ResizeObserver = mockRO as unknown as typeof ResizeObserver
+
     const terminal = ref(null)
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Keyboard open — shared singleton must reflect it (App.vue reads this)
     Object.defineProperty(window, 'visualViewport', {
       value: {
-        height: 600,
+        height: 800,
         offsetTop: 0,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
@@ -157,13 +141,128 @@ describe('useTerminalViewport', () => {
     })
 
     viewport.startWatching()
+    expect(mockShared.keyboardHeight.value).toBe(0)
+
+    // Keyboard opens → innerHeight shrinks → container resizes → ResizeObserver fires.
+    Object.defineProperty(window, 'innerHeight', {
+      value: 500,
+      writable: true,
+      configurable: true,
+    })
+    mockRO.cb?.([], mockRO as unknown as ResizeObserver)
+    await nextTick()
+
+    // resizeKeyboard = fullScreenHeight(800) - innerHeight(500) = 300
+    expect(mockShared.keyboardHeight.value).toBe(300)
+    expect(mockShared.isAdjustResize.value).toBe(true)
+
+    viewport.stopWatching()
+  })
+
+  it('clears the shared keyboard height when the active container becomes null', () => {
+    let resizeHandler: (() => void) | null = null
+    const terminal = ref(null)
+    const containerRef = ref<HTMLElement | null>(container)
+    const viewport = useTerminalViewport(terminal, containerRef)
+
+    Object.defineProperty(window, 'visualViewport', {
+      value: {
+        height: 600,
+        offsetTop: 0,
+        addEventListener: (_type: string, cb: () => void) => { resizeHandler = cb },
+        removeEventListener: vi.fn(),
+      },
+      writable: true,
+      configurable: true,
+    })
+    Object.defineProperty(window, 'innerHeight', {
+      value: 800,
+      writable: true,
+      configurable: true,
+    })
+
+    viewport.startWatching()
     expect(mockShared.keyboardHeight.value).toBe(200)
 
-    // Deactivating the terminal (closing/switching away from the tab page) must
-    // clear the shared keyboard state. Otherwise the dock stays hidden even
-    // though the terminal is no longer active.
-    viewport.stopWatching()
+    // Closing the last terminal session tab detaches the active container; the
+    // following resize must clear the stale shared height so the Dock is not
+    // left hidden forever.
+    containerRef.value = null
+    resizeHandler!()
     expect(mockShared.keyboardHeight.value).toBe(0)
+  })
+
+  it('detects keyboard via polling when no resize event fires (Android WebView)', () => {
+    vi.useFakeTimers()
+    const terminal = ref(null)
+    const containerRef = ref<HTMLElement | null>(container)
+    const viewport = useTerminalViewport(terminal, containerRef)
+
+    // visualViewport present but its resize listener is a no-op (WebView quirk:
+    // no event dispatched even though height changes). window.resize also not fired.
+    Object.defineProperty(window, 'visualViewport', {
+      value: {
+        height: 800,
+        offsetTop: 0,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+      writable: true,
+      configurable: true,
+    })
+    Object.defineProperty(window, 'innerHeight', {
+      value: 800,
+      writable: true,
+      configurable: true,
+    })
+
+    viewport.startWatching()
+    expect(mockShared.keyboardHeight.value).toBe(0)
+
+    // Keyboard opens on Android adjustResize: innerHeight + visualViewport both
+    // shrink, but no event fires. The 300ms poll must detect it.
+    Object.defineProperty(window, 'innerHeight', {
+      value: 500,
+      writable: true,
+      configurable: true,
+    })
+    Object.defineProperty(window, 'visualViewport', {
+      value: {
+        height: 500,
+        offsetTop: 0,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+      writable: true,
+      configurable: true,
+    })
+
+    vi.advanceTimersByTime(300)
+    // resizeKeyboard = fullScreenHeight(800) - innerHeight(500) = 300
+    expect(mockShared.keyboardHeight.value).toBe(300)
+    expect(mockShared.isAdjustResize.value).toBe(true)
+
+    // Keyboard closes silently: both restore to 800.
+    Object.defineProperty(window, 'innerHeight', {
+      value: 800,
+      writable: true,
+      configurable: true,
+    })
+    Object.defineProperty(window, 'visualViewport', {
+      value: {
+        height: 800,
+        offsetTop: 0,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+      writable: true,
+      configurable: true,
+    })
+    vi.advanceTimersByTime(300)
+    expect(mockShared.keyboardHeight.value).toBe(0)
+
+    viewport.stopWatching()
+    vi.useRealTimers()
   })
 
   it('detects keyboard from Android adjustResize (innerHeight shrinks)', () => {
@@ -171,7 +270,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Mock visualViewport as if keyboard is open on Android
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 500,
@@ -191,9 +289,7 @@ describe('useTerminalViewport', () => {
     viewport.startWatching()
 
     // keyboardHeight = max(vvKeyboard, resizeKeyboard, 0)
-    // vvKeyboard = innerHeight(500) - vv.height(500) - offsetTop(0) = 0
-    // resizeKeyboard = fullScreenHeight(800) - innerHeight(500) = 300
-    // max(0, 300, 0) = 300
+    // vvKeyboard = 500 - 500 - 0 = 0; resizeKeyboard = 800 - 500 = 300
     expect(viewport.keyboardHeight.value).toBe(300)
 
     viewport.stopWatching()
@@ -204,7 +300,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Remove visualViewport
     Object.defineProperty(window, 'visualViewport', {
       value: undefined,
       writable: true,
@@ -230,7 +325,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(null)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Should not throw
     viewport.startWatching()
 
     expect(viewport.viewportHeight.value).toBe(0)
@@ -275,7 +369,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Scenario: visualViewport reports keyboard, but innerHeight shrink is larger
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 700,
@@ -294,9 +387,7 @@ describe('useTerminalViewport', () => {
 
     viewport.startWatching()
 
-    // vvKeyboard = 600 - 700 - 0 = -100 → Math.max with 0 later
-    // resizeKeyboard = 800 - 600 = 200
-    // max(-100, 200, 0) = 200
+    // vvKeyboard = 600 - 700 - 0 = -100 → clamped; resizeKeyboard = 800 - 600 = 200
     expect(viewport.keyboardHeight.value).toBe(200)
 
     viewport.stopWatching()
@@ -307,7 +398,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // No keyboard visible
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 800,
@@ -326,9 +416,6 @@ describe('useTerminalViewport', () => {
 
     viewport.startWatching()
 
-    // vvKeyboard = 800 - 800 - 0 = 0
-    // resizeKeyboard = 800 - 800 = 0
-    // max(0, 0, 0) = 0
     expect(viewport.keyboardHeight.value).toBe(0)
 
     viewport.stopWatching()
@@ -339,7 +426,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // URL bar takes 50px at top
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 700,
@@ -359,8 +445,6 @@ describe('useTerminalViewport', () => {
     viewport.startWatching()
 
     // vvKeyboard = 800 - 700 - 50 = 50
-    // resizeKeyboard = 800 - 800 = 0
-    // max(50, 0, 0) = 50
     expect(viewport.keyboardHeight.value).toBe(50)
 
     viewport.stopWatching()
@@ -373,7 +457,6 @@ describe('useTerminalViewport', () => {
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Mock visualViewport so startWatching works
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 800,
@@ -384,18 +467,10 @@ describe('useTerminalViewport', () => {
       writable: true,
       configurable: true,
     })
-    Object.defineProperty(window, 'innerHeight', {
-      value: 800,
-      writable: true,
-      configurable: true,
-    })
 
     viewport.startWatching()
 
-    // fit() should not be called immediately (debounced)
     expect(mockTerminal.fitAddon.fit).not.toHaveBeenCalled()
-
-    // After debounce (100ms), fit() should be called
     vi.advanceTimersByTime(100)
     expect(mockTerminal.fitAddon.fit).toHaveBeenCalledTimes(1)
 
@@ -420,31 +495,23 @@ describe('useTerminalViewport', () => {
       writable: true,
       configurable: true,
     })
-    Object.defineProperty(window, 'innerHeight', {
-      value: 800,
-      writable: true,
-      configurable: true,
-    })
 
     viewport.startWatching()
     expect(mockTerminal.fitAddon.fit).not.toHaveBeenCalled()
 
-    // Stop watching before debounce fires
     viewport.stopWatching()
 
-    // Advance past debounce time — fit() should NOT be called
     vi.advanceTimersByTime(200)
     expect(mockTerminal.fitAddon.fit).not.toHaveBeenCalled()
 
     vi.useRealTimers()
   })
 
-  it('detects adjustResize when innerHeight shrinks (Android native)', () => {
+  it('flags adjustResize when innerHeight shrinks, clears on stop', () => {
     const terminal = ref(null)
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // Android adjustResize: innerHeight shrinks when keyboard opens
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 500,
@@ -456,7 +523,7 @@ describe('useTerminalViewport', () => {
       configurable: true,
     })
     Object.defineProperty(window, 'innerHeight', {
-      value: 500, // shrunk from 800 → adjustResize
+      value: 500,
       writable: true,
       configurable: true,
     })
@@ -465,51 +532,14 @@ describe('useTerminalViewport', () => {
     expect(mockShared.isAdjustResize.value).toBe(true)
 
     viewport.stopWatching()
-    // Reset on stop
     expect(mockShared.isAdjustResize.value).toBe(false)
   })
 
-  it('keeps keyboard height at 0 on PC even when innerHeight shrinks (window resize)', () => {
-    mockIsPC.value = true
+  it('does not flag adjustResize when innerHeight stays same (PWA/iOS)', () => {
     const terminal = ref(null)
     const containerRef = ref<HTMLElement | null>(container)
     const viewport = useTerminalViewport(terminal, containerRef)
 
-    // On PC, shrinking the window lowers innerHeight exactly like an Android
-    // adjustResize keyboard would — but it is a user window resize, not a soft
-    // keyboard. It must not set keyboardHeight > 0 (which would hide the bottom
-    // dock via anyKeyboardActive) nor flag adjustResize.
-    Object.defineProperty(window, 'visualViewport', {
-      value: {
-        height: 500,
-        offsetTop: 0,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      },
-      writable: true,
-      configurable: true,
-    })
-    Object.defineProperty(window, 'innerHeight', {
-      value: 500, // shrunk from 800 → would otherwise read as a keyboard
-      writable: true,
-      configurable: true,
-    })
-
-    viewport.startWatching()
-
-    expect(viewport.viewportHeight.value).toBe(500)
-    expect(viewport.keyboardHeight.value).toBe(0)
-    expect(mockShared.isAdjustResize.value).toBe(false)
-
-    viewport.stopWatching()
-  })
-
-  it('does not detect adjustResize when innerHeight stays same (PWA/iOS)', () => {
-    const terminal = ref(null)
-    const containerRef = ref<HTMLElement | null>(container)
-    const viewport = useTerminalViewport(terminal, containerRef)
-
-    // PWA standalone / iOS: innerHeight stays 800, visualViewport shrinks
     Object.defineProperty(window, 'visualViewport', {
       value: {
         height: 550,
@@ -521,7 +551,7 @@ describe('useTerminalViewport', () => {
       configurable: true,
     })
     Object.defineProperty(window, 'innerHeight', {
-      value: 800, // unchanged — NOT adjustResize
+      value: 800,
       writable: true,
       configurable: true,
     })
