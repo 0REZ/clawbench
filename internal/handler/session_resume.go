@@ -1,5 +1,35 @@
 package handler
 
+// ═════════════════════════════════════════════════════════════════════════════
+// MODULE 1 — UNIVERSAL TITLE CLEANING (backend-agnostic, works for EVERY
+// agent out of the box). Counterpart: session_title_resolver.go (Module 2,
+// per-backend optimization).
+//
+// What this module does for every backend, with zero backend-specific code:
+//
+//	deriveSessionTitleFromReplay — takes the first user message from the
+//	  ACP LoadSession replay (protocol-uniform; no files read) and strips
+//	  machine-generated prefixes to surface the real question.
+//	stripMachineText — the data-driven stripper core. Receives rules as
+//	  DATA ([]stripRule: prefix + removal strategy), loops trim→match→apply
+//	  until human text remains. Never reads files, never names a backend.
+//	clientInjectedStripRules — the default rule set: machine headers the
+//	  CLIENT prepends to user turns for ALL backends. An unregistered
+//	  backend gets exactly these rules and nothing else — no backend's
+//	  native rules leak into another backend's path.
+//
+// 模块一——通用标题清洗(与后端无关,对所有智能体开箱即用)。对应模块见
+// session_title_resolver.go(模块二,逐后端优化)。
+//   • deriveSessionTitleFromReplay — 取 ACP LoadSession 重放的首条用户消息
+//     (协议统一,不读文件),剥机器前缀得到真实首问。
+//   • stripMachineText — 数据驱动的剥离器核心。规则以数据传入([]stripRule:
+//     前缀+剥离策略),循环"修剪→匹配→套用"直到剩下人类文本。不读文件、
+//     不出现任何后端名。
+//   • clientInjectedStripRules — 默认规则集:客户端对所有后端注入的机器头。
+//     未注册后端恰好拿到这些规则、别无其他——任何后端的原生规则都不会泄入
+//     其他后端的路径。
+// ═════════════════════════════════════════════════════════════════════════════
+
 import (
 	"context"
 	"database/sql"
@@ -8,6 +38,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"clawbench/internal/ai"
@@ -26,6 +57,190 @@ const (
 	strError     = "error"
 	strToolUse   = "tool_use"
 )
+
+// maxReplayTitleRunes caps the session title derived from a replayed message.
+const maxReplayTitleRunes = 50
+
+// clientInjectedUserPrefixes are the headers the CLIENT (ClawBench) prepends
+// to user turns for EVERY backend — universal by construction.
+//
+// 客户端(ClawBench)对所有后端都注入的头部——天然通用。
+var clientInjectedUserPrefixes = []string{
+	"[System Instructions:",
+	"[Below is the conversation history",
+	"[Current file: ",
+	"[Current directory: ",
+	"[User uploaded ",
+}
+
+// machineGeneratedUserPrefixes is the combined list used for title
+// machine-text DETECTION (isMachineGeneratedTitle): client-injected (all
+// backends) + claude-native. The STRIPPER is now data-driven off
+// stripRule slices (see stripRulesFor), so this flat list is only for the
+// detector's truncation-tolerant prefix match.
+//
+// 机器文本"检测"所用的合并列表(客户端注入全后端 + claude 原生)。剥离器已改为
+// 由 stripRule 切片数据驱动(见 stripRulesFor),此扁平列表仅供检测器的容截断
+// 前缀匹配使用。
+var machineGeneratedUserPrefixes = append(append([]string{}, clientInjectedUserPrefixes...), claudeNativeUserPrefixes...)
+
+// stripKind enumerates how a machine prefix is removed from a user turn.
+//
+// 机器前缀从用户轮次中移除的方式。
+type stripKind int
+
+const (
+	// stripSkipTurn: the WHOLE turn is machine text (e.g. a compaction
+	// header, a slash command) — discard it, ok=false.
+	// 整轮皆为机器文本(如压缩头、斜杠命令)——丢弃,ok=false。
+	stripSkipTurn stripKind = iota
+	// stripToDoubleNewline: strip the prefix paragraph (up to "\n\n") and
+	// keep scanning the remainder (e.g. a caveat wrapper).
+	// 剥到 "\n\n" 为止,保留剩余继续扫(如 Caveat 警示段)。
+	stripToDoubleNewline
+	// stripToDelimiter: strip up to a fixed end-delimiter and keep scanning
+	// (e.g. "[Below is ...[End of conversation history...]<rest>").
+	// 剥到固定结束分隔符为止,保留剩余继续扫。
+	stripToDelimiter
+	// stripToBracketClose: strip a "[...]\n\n" block and keep scanning
+	// (e.g. "[System Instructions: ...]\n\n<rest>").
+	// 剥掉 "[...]\n\n" 块,保留剩余继续扫。
+	stripToBracketClose
+	// stripToNewline: strip one line (up to "\n") and keep scanning
+	// (e.g. "[Current file: ...]\n<rest>").
+	// 剥掉一行(到 "\n"),保留剩余继续扫。
+	stripToNewline
+)
+
+// stripRule pairs a machine prefix with its removal strategy. Both the
+// client-injected (universal) prefixes and each backend's native prefixes
+// become stripRules; the stripper itself is backend-agnostic and works off
+// a merged slice.
+//
+// stripRule 把机器前缀与其移除策略配对。客户端注入(通用)前缀与各后端原生前缀
+// 都变成 stripRule;剥离器本身与后端无关,只在一个合并切片上工作。
+type stripRule struct {
+	prefix    string
+	kind      stripKind
+	delimiter string // only for stripToDelimiter
+}
+
+// clientInjectedStripRules are the client (ClawBench) headers prepended to
+// user turns for EVERY backend — universal by construction.
+//
+// 客户端(ClawBench)对所有后端注入的头部——天然通用。
+var clientInjectedStripRules = []stripRule{
+	{"[System Instructions:", stripToBracketClose, ""},
+	{"[Below is the conversation history", stripToDelimiter, "[End of conversation history. Now answer the user's new question.]"},
+	{"[Current file: ", stripToNewline, ""},
+	{"[Current directory: ", stripToNewline, ""},
+	{"[User uploaded ", stripToNewline, ""},
+}
+
+// claudeNativeStripRules are the claude-code CLI's own machine headers
+// (claudeTranscriptResolver's strip rules). Harmless no-ops for other
+// backends (their turns never start with these).
+//
+// claude-code CLI 自己的机器头(claude 解析器的剥离规则)。对其他后端为无害
+// 空转(它们的轮次不会以这些开头)。
+var claudeNativeStripRules = []stripRule{
+	{"This session is being continued from a previous conversation", stripSkipTurn, ""},
+	{"<command-name>/", stripSkipTurn, ""},
+	{"<local-command", stripSkipTurn, ""},
+	{"Caveat: The messages below were generated by the user", stripToDoubleNewline, ""},
+	{"[Request interrupted", stripSkipTurn, ""},
+}
+
+// deriveSessionTitleFromReplay picks the acp-load session title from the
+// first user-typed message in the replay. Machine-generated headers are
+// stripped with the rule set for the given backend: universal
+// client-injected rules always, plus that backend's native rules via its
+// resolver. A nil resolver (backend not registered) uses universal rules
+// ONLY — no backend's native rules leak into another backend's path.
+//
+// 从重放(ACP replay)中取第一条人类输入作为标题。按给定后端的规则集剥机器
+// 前缀:始终含客户端通用注入规则,加上该后端经 resolver 的原生规则。resolver
+// 为 nil(未注册后端)时只用通用规则——任何后端的原生规则都不会泄入其他后端
+// 的路径。
+func deriveSessionTitleFromReplay(messages []replayMessage, r sessionTranscriptResolver) string {
+	rules := stripRulesFor(r)
+	for _, msg := range messages {
+		if msg.role != strUser {
+			continue
+		}
+		text, ok := stripMachineText(service.ExtractPlainText(msg.content), rules)
+		if !ok {
+			continue
+		}
+		title := strings.TrimSpace(text)
+		if title == "" {
+			continue
+		}
+		if runes := []rune(title); len(runes) > maxReplayTitleRunes {
+			title = string(runes[:maxReplayTitleRunes]) + "..."
+		}
+		return title
+	}
+	return ""
+}
+
+// stripMachineText is the data-driven stripper core: loop, trim, match a
+// rule prefix, apply its strategy; stop at the first non-machine text.
+// It receives rules as DATA — the function itself is backend-agnostic and
+// never reads files. Concrete before → after examples:
+//
+//	"[System Instructions: rules]\n\n如何配置自动备份"        → "如何配置自动备份"
+//	"[Current file: /tmp/a.png]\n看看这张图"                  → "看看这张图"
+//	"[Below is ...[End of conversation history...]新问题"      → "新问题"
+//	"This session is being continued..."(整轮,claude规则)     → ok=false
+//	"怎么导出数据库备份"(纯人话)                              → 原样返回,ok=true
+//
+// 数据驱动的剥离器核心:循环、修剪、匹配规则前缀、套用其策略;遇到非机器文本停止。
+// 规则以数据传入——函数本身与后端无关、不读任何文件。
+func stripMachineText(text string, rules []stripRule) (string, bool) {
+	for {
+		text = strings.TrimLeft(text, " \t\n")
+		matched := false
+		for _, r := range rules {
+			if !strings.HasPrefix(text, r.prefix) {
+				continue
+			}
+			matched = true
+			switch r.kind {
+			case stripSkipTurn:
+				return "", false
+			case stripToDoubleNewline:
+				idx := strings.Index(text, "\n\n")
+				if idx < 0 {
+					return "", false
+				}
+				text = text[idx+2:]
+			case stripToDelimiter:
+				idx := strings.Index(text, r.delimiter)
+				if idx < 0 {
+					return "", false
+				}
+				text = text[idx+len(r.delimiter):]
+			case stripToBracketClose:
+				idx := strings.Index(text, "]\n\n")
+				if idx < 0 {
+					return "", false
+				}
+				text = text[idx+3:]
+			case stripToNewline:
+				nl := strings.IndexByte(text, '\n')
+				if nl < 0 {
+					return "", false
+				}
+				text = text[nl+1:]
+			}
+			break // re-loop from the trimmed remainder
+		}
+		if !matched {
+			return text, true
+		}
+	}
+}
 
 // getOrCreateConnForLoadFn is the function signature for obtaining an ACP
 // connection for loading a session. Used to allow test overrides.
@@ -311,19 +526,12 @@ func ServeACPLoadSession(w http.ResponseWriter, r *http.Request) {
 		}
 		persistReplayMessages(sessionID, projectPath, agent.Backend, messages)
 
-		// Set session title from first user message
-		for _, msg := range messages {
-			if msg.role == strUser {
-				title := service.ExtractPlainText(msg.content)
-				if title != "" {
-					if runes := []rune(title); len(runes) > 50 {
-						title = string(runes[:50]) + "..."
-					}
-					if err := service.UpdateSessionTitle(sessionID, title); err != nil {
-						slog.Warn("handler: failed to set title for acp-load session", "session_id", sessionID, "error", err)
-					}
-				}
-				break
+		// Set session title from the first real user-typed message,
+		// skipping machine-generated user turns (see
+		// deriveSessionTitleFromReplay).
+		if title := deriveSessionTitleForAgent(agent, projectPath, req.AcpSessionID, messages); title != "" {
+			if err := service.UpdateSessionTitle(sessionID, title); err != nil {
+				slog.Warn("handler: failed to set title for acp-load session", "session_id", sessionID, "error", err)
 			}
 		}
 
