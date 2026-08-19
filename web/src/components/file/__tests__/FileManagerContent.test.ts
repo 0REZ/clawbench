@@ -156,6 +156,11 @@ vi.mock('@/utils/fileType', () => ({
   }),
 }))
 
+// No-op logger: keeps the 9999-retry loop test from flooding /api/client-log.
+vi.mock('@/utils/appLog', () => ({
+  appLog: { d: vi.fn(), i: vi.fn(), w: vi.fn(), e: vi.fn() },
+}))
+
 vi.mock('@/utils/fileManager', () => ({
   buildThumbUrl: (dir: string, name: string) => `/api/file/thumb?path=${dir}/${name}`,
   isImage: (e: any) => /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(e.name || ''),
@@ -167,6 +172,11 @@ vi.mock('@/utils/fileManager', () => ({
     return `${s} B`
   },
   THUMBABLE_EXTS: [],
+  numberedName: (baseName: string, index: number) => {
+    const lastDot = baseName.lastIndexOf('.')
+    if (lastDot <= 0) return `${baseName}_${index}`
+    return `${baseName.slice(0, lastDot)}_${index}${baseName.slice(lastDot)}`
+  },
   createMultiSelect: () => {
     const state = reactive({ active: false, selected: new Set() })
     return {
@@ -228,7 +238,7 @@ const i18n = createI18n({
         noFiles: '无文件',
         truncateHint: '截断提示',
         multiSelect: { allCopied: '已复制', allCut: '已剪切', confirmDelete: '确认删除', enter: '多选', exit: '退出', tapToSelect: '点击选择', selectedCount: '已选 {n} 项', selectAll: '全选', deselectAll: '取消全选', archive: '归档', share: '分享' },
-        prompt: { fileName: '文件名', folderName: '文件夹名', newName: '新名称', pasteNewName: '新名称' },
+        prompt: { fileName: '文件名', folderName: '文件夹名', newName: '新名称' },
         toast: { fileCreated: '已创建', folderCreated: '已创建', cutDone: '已剪切', moved: '已移动', createFailed: '创建失败', createFailedDetail: '创建失败', archiving: '归档中', archiveDone: '归档完成', archiveFailed: '归档失败', archiveFailedDetail: '归档失败', switchProjectFailed: '切换失败', switchProjectFailedShort: '切换失败' },
         search: { title: '搜索文件' },
       },
@@ -821,6 +831,22 @@ describe('FileManagerContent — keyboard shortcuts', () => {
     expect(mockToastShow).toHaveBeenCalled()
   })
 
+  it('Ctrl+C copies selectedPath entry to clipboard (browse-list selection)', async () => {
+    const wrapper = mountContent()
+    await nextTick()
+    // Simulate browse-list click: no currentFile, only selectedPath
+    wrapper.vm._setSelectedPath('test.ts')
+    await nextTick()
+
+    const event = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true })
+    document.dispatchEvent(event)
+    await nextTick()
+
+    expect(wrapper.vm.clipboard.entries).toHaveLength(1)
+    expect(wrapper.vm.clipboard.entries[0]).toEqual({ type: 'file', name: 'test.ts', path: 'test.ts' })
+    expect(wrapper.vm.clipboard.isCut).toBe(false)
+  })
+
   it('Ctrl+X cuts current file to clipboard', async () => {
     const wrapper = mountContent({ currentFile: { path: 'test.ts', name: 'test.ts' } })
     await nextTick()
@@ -830,6 +856,21 @@ describe('FileManagerContent — keyboard shortcuts', () => {
     await nextTick()
 
     expect(mockToastShow).toHaveBeenCalled()
+  })
+
+  it('Ctrl+X cuts selectedPath entry to clipboard (browse-list selection)', async () => {
+    const wrapper = mountContent()
+    await nextTick()
+    wrapper.vm._setSelectedPath('test.ts')
+    await nextTick()
+
+    const event = new KeyboardEvent('keydown', { key: 'x', ctrlKey: true, bubbles: true })
+    document.dispatchEvent(event)
+    await nextTick()
+
+    expect(wrapper.vm.clipboard.entries).toHaveLength(1)
+    expect(wrapper.vm.clipboard.entries[0]).toEqual({ type: 'file', name: 'test.ts', path: 'test.ts' })
+    expect(wrapper.vm.clipboard.isCut).toBe(true)
   })
 
   it('Delete emits delete for current file', async () => {
@@ -1869,6 +1910,96 @@ describe('FileManagerContent — clipboard paste (doPaste)', () => {
     await wrapper.vm.doPaste()
 
     expect(wrapper.emitted('refresh')).toBeFalsy()
+  })
+
+  it('auto-numbers the destination name on 409 instead of prompting', async () => {
+    // Copying to the same dir: src==dest so frontend skips original name and
+    // starts with numbered name. 409 on test_1.ts → retry with test_2.ts.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 409, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContent({ currentDir: '' })
+    await nextTick()
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await wrapper.vm.doCopy()
+    await nextTick()
+
+    await wrapper.vm.doPaste()
+    await nextTick()
+
+    // First call: test_1.ts (same-dir skip). Second call: test_2.ts (after 409).
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const firstBody = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(firstBody.dest).toBe('test_1.ts')
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(secondBody.dest).toBe('test_2.ts')
+    // No naming dialog should be invoked
+    expect(mockDialogPrompt).not.toHaveBeenCalled()
+    expect(wrapper.emitted('refresh')).toBeTruthy()
+  })
+
+  it('stops retrying at the 9999 cap (no infinite loop)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 409, text: async () => '' })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContent({ currentDir: '' })
+    await nextTick()
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await wrapper.vm.doCopy()
+    await nextTick()
+
+    await wrapper.vm.doPaste()
+    await nextTick()
+
+    // Same-dir copy skips original name → starts with test_1.ts.
+    // test_1..test_9999 all 409 = 9999 calls, then loop breaks.
+    expect(fetchMock).toHaveBeenCalledTimes(9999)
+  })
+
+  it('keeps incrementing on repeated collisions (test_2.ts)', async () => {
+    // Same-dir copy: starts with test_1.ts (409), then test_2.ts (200).
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 409, text: async () => '' })
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => '' })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContent({ currentDir: '' })
+    await nextTick()
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await wrapper.vm.doCopy()
+    await nextTick()
+
+    await wrapper.vm.doPaste()
+    await nextTick()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const lastBody = JSON.parse(fetchMock.mock.calls[1][1].body)
+    expect(lastBody.dest).toBe('test_2.ts')
+    expect(wrapper.emitted('refresh')).toBeTruthy()
+  })
+
+  it('same-dir copy skips original name and uses numbered name directly', async () => {
+    // Copying to the same directory: backend returns 200 no-op for src==dest,
+    // so frontend must skip the original name and start with a numbered name.
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, text: async () => '' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mountContent({ currentDir: '' })
+    await nextTick()
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await wrapper.vm.doCopy()
+    await nextTick()
+
+    await wrapper.vm.doPaste()
+    await nextTick()
+
+    // Only one fetch call, with the numbered name test_1.ts
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.dest).toBe('test_1.ts')
+    expect(wrapper.emitted('refresh')).toBeTruthy()
   })
 })
 

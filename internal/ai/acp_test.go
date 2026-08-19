@@ -962,11 +962,16 @@ func TestMapACPSessionUpdate_AgentMessageChunk(t *testing.T) {
 	assertNoMoreACPEvents(ch, t)
 }
 
-func TestMapACPSessionUpdate_RawOutputEmitted(t *testing.T) {
-	// Every ACP notification should emit a raw_output event for debugging/storage
+func TestMapACPSessionUpdate_RawOutputAccumulatedOnConn(t *testing.T) {
+	// Raw ACP notification payloads are now accumulated on ACPConn.rawOutputBuf
+	// instead of being sent through the channel (to avoid consuming channel buffer
+	// space that would cause content events to be dropped).
+	// When conn is nil, raw output is not accumulated.
+	// When conn is provided, raw output is accumulated on the connection.
 	ch := make(chan StreamEvent, 10)
 	ctx := context.Background()
 
+	// With conn=nil: no raw_output event in channel
 	update := acp.SessionUpdate{
 		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
 			Content: acp.ContentBlock{
@@ -977,7 +982,7 @@ func TestMapACPSessionUpdate_RawOutputEmitted(t *testing.T) {
 
 	mapACPSessionUpdate(update, ch, ctx, nil, nil)
 
-	// Drain all events including raw_output
+	// Drain all events — should NOT contain raw_output
 	var rawEvents []StreamEvent
 	var otherEvents []StreamEvent
 	for {
@@ -994,14 +999,34 @@ func TestMapACPSessionUpdate_RawOutputEmitted(t *testing.T) {
 	}
 done:
 
-	// Should have exactly 1 raw_output event
-	assert.Len(t, rawEvents, 1, "expected exactly 1 raw_output event")
-	if len(rawEvents) > 0 {
-		assert.Contains(t, rawEvents[0].RawOutput, "agent_message_chunk")
-	}
+	assert.Len(t, rawEvents, 0, "raw_output should not be sent through channel anymore")
+	assert.Len(t, otherEvents, 2, "should have thinking_done + content")
 
-	// Other events should be present (thinking_done + content)
-	assert.Len(t, otherEvents, 2)
+	// With conn provided: raw output is accumulated on the connection
+	conn := &ACPConn{
+		agent: &model.Agent{ID: "test"},
+	}
+	ch2 := make(chan StreamEvent, 10)
+	mapACPSessionUpdate(update, ch2, ctx, conn, nil)
+
+	// Drain events from ch2
+	var otherEvents2 []StreamEvent
+	for {
+		select {
+		case event := <-ch2:
+			otherEvents2 = append(otherEvents2, event)
+		default:
+			goto done2
+		}
+	}
+done2:
+
+	// No raw_output in channel
+	assert.Len(t, otherEvents2, 2, "should have thinking_done + content, no raw_output")
+
+	// Raw output should be accumulated on the connection
+	rawOutput := conn.ResetRawOutput()
+	assert.Contains(t, rawOutput, "agent_message_chunk", "raw output should be accumulated on ACPConn")
 }
 
 func TestMapACPSessionUpdate_AgentMessageChunk_NilText(t *testing.T) {
@@ -2364,4 +2389,62 @@ func assertNoMoreACPEvents(ch chan StreamEvent, t *testing.T) {
 			return
 		}
 	}
+}
+
+// --- ACPConn raw output buffer tests ---
+
+func TestACPConn_AppendRawOutput(t *testing.T) {
+	conn := &ACPConn{}
+
+	conn.AppendRawOutput(`{"type":"agent_message_chunk"}`)
+	assert.Equal(t, `{"type":"agent_message_chunk"}`, conn.rawOutputBuf.String())
+
+	conn.AppendRawOutput(`{"type":"tool_call_update"}`)
+	assert.Equal(t, `{"type":"agent_message_chunk"}
+{"type":"tool_call_update"}`, conn.rawOutputBuf.String())
+}
+
+func TestACPConn_ResetRawOutput(t *testing.T) {
+	conn := &ACPConn{}
+
+	// Empty buffer returns empty string
+	s := conn.ResetRawOutput()
+	assert.Equal(t, "", s)
+
+	// After appending, ResetRawOutput returns accumulated and clears
+	conn.AppendRawOutput("line1")
+	conn.AppendRawOutput("line2")
+	s = conn.ResetRawOutput()
+	assert.Equal(t, "line1\nline2", s)
+
+	// Buffer is cleared after reset
+	s = conn.ResetRawOutput()
+	assert.Equal(t, "", s)
+}
+
+func TestACPConn_AppendRawOutput_Concurrent(t *testing.T) {
+	conn := &ACPConn{}
+	done := make(chan struct{})
+
+	// Two goroutines appending concurrently should not race
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for range 100 {
+			conn.AppendRawOutput(`{"goroutine":"a"}`)
+		}
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for range 100 {
+			conn.AppendRawOutput(`{"goroutine":"b"}`)
+		}
+	}()
+
+	<-done
+	<-done
+
+	// Should have 200 entries total (separated by newlines)
+	result := conn.ResetRawOutput()
+	lines := strings.Split(result, "\n")
+	assert.Len(t, lines, 200)
 }

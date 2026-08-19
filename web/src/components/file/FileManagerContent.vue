@@ -424,6 +424,7 @@ import {
   buildThumbUrl,
   isThumbable as isThumbableEntry, formatSize as formatFileSize,
   createMultiSelect as _createMultiSelect, createClipboard as _createClipboard,
+  numberedName,
 } from '@/utils/fileManager.ts'
 import { store } from '@/stores/app.ts'
 import { localConfig, setLocalConfig, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
@@ -988,26 +989,37 @@ async function transferEntries(entries, destDir, isMove) {
                 appLog.d(TAG, '[transfer] same-path no-op, skipping:', srcEntry.path)
                 continue
             }
+            // Copy to the same directory: the backend treats src==dest as a no-op (200),
+            // so skip the original name and start with a numbered name directly.
+            let attempt = 0
+            if (!isMove && srcEntry.path === destPath) {
+                attempt = 1
+                destPath = (destDir ? destDir + '/' : '') + numberedName(srcEntry.name, attempt)
+                appLog.d(TAG, '[transfer] same-dir copy, using numbered name:', destPath)
+            }
             // Guard: don't move a directory into itself or one of its descendants
             if (isMove && (srcEntry.path === destDir || destDir.startsWith(srcEntry.path + '/'))) {
                 appLog.d(TAG, '[transfer] skip self-nesting move:', srcEntry.path, '→', destDir)
                 continue
             }
             appLog.d(TAG, '[transfer]', isMove ? 'moving' : 'copying', srcEntry.path, '→', destPath)
-            let resp = await fetch(api, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
-            })
-            if (resp.status === 409) {
-                const newName = await dialog.prompt(t('file.prompt.pasteNewName', { name: srcEntry.name }), { value: srcEntry.name })
-                if (!newName || !newName.trim()) continue
-                destPath = (destDir ? destDir + '/' : '') + newName.trim()
+            let resp
+            while (true) {
                 resp = await fetch(api, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ path: srcEntry.path, dest: destPath }),
                 })
+                // Same-name conflict: auto-append a numeric suffix and retry
+                // (mirrors backend upload numbering), no naming dialog.
+                if (resp.status === 409 && attempt < 9999) {
+                    attempt++
+                    const candidate = numberedName(srcEntry.name, attempt)
+                    destPath = (destDir ? destDir + '/' : '') + candidate
+                    appLog.d(TAG, '[transfer] conflict, retrying as:', destPath)
+                    continue
+                }
+                break
             }
             if (!resp.ok) {
                 const errBody = await resp.text().catch(() => '')
@@ -1450,9 +1462,11 @@ async function handleKeydown(e) {
         if (multiSelect.active && multiSelect.selected.size > 0) {
             e.preventDefault()
             doBatchCopy()
-        } else if (currentFileForClipboard()) {
+        } else if (selectedPath.value) {
             e.preventDefault()
-            clipboard.entries = [currentFileForClipboard()]
+            const name = selectedPath.value.split('/').pop() || ''
+            const entry = props.entries.find(e => e.name === name)
+            clipboard.entries = [{ type: entry?.type || 'file', name, path: selectedPath.value }]
             clipboard.isCut = false
             if (toast) toast.show(t('common.copied'), { icon: '📋', type: 'success', duration: 1500 })
         }
@@ -1466,9 +1480,11 @@ async function handleKeydown(e) {
         if (multiSelect.active && multiSelect.selected.size > 0) {
             e.preventDefault()
             doBatchCut()
-        } else if (currentFileForClipboard()) {
+        } else if (selectedPath.value) {
             e.preventDefault()
-            clipboard.entries = [currentFileForClipboard()]
+            const name = selectedPath.value.split('/').pop() || ''
+            const entry = props.entries.find(e => e.name === name)
+            clipboard.entries = [{ type: entry?.type || 'file', name, path: selectedPath.value }]
             clipboard.isCut = true
             if (toast) toast.show(t('file.toast.cutDone'), { icon: '✂️', type: 'success', duration: 1500 })
         }
@@ -1669,15 +1685,6 @@ function scrollSelectedIntoView(path) {
             }
         }
     })
-}
-
-// Build a clipboard entry from the currently viewed/selected file
-function currentFileForClipboard() {
-    if (!props.currentFile) return null
-    const path = props.currentFile.path
-    const name = path.split('/').pop() || ''
-    const entry = props.entries.find(e => e.name === name)
-    return { type: entry?.type || 'file', name, path }
 }
 
 </script>

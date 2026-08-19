@@ -108,6 +108,11 @@ vi.mock('@/utils/fileManager', () => ({
     clear: vi.fn(),
   }),
   resolveClickAction: vi.fn(),
+  numberedName: (baseName: string, index: number) => {
+    const lastDot = baseName.lastIndexOf('.')
+    if (lastDot <= 0) return `${baseName}_${index}`
+    return `${baseName.slice(0, lastDot)}_${index}${baseName.slice(lastDot)}`
+  },
 }))
 
 vi.mock('@/components/common/SearchInput.vue', () => ({
@@ -128,7 +133,7 @@ const i18n = createI18n({
         context: { newFile: '新建文件', newFolder: '新建文件夹', paste: '粘贴', rename: '重命名', delete: '删除', archiveDir: '归档', openAsProject: '打开为项目' },
         uploadHere: '上传到此处',
         sortDefault: '排序',
-        prompt: { fileName: '文件名', folderName: '文件夹名', newName: '新名称', pasteNewName: '新名称' },
+        prompt: { fileName: '文件名', folderName: '文件夹名', newName: '新名称' },
         toast: { fileCreated: '已创建', folderCreated: '已创建', cutDone: '已剪切', moved: '已移动', createFailed: '创建失败', createFailedDetail: '创建失败', archiving: '归档中', archiveDone: '归档完成', archiveFailed: '归档失败', archiveFailedDetail: '归档失败', switchProjectFailed: '切换失败', switchProjectFailedShort: '切换失败' },
         multiSelect: { allCopied: '已复制', allCut: '已剪切', confirmDelete: '确认删除' },
       },

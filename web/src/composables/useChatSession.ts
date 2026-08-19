@@ -147,6 +147,14 @@ export function useChatSession(options: UseChatSessionOptions) {
     // ── Message replacement ──
     const prevCount = messages.value.length
     const newCount = rawMsgs.length
+    // Diagnostic: log when messages are being set for a session (helps debug
+    // stale-messages-in-new-session issues). Only logs when the message count
+    // changes or when a non-empty list replaces an empty one.
+    if (newCount > 0 || prevCount > 0) {
+      const sid = (sessionData.sessionId as string) || '?'
+      const curSid = currentSessionId.value || '?'
+      appLog.d(TAG, `syncSessionState: ${prevCount}→${newCount} msgs, curSid=${curSid.slice(0,12)}, respSid=${sid.slice(0,12)}, skip=${skipIfUnchanged}`)
+    }
     const sameCore = prevCount === newCount && prevCount > 0 && rawMsgs.slice(0, -1).every((m: Record<string, unknown>, i: number) => m.id === messages.value[i]?.id)
     if (!sameCore) {
       expandedTools.value = {}
@@ -661,7 +669,25 @@ export function useChatSession(options: UseChatSessionOptions) {
     // race where another client created a session between pre-check and POST),
     // we need to restore it to avoid disabling the delete button.
     const prevSessionId = currentSessionId.value
+    // Mirror switchSession's synchronous pre-flight cleanup so the async POST
+    // gap doesn't leak stale state (stream events, snapshots, blocks).
+    onDisconnectStream()
+    lastMessageSnapshot = ''
+    expandedTools.value = {}
+    Object.keys(blockTasks).forEach(k => delete blockTasks[k])
+    Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
     clearSessionIdentity()
+    // Bump loadHistorySeq to invalidate any in-flight loadHistory (e.g.
+    // polling) so its recovery path cannot re-populate stale messages while
+    // currentSessionId is empty. This mirrors switchSession's ++loadHistorySeq.
+    ++loadHistorySeq
+    // Clear messages immediately so the recovery path in any concurrent
+    // loadHistory (e.g. from the active watcher) cannot re-populate stale
+    // messages from the previous session via the cookie-based fallback.
+    // switchSession also clears messages, but it runs after the async POST —
+    // the gap between clearSessionIdentity('') and switchSession is the
+    // window where the recovery path can load old messages.
+    messages.value = []
     try {
       const body = agentId ? { agentId } : {}
       const resp = await fetch('/api/ai/sessions', {
@@ -712,6 +738,14 @@ export function useChatSession(options: UseChatSessionOptions) {
       // after a rare TOCTOU race (pre-check passed but backend still 409'd).
       if (prevSessionId && !currentSessionId.value) {
         currentSessionId.value = prevSessionId
+      }
+      // Reload messages for the restored session — messages were cleared
+      // above before the async POST, so we need to re-fetch them.
+      // showOverlay=false: switching overlay was already reset above.
+      if (currentSessionId.value) {
+        loadHistory(false, false, false).catch((e) => {
+          appLog.w(TAG, 'Failed to reload messages after createSession error:', e)
+        })
       }
     }
   }
