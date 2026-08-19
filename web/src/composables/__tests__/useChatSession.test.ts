@@ -616,6 +616,34 @@ describe('onSessionEvent', () => {
     expect(mockState.chatUnreadCount).toBe(0)
   })
 
+  it('recovers loading state when session_update running arrives while loading is false', () => {
+    const { session, options } = createSessionInternal()
+    mockState.currentSessionId = 'current-s1'
+
+    // Simulate: session is running, but loading got stuck at false
+    // (e.g. stale completed event arrived before the fresh running event)
+    options.loading.value = false
+
+    session.onSessionEvent({ session_id: 'current-s1', status: 'running' })
+
+    // Should recover: loading=true, connectStream called
+    expect(options.loading.value).toBe(true)
+    expect(options.onConnectStream).toHaveBeenCalledWith('current-s1', { reuseExistingStreaming: true })
+  })
+
+  it('does not recover loading for a different session', () => {
+    const { session, options } = createSessionInternal()
+    mockState.currentSessionId = 'current-s1'
+
+    options.loading.value = false
+
+    session.onSessionEvent({ session_id: 'other-s2', status: 'running' })
+
+    // Should NOT recover — it's a different session
+    expect(options.loading.value).toBe(false)
+    expect(options.onConnectStream).not.toHaveBeenCalled()
+  })
+
   // ── onSessionEvent → loadHistory (replaces old msgCountPolling) ──
 
   it('calls loadHistory when has_new_messages=true for current session', async () => {
@@ -3309,7 +3337,7 @@ describe('handleVisibilityChange', () => {
     vi.restoreAllMocks()
   })
 
-  it('when visible and loading=false: does nothing', async () => {
+  it('when visible and loading=false: reloads history (skipIfUnchanged)', async () => {
     const loading = ref(false)
     const onDisconnectStream = vi.fn()
     const options = {
@@ -3330,11 +3358,26 @@ describe('handleVisibilityChange', () => {
     }
     const session = useChatSession(options)
 
+    // Mock fetch for the loadHistory call
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1', messages: [], total: 0, running: false,
+      }),
+    })
+
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
 
     session.handleVisibilityChange()
 
+    // Should NOT disconnect stream (not streaming), but SHOULD reload history
     expect(onDisconnectStream).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat?session_id=s1'),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+    })
 
     vi.restoreAllMocks()
   })
@@ -3360,16 +3403,73 @@ describe('handleVisibilityChange', () => {
     }
     const session = useChatSession(options)
 
+    // Mock fetch to detect any loadHistory calls
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1', messages: [], total: 0, running: false,
+      }),
+    })
+
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
 
     session.handleVisibilityChange()
 
     expect(onDisconnectStream).not.toHaveBeenCalled()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+
+    vi.restoreAllMocks()
+  })
+
+  it('when visible and no session selected: reloads history via recovery path', async () => {
+    const loading = ref(false)
+    const onDisconnectStream = vi.fn()
+    const options = {
+      currentSessionId: ref(''),
+      messages: ref([]),
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream,
+      onOpen: vi.fn(),
+    }
+    const session = useChatSession(options)
+
+    // Mock fetch for the recovery path (no session_id in URL)
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'recovered-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+
+    session.handleVisibilityChange()
+
+    expect(onDisconnectStream).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      // Recovery path: URL does NOT contain session_id parameter
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat?limit='),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+      expect(globalThis.fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining('session_id'),
+        expect.anything()
+      )
+    })
 
     vi.restoreAllMocks()
   })
 })
-
 // ───────────────────────────────────────────────────────────
 // handleWsReconnect
 // ───────────────────────────────────────────────────────────

@@ -291,6 +291,93 @@ func TestClawBenchACPClient_GetCommandsAsInfo_Empty(t *testing.T) {
 	assert.Empty(t, info)
 }
 
+// --- MergeCommandsFromScan + SessionUpdate merge tests (issue #383) ---
+
+func TestClawBenchACPClient_MergeCommandsFromScan_EmptyClient(t *testing.T) {
+	c := NewClawBenchACPClient()
+
+	pluginCmds := []AvailableCommandInfo{
+		{Name: "brainstorm", Description: "Brainstorm ideas"},
+		{Name: "execute-plan", Description: "Execute plan"},
+	}
+	c.MergeCommandsFromScan(pluginCmds)
+
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 2)
+	assert.Equal(t, "brainstorm", cmds[0].Name)
+	assert.Equal(t, "execute-plan", cmds[1].Name)
+}
+
+func TestClawBenchACPClient_MergeCommandsFromScan_ACPWins(t *testing.T) {
+	c := NewClawBenchACPClient()
+
+	// Set existing ACP commands
+	c.SetCommands([]acp.AvailableCommand{
+		{Name: "compact", Description: "ACP compact"},
+		{Name: "brainstorm", Description: "ACP brainstorm", Input: &acp.AvailableCommandInput{
+			Unstructured: &acp.UnstructuredCommandInput{Hint: "topic"},
+		}},
+	})
+
+	// Merge plugin commands — "brainstorm" already exists in ACP, so ACP version wins
+	pluginCmds := []AvailableCommandInfo{
+		{Name: "brainstorm", Description: "Plugin brainstorm"},
+		{Name: "execute-plan", Description: "Execute plan"},
+	}
+	c.MergeCommandsFromScan(pluginCmds)
+
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 3)
+	assert.Equal(t, "compact", cmds[0].Name)
+	assert.Equal(t, "ACP brainstorm", cmds[1].Description) // ACP version preserved
+	assert.Equal(t, "topic", cmds[1].Input.Unstructured.Hint)
+	assert.Equal(t, "execute-plan", cmds[2].Name)
+}
+
+func TestClawBenchACPClient_MergeCommandsFromScan_EmptyInput(t *testing.T) {
+	c := NewClawBenchACPClient()
+	c.MergeCommandsFromScan(nil) // should not panic
+	assert.Nil(t, c.GetCommands())
+}
+
+func TestClawBenchACPClient_SessionUpdate_MergesWithPreScanned(t *testing.T) {
+	c := NewClawBenchACPClient()
+	ch := make(chan StreamEvent, 10)
+	c.RegisterSession("sess-1", ch)
+
+	// Pre-scan adds plugin commands
+	pluginCmds := []AvailableCommandInfo{
+		{Name: "brainstorm", Description: "Brainstorm ideas"},
+		{Name: "execute-plan", Description: "Execute plan"},
+	}
+	c.MergeCommandsFromScan(pluginCmds)
+
+	// First ACP update (built-in only, no plugin commands yet)
+	ctx := context.Background()
+	notif := acp.SessionNotification{
+		SessionId: acp.SessionId("sess-1"),
+		Update: acp.SessionUpdate{
+			AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+				AvailableCommands: []acp.AvailableCommand{
+					{Name: "compact", Description: "Compact history"},
+				},
+			},
+		},
+	}
+	err := c.SessionUpdate(ctx, notif)
+	assert.NoError(t, err)
+
+	// Pre-scanned commands should NOT be lost — merge preserves them
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 3)
+	assert.Equal(t, "compact", cmds[0].Name)
+	assert.Equal(t, "brainstorm", cmds[1].Name)
+	assert.Equal(t, "execute-plan", cmds[2].Name)
+
+	// Drain the event from channel
+	<-ch
+}
+
 // --- Permission request/respond flow tests ---
 
 func TestClawBenchACPClient_RequestPermission_NoOptions_AutoCancel(t *testing.T) {
@@ -940,4 +1027,118 @@ func TestRequestPermission_AutoApproveOff_Interactive(t *testing.T) {
 	// Respond to unblock the goroutine
 	client.RespondPermission(PermissionKey(acpSessionID, "tc-interactive-1"), "allow", false)
 	<-done
+}
+
+// --- mergeAndSyncCommands registry sync tests ---
+
+func TestMergeAndSyncCommands_WithConnRef_UpdatesRegistry(t *testing.T) {
+	reg := resetGlobalRegistryForTest(t)
+
+	c := NewClawBenchACPClient()
+	agent := &model.Agent{ID: "test-merge-agent", Backend: "codebuddy"}
+	c.connRef = newACPConn(agent, "session-1")
+
+	acpCmds := []acp.AvailableCommand{
+		{Name: "compact", Description: "Compact context"},
+		{Name: "ask", Description: "Ask question", Input: &acp.AvailableCommandInput{
+			Unstructured: &acp.UnstructuredCommandInput{Hint: "your question"},
+		}},
+	}
+
+	c.mergeAndSyncCommands(acpCmds)
+
+	// Client cache should have the commands
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 2)
+	assert.Equal(t, "compact", cmds[0].Name)
+	assert.Equal(t, "ask", cmds[1].Name)
+	assert.Equal(t, "your question", cmds[1].Input.Unstructured.Hint)
+
+	// Registry should also have the commands
+	regCmds := reg.GetCommands("test-merge-agent")
+	require.Len(t, regCmds, 2)
+	assert.Equal(t, "compact", regCmds[0].Name)
+	assert.Equal(t, "Compact context", regCmds[0].Description)
+	assert.Equal(t, "ask", regCmds[1].Name)
+	assert.Equal(t, "Ask question", regCmds[1].Description)
+	assert.Equal(t, "your question", regCmds[1].InputHint)
+}
+
+func TestMergeAndSyncCommands_WithConnRef_MergesPreScanned(t *testing.T) {
+	reg := resetGlobalRegistryForTest(t)
+
+	c := NewClawBenchACPClient()
+	agent := &model.Agent{ID: "test-merge-pre-agent", Backend: "codebuddy"}
+	c.connRef = newACPConn(agent, "session-2")
+
+	// Pre-scan adds plugin commands
+	pluginCmds := []AvailableCommandInfo{
+		{Name: "brainstorm", Description: "Brainstorm ideas"},
+		{Name: "execute-plan", Description: "Execute plan"},
+	}
+	c.MergeCommandsFromScan(pluginCmds)
+
+	// ACP update arrives with built-in commands only
+	acpCmds := []acp.AvailableCommand{
+		{Name: "compact", Description: "Compact context"},
+	}
+	c.mergeAndSyncCommands(acpCmds)
+
+	// Client cache should have merged result
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 3)
+	assert.Equal(t, "compact", cmds[0].Name)
+	assert.Equal(t, "brainstorm", cmds[1].Name)
+	assert.Equal(t, "execute-plan", cmds[2].Name)
+
+	// Registry should have the same merged result
+	regCmds := reg.GetCommands("test-merge-pre-agent")
+	require.Len(t, regCmds, 3)
+	assert.Equal(t, "compact", regCmds[0].Name)
+	assert.Equal(t, "brainstorm", regCmds[1].Name)
+	assert.Equal(t, "execute-plan", regCmds[2].Name)
+}
+
+func TestMergeAndSyncCommands_WithConnRef_EmptyAgentID_SkipsRegistry(t *testing.T) {
+	reg := resetGlobalRegistryForTest(t)
+
+	c := NewClawBenchACPClient()
+	// Agent with empty ID — registry sync should be skipped
+	agent := &model.Agent{ID: "", Backend: "codebuddy"}
+	c.connRef = newACPConn(agent, "session-3")
+
+	c.mergeAndSyncCommands([]acp.AvailableCommand{
+		{Name: "compact", Description: "Compact context"},
+	})
+
+	// Client cache should still be updated
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 1)
+	assert.Equal(t, "compact", cmds[0].Name)
+
+	// Registry should NOT have any entry for the empty agent ID
+	regCmds := reg.GetCommands("")
+	assert.Nil(t, regCmds)
+}
+
+func TestMergeAndSyncCommands_NilConnRef_SkipsRegistry(t *testing.T) {
+	reg := resetGlobalRegistryForTest(t)
+
+	c := NewClawBenchACPClient()
+	// connRef is nil by default — registry sync should be skipped
+
+	c.mergeAndSyncCommands([]acp.AvailableCommand{
+		{Name: "compact", Description: "Compact context"},
+	})
+
+	// Client cache should still be updated
+	cmds := c.GetCommands()
+	require.Len(t, cmds, 1)
+	assert.Equal(t, "compact", cmds[0].Name)
+
+	// Registry should be empty
+	reg.mu.Lock()
+	empty := len(reg.caps) == 0
+	reg.mu.Unlock()
+	assert.True(t, empty, "registry should have no entries when connRef is nil")
 }
