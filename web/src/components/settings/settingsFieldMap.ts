@@ -176,6 +176,7 @@ export const categoryItems: Record<string, CategoryEntry[]> = {
     { type: 'item', spec: { labelKey: 'settings.items.changePassword', descriptionKey: 'settings.items.changePasswordDesc', key: 'changePassword', type: 'action', source: 'local', sectionHeader: 'settings.items.securitySection' } },
   ],
   notification: [
+    { type: 'item', spec: { labelKey: 'settings.items.notificationSound', descriptionKey: 'settings.items.notificationSoundDesc', key: 'notificationSound', type: 'switch', source: 'local', sectionHeader: 'settings.items.notificationSoundSection' } },
     { type: 'panel', config: {
       panelId: 'push',
       entrySelector: {

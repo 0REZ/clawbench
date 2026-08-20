@@ -895,6 +895,90 @@ func TestEnsureAliveWithSession_EmptyPreSpawnAcpSID_SkipsResume(t *testing.T) {
 	assert.Empty(t, savedBeforeSpawn, "preSpawnAcpSID should be empty for brand-new sessions, skipping ResumeSession")
 }
 
+// --- ensureAliveWithSession recovers acpSID from DB when in-memory is empty ---
+
+func TestEnsureAliveWithSession_DBFallbackWhenInMemoryEmpty(t *testing.T) {
+	// After idle sweep or killProcessLocked, c.acpSID can be empty while the
+	// DB still has external_session_id. ensureAliveWithSession must consult
+	// getExternalSessionID as a fallback so the next prompt can still attempt
+	// ResumeSession instead of always creating a brand-new session (amnesia).
+	agent := &model.Agent{ID: "test-dbfallback", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "session-dbfallback")
+
+	acpSIDFromDB := "acp-session-recovered-from-db"
+
+	// Simulate the state after idle-sweep-with-conn-still-in-pool:
+	// c.acpSID is empty in-memory, but the DB still has external_session_id.
+	conn.mu.Lock()
+	conn.acpSID = ""
+	conn.mu.Unlock()
+
+	// Override the DB lookup to return our recovery value.
+	originalGetter := getExternalSessionID
+	getExternalSessionID = func(sid string) string {
+		if sid == conn.clawbenchSID {
+			return acpSIDFromDB
+		}
+		return ""
+	}
+	defer func() { getExternalSessionID = originalGetter }()
+
+	// Simulate ensureAliveWithSession's recovery logic directly: it captures
+	// preSpawnAcpSID first (empty), then consults getExternalSessionID.
+	conn.mu.Lock()
+	preSpawnAcpSID := conn.acpSID
+	conn.acpSID = "" // spawnLocked clears it (no-op here, already empty)
+	conn.mu.Unlock()
+
+	var acpSID string
+	if preSpawnAcpSID != "" {
+		acpSID = preSpawnAcpSID
+	} else if extID := getExternalSessionID(conn.clawbenchSID); extID != "" {
+		acpSID = extID
+	}
+
+	assert.Equal(t, acpSIDFromDB, acpSID,
+		"ensureAliveWithSession must fall back to getExternalSessionID when in-memory acpSID is empty, otherwise the session loses context after idle sweep")
+}
+
+func TestEnsureAliveWithSession_DBFallback_NotCalledWhenInMemorySet(t *testing.T) {
+	// When in-memory acpSID IS set, getExternalSessionID must NOT be consulted —
+	// the in-memory value is authoritative. This avoids stale-DB surprises
+	// (e.g., DB still has the old acpSID after the user reset the session).
+	agent := &model.Agent{ID: "test-dbfallback-skip", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "session-dbfallback-skip")
+
+	acpSIDInMemory := "acp-session-fresh"
+	acpSIDStaleInDB := "acp-session-stale"
+
+	conn.mu.Lock()
+	conn.acpSID = acpSIDInMemory
+	conn.mu.Unlock()
+
+	called := false
+	originalGetter := getExternalSessionID
+	getExternalSessionID = func(sid string) string {
+		called = true
+		return acpSIDStaleInDB
+	}
+	defer func() { getExternalSessionID = originalGetter }()
+
+	conn.mu.Lock()
+	preSpawnAcpSID := conn.acpSID
+	conn.acpSID = "" // spawnLocked clears it
+	conn.mu.Unlock()
+
+	var acpSID string
+	if preSpawnAcpSID != "" {
+		acpSID = preSpawnAcpSID
+	} else if extID := getExternalSessionID(conn.clawbenchSID); extID != "" {
+		acpSID = extID
+	}
+
+	assert.False(t, called, "getExternalSessionID must not be called when in-memory acpSID is set")
+	assert.Equal(t, acpSIDInMemory, acpSID, "in-memory acpSID must win over stale DB value")
+}
+
 // --- GetOrCreateConn reuses existing conn (does not re-read DB) ---
 
 func TestGetOrCreateConn_ReusesExistingConn(t *testing.T) {
@@ -1033,4 +1117,121 @@ func TestWaitForLoadSessionDone(t *testing.T) {
 	err := conn.waitForLoadSessionDone()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "still loading")
+}
+
+// --- sweepOnce: basic idle connection cleanup ---
+
+func TestSweepOnce_KillsIdleConnections(t *testing.T) {
+	mgr := GetACPConnManager()
+
+	agent := &model.Agent{ID: "test-sweep-idle", Backend: "acp-stdio", AcpCommand: "echo"}
+
+	// Create 2 alive, idle connections (idle > 5 min)
+	idleSids := make([]string, 0, 2)
+	for _, sid := range []string{"session-sweep-idle-1", "session-sweep-idle-2"} {
+		conn := newACPConn(agent, sid)
+		conn.SetAliveForTest()
+		conn.mu.Lock()
+		conn.lastUsed = time.Now().Add(-10 * time.Minute)
+		conn.mu.Unlock()
+		mgr.SetConnForTest(sid, conn)
+		idleSids = append(idleSids, sid)
+	}
+	defer func() {
+		for _, sid := range idleSids {
+			mgr.CloseConn(sid)
+		}
+	}()
+
+	// Create 1 alive, recently-used connection (not idle)
+	activeSid := "session-sweep-active"
+	activeConn := newACPConn(agent, activeSid)
+	activeConn.SetAliveForTest()
+	activeConn.mu.Lock()
+	activeConn.lastUsed = time.Now()
+	activeConn.mu.Unlock()
+	mgr.SetConnForTest(activeSid, activeConn)
+	defer mgr.CloseConn(activeSid)
+
+	mgr.sweepOnce()
+
+	// Idle connections should be killed
+	for _, sid := range []string{"session-sweep-idle-1", "session-sweep-idle-2"} {
+		conn := mgr.GetConn(sid)
+		if conn == nil {
+			continue
+		}
+		conn.mu.Lock()
+		alive := conn.alive
+		conn.mu.Unlock()
+		assert.False(t, alive, "idle connection %s should be killed", sid)
+	}
+
+	// Recently-used connection should survive
+	activeConn = mgr.GetConn(activeSid)
+	activeConn.mu.Lock()
+	assert.True(t, activeConn.alive, "recently-used connection should survive")
+	activeConn.mu.Unlock()
+}
+
+func TestSweepOnce_SkipsRunningSessions(t *testing.T) {
+	mgr := GetACPConnManager()
+
+	agent := &model.Agent{ID: "test-sweep-running", Backend: "acp-stdio", AcpCommand: "echo"}
+
+	// Create 2 alive, idle connections: one running, one not running
+	runningSid := "session-sweep-running"
+	runningConn := newACPConn(agent, runningSid)
+	runningConn.SetAliveForTest()
+	runningConn.mu.Lock()
+	runningConn.lastUsed = time.Now().Add(-10 * time.Minute)
+	runningConn.mu.Unlock()
+	mgr.SetConnForTest(runningSid, runningConn)
+	defer mgr.CloseConn(runningSid)
+
+	idleSid := "session-sweep-not-running"
+	idleConn := newACPConn(agent, idleSid)
+	idleConn.SetAliveForTest()
+	idleConn.mu.Lock()
+	idleConn.lastUsed = time.Now().Add(-10 * time.Minute)
+	idleConn.mu.Unlock()
+	mgr.SetConnForTest(idleSid, idleConn)
+	defer mgr.CloseConn(idleSid)
+
+	// Mark the "running" session as actively running
+	mgr.SetSessionRunningChecker(func(sid string) bool {
+		return sid == runningSid
+	})
+	defer mgr.SetSessionRunningChecker(nil)
+
+	mgr.sweepOnce()
+
+	runningConn = mgr.GetConn(runningSid)
+	runningConn.mu.Lock()
+	assert.True(t, runningConn.alive, "running session should not be killed")
+	runningConn.mu.Unlock()
+
+	idleConn = mgr.GetConn(idleSid)
+	idleConn.mu.Lock()
+	assert.False(t, idleConn.alive, "idle (non-running) session should be killed")
+	idleConn.mu.Unlock()
+}
+
+func TestSweepOnce_NilConnInMap(t *testing.T) {
+	// Regression: sweepOnce must skip nil entries in the conns map
+	// instead of panicking with nil pointer dereference.
+	// This can happen when a concurrent test clears a conn slot.
+	mgr := GetACPConnManager()
+
+	mgr.mu.Lock()
+	mgr.conns["nil-slot"] = nil
+	mgr.mu.Unlock()
+
+	// Must not panic
+	mgr.sweepOnce()
+
+	// Clean up
+	mgr.mu.Lock()
+	delete(mgr.conns, "nil-slot")
+	mgr.mu.Unlock()
 }

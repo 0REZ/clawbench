@@ -262,6 +262,7 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   uiScale: 1,
   recentFilesCount: 10,
   headerShortcutTips: true,
+  notificationSound: true,
 }
 
 // Build reactive local config from legacy localStorage + defaults

@@ -1,13 +1,22 @@
 <template>
   <div v-if="parts.length > 0" class="dir-breadcrumb">
-    <span class="crumb" @click="$emit('navigate', '')">
+    <span
+      class="crumb crumb-home"
+      :draggable="isWideScreen"
+      @dragstart="onCrumbDragStart('/', 'Home', $event)"
+      @dragend="cleanupDragGhost()"
+      @click="$emit('navigate', '')"
+    >
       <Home :size="14" />
     </span>
     <template v-for="(part, i) in parts" :key="i">
-      <span class="crumb-sep">›</span>
+      <span class="crumb-sep">/</span>
       <span
         class="crumb"
         :class="{ current: i === parts.length - 1 }"
+        :draggable="isWideScreen"
+        @dragstart="onCrumbDragStart(reconstructPath(parts.slice(0, i + 1)), part, $event)"
+        @dragend="cleanupDragGhost()"
         @click="i < parts.length - 1 && $emit('navigate', reconstructPath(parts.slice(0, i + 1)))"
       >{{ part }}</span>
     </template>
@@ -23,6 +32,8 @@ import { computed, inject, ref } from 'vue'
 import { Home, Copy } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { splitPath } from '@/utils/path.ts'
+import { setAttachDragData, buildAttachDragImage, cleanupDragGhost } from '@/utils/attachDrag.ts'
+import { useWideScreenLayout } from '@/composables/useWideScreenLayout.ts'
 
 const props = defineProps({
   path: { type: String, default: '' },
@@ -31,6 +42,15 @@ defineEmits(['navigate'])
 const { t } = useI18n()
 const toast = inject('toast', null)
 const copied = ref(false)
+const { isWideScreen } = useWideScreenLayout()
+
+function onCrumbDragStart(path, name, e) {
+  if (!isWideScreen.value) return
+  setAttachDragData(e.dataTransfer, path, true)
+  e.dataTransfer.effectAllowed = 'move'
+  const ghost = buildAttachDragImage(name || '/', true)
+  e.dataTransfer.setDragImage(ghost, 14, 16)
+}
 
 function copyFullPath() {
   const value = props.path
@@ -124,7 +144,7 @@ const parts = computed(() => {
 
 .crumb-sep {
   color: var(--text-muted, #999);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .crumb-copy-btn {

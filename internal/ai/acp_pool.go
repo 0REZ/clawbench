@@ -147,12 +147,18 @@ func (m *ACPConnManager) idleSweep() {
 }
 
 // sweepOnce performs a single idle sweep pass.
+// Connections that have been idle longer than idleConnTimeout are killed
+// (but acpSID is preserved so the session can be recovered via ResumeSession).
+// Connections with actively running sessions are skipped.
 func (m *ACPConnManager) sweepOnce() {
 	var toClose []string
 
 	m.mu.Lock()
 	now := time.Now()
 	for sid, conn := range m.conns {
+		if conn == nil {
+			continue
+		}
 		conn.mu.Lock()
 		lastActivity := conn.lastActivityNano()
 		alive := conn.alive
@@ -199,17 +205,19 @@ func (m *ACPConnManager) sweepOnce() {
 			continue // session started running since initial scan
 		}
 
-		// Re-acquire manager lock to atomically delete + close.
+		// Kill the idle connection but preserve acpSID so the session
+		// can be recovered via ResumeSession on the next prompt.
+		// Do NOT delete from pool or call close() (which clears acpSID) —
+		// that would cause amnesia if the DB external_session_id was
+		// not yet persisted (e.g., session_capture missed).
 		m.mu.Lock()
 		conn, ok = m.conns[sid]
-		if ok {
-			delete(m.conns, sid)
-		}
 		m.mu.Unlock()
 
 		if ok {
-			slog.Info("acp: idle sweep closing connection", "clawbench_sid", sid, "idle_duration", time.Since(time.Unix(0, lastActivity)))
-			conn.close()
+			slog.Info("acp: idle sweep killing idle connection (preserving acpSID for recovery)",
+				"clawbench_sid", sid, "idle_duration", time.Since(time.Unix(0, lastActivity)))
+			conn.killAndMarkDead()
 		}
 	}
 }
@@ -580,11 +588,30 @@ func (m *ACPConnManager) GetPendingApprovalSessionIDs() map[string]bool {
 
 // ACPConn represents a dedicated ACP stdio connection for one ClawBench session.
 // One session = one agent process = one ACP session. No sharing, no pooling.
+//
+// DEADLOCK SAFETY: Methods called from the SDK's processNotifications goroutine
+// (via ClawBenchACPClient.SessionUpdate → mapACPSessionUpdate, mergeAndSyncCommands,
+// handleConfigOptionSelect, RequestPermission, etc.) MUST NOT acquire c.mu.
+// RPC methods like NewSession/ResumeSession hold c.mu while waiting for queued
+// notifications to be processed (SDK waitNotificationsUpTo), so acquiring c.mu in
+// a notification callback would deadlock.
+//
+// Safe patterns for notification callbacks:
+//   - Read immutable fields (agent, clawbenchSID) directly without locking
+//   - Use atomic operations (TouchSessionUpdate, SetToolInFlight)
+//   - Use dedicated locks (rawOutputMu, lastSetConfigMu) that don't interact with c.mu
+//   - Use ClawBenchACPClient.mu (different lock) for client-internal state
+//
+// If an RPC must be made while holding c.mu (e.g. reapplyConfigOption), the only
+// safe pattern is: unlock → RPC → re-lock. See reapplyConfigOption for an example.
 type ACPConn struct {
+	// Immutable fields — set once in newACPConn, never modified.
+	// Safe to read without c.mu from any goroutine (including notification callbacks).
 	agent        *model.Agent
 	clawbenchSID string
-	cwd          string // project working directory, set on first ensureAliveWithSession
-	mu           sync.Mutex
+
+	cwd string // project working directory, set on first ensureAliveWithSession
+	mu  sync.Mutex
 
 	cmd    *exec.Cmd
 	conn   *acp.ClientSideConnection
@@ -859,9 +886,12 @@ func (c *ACPConn) AcpSID() string {
 }
 
 // AgentID returns the ID of the agent this connection belongs to.
+// c.agent is set once at construction and never mutated, so no lock needed.
+// This must NOT acquire c.mu — it is called from the SDK's processNotifications
+// goroutine (via ClawBenchACPClient.SessionUpdate → mergeAndSyncCommands →
+// connRef.AgentID()), and ensureAliveWithSession holds c.mu during ResumeSession
+// and other RPCs. Acquiring c.mu here would deadlock.
 func (c *ACPConn) AgentID() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.agent != nil {
 		return c.agent.ID
 	}
@@ -870,9 +900,10 @@ func (c *ACPConn) AgentID() string {
 
 // BackendID returns the backend identifier of the agent this connection belongs to.
 // Used for ACP event mapping to look up backend-specific tool name and input remap tables.
+// c.agent is set once at construction and never mutated, so no lock needed.
+// This must NOT acquire c.mu — same deadlock risk as AgentID (called from
+// mapACPSessionUpdate during notification processing while c.mu is held).
 func (c *ACPConn) BackendID() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.agent != nil {
 		return c.agent.Backend
 	}
@@ -1386,9 +1417,17 @@ func (c *ACPConn) ProcessPID() int {
 // but preserves acpSID so ensureAliveWithSession can recover the session via
 // LoadSession/ResumeSession on the next prompt. Used by the stall watchdog
 // which kills a stuck process but must not cause amnesia on recovery.
+// Must NOT be called with c.mu held — use killAndMarkDeadLocked instead.
 func (c *ACPConn) killAndMarkDead() {
 	c.mu.Lock()
+	c.killAndMarkDeadLocked()
+	c.mu.Unlock()
+}
 
+// killAndMarkDeadLocked kills the agent process and marks the connection as dead,
+// preserving acpSID for future ResumeSession recovery.
+// Must be called with c.mu held; temporarily releases c.mu during Wait().
+func (c *ACPConn) killAndMarkDeadLocked() {
 	if c.cmd != nil && c.cmd.Process != nil {
 		if c.stdoutFilter != nil {
 			c.stdoutFilter.Close()
@@ -1411,7 +1450,6 @@ func (c *ACPConn) killAndMarkDead() {
 	// Intentionally preserve c.acpSID — ensureAliveWithSession needs it
 	// to recover the session via LoadSession/ResumeSession after respawn.
 	c.resetLastSetConfig()
-	c.mu.Unlock()
 }
 
 // close kills the agent process and marks the connection as dead.

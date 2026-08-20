@@ -55,13 +55,22 @@ export function hasAttachDragData(dt: DataTransfer | null | undefined): boolean 
 // ── Custom drag ghost ──────────────────────────────────────────────────────
 // The OS-native drag image snapshots the source element, so a selected/accent
 // item renders with a jarring gradient + tint over the browser's translucent
-// ghost. We instead draw a flat, semi-transparent chip ourselves and hand it
-// to setDragImage — a plain opacity look with no gradient.
+// ghost.  Canvas-based ghosts also fail in Chrome (shows a blank/noise square),
+// so we use a real DOM element appended off-screen — the browser snapshots it
+// reliably.
+//
+// IMPORTANT: The ghost element must stay in the DOM until the drag operation
+// completes.  Chrome snapshots setDragImage's element asynchronously — removing
+// it synchronously after setDragImage causes a blank/noise ghost.  We store the
+// reference and clean it up in cleanupDragGhost(), called from dragend or as a
+// safety timeout.
 
-export const ATTACH_DRAG_GHOST_FONT = '13px system-ui, sans-serif'
-export const ATTACH_DRAG_GHOST_PAD_X = 12
-export const ATTACH_DRAG_GHOST_ICON_W = 22
-export const ATTACH_DRAG_GHOST_GAP = 7
+let pendingGhost: HTMLElement | null = null
+
+export const ATTACH_DRAG_GHOST_FONT = 'bold 13px system-ui, sans-serif'
+export const ATTACH_DRAG_GHOST_PAD_X = 14
+export const ATTACH_DRAG_GHOST_ICON_W = 28
+export const ATTACH_DRAG_GHOST_GAP = 8
 
 export interface AttachDragImageSize {
   w: number
@@ -80,70 +89,109 @@ export function estimateTextWidth(text: string): number {
 /** Ghost chip dimensions for a given file name. */
 export function computeAttachDragImageSize(name: string): AttachDragImageSize {
   const textW = estimateTextWidth(name)
-  const w = Math.max(64, Math.ceil(textW + ATTACH_DRAG_GHOST_ICON_W + ATTACH_DRAG_GHOST_GAP + ATTACH_DRAG_GHOST_PAD_X * 2))
-  return { w, h: 38 }
+  const w = Math.max(80, Math.ceil(textW + ATTACH_DRAG_GHOST_ICON_W + ATTACH_DRAG_GHOST_GAP + ATTACH_DRAG_GHOST_PAD_X * 2))
+  return { w, h: 44 }
 }
 
-/** Convert a hex (#rgb/#rrggbb) or rgb()/rgba() color to an rgba() string with the given alpha. */
-export function toRgba(color: string, alpha: number): string {
-  const c = (color || '').trim()
-  const hex = c.match(/^#?([0-9a-f]{6}|[0-9a-f]{3})$/i)
-  if (hex) {
-    let s = hex[1]
-    if (s.length === 3) s = s.split('').map((ch) => ch + ch).join('')
-    const n = parseInt(s, 16)
-    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
-  }
-  const rgb = c.match(/rgba?\(([^)]+)\)/)
-  if (rgb) {
-    const parts = rgb[1].split(',').map((x) => parseFloat(x.trim()))
-    return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`
-  }
-  return `rgba(74, 144, 217, ${alpha})`
+/** Resolve the accent color from CSS variable, with a hard fallback. */
+export function resolveAccentColor(): string {
+  try {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent-color').trim()
+    if (v) return v
+  } catch { /* ignore */ }
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+  return isDark ? '#5b9bd5' : '#4a90d9'
 }
 
 /**
- * Draw a flat, semi-transparent drag ghost for an attach drag. Falls back to a
- * blank canvas (and thus the OS ghost) if 2D canvas is unavailable.
+ * Build a real DOM element to use as the drag ghost image.
+ * Uses an off-screen div with accent background pill, icon badge, and bold
+ * white text — then it's passed to setDragImage.
+ *
+ * The ghost element is kept in the DOM and tracked internally.  Call
+ * cleanupDragGhost() from a dragend handler (or it auto-cleans after 5s).
+ *
+ * Chrome cannot snapshot canvas content for setDragImage (renders as noise),
+ * so we must use a real DOM element for reliable rendering.
  */
-export function buildAttachDragImage(name: string, isDir: boolean): HTMLCanvasElement {
-  const { w, h } = computeAttachDragImageSize(name)
-  const pad = 4
-  const scale = 2
-  const canvas = document.createElement('canvas')
-  canvas.width = (w + pad * 2) * scale
-  canvas.height = (h + pad * 2) * scale
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return canvas
+export function buildAttachDragImage(name: string, isDir: boolean): HTMLElement {
+  // Clean up any previous ghost first
+  cleanupDragGhost()
 
-  ctx.scale(scale, scale)
+  const accent = resolveAccentColor()
+  const el = document.createElement('div')
+  el.setAttribute('data-attach-ghost', '')
+  el.style.cssText = `
+    position: fixed;
+    top: -9999px;
+    left: -9999px;
+    display: inline-flex;
+    align-items: center;
+    gap: ${ATTACH_DRAG_GHOST_GAP}px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: ${accent};
+    color: #fff;
+    font: ${ATTACH_DRAG_GHOST_FONT};
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    z-index: -1;
+  `
 
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-color').trim() || '#4a90d9'
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark'
+  // Icon badge
+  const badge = document.createElement('span')
+  badge.style.cssText = `
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.22);
+    flex-shrink: 0;
+  `
 
-  ctx.fillStyle = toRgba(accent, 0.28)
-  roundRectPath(ctx, pad, pad, w, h, 8)
-  ctx.fill()
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = toRgba(accent, 0.6)
-  ctx.stroke()
+  // Use Lucide-style SVG icons (simple, no font dependency)
+  badge.innerHTML = isDir ? folderSvg : fileSvg
 
-  ctx.font = ATTACH_DRAG_GHOST_FONT
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'left'
-  ctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.92)' : 'rgba(0, 0, 0, 0.9)'
-  ctx.fillText(isDir ? '📁' : '📄', pad + 8, pad + h / 2 + 1)
-  ctx.fillText(name, pad + 8 + ATTACH_DRAG_GHOST_ICON_W + ATTACH_DRAG_GHOST_GAP, pad + h / 2 + 1)
+  const label = document.createElement('span')
+  label.textContent = name
+  label.style.cssText = 'overflow: hidden; text-overflow: ellipsis;'
 
-  return canvas
+  el.appendChild(badge)
+  el.appendChild(label)
+
+  document.body.appendChild(el)
+  pendingGhost = el
+
+  // Safety timeout: auto-clean after 5s in case dragend never fires
+  setTimeout(cleanupDragGhost, 5000)
+
+  return el
 }
 
-function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.arcTo(x + w, y, x + w, y + h, r)
-  ctx.arcTo(x + w, y + h, x, y + h, r)
-  ctx.arcTo(x, y + h, x, y, r)
-  ctx.arcTo(x, y, x + w, y, r)
-  ctx.closePath()
+/**
+ * Remove the pending drag ghost element from the DOM.
+ * Call this from a dragend handler, or it auto-cleans after the safety timeout.
+ */
+export function cleanupDragGhost() {
+  if (pendingGhost && pendingGhost.parentNode) {
+    pendingGhost.parentNode.removeChild(pendingGhost)
+  }
+  pendingGhost = null
 }
+
+// ── Minimal inline SVGs for file/folder icons ─────────────────────────────
+// Kept as raw strings so they render instantly with no font/icon dependency.
+
+const folderSvg = `<svg width="14" height="12" viewBox="0 0 14 12" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1 3V2a1 1 0 0 1 1-1h3l1.5 2H12a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3z"/>
+</svg>`
+
+const fileSvg = `<svg width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1 1.5a1 1 0 0 1 1-1h5.5L11 4v8.5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-12z"/>
+  <path d="M7.5 0.5v3.5H11"/>
+  <line x1="3.5" y1="7.5" x2="8.5" y2="7.5"/>
+  <line x1="3.5" y1="9.5" x2="6.5" y2="9.5"/>
+</svg>`

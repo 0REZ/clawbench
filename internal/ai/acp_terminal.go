@@ -33,6 +33,36 @@ type terminalSession struct {
 	mu        sync.Mutex
 }
 
+// resolveTerminalCwd determines the working directory for a terminal command.
+func (c *ClawBenchACPClient) resolveTerminalCwd(req acp.CreateTerminalRequest) string {
+	if req.Cwd != nil && *req.Cwd != "" {
+		return *req.Cwd
+	}
+	if c.connRef != nil {
+		if connCwd := c.connRef.Cwd(); connCwd != "" {
+			slog.Info("acp terminal: req.Cwd is nil/empty, using connRef.cwd as fallback",
+				slog.String("command", req.Command),
+				slog.String("fallback_cwd", connCwd))
+			return connCwd
+		}
+	}
+	slog.Warn("acp terminal: no Cwd available — command will inherit server CWD",
+		slog.String("command", req.Command))
+	return ""
+}
+
+// appendTerminalEnv merges request environment variables into os.Environ.
+func appendTerminalEnv(cmd *exec.Cmd, env []acp.EnvVariable) {
+	if len(env) == 0 {
+		return
+	}
+	e := os.Environ()
+	for _, v := range env {
+		e = append(e, v.Name+"="+v.Value)
+	}
+	cmd.Env = e
+}
+
 // CreateTerminal creates a terminal session by executing the command via os/exec.
 func (c *ClawBenchACPClient) CreateTerminal(ctx context.Context, req acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
 	// Use Background context — the command must outlive the JSON-RPC request context.
@@ -47,34 +77,8 @@ func (c *ClawBenchACPClient) CreateTerminal(ctx context.Context, req acp.CreateT
 		// when $SHELL is not set — use cmd.exe instead.
 		cmd = exec.CommandContext(cmdCtx, "cmd", "/C", req.Command)
 	}
-	// Resolve working directory for the command:
-	// 1. Use req.Cwd if the ACP agent provided it (some agents pass cwd per-command).
-	// 2. Fallback to connRef.cwd — the project working directory locked on first
-	//    ensureAliveWithSession call. This is necessary because CodeBuddy's ACP
-	//    implementation omits Cwd in terminal/create requests, so without this
-	//    fallback, commands would inherit the ClawBench server's CWD instead of
-	//    the project directory.
-	if req.Cwd != nil && *req.Cwd != "" {
-		cmd.Dir = *req.Cwd
-	} else if c.connRef != nil {
-		if connCwd := c.connRef.Cwd(); connCwd != "" {
-			cmd.Dir = connCwd
-			slog.Info("acp terminal: req.Cwd is nil/empty, using connRef.cwd as fallback",
-				slog.String("command", req.Command),
-				slog.String("fallback_cwd", connCwd))
-		}
-	}
-	if cmd.Dir == "" {
-		slog.Warn("acp terminal: no Cwd available — command will inherit server CWD",
-			slog.String("command", req.Command))
-	}
-	if len(req.Env) > 0 {
-		env := os.Environ()
-		for _, e := range req.Env {
-			env = append(env, e.Name+"="+e.Value)
-		}
-		cmd.Env = env
-	}
+	cmd.Dir = c.resolveTerminalCwd(req)
+	appendTerminalEnv(cmd, req.Env)
 
 	termID := fmt.Sprintf("term-%d", c.termSeq.Add(1))
 	ts := &terminalSession{
@@ -88,7 +92,30 @@ func (c *ClawBenchACPClient) CreateTerminal(ctx context.Context, req acp.CreateT
 	cmd.Stdout = &ts.output
 	cmd.Stderr = &ts.output
 
+	// Detach the terminal command from the server's controlling terminal.
+	// Without Setsid:true, a command like `sudo` would prompt for a password
+	// on the ClawBench server console via /dev/tty and block the whole
+	// session. A new session has no controlling terminal, so sudo fails fast
+	// with "no tty present" instead of hanging. This also enables
+	// killProcessGroup to reach the entire process tree on cancellation.
+	setProcessGroup(cmd)
+
+	// Replace the default leader-only kill with a process-group kill: when
+	// a spawned child inherits the pipes, killing only the leader leaves the
+	// child holding the pipes open and cmd.Wait() blocks indefinitely.
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			killProcessGroup(cmd.Process)
+		}
+		return nil
+	}
+	// Bound how long pipes may stay open after the process exits when a
+	// spawned child inherited them. Wait() forcibly closes the parent's pipe
+	// ends after the delay, unblocking the output buffer read.
+	cmd.WaitDelay = streamWaitDelay
+
 	if err := cmd.Start(); err != nil {
+		cancel() // release the context timeout
 		return acp.CreateTerminalResponse{}, fmt.Errorf("start command: %w", err)
 	}
 
