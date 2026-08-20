@@ -136,10 +136,7 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 	if err != nil {
 		if ctx.Err() != nil {
 			slog.Info("acp conn: prompt cancelled", "clawbench_sid", c.clawbenchSID, "acp_sid", acpSID)
-			// Only mark this connection dead if it's still the active one. A
-			// concurrent respawn may have replaced it (and set alive=true) while
-			// this prompt was in flight; we must not clobber that state.
-			c.markDeadIfCurrent(conn)
+			c.handlePromptCancel(conn)
 			return ctx.Err()
 		}
 
@@ -291,4 +288,21 @@ func (c *ACPConn) waitForLoadSessionDone() error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil
+}
+
+// handlePromptCancel processes a user-initiated prompt cancellation.
+// Only marks the connection dead if the ACP process has actually died
+// (conn.Done() is closed). When the process is still alive, the connection
+// is preserved so the next Prompt can reuse it directly without a slow
+// kill+respawn+LoadSession cycle that can timeout (60s).
+func (c *ACPConn) handlePromptCancel(conn *acp.ClientSideConnection) {
+	c.mu.Lock()
+	if !c.isAliveLocked() {
+		c.mu.Unlock()
+		c.markDeadIfCurrent(conn)
+	} else {
+		c.mu.Unlock()
+		slog.Info("acp conn: prompt cancelled but process still alive, keeping connection",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", c.acpSID)
+	}
 }
