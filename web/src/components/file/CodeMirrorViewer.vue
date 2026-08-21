@@ -29,7 +29,7 @@ import { EditorView, lineNumbers, Decoration, gutter, GutterMarker, keymap } fro
 import { defaultKeymap, historyKeymap, history, undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
-import { buildLangExtension } from '@/utils/codeEditorLang'
+import { buildLangExtension, buildCompletionExtension } from '@/utils/codeEditorLang'
 import { diffMarkers, openDiffDrawer } from '@/composables/useMarkdownDiff.ts'
 import { flashRanges, flashType } from '@/composables/useFileRefresh.ts'
 import { useQuoteQuestion, isPointerPressed } from '@/composables/useQuoteQuestion.ts'
@@ -147,6 +147,7 @@ const lineNumbersCompartment = new Compartment()
 const wrapCompartment = new Compartment()
 const overlayCompartment = new Compartment()
 const jumpFlashCompartment = new Compartment()
+const completionCompartment = new Compartment()
 
 // Gutter markers for diff markers (M/D/+), clickable to open the diff drawer.
 class DiffGutterMarker extends GutterMarker {
@@ -382,6 +383,7 @@ function buildAllExtensions() {
     return [
         readonlyCompartment.of(props.editable ? [] : [EditorState.readOnly.of(true)]),
         langCompartment.of([]), // placeholder; loaded async in mountLang()
+        completionCompartment.of([]), // placeholder; loaded async in mountCompletion()
         lineNumbersCompartment.of(props.showLineNumbers ? [lineNumbers()] : []),
         wrapCompartment.of(props.wordWrap ? [EditorView.lineWrapping] : []),
         codeMirrorTheme,
@@ -403,6 +405,26 @@ async function mountLang() {
     if (view.value) {
         view.value.dispatch({ effects: langCompartment.reconfigure(ext) })
     }
+}
+
+let completionGeneration = 0
+
+/** Load the completion extension asynchronously for languages that provide one.
+ *  Only active in editable mode — read-only browsing has no completion.
+ *  Uses a generation counter to discard stale results when the language prop
+ *  changes while a previous mountCompletion is still in-flight. */
+async function mountCompletion() {
+    const gen = ++completionGeneration
+    if (!props.editable) {
+        // Clear any previous completion extension when switching to read-only
+        if (view.value) {
+            view.value.dispatch({ effects: completionCompartment.reconfigure([]) })
+        }
+        return
+    }
+    const ext = await buildCompletionExtension(props.language)
+    if (gen !== completionGeneration || !view.value) return
+    view.value.dispatch({ effects: completionCompartment.reconfigure(ext) })
 }
 
 function reconfigure(compartment, ext) {
@@ -430,6 +452,7 @@ onMounted(() => {
     savedSnapshot = props.content || ''
     recomputeOverlay()
     mountLang()
+    mountCompletion()
     sticky.init(view.value, props.file?.path, stickyScrollEnabled())
     window.addEventListener('cm-scroll-to-line', onScrollToLine)
     document.addEventListener('pointerup', onDocPointerUp)
@@ -458,6 +481,7 @@ watch([() => props.editable], () => {
     canRedo.value = false
     dirty.value = false
     savedSnapshot = props.content || ''
+    mountCompletion()
 })
 watch([() => props.showLineNumbers], () => {
     reconfigure(lineNumbersCompartment, props.showLineNumbers ? [lineNumbers()] : [])
@@ -468,7 +492,7 @@ watch([() => props.wordWrap], () => {
     reconfigure(wrapCompartment, props.wordWrap ? [EditorView.lineWrapping] : [])
     sticky.refresh()
 })
-watch([() => props.language], () => mountLang())
+watch([() => props.language], () => { mountLang(); mountCompletion() })
 
 // Sticky scroll: enable/disable when browse/edit mode or the toggle changes.
 // Re-init on enabling so definition lines are re-fetched against the current doc.
@@ -500,6 +524,7 @@ watch(() => props.content, (c) => {
         // survives an in-place content refresh (e.g. after a quote-driven edit
         // deletes lines and the file reloads with the same language prop).
         mountLang()
+        mountCompletion()
     }
     savedSnapshot = next
     // Recompute dirty even when the doc already equals the new content (the
@@ -760,5 +785,57 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
     white-space: pre-wrap;
     word-break: break-all;
     overflow-wrap: break-word;
+}
+
+/* Autocomplete tooltip */
+.cm-viewer .cm-tooltip {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.cm-viewer .cm-tooltip-autocomplete {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  max-height: 200px;
+}
+.cm-viewer .cm-tooltip-autocomplete ul li {
+  padding: 2px 8px 2px 4px;
+}
+.cm-viewer .cm-completionIcon {
+  width: 16px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.cm-viewer .cm-completionIcon-class::after { color: var(--code-syntax-type); }
+.cm-viewer .cm-completionIcon-constant::after { color: var(--code-syntax-number); }
+.cm-viewer .cm-completionIcon-enum::after { color: var(--code-syntax-type); }
+.cm-viewer .cm-completionIcon-function::after { color: var(--code-syntax-function); }
+.cm-viewer .cm-completionIcon-interface::after { color: var(--code-syntax-type); }
+.cm-viewer .cm-completionIcon-keyword::after { color: var(--code-syntax-keyword); }
+.cm-viewer .cm-completionIcon-method::after { color: var(--code-syntax-function); }
+.cm-viewer .cm-completionIcon-namespace::after { color: var(--code-syntax-type); }
+.cm-viewer .cm-completionIcon-property::after { color: var(--code-syntax-property); }
+.cm-viewer .cm-completionIcon-text::after { color: var(--text-muted); }
+.cm-viewer .cm-completionIcon-type::after { color: var(--code-syntax-type); }
+.cm-viewer .cm-completionIcon-variable::after { color: var(--code-syntax-variable); }
+.cm-viewer .cm-completionLabel {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+.cm-viewer .cm-completionDetail {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.cm-viewer .cm-activeCompletion {
+  background: color-mix(in srgb, var(--accent-color) 20%, transparent);
+  color: var(--text-primary);
+}
+.cm-viewer .cm-completionMatchedText {
+  color: var(--accent-color);
+  font-weight: 600;
 }
 </style>

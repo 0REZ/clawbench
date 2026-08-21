@@ -150,7 +150,7 @@
         </button>
         <div class="quick-send-divider" />
         <button class="quick-send-item" @click="showQuickMenu = false; quickSendDrawer.open()">
-          ⚙️ {{ t('chat.quickSend.edit') }}
+          <Settings :size="14" /> {{ t('chat.quickSend.edit') }}
         </button>
       </PopupMenu>
       <!-- Session settings drawer -->
@@ -267,7 +267,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
@@ -706,17 +706,19 @@ watch(inputText, () => {
   const shouldShowAt = text.startsWith('@')
     && !text.includes(' ')
     && atMenuItems.value.length > 0
+  if (shouldShowAt && !showAtMenu.value) atMenuIndex.value = 0
   showAtMenu.value = shouldShowAt
   // Slash command menu
   const shouldShowSlash = text.startsWith('/')
     && !text.includes(' ')
     && slashMenuItems.value.length > 0
+  if (shouldShowSlash && !showSlashMenu.value) slashMenuIndex.value = 0
   showSlashMenu.value = shouldShowSlash
 })
 
-// Reset selection when menu items change
-watch(slashMenuItems, () => { slashMenuIndex.value = -1 })
-watch(atMenuItems, () => { atMenuIndex.value = -1 })
+// Default to first item when menu items change (VSCode-style: first item pre-selected)
+watch(slashMenuItems, () => { slashMenuIndex.value = slashMenuItems.value.length > 0 ? 0 : -1 })
+watch(atMenuItems, () => { atMenuIndex.value = atMenuItems.value.length > 0 ? 0 : -1 })
 
 // Scroll selected menu item into view
 watch(slashMenuIndex, (idx) => {
@@ -756,7 +758,7 @@ function handleSlashSelect(cmd) {
   })
 }
 
-// ── Menu keyboard navigation (PC: ArrowUp/Down + Enter + Escape) ──
+// ── Menu keyboard navigation (PC: ArrowUp/Down + Enter/Tab + Escape) ──
 function handleMenuKeydown(e) {
   // Determine which menu is active (slash takes priority if both open)
   const isSlash = showSlashMenu.value
@@ -785,7 +787,7 @@ function handleMenuKeydown(e) {
     indexRef.value = indexRef.value <= 0 ? items.length - 1 : indexRef.value - 1
     return true
   }
-  if (e.key === 'Enter' && indexRef.value >= 0 && indexRef.value < items.length) {
+  if ((e.key === 'Enter' || e.key === 'Tab') && indexRef.value >= 0 && indexRef.value < items.length) {
     e.preventDefault()
     const selected = items[indexRef.value]
     if (isSlash) handleSlashSelect(selected)
@@ -2129,7 +2131,9 @@ defineExpose({
 }
 
 .quick-send-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   padding: 8px 14px;
   border: none;

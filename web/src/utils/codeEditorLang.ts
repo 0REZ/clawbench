@@ -14,7 +14,7 @@ import { python } from '@codemirror/lang-python'
 /** Lazy-loaded language factory: returns a Promise of Extension. */
 type LangFactory = () => Extension | Promise<Extension>
 
-const LANG_EXT: Record<string, LangFactory> = {
+export const LANG_EXT: Record<string, LangFactory> = {
     // Static imports (high-frequency)
     javascript: () => javascript(),
     typescript: () => javascript({ typescript: true }),
@@ -53,6 +53,16 @@ const LANG_EXT: Record<string, LangFactory> = {
     makefile: () => import('codemirror-lang-makefile').then(m => m.makefile()),
     r: () => import('codemirror-lang-r').then(m => m.r()),
 }
+
+/**
+ * Languages that register completion sources in their language data
+ * (via `language.data.of({ autocomplete: source })`). When `autocompletion()`
+ * is enabled for these languages, it reads those sources automatically.
+ */
+const COMPLETION_LANGS: Set<string> = new Set([
+    'javascript', 'typescript', 'html', 'css', 'python', 'sql', 'go',
+    'less', 'sass', 'liquid', 'markdown',
+])
 
 /**
  * Markdown with nested syntax highlighting inside fenced code blocks.
@@ -96,4 +106,19 @@ export async function buildLangExtension(fileLang: string): Promise<Extension> {
     const factory = LANG_EXT[fileLang]
     if (!factory) return []
     return factory()
+}
+
+/**
+ * Build a completion extension for a given language.
+ * Returns an empty array for languages without a built-in completion source.
+ *
+ * Note: We do NOT use `override` here. Language packages register their completion
+ * sources via `language.data.of({ autocomplete: source })`, and `autocompletion()`
+ * reads those by default. Using `override` would replace the default source
+ * collection and lose keyword completions (e.g. JS `const`/`continue`).
+ */
+export async function buildCompletionExtension(fileLang: string): Promise<Extension[]> {
+    if (!COMPLETION_LANGS.has(fileLang)) return []
+    const { autocompletion } = await import('@codemirror/autocomplete')
+    return [autocompletion()]
 }
