@@ -961,8 +961,7 @@ func acpDisplayTitleFromHome(home, cwd, sessionID, agentTitle string, r sessionT
 	// 上报的是不一致的某条用户消息（常为末问或中间某条），并非可靠的首问。
 	// 两层在单次文件扫描中提取（scanTranscriptForTitles）。
 	if path != "" {
-		custom := r.CustomTitle(path)
-		first := r.FirstQuestion(path)
+		custom, first := r.TitleCandidates(path)
 		if custom != "" {
 			return capTitle(custom)
 		}
@@ -1055,10 +1054,11 @@ func deriveSessionTitleForAgent(agent *model.Agent, projectPath, acpSessionID st
 			if home, err := os.UserHomeDir(); err == nil {
 				path := resolver.TranscriptPath(home, projectPath, acpSessionID)
 				if path != "" {
-					if custom := resolver.CustomTitle(path); custom != "" {
+					custom, first := resolver.TitleCandidates(path)
+					if custom != "" {
 						return capTitle(custom)
 					}
-					if first := resolver.FirstQuestion(path); first != "" {
+					if first != "" {
 						return capTitle(first)
 					}
 				}
@@ -1099,8 +1099,10 @@ func isMachineGeneratedTitleFor(title string, r sessionTranscriptResolver) bool 
 // 后端无关的便捷包装，检查通用（客户端注入）+ claude 原生前缀集。后端已知
 // 时优先使用 isMachineGeneratedTitleFor。
 func isMachineGeneratedTitle(title string) bool {
-	return isMachineGeneratedTitleFor(title, nil) ||
-		isMachineGeneratedTitleFor(title, claudeTranscriptResolver{})
+	// The claude rule set is universal + claude-native, which already
+	// subsumes the nil (universal-only) set — one call suffices.
+	// claude 规则集 = 通用 + claude 原生，已涵盖 nil（仅通用）规则集——单次调用足够。
+	return isMachineGeneratedTitleFor(title, claudeTranscriptResolver{})
 }
 
 // acpTranscriptPath returns the expected CLI transcript path for a session,

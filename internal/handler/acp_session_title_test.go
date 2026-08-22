@@ -412,3 +412,81 @@ func TestFirstRealQuestion_StringContent(t *testing.T) {
 	})
 	assert.Equal(t, "如何配置自动备份", acpDisplayTitleFromHome(home, "/Users/x", "sid-s", "给出完整ID", claudeTranscriptResolver{}))
 }
+
+func TestScanTranscriptForTitles_ScansLargeFiles(t *testing.T) {
+	home := t.TempDir()
+	// A transcript well beyond the old 32MB cap: the first real question sits
+	// at the head, the custom-title at the tail. Both must be extracted — there
+	// is no size limit anymore, so large files are fully scanned.
+	munged := strings.ReplaceAll("/Users/x", "/", "-")
+	dir := filepath.Join(home, ".claude", "projects", munged)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "sid-big.jsonl")
+
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer f.Close()
+	_, err = fmt.Fprintln(f, userTurnJSON(t, "大文件首问"))
+	require.NoError(t, err)
+	// ~1MB of filler turns to push the file well past the old cap.
+	filler := strings.Repeat("x", 1024*1024)
+	_, err = fmt.Fprintf(f, "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":%q}}\n", filler)
+	require.NoError(t, err)
+	_, err = fmt.Fprintln(f, customTitleJSON(t, "大文件自定义标题"))
+	require.NoError(t, err)
+
+	require.NoError(t, f.Sync())
+
+	custom, first := scanTranscriptForTitles(path)
+	assert.Equal(t, "大文件自定义标题", custom, "tail custom-title must be read even in large files")
+	assert.Equal(t, "大文件首问", first, "head first question must be read even in large files")
+}
+
+func TestDeriveSessionTitleForAgent_ClaudeTranscriptTiers(t *testing.T) {
+	agent := &model.Agent{ID: "claude", Name: "Claude Code Cli", Backend: "claude", Transport: "acp-stdio"}
+	userMsg := func(text string) replayMessage {
+		return replayMessage{role: strUser, content: fmt.Sprintf(`{"blocks":[{"type":"text","text":%q}]}`, text)}
+	}
+	replay := []replayMessage{userMsg("重放兜底消息")}
+
+	t.Run("tier1 custom-title from transcript", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
+		writeTranscript(t, home, "/Users/x", "sid-t1", []string{
+			userTurnJSON(t, "首问内容"),
+			customTitleJSON(t, "用户改的标题"),
+		})
+		assert.Equal(t, "用户改的标题", deriveSessionTitleForAgent(agent, "/Users/x", "sid-t1", replay))
+	})
+
+	t.Run("tier2 first question when no custom-title", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home) // os.UserHomeDir reads USERPROFILE on Windows
+		writeTranscript(t, home, "/Users/x", "sid-t2", []string{
+			userTurnJSON(t, "[System Instructions: rules]\n\n剥壳后的首问"),
+		})
+		assert.Equal(t, "剥壳后的首问", deriveSessionTitleForAgent(agent, "/Users/x", "sid-t2", replay))
+	})
+
+	t.Run("falls to replay when transcript missing", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		assert.Equal(t, "重放兜底消息", deriveSessionTitleForAgent(agent, "/Users/x", "sid-none", replay))
+	})
+}
+
+func TestClaudeResolverSingleValueWrappers(t *testing.T) {
+	home := t.TempDir()
+	writeTranscript(t, home, "/Users/x", "sid-w", []string{
+		userTurnJSON(t, "包装器测试首问"),
+		customTitleJSON(t, "包装器测试标题"),
+	})
+	path := resolveTranscriptPath(home, "/Users/x", "sid-w")
+	require.NotEmpty(t, path)
+	r := claudeTranscriptResolver{}
+	assert.Equal(t, "包装器测试标题", r.CustomTitle(path))
+	assert.Equal(t, "包装器测试首问", r.FirstQuestion(path))
+}
