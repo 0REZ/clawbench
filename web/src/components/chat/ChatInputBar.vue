@@ -81,7 +81,7 @@
         <!-- Attached file reference cards (shared component, includes pending uploads with local Blob preview) -->
         <AttachmentTags :files="attachedFiles" :pending-files="pendingFiles" @file-click="$emit('file-tag-click', $event)" @remove="handleRemoveAttached" @remove-pending="removeFile" />
       </div>
-      <!-- Input row: attach + clear + textarea + stop + send -->
+      <!-- Input row: attach + textarea + stop + send -->
       <div class="chat-input-row">
         <div class="attach-menu-wrapper" ref="attachMenuRef">
           <button v-if="voiceState === 'recording' || voiceState === 'transcribing'" class="chat-attach-btn voice-rec-btn" :class="{ recording: voiceState === 'recording', transcribing: voiceState === 'transcribing' }" disabled :title="voiceState === 'recording' ? t('chat.voice.recording') : t('chat.voice.transcribing')">
@@ -92,9 +92,6 @@
             <Paperclip :size="16" />
           </button>
         </div>
-        <button v-if="inputText" class="chat-clear-btn" @click="inputText = ''" :title="t('chat.input.clearInput')">
-          <XCircle :size="16" />
-        </button>
         <textarea class="chat-textarea"
           ref="textareaRef"
           v-model="inputText"
@@ -267,7 +264,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, XCircle, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
@@ -1738,27 +1735,6 @@ defineExpose({
 .chat-attach-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-/* Clear input button (next to attach button) */
-.chat-clear-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-muted, #999);
-  padding: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-  flex-shrink: 0;
-  align-self: flex-end;
-}
-
-.chat-clear-btn:hover {
-  color: var(--danger-color, #dc3545);
-  background: color-mix(in srgb, var(--danger-color, #dc3545) 8%, transparent);
 }
 
 /* Attachment tags row — horizontal scroll, no wrap */
