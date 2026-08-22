@@ -70,16 +70,35 @@ type sessionTranscriptResolver interface {
 	// 实现必须拒绝含路径分隔符、穿越段或 glob 元字符的 ID（见 acpTranscriptPath）。
 	TranscriptPath(home, cwd, sessionID string) string
 
+	// TitleCandidates extracts BOTH title candidates from the transcript in
+	// ONE scan: the backend-persisted custom title (newest record, a user
+	// rename or auto-generated topic name) and the first human-typed question
+	// (machine prefixes stripped). Either may be "". Implementations should
+	// cache results by (sessionID, modTime) so tier-1-miss → tier-2 lookups
+	// cost one read, not two.
+	//
+	// 单次扫描同时提取两个标题候选：后端自持久化的标题（最新记录，用户改名
+	// 或自动主题名）与第一条人类提问（剥机器前缀后）。任一可为 ""。实现应
+	// 按 (sessionID, modTime) 缓存结果，使"第 1 层未命中→查第 2 层"只花一次
+	// 读盘而非两次。
+	TitleCandidates(path string) (customTitle, firstQuestion string)
+
 	// CustomTitle returns the title the backend itself persisted for the
 	// session (a user rename or auto-generated topic name), "" when none.
+	// Convenience wrapper over TitleCandidates for callers needing one value —
+	// it triggers the same single scan and discards the question.
 	//
 	// 返回后端自身为会话持久化的标题（用户改名或自动生成的主题名），无则 ""。
+	// 单值场景下对 TitleCandidates 的便捷包装——同样触发单次扫描，丢弃首问。
 	CustomTitle(path string) string
 
 	// FirstQuestion returns the first human-typed message from the
 	// transcript, with machine-generated prefixes stripped, "" when none.
+	// Convenience wrapper over TitleCandidates for callers needing one value —
+	// it triggers the same single scan and discards the custom title.
 	//
-	// 返回转录中第一条人类输入（剥离机器前缀后），无则 ""。
+	// 返回转录中第一条人类输入（剥离机器前缀后），无则 ""。单值场景下对
+	// TitleCandidates 的便捷包装——同样触发单次扫描，丢弃自持久化标题。
 	FirstQuestion(path string) string
 
 	// StripRules returns THIS backend's native machine-prefix strip rules
@@ -156,13 +175,39 @@ func (claudeTranscriptResolver) TranscriptPath(home, cwd, sessionID string) stri
 	return resolveTranscriptPath(home, cwd, sessionID)
 }
 
+// TitleCandidates implements the claude resolver's single-scan extraction.
+// It delegates to scanTranscriptForTitles, which streams the .jsonl transcript
+// line by line and returns BOTH candidates in one pass: the newest
+// "custom-title" record (tier 1) and the first real user question after
+// machine-prefix stripping (tier 2). The scan honors the (sessionID, modTime)
+// result cache, so a repeated call for the same unchanged file costs one stat
+// + one map lookup instead of a re-read.
+//
+// 实现 claude 解析器的单次扫描提取：转调 scanTranscriptForTitles。该函数逐行
+// 流式读取 .jsonl 转录，一次遍历同时返回两个候选——最新的 custom-title 记录
+// （第 1 层）与剥离机器前缀后的第一条真实用户提问（第 2 层）。扫描遵循
+// (sessionID, modTime) 结果缓存，因此对同一未变更文件的重复调用只花一次
+// stat + 一次查表，不会重新读盘。
+func (claudeTranscriptResolver) TitleCandidates(path string) (string, string) {
+	return scanTranscriptForTitles(path)
+}
+
+// CustomTitle / FirstQuestion are single-value convenience wrappers: each
+// runs the SAME single scan (cache-backed) and discards the other candidate.
+// Callers that need both values must use TitleCandidates directly instead of
+// calling these two in sequence — the wrapper pair exists for interface
+// completeness, not for paired use.
+//
+// CustomTitle / FirstQuestion 是单值便捷包装：各自跑同一次（带缓存的）扫描，
+// 丢弃另一个候选。需要两个值的调用方必须直接用 TitleCandidates，而不是先后
+// 调这两个——包装对的存在是为接口完整性，不是为成对使用。
 func (claudeTranscriptResolver) CustomTitle(path string) string {
-	custom, _ := scanTranscriptForTitles(path)
+	custom, _ := claudeTranscriptResolver{}.TitleCandidates(path)
 	return custom
 }
 
 func (claudeTranscriptResolver) FirstQuestion(path string) string {
-	_, first := scanTranscriptForTitles(path)
+	_, first := claudeTranscriptResolver{}.TitleCandidates(path)
 	return first
 }
 
@@ -175,16 +220,6 @@ func (claudeTranscriptResolver) StripRules() []stripRule {
 // These are used by claudeTranscriptResolver and by agent.go's display-title
 // pipeline. They remain in agent.go; the resolver wraps them.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// maxTranscriptSizeBytes caps the transcript file size read for title
-// derivation. Files larger than this are skipped to avoid multi-second I/O
-// on every list request. The first user question and custom-title records
-// are typically near the top / bottom of the file respectively, so skipping
-// huge files is safe.
-//
-// 标题派生时读取转录文件的大小上限。超过此大小的文件跳过，避免每次列表请求
-// 触发数秒 I/O。首问和 custom-title 通常在文件头部/尾部，跳过大文件是安全的。
-const maxTranscriptSizeBytes int64 = 32 << 20 // 32 MB
 
 // transcriptTitleCache caches the result of transcript title derivation
 // keyed by (sessionID, fileModTime). When the file hasn't changed, the
@@ -221,10 +256,14 @@ func cachedTitleResult(sid string, modTime int64) (transcriptTitleResult, bool) 
 // scanTranscriptForTitles performs a single-pass scan of a transcript file
 // extracting both the newest custom-title record and the first real user
 // question. This replaces the previous two separate full-file scans, halving
-// I/O for large files.
+// I/O for large files. The whole file is always scanned (no size cap) so the
+// correct title is derived for transcripts of any size; the (sessionID,
+// modTime) cache keeps repeated reads of an unchanged file cheap.
 //
 // 单次扫描转录文件，同时提取最新的 custom-title 记录和第一条真实用户问题。
-// 替代之前的两次全文件扫描，将 I/O 减半。
+// 替代之前的两次全文件扫描，将 I/O 减半。始终扫描整个文件（无大小上限），
+// 因此任何大小的转录都能得到正确标题；(sessionID, modTime) 缓存使同一未变更
+// 文件的重复读取保持廉价。
 func scanTranscriptForTitles(path string) (customTitle, firstQuestion string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -232,9 +271,10 @@ func scanTranscriptForTitles(path string) (customTitle, firstQuestion string) {
 	}
 	defer func() { _ = f.Close() }()
 
-	// Skip files exceeding the size limit.
+	// Read modTime for the result cache; the whole file is always scanned so
+	// the correct title is derived regardless of size.
 	fi, err := f.Stat()
-	if err != nil || fi.Size() > maxTranscriptSizeBytes {
+	if err != nil {
 		return "", ""
 	}
 	modTime := fi.ModTime().UnixNano()
