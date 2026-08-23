@@ -232,7 +232,6 @@ export default {
       send: 'Send',
       enqueue: 'Enqueue',
       quickMenu: 'Quick commands',
-      clearInput: 'Clear input',
       stopGenerating: 'Stop generating',
       confirmStop: 'Confirm stop',
     },
