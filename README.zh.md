@@ -184,6 +184,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **文件路径跳转**：代码预览中的文件路径可点击跳转，支持 import 路径解析（如 @/composables/useFoo 解析为实际文件路径）；支持行范围导航（如 `file.go:42-50`），高亮闪烁指定行范围
 - **编辑模式**：undo/redo、保存退出、未保存变更确认对话框、编辑模式视觉区分（强调色背景+顶部边框）
 - **Markdown 标题锚定滚动同步**：在渲染视图和源码编辑之间切换时，根据标题锚点同步滚动位置
+- **Excalidraw 画布**：`.excalidraw` 文件直接在应用内打开画布编辑器（iframe 内嵌独立构建），支持绘制、编辑、保存写回原文件；语言和主题跟随应用系统设置，退出时自动检测未保存修改并提示
 - 滑动手势：左右滑动切换文件
 
 ### 📝 Markdown
@@ -204,6 +205,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **继续对话**：定时任务执行详情页可一键继续对话，自动复制历史消息和摘要到新会话，继承后端/智能体/模型/思考档位；会话列表中定时任务来源的会话显示紫色「定时」角标
 - **多会话管理**：创建、切换、归档独立会话，滑动切换；归档会话可通过搜索恢复，支持物理删除（不可恢复）和归档留存期自动清理；Ctrl/Cmd+Delete 快捷归档当前会话
 - **滑动会话切换开关**：可在设置中开关聊天区域左右滑动切换会话，默认关闭避免滚动宽内容时误触
+- **宽屏聊天区切换**：宽屏 Dock 底部提供聊天区隐藏/显示按钮，隐藏后左侧面板占满宽度，专注文件/终端等工作区，需要时一键恢复
 - **图片上传**：支持上传图片与 AI 对话（多模态）
 - **断连保护**：消息立即落库，网络断开不丢失，15 秒心跳保活 + 30 秒超时自动重连（降级轮询时实时更新内容）；重连后自动检查会话状态，防止因断线期间 AI 完成但界面卡死
 - **自动恢复**：Claude / CodeBuddy / Qoder / CodeWhale / MiMo / Pi / Copilot / Kimi 退出 Plan Mode 后自动发送"继续"
@@ -230,6 +232,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **未读徽章**：聊天面板图标显示未读消息数
 - **附件抽屉已选文件**：附件抽屉底部常驻显示已选文件标签，支持横向滚动和直接移除
 - **自动审批指示**：模式芯片在启用 auto-approve 时变为绿色，直观显示权限模式
+- **重置会话**：AI 错误/警告横幅上提供"重置会话"按钮，会话卡死（如工具已批准但未执行）时一键重启 AI 进程；保留外部会话 ID 与聊天历史，重连后自动恢复上下文并重发最后一条用户消息
 
 ### 🖼️ 媒体预览
 - 图片、音频、视频应用内直接预览
@@ -276,7 +279,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 ### 💻 Web 终端
 - **交互式终端**：基于 PTY + WebSocket + xterm.js，浏览器内直接操作服务器终端
 - **多会话并发**：每个客户端拥有独立 PTY 会话，互不干扰
-- **多标签管理**：支持关闭所有标签页，空状态显示创建按钮，Dock 图标显示活跃会话数
+- **多标签管理**：支持关闭所有标签页，空状态显示创建按钮，Dock 图标显示活跃会话数；标签页后台产生新输出时显示未读圆点提示
 - **三模式手势系统**：浏览（默认，支持触摸滚动）、手势（Termius 风格滑动→方向键、长按重复、双击→Tab、捏合缩放）、选择（拖拽选择文本+浮动复制栏）
 - **虚拟按键栏**：按类型分组的颜色编码按键（修饰键、快捷键、导航键、方向键、操作键），修饰键支持三态切换
 - **按键/符号配置**：全屏配置抽屉，按键和符号双标签页，支持点选添加、拖拽排序、手势模式自动隐藏部分按键，配置持久化到数据库
@@ -320,7 +323,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 
 
 ### 🎨 主题
-- **18 个命名主题**：VSCode 风格自包含配色方案——GitHub Light/Dark、One Dark Pro、Catppuccin Mocha/Latte、Dracula、Nord、Tokyo Night、Solarized Dark/Light/Deep、Gruvbox Dark/Light、High Contrast Dark/Light、Night Owl、Ayu Dark、Vitesse Dark
+- **27 个命名主题**：VSCode 风格自包含配色方案，按亮度从浅到深排列——亮色 11 个（GitHub Light、One Light、Ayu Light、Everforest Light、High Contrast Light、Mint Light、Sky Light、Nord Light、Catppuccin Latte、Solarized Light、Gruvbox Light），暗色 16 个（Solarized Dark/Deep、Nord、Everforest Dark、One Dark Pro、Dracula、Rose Pine、Gruvbox Dark、GitHub Dark、Catppuccin Mocha、Vitesse Dark、Tokyo Night、Kanagawa、Ayu Dark、Night Owl、High Contrast Dark）
 - **跟随系统**：`auto` 模式下根据系统深浅色自动选择默认 GitHub Light/Dark
 - **快捷主题选择器**：Header 上的调色板按钮可即时切换主题，并带实时配色预览
 - **持久化与状态栏适配**：选择本地保存、刷新后恢复；Android 状态栏颜色跟随当前主题

@@ -172,6 +172,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **File Path Navigation**: Clickable file paths in code previews with import path resolution (e.g., @/composables/useFoo resolves to the actual file path); line range navigation support (e.g., `file.go:42-50`) with flash highlight
 - **Edit Mode**: undo/redo, save & exit, unsaved changes confirmation dialog, visual distinction for edit mode (accent-tinted background + top border)
 - **Markdown Heading-Anchored Scroll Sync**: Scroll position synchronized between rendered view and source edit based on heading anchors
+- **Excalidraw Canvas**: `.excalidraw` files open directly in an in-app canvas editor (embedded independent build in an iframe) with drawing and editing, save-writes back to the original file; language and theme follow the app settings, with unsaved-change confirmation on exit
 - Swipe gestures: swipe left/right to switch files
 
 ### 📝 Markdown
@@ -192,6 +193,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Continue Conversation**: One-click continue conversation from task execution detail, auto-copies history messages and summaries to a new session, inherits backend/agent/model/thinking effort; sessions originated from scheduled tasks show a purple "Task" badge in session list
 - **Multi-Session Management**: Create, switch, archive independent sessions, swipe to switch; archived sessions recoverable via search, physical delete (irreversible) and archive retention auto-cleanup available; Ctrl/Cmd+Delete to quick-archive current session
 - **Swipe Session Toggle**: Toggle left/right swipe session switching in Settings → Chat; defaults to off to prevent accidental switches when scrolling wide content
+- **Wide-Screen Chat Toggle**: A button at the bottom of the wide-screen dock hides/shows the chat area — when hidden, the left pane takes the full width for focused work (files, terminal, etc.) and can be restored on demand
 - **Image Upload**: Upload images for AI conversation (multimodal)
 - **Disconnect Protection**: Messages persist immediately, no data loss on disconnect, 15s heartbeat keep-alive + 30s timeout auto-reconnect (live content updates during polling fallback); on reconnect, auto-checks session state to prevent UI stuck when AI completed during disconnect
 - **Auto Resume**: Automatically sends "continue" after Claude/CodeBuddy/Qoder/CodeWhale/MiMo/Pi/Copilot/Kimi exits Plan Mode
@@ -218,6 +220,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Unread Badge**: Chat panel icon shows unread message count
 - **Attach Drawer Footer**: Selected files shown as persistent scrollable tags at the bottom of the attach drawer, with direct removal support
 - **Auto-Approve Indicator**: Mode chip turns green when auto-approve is enabled, providing visual feedback for ACP permission mode
+- **Reset Session**: A "Reset session" button on AI error/warning banners restarts a stuck agent process (e.g., a tool approved but never executed); the external session ID and chat history are preserved, context is restored on reconnect and the last user message is re-sent
 
 ### 🖼️ Media Preview
 - In-app preview of images, audio, video
@@ -264,7 +267,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 ### 💻 Web Terminal
 - **Interactive Terminal**: PTY + WebSocket + xterm.js, operate server terminal directly in browser
 - **Concurrent Sessions**: Each client gets an independent PTY session, no interference
-- **Multi-Tab Management**: Close all tabs, empty state with create button, dock icon shows active session count
+- **Multi-Tab Management**: Close all tabs, empty state with create button, dock icon shows active session count; background tabs show an unread dot when new output arrives
 - **Three-Mode Gesture System**: Browse (default, touch scroll), Gesture (Termius-style swipe→arrow keys, hold-to-repeat, double-tap→Tab, pinch-to-zoom), Selection (drag-to-select text + floating copy bar)
 - **Virtual Key Toolbar**: Color-coded key groups (modifiers, shortcuts, navigation, arrows, actions), three-state modifier toggle
 - **Key/Symbol Configuration**: Full-screen configuration drawer with keys and symbols dual tabs; supports tap-to-add, drag-to-reorder, gesture mode auto-hides certain keys; configuration persisted to database
@@ -307,7 +310,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 
 
 ### 🎨 Themes
-- **18 Named Themes**: VSCode-style self-contained color schemes — GitHub Light/Dark, One Dark Pro, Catppuccin Mocha/Latte, Dracula, Nord, Tokyo Night, Solarized Dark/Light/Deep, Gruvbox Dark/Light, High Contrast Dark/Light, Night Owl, Ayu Dark, Vitesse Dark
+- **27 Named Themes**: VSCode-style self-contained color schemes sorted by background brightness — 11 light (GitHub Light, One Light, Ayu Light, Everforest Light, High Contrast Light, Mint Light, Sky Light, Nord Light, Catppuccin Latte, Solarized Light, Gruvbox Light) and 16 dark (Solarized Dark/Deep, Nord, Everforest Dark, One Dark Pro, Dracula, Rose Pine, Gruvbox Dark, GitHub Dark, Catppuccin Mocha, Vitesse Dark, Tokyo Night, Kanagawa, Ayu Dark, Night Owl, High Contrast Dark)
 - **Follow System**: `auto` mode picks the default GitHub Light/Dark based on the system color scheme
 - **Quick Theme Picker**: Palette button in the header switches themes on the fly with live color previews
 - **Persistent & Status Bar Aware**: Selection is saved locally and restored on reload; Android status bar color follows the active theme
