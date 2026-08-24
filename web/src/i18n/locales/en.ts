@@ -1466,7 +1466,7 @@ export default {
       messageDisplayModeSummary: 'Summary mode',
       messageDisplayModeOriginal: 'Original text',
       chatSystemPromptInterval: 'System Prompt Interval',
-      chatSystemPromptIntervalDesc: 'Insert a system prompt every N messages',
+      chatSystemPromptIntervalDesc: 'Insert a system prompt every N messages (0 = never)',
       sessionMaxCount: 'Max Sessions',
       sessionMaxCountDesc: 'Maximum number of concurrent chat sessions',
       archiveRetentionSectionHeader: 'Archive Retention',
