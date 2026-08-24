@@ -156,10 +156,9 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 		if limit > 100 {
 			limit = 100
 		}
-		summaryView := r.URL.Query().Get("view") == "summary"
 
 		totalCount := 0
-		messages, totalCount, err := service.GetChatHistoryPaged(projectPath, sessionBackend, sessionID, limit, beforeID, summaryView)
+		messages, totalCount, err := service.GetChatHistoryPaged(projectPath, sessionBackend, sessionID, limit, beforeID)
 		// Use cached session info from earlier lookup, or fetch if not yet available
 		// (e.g. when session was found via GetLatestSessionID or newly created).
 		// This avoids an extra DB query for the common case of switching to an existing session.
@@ -540,6 +539,8 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 				cancel()
 				// Emit error event to WS clients
 				ws.EmitToSession(sessionID, ai.StreamEvent{Type: "error", Error: "AI internal error, please retry", Reason: ai.ReasonPanic})
+				// Push cancelled notification — panic is a terminal state
+				service.EmitSessionPushNotification(sessionID, "cancelled")
 				// Persist error to database
 				errMsg := "AI internal error, please retry"
 				errContent, _ := json.Marshal(map[string]any{"blocks": []any{map[string]string{"type": "error", "text": errMsg, "reason": ai.ReasonPanic}}})
@@ -561,6 +562,13 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 			service.SetSessionRunning(sessionID, false, true) // skip event — we emit directly
 			// Emit terminal event to WS clients via StreamHub
 			ws.EmitToSession(sessionID, event)
+			// DingTalk/Feishu push — EmitSessionEvent is skipped above, so push
+			// must be triggered here for normal completion.
+			// Skip for cancelled: CancelSession already calls EmitSessionEvent("cancelled")
+			// which handles push. Skip for error: no meaningful push content.
+			if event.Type == "done" {
+				service.EmitSessionPushNotification(sessionID, "completed")
+			}
 		}
 		// Mark ACP connection as idle when the session goroutine exits.
 		// Previously this used CloseConn, which caused a race: the goroutine

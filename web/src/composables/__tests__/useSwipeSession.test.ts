@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { reactive, ref } from 'vue'
+
+// Full-suite scheduling: this test exercises a swipe gesture watcher that
+// dispatches a debounced session switch. Finishes quickly in isolation but
+// can flake under the coverage-gate's full-suite run. Bump this file's
+// timeout only.
+vi.setConfig({ testTimeout: 30_000 })
 import { useSwipeSession } from '@/composables/useSwipeSession'
 
 // ── swipeSession disabled guard ──
@@ -93,30 +99,37 @@ describe('useSwipeSession disabled guard', () => {
       json: () => Promise.resolve({ sessions: [{ id: 'session-1', title: 'S1' }, { id: 'session-2', title: 'S2' }] }),
     } as Response)
 
-    const switchSession = vi.fn().mockResolvedValue(undefined)
-    const currentSessionId = ref('session-2')
+    try {
+      const switchSession = vi.fn().mockResolvedValue(undefined)
+      const currentSessionId = ref('session-2')
 
-    const { onTouchStart, onTouchEnd, indicatorText } = useSwipeSession({
-      currentSessionId,
-      switchSession,
-    })
+      const { onTouchStart, onTouchEnd, indicatorText } = useSwipeSession({
+        currentSessionId,
+        switchSession,
+      })
 
-    // Simulate a left swipe (next session)
-    const startEvent = createTouchEvent('touchstart', 200, 100)
-    onTouchStart(startEvent)
+      // Simulate a left swipe (next session)
+      const startEvent = createTouchEvent('touchstart', 200, 100)
+      onTouchStart(startEvent)
 
-    const endEvent = createTouchEvent('touchend', 50, 100)
-    onTouchEnd(endEvent)
+      const endEvent = createTouchEvent('touchend', 50, 100)
+      onTouchEnd(endEvent)
 
-    // Wait for async operations
-    await vi.waitFor(() => {
-      expect(switchSession).toHaveBeenCalled()
-    }, { timeout: 5000 })
+      // Wait for async operations. Full-suite scheduling under the coverage gate
+      // can slow async tasks; the swipe handler may need more than 5s when the
+      // worker pool is busy.
+      await vi.waitFor(() => {
+        expect(switchSession).toHaveBeenCalled()
+      }, { timeout: 20_000 })
 
-    // Indicator should show the target session title
-    expect(indicatorText.value).toBeTruthy()
-
-    fetchSpy.mockRestore()
+      // Indicator should show the target session title
+      expect(indicatorText.value).toBeTruthy()
+    } finally {
+      // Always restore the fetch mock — even if the waitFor above throws, so
+      // the globalThis.fetch mock does not leak into subsequent tests in the
+      // full coverage suite.
+      fetchSpy.mockRestore()
+    }
   })
 })
 

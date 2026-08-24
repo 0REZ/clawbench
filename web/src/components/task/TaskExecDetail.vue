@@ -1,12 +1,13 @@
 <template>
   <div class="exec-detail-page">
-    <!-- Header: breadcrumb + actions -->
+    <!-- Header: breadcrumb + refresh button -->
     <div class="exec-detail-header">
       <TaskBreadcrumb />
+      <RefreshButton class="header-btn refresh-btn" :loading="refreshing" :disabled="refreshing" :title="t('common.refresh')" @click="onRefresh" />
     </div>
 
     <!-- Scrollable message content -->
-    <div class="exec-detail-content" ref="contentRef" @click="handleContentClick" @mousedown="onTableMouseDown" @touchstart="onTableTouchStart">
+    <div class="exec-detail-content" ref="contentRef" @click="handleContentClick" @mousedown="onTableMouseDown" @touchstart="onContentTouchStart" @touchend="onContentTouchEnd" @touchcancel="onContentTouchEnd" @scroll="handleScroll">
       <!-- Summary / Original tab bar (hidden during live streaming) -->
       <SummaryToggle v-if="hasSummary && !execStream.isStreaming.value && !isRunning" mode="tab" :showing-summary="activeTab === 'summary'" i18n-prefix="task.exec" @toggle="setTab(activeTab === 'summary' ? 'original' : 'summary')" />
       <ChatMessageItem
@@ -20,6 +21,7 @@
         @show-tool-detail="handleShowToolDetail"
         @show-metadata="showMetadata"
         @task-card-click="() => {}"
+        @render-flush="scrollToBottom"
       />
       <div v-else-if="execDetail?.status === 'cancelled'" class="exec-cancelled-notice">{{ t('task.exec.cancelledNotice') }}</div>
       <div v-else class="exec-detail-empty">{{ isRunning ? t('task.exec.startingPreview') : t('task.exec.noTextOutput') }}</div>
@@ -32,8 +34,9 @@
         <span class="action-text">{{ continueLoading ? t('task.exec.continueConversationLoading') : t('task.exec.continueConversation') }}</span>
       </button>
       <span class="actions-spacer"></span>
-      <button class="action-btn" :class="{ spinning: refreshing }" :disabled="refreshing" @click="onRefresh" :title="t('common.refresh')">
-        <RefreshCw :size="14" />
+      <button v-if="isRunning" class="action-btn danger" :disabled="cancelling" @click="onTerminate" :title="t('task.exec.cancel')">
+        <Square :size="14" />
+        <span class="action-text">{{ cancelling ? t('common.loading') : t('task.exec.cancel') }}</span>
       </button>
     </div>
 
@@ -82,8 +85,9 @@
 <script setup>
 import { ref, computed, watch, nextTick, provide, onUnmounted, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RefreshCw, MessageSquare } from 'lucide-vue-next'
+import { MessageSquare, Square } from 'lucide-vue-next'
 import TaskBreadcrumb from '@/components/task/TaskBreadcrumb.vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import ChatMessageItem from '@/components/chat/ChatMessageItem.vue'
 import ToolDetailDrawer from '@/components/chat/ToolDetailDrawer.vue'
 import ChatMetadataModal from '@/components/chat/ChatMetadataModal.vue'
@@ -100,6 +104,7 @@ import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
 import { useToolDetailDrawer } from '@/composables/useToolDetailDrawer.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import { useTaskExecStream } from '@/composables/useTaskExecStream.ts'
+import { terminateExecution } from '@/utils/taskExecUtils.ts'
 import { formatToolOutput } from '@/utils/renderToolDetail.ts'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 
@@ -124,6 +129,9 @@ const { tableRowModal, closeTableRowModal, tableRowPrev, tableRowNext, handleTab
 const continueLoading = ref(false)
 const isRunning = computed(() => props.execDetail?.status === 'running')
 
+// ── Terminate (cancel) running execution ──
+const cancelling = ref(false)
+
 // ── Live preview stream ──
 const execStatusRef = computed(() => props.execDetail?.status || '')
 const execSessionIdRef = computed(() => props.execDetail?.sessionId || null)
@@ -143,6 +151,26 @@ const showContinueBtn = computed(() => {
   return status && status !== 'running' && props.taskId && props.execDetail?.id
 })
 
+async function onTerminate() {
+  if (!props.taskId || !props.execDetail?.id || cancelling.value) return
+  cancelling.value = true
+  try {
+    // Backend runningExecutions map is keyed by session ID, not the DB id.
+    // Prefer sessionId for running executions; fall back to DB id.
+    const executionId = props.execDetail?.sessionId || String(props.execDetail.id)
+    // terminateExecution refreshes exactly once on the success path — do NOT
+    // also refresh off its return value (that would double-refresh).
+    await terminateExecution({
+      taskId: props.taskId,
+      executionId,
+      onStopPreview: () => execStream.stopPreview(),
+      onRefresh: () => refreshExecDetail(),
+    })
+  } finally {
+    cancelling.value = false
+  }
+}
+
 async function onContinueConversation() {
   if (!props.taskId || !props.execDetail?.id || continueLoading.value) return
   continueLoading.value = true
@@ -155,11 +183,18 @@ async function onContinueConversation() {
 
 // ── Refresh logic ──
 const refreshing = ref(false)
+// Minimum spin duration so the refresh animation is always visible,
+// even when the API responds almost instantly.
+const REFRESH_MIN_MS = 600
 
 async function onRefresh() {
+  if (refreshing.value) return
   refreshing.value = true
   try {
-    await refreshExecDetail()
+    await Promise.all([
+      refreshExecDetail(),
+      new Promise(resolve => setTimeout(resolve, REFRESH_MIN_MS)),
+    ])
   } finally {
     refreshing.value = false
   }
@@ -409,6 +444,50 @@ function showMetadata() {
 // ── Delegated click handler for .chat-file-open-btn ──
 const contentRef = ref(null)
 
+// ── Auto-follow scroll (mirrors chat streaming UX) ──
+// When live streaming output, keep pinned to the bottom unless the user
+// manually scrolls elsewhere. Scrolling back to the bottom resumes following.
+const isAtBottom = ref(true)
+const NEAR_BOTTOM_THRESHOLD = 100
+let userTouching = false
+
+function handleScroll() {
+  if (!contentRef.value) return
+  const el = contentRef.value
+  const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  isAtBottom.value = distFromBottom < NEAR_BOTTOM_THRESHOLD
+}
+
+function onContentTouchStart(e) {
+  userTouching = true
+  onTableTouchStart(e)
+}
+
+function onContentTouchEnd() {
+  // Short delay so the final scroll event from the user's gesture lands
+  // before auto-scroll re-engages (prevents snap-back fighting the touch).
+  setTimeout(() => { userTouching = false }, 150)
+}
+
+function scrollToBottom() {
+  if (!contentRef.value || !isAtBottom.value || userTouching) return
+  const el = contentRef.value
+  el.scrollTop = el.scrollHeight
+  // Re-check after layout — content may grow during streaming.
+  // Only correct if the user hasn't scrolled up since (sticky-jitter guard).
+  requestAnimationFrame(() => {
+    if (!contentRef.value || !isAtBottom.value || userTouching) return
+    const c = contentRef.value
+    const gap = c.scrollHeight - c.scrollTop - c.clientHeight
+    if (gap > 0) c.scrollTop = c.scrollHeight
+  })
+}
+
+// Follow streaming updates while at the bottom
+watch(activeMsgData, () => {
+  nextTick(scrollToBottom)
+})
+
 function handleContentClick(event) {
   // 0. Code block header buttons (copy/wrap)
   if (handleCodeBlockClick(event)) return
@@ -466,6 +545,7 @@ watch(() => props.execDetail, (newVal, oldVal) => {
   closeOverlay()
   metadataModal.value.show = false
   activeTab.value = hasSummary.value ? 'summary' : 'original'
+  isAtBottom.value = true
 
   // Start live preview when execution becomes running
   if (newVal?.status === 'running' && newVal?.sessionId) {
@@ -516,6 +596,38 @@ onUnmounted(() => {
   padding: 4px 8px;
   border-bottom: 1px solid var(--border-color, #e5e5e5);
   flex-shrink: 0;
+}
+
+/* Refresh button in the breadcrumb bar (unified with TaskDetailPage) */
+.header-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 14px;
+  background: var(--bg-secondary, #f1f3f5);
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.header-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (hover: hover) {
+  .header-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary, #eef1f4);
+    color: var(--accent-color, #0066cc);
+  }
+}
+
+.header-btn:active:not(:disabled) {
+  transform: scale(0.9);
 }
 
 .exec-detail-content {
@@ -573,27 +685,30 @@ onUnmounted(() => {
 }
 
 .action-btn.accent {
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 20%, var(--bg-secondary, #f1f3f5));
-  color: var(--accent-color, #0066cc);
+  background: var(--accent-color, #0066cc);
+  color: #fff;
 }
 
 @media (hover: hover) {
   .action-btn.accent:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-color, #0066cc) 35%, var(--bg-secondary, #f1f3f5));
+    background: color-mix(in srgb, var(--accent-color, #0066cc) 85%, black);
     color: #fff;
   }
 }
 
-.action-btn.spinning svg {
-  animation: exec-spin 1s linear infinite;
+.action-btn.danger {
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-secondary, #f1f3f5));
+  color: #b91c1c;
+}
+
+@media (hover: hover) {
+  .action-btn.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, #ef4444 25%, var(--bg-secondary, #f1f3f5));
+  }
 }
 
 .action-text {
   white-space: nowrap;
-}
-
-@keyframes exec-spin {
-  100% { transform: rotate(360deg); }
 }
 
 .exec-detail-empty {

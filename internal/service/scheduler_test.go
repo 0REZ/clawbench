@@ -385,12 +385,15 @@ func TestPauseTask(t *testing.T) {
 	task := helperTask()
 	assert.NoError(t, s.AddTask(task))
 
+	assert.NotNil(t, task.NextRunAt, "active task should have a next run time")
 	s.PauseTask(task.ID)
 
 	// Task should be marked as paused in DB
 	persisted, err := service.GetTaskByID(task.ID)
 	assert.NoError(t, err)
 	assert.Equal(t, "paused", persisted.Status)
+	// Paused tasks should no longer show a stale next run time in the UI
+	assert.Nil(t, persisted.NextRunAt, "paused task should have nil next_run_at")
 
 	// Paused tasks should still appear in GetTasks (not deleted)
 	tasks, err := service.GetTasks(task.ProjectPath)
@@ -408,6 +411,33 @@ func TestPauseTask_NonExistentDoesNotPanic(t *testing.T) {
 
 // ---------- ResumeTask ----------
 
+func TestNextRunAt_TimeZoneRoundTrip(t *testing.T) {
+	s, cleanup := setupScheduler(t)
+	defer cleanup()
+
+	task := helperTask()
+	assert.NoError(t, s.AddTask(task))
+
+	// Write a next_run_at in a non-UTC fixed offset (simulating a server whose
+	// local timezone is UTC+8). The absolute instant must survive the SQLite
+	// DATETIME round-trip unchanged — otherwise the "next run" shown in the UI
+	// would drift by the UTC offset. The zone abbreviation is letter-only (CST,
+	// as real IANA zones like Asia/Shanghai produce) so the driver's time parser
+	// recognizes it; a digit-bearing FixedZone name like "UTC+8" is not a real
+	// server timezone.
+	loc := time.FixedZone("CST", 8*60*60)
+	written := time.Date(2026, 12, 31, 8, 0, 0, 0, loc) // 08:00 +0800 == 00:00 UTC
+	_, err := service.WriteExec("UPDATE scheduled_tasks SET next_run_at = ? WHERE id = ?", written, task.ID)
+	assert.NoError(t, err)
+
+	persisted, err := service.GetTaskByID(task.ID)
+	assert.NoError(t, err)
+	assert.NotNil(t, persisted.NextRunAt)
+	// Equal compares the instant regardless of the time.Location each side
+	// carries — proves no wall-clock offset was introduced by the round-trip.
+	assert.True(t, persisted.NextRunAt.Equal(written), "next_run_at must survive the SQLite round-trip as the same instant")
+}
+
 func TestResumeTask(t *testing.T) {
 	s, cleanup := setupScheduler(t)
 	defer cleanup()
@@ -423,6 +453,9 @@ func TestResumeTask(t *testing.T) {
 	persisted, err := service.GetTaskByID(task.ID)
 	assert.NoError(t, err)
 	assert.Equal(t, "active", persisted.Status)
+	// Resume should recompute a fresh next run time (was cleared by pause)
+	assert.NotNil(t, persisted.NextRunAt, "resumed task should have a recomputed next_run_at")
+	assert.True(t, persisted.NextRunAt.After(time.Now()), "resumed next_run_at should be in the future")
 }
 
 func TestResumeTask_NotPaused(t *testing.T) {

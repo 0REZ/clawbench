@@ -109,17 +109,33 @@ export type CategoryEntry =
  */
 export const categoryItems: Record<string, CategoryEntry[]> = {
   appearance: [
-    { type: 'item', spec: { labelKey: 'settings.items.theme', descriptionKey: 'settings.items.themeDesc', key: 'theme', type: 'select', source: 'local', sectionHeader: 'settings.items.appearanceDisplaySection', options: [
+    { type: 'item', spec: { labelKey: 'settings.items.theme', descriptionKey: 'settings.items.themeDesc', key: 'theme', type: 'select', source: 'local', sectionHeader: 'settings.items.themeSection', options: [
       { labelKey: 'settings.items.themeAuto', value: 'auto' },
-      { labelKey: 'settings.items.themeLight', value: 'light' },
-      { labelKey: 'settings.items.themeDark', value: 'dark' },
+      { labelKey: 'settings.items.themeGithubLight', value: 'github-light' },
+      { labelKey: 'settings.items.themeGithubDark', value: 'github-dark' },
+      { labelKey: 'settings.items.themeOneDarkPro', value: 'one-dark-pro' },
+      { labelKey: 'settings.items.themeCatppuccinMocha', value: 'catppuccin-mocha' },
+      { labelKey: 'settings.items.themeCatppuccinLatte', value: 'catppuccin-latte' },
+      { labelKey: 'settings.items.themeDracula', value: 'dracula' },
+      { labelKey: 'settings.items.themeNord', value: 'nord' },
+      { labelKey: 'settings.items.themeTokyoNight', value: 'tokyo-night' },
+      { labelKey: 'settings.items.themeSolarizedDark', value: 'solarized-dark' },
+      { labelKey: 'settings.items.themeSolarizedLight', value: 'solarized-light' },
+      { labelKey: 'settings.items.themeSolarizedDeep', value: 'solarized-deep' },
+      { labelKey: 'settings.items.themeGruvboxDark', value: 'gruvbox-dark' },
+      { labelKey: 'settings.items.themeGruvboxLight', value: 'gruvbox-light' },
+      { labelKey: 'settings.items.themeHighContrastDark', value: 'high-contrast-dark' },
+      { labelKey: 'settings.items.themeHighContrastLight', value: 'high-contrast-light' },
+      { labelKey: 'settings.items.themeNightOwl', value: 'night-owl' },
+      { labelKey: 'settings.items.themeAyuDark', value: 'ayu-dark' },
+      { labelKey: 'settings.items.themeVitesseDark', value: 'vitesse-dark' },
     ]}},
     { type: 'item', spec: { labelKey: 'settings.items.locale', descriptionKey: 'settings.items.localeDesc', key: 'locale', type: 'select', source: 'local', sectionHeader: 'settings.items.appearanceDisplaySection', options: [
       { labelKey: 'settings.items.localeZh', value: 'zh' },
       { labelKey: 'settings.items.localeEn', value: 'en' },
     ]}},
-    { type: 'item', spec: { labelKey: 'settings.items.uiScale', descriptionKey: 'settings.items.uiScaleDesc', key: 'uiScale', type: 'slider', source: 'local', min: 0.8, max: 1.5, step: 0.05, defaultValue: 1, displayFormat: 'percent' } },
-    { type: 'item', spec: { labelKey: 'settings.items.headerShortcutTips', descriptionKey: 'settings.items.headerShortcutTipsDesc', key: 'headerShortcutTips', type: 'switch', source: 'local', sectionHeader: 'settings.items.appearanceHeaderSection' } },
+    { type: 'item', spec: { labelKey: 'settings.items.uiScale', descriptionKey: 'settings.items.uiScaleDesc', key: 'uiScale', type: 'slider', source: 'local', min: 0.8, max: 1.5, step: 0.05, defaultValue: 1, displayFormat: 'percent', sectionHeader: 'settings.items.appearanceDisplaySection' } },
+    { type: 'item', spec: { labelKey: 'settings.items.headerShortcutTips', descriptionKey: 'settings.items.headerShortcutTipsDesc', key: 'headerShortcutTips', type: 'switch', source: 'local', sectionHeader: 'settings.items.appearanceDisplaySection' } },
   ],
   agents: [],
   chat: [
@@ -241,6 +257,7 @@ export const categoryItems: Record<string, CategoryEntry[]> = {
       enableKey: 'terminal.enabled',
       enableLabelKey: 'settings.items.terminalEnabled',
       commonFields: [
+        { labelKey: 'settings.items.terminalTheme', descriptionKey: 'settings.items.terminalThemeDesc', key: 'terminalTheme', type: 'select', source: 'local', defaultValue: 'auto' },
         { labelKey: 'settings.items.terminalFontSize', descriptionKey: 'settings.items.terminalFontSizeDesc', key: 'terminalFontSize', type: 'slider', source: 'local', min: 10, max: 24, step: 1, defaultValue: 12 },
         { labelKey: 'settings.items.terminalIdleTimeout', descriptionKey: 'settings.items.terminalIdleTimeoutDesc', key: 'terminal.idle_timeout', type: 'text', source: 'server' },
         { labelKey: 'settings.items.terminalMaxSessions', descriptionKey: 'settings.items.terminalMaxSessionsDesc', key: 'terminal.max_sessions', type: 'number', source: 'server' },

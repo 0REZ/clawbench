@@ -92,6 +92,7 @@ const i18n = createI18n({
         thinkingLoadFailed: 'Failed to load thinking',
         retry: 'Retry',
         continue: 'Continue',
+        resetSession: 'Reset session',
       },
     },
     tool: { askUser: { name: 'Ask' } },
@@ -114,10 +115,13 @@ function mountBlocks(props: Record<string, unknown> = {}) {
     global: {
       plugins: [i18n],
       stubs: {
-        'lucide-vue-next': LucideStub,
+        // Note: CheckCircle2 is intentionally NOT stubbed so the "shows check
+        // icon" test verifies the real component renders. Stub every other
+        // lucide icon explicitly instead of the package-level stub.
         Brain: LucideStub,
         ChevronRight: LucideStub,
-        CheckCircle2: LucideStub,
+        ChevronDown: LucideStub,
+        ChevronUp: LucideStub,
         AlertCircle: LucideStub,
         AlertTriangle: LucideStub,
         XCircle: LucideStub,
@@ -194,7 +198,13 @@ describe('ContentBlocks', () => {
       const wrapper = mountBlocks({
         blocks: [{ type: 'tool_use', name: 'Read', done: true, status: 'success' }],
       })
-      expect(wrapper.find('.tool-check').exists()).toBe(true)
+      const check = wrapper.find('.tool-check')
+      expect(check.exists()).toBe(true)
+      // CheckCircle2 is intentionally NOT stubbed here — a regression guard for
+      // the missing-import bug where the icon component was unregistered and
+      // rendered as an empty element. The lucide component's root IS the svg
+      // carrying the .tool-check class, so assert it is a real svg element.
+      expect(check.element.tagName.toLowerCase()).toBe('svg')
     })
 
     it('shows error icon when tool has error status', () => {
@@ -356,6 +366,50 @@ describe('ContentBlocks', () => {
         blocks: [{ type: 'warning', reason: 'parse_error', text: 'Parse error' }],
       })
       expect(wrapper.find('.warning-continue-btn').exists()).toBe(false)
+    })
+
+    it('shows reset button on empty warning and emits reset-session on click', async () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'warning', reason: 'empty', text: 'AI returned no content' }],
+      })
+      const btn = wrapper.find('.warning-reset-btn')
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).toBe('Reset session')
+      await btn.trigger('click')
+      expect(wrapper.emitted('reset-session')).toBeTruthy()
+      expect(wrapper.emitted('reset-session')![0]).toEqual([{ reason: 'empty' }])
+    })
+
+    it('shows reset button on error block', async () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'error', reason: 'backend_exit', text: 'AI backend exited' }],
+      })
+      const btn = wrapper.find('.warning-reset-btn')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+      expect(wrapper.emitted('reset-session')).toBeTruthy()
+      expect(wrapper.emitted('reset-session')![0]).toEqual([{ reason: 'backend_exit' }])
+    })
+
+    it('shows reset button on severe warning (timeout)', () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'warning', reason: 'timeout', text: 'Timed out' }],
+      })
+      expect(wrapper.find('.warning-reset-btn').exists()).toBe(true)
+    })
+
+    it('does not show reset button for user_cancel', () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'warning', reason: 'user_cancel', text: 'Cancelled' }],
+      })
+      expect(wrapper.find('.warning-reset-btn').exists()).toBe(false)
+    })
+
+    it('does not show reset button for warning without a resetable reason', () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'warning', reason: 'stderr', text: 'stderr output' }],
+      })
+      expect(wrapper.find('.warning-reset-btn').exists()).toBe(false)
     })
   })
 
@@ -856,7 +910,7 @@ describe('ContentBlocks', () => {
   })
 })
 
-describe('summary mode with empty blocks (view=summary stripped content)', () => {
+describe('summary mode with empty blocks (backend stripped content)', () => {
   it('renders summary text even when blocks are empty', () => {
     const wrapper = mountBlocks({
       blocks: [],

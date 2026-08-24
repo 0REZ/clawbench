@@ -4,23 +4,24 @@
     <!-- Logo: hidden in APP mode -->
     <img class="header-logo" src="/logo-64.png" alt="ClawBench">
 
-    <div class="badge-capsule">
-      <div class="project-dropdown-wrapper" ref="dropdownRef">
+    <div class="badge-capsule" ref="capsuleRef">
+      <div class="project-dropdown-wrapper" ref="dropdownRef" :class="segmentClass('project')" :style="segmentStyle('project')">
         <button class="project-switch-btn" @click="toggleDropdown" :title="t('appHeader.switchProject')">
           <Projector :size="12" />
           <span class="project-name">{{ projectName }}</span>
         </button>
       </div>
-      <div v-if="gitBranch" class="badge-capsule-divider"></div>
-      <div v-if="gitBranch" class="branch-badge" :class="{ 'branch-switch': branchAnimating }" :title="gitBranch" @click="toggleBranchDropdown" @animationend="branchAnimating = false">
+      <div v-if="gitBranch" class="badge-capsule-divider" :class="{ 'badge-segment-hidden': fillBadge !== null }"></div>
+      <div v-if="gitBranch" class="branch-badge" :title="gitBranch" @click="toggleBranchDropdown" :class="segmentClass('branch')" :style="segmentStyle('branch')">
         <GitBranch :size="12" class="branch-icon" />
         <span class="branch-name">{{ gitBranch }}</span>
       </div>
-      <div v-if="currentFileName || recentFilesAvailable > 0" class="badge-capsule-divider"></div>
+      <div v-if="currentFileName || recentFilesAvailable > 0" class="badge-capsule-divider" :class="{ 'badge-segment-hidden': fillBadge !== null }"></div>
       <button
         v-if="currentFileName || recentFilesAvailable > 0"
         class="current-file-badge"
-        :class="{ 'no-file': !currentFileName }"
+        :class="segmentClass('file')"
+        :style="segmentStyle('file')"
         :title="currentFileName || t('appHeader.noFileOpen')"
         :disabled="recentFilesAvailable === 0"
         @click="toggleFileDropdown"
@@ -162,6 +163,34 @@
       </div>
     </Teleport>
 
+    <!-- Quick theme picker -->
+    <button ref="themeBtnRef" class="theme-quick-toggle" :title="t('appHeader.themePicker')" :aria-label="t('appHeader.themePicker')" @click="toggleThemeMenu">
+      <Palette :size="14" />
+    </button>
+    <PopupMenu v-model:show="themeMenuOpen" :target-element="themeBtnRef" :max-width="200" :max-height="440" :menu-items-count="1 + THEME_IDS.length" anchor="right">
+      <div class="theme-picker">
+        <div class="theme-picker-title">{{ t('terminal.theme') }}</div>
+        <div class="theme-picker-list">
+          <button
+            v-for="opt in themeOptions"
+            :key="opt.value"
+            class="theme-item"
+            role="menuitem"
+            tabindex="-1"
+            :class="{ active: currentThemeValue === opt.value }"
+            :style="getThemePreviewStyle(opt.value)"
+            @click="selectTheme(opt.value)"
+            @keydown.enter="selectTheme(opt.value)"
+            @keydown.space.prevent="selectTheme(opt.value)"
+          >
+            <span class="theme-item-check">{{ currentThemeValue === opt.value ? '✓' : '' }}</span>
+            <span class="theme-item-name">{{ opt.label }}</span>
+            <component :is="getThemeBaseIcon(opt.value)" :size="12" class="theme-item-base-icon" />
+          </button>
+        </div>
+      </div>
+    </PopupMenu>
+
     <!-- Server button: merged gauge + status dot. Icon color reflects connection status -->
     <button ref="serverBtnRef" class="server-toggle" :class="[statusDotClass, { 'pressure-alert': isUnderPressure && showMetricIcon }]" @click="toggleResourcesMenu" :title="t('systemResources.title')">
       <Server v-if="!isUnderPressure || !showMetricIcon" :size="15" />
@@ -177,7 +206,7 @@
 </template>
 
 <script setup lang="ts">
-import { Projector, Search, GitBranch, Server, FileText, Settings2, FolderOpen, Cpu, Activity, MemoryStick, Database, X } from 'lucide-vue-next'
+import { Projector, Search, GitBranch, Server, FileText, Settings2, FolderOpen, Cpu, Activity, MemoryStick, Database, X, Palette, Sun, Moon } from 'lucide-vue-next'
 import { ref, computed, onMounted, onUnmounted, inject, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
@@ -194,11 +223,12 @@ import { useMenuKeyboard } from '@/composables/useMenuKeyboard'
 import { useDialog } from '@/composables/useDialog.ts'
 import { apiGet, apiPost } from '@/utils/api'
 import { toFixedCSS } from '@/composables/useSettingsConfig'
-import { localConfig } from '@/composables/useSettingsConfig'
+import { localConfig, setLocalConfig } from '@/composables/useSettingsConfig'
 import { useSystemResources } from '@/composables/useSystemResources'
 import { appLog } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { useWideScreenLayout } from '@/composables/useWideScreenLayout'
+import { isDarkTheme, resolveThemeId, THEME_IDS, getThemeLabelKey, getThemePreviewColor } from '@/utils/themeMeta'
 import ShortcutTipsDialog from '@/components/common/ShortcutTipsDialog.vue'
 import type { ShortcutContext } from '@/config/shortcutTips'
 import { resolveShortcutContext } from '@/config/shortcutTips'
@@ -220,6 +250,44 @@ const shortcutContext = computed<ShortcutContext>(() =>
   }),
 )
 const shortcutTipsOpen = ref(false)
+
+// Quick theme picker
+const themeBtnRef = ref<HTMLElement | null>(null)
+const themeMenuOpen = ref(false)
+const currentThemeValue = computed(() => localConfig.theme || 'auto')
+const autoPreviewColors = computed(() => getThemePreviewColor(resolveThemeId('auto')))
+
+const themeOptions = computed(() => [
+  { label: t('settings.items.themeAuto'), value: 'auto' },
+  ...THEME_IDS.map(id => ({ label: t(getThemeLabelKey(id)), value: id })),
+])
+
+function toggleThemeMenu() {
+  if (themeMenuOpen.value) {
+    themeMenuOpen.value = false
+    return
+  }
+  dropdownOpen.value = false
+  fileDropdownOpen.value = false
+  branchDropdownOpen.value = false
+  themeMenuOpen.value = true
+}
+
+function selectTheme(value: string) {
+  themeMenuOpen.value = false
+  setLocalConfig('theme', value)
+}
+
+function getThemePreviewStyle(value: string) {
+  const c = value === 'auto' ? autoPreviewColors.value : getThemePreviewColor(value)
+  if (!c) return undefined
+  return { '--tterm-preview-bg': c.bg, '--tterm-preview-fg': c.text, '--tterm-preview-accent': c.accent }
+}
+
+function getThemeBaseIcon(value: string) {
+  const resolved = value === 'auto' ? resolveThemeId('auto') : value
+  return isDarkTheme(resolved) ? Moon : Sun
+}
 
 const props = defineProps({
     projectRoot: String,
@@ -244,6 +312,7 @@ function toggleFileDropdown() {
     }
     branchDropdownOpen.value = false
     dropdownOpen.value = false
+    themeMenuOpen.value = false
     fileDropdownOpen.value = true
     // Position synchronously (estimated width) so the panel never flashes at the
     // default far-left position; refine to the real width after it renders.
@@ -286,6 +355,7 @@ function toggleBranchDropdown() {
     }
     fileDropdownOpen.value = false
     dropdownOpen.value = false
+    themeMenuOpen.value = false
     branchDropdownOpen.value = true
     loadBranches()
     updateBranchDropdownPosition(true)
@@ -529,14 +599,201 @@ const projectName = computed(() => {
 
 // Git branch
 const gitBranch = computed(() => store.state.gitBranch)
-const branchAnimating = ref(false)
 
-// Trigger animation when branch changes (skip initial value)
-watch(gitBranch, (newVal, oldVal) => {
-    if (oldVal !== undefined && newVal !== oldVal) {
-        branchAnimating.value = false
-        nextTick(() => { branchAnimating.value = true })
+// Badge capsule feedback — staged timeline on a badge segment content change
+// (project name, current file, branch):
+//   1. HIGHLIGHT_PRE_MS  the changed segment highlights (accent background)
+//   2. only when the capsule is space-constrained (its natural content width
+//      overflows the available capsule width, i.e. text would be truncated)
+//      does the segment then FILL the capsule — other segments slide shut
+//   3. FILL_MS / HIGHLIGHT_POST_MS everything expands back
+//   4. finally the highlight fades out
+// `highlightBadge` drives the accent background (always); `fillBadge` drives
+// the collapse/expand of the other segments (only on truncation).
+const capsuleRef = ref<HTMLElement | null>(null)
+const highlightBadge = ref<'project' | 'branch' | 'file' | null>(null)
+const fillBadge = ref<'project' | 'branch' | 'file' | null>(null)
+// Shape of the highlighted segment when NOT filling: 'left' → capsule-left
+// edge (round on the left), 'right' → capsule-right edge, 'none' → middle.
+const highlightRadius = ref<'left' | 'right' | 'none' | null>(null)
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+let fillTimer: ReturnType<typeof setTimeout> | null = null
+let clearTimer: ReturnType<typeof setTimeout> | null = null
+
+const HIGHLIGHT_PRE_MS = 200
+const FILL_MS = 1000
+const HIGHLIGHT_POST_MS = 200
+const HIGHLIGHT_NO_FILL_MS = 400
+const EDGE_THRESHOLD_PX = 2
+
+/** Non-fill highlight shape → border-radius: left edge → round-left pill,
+    right edge → round-right pill, middle → rectangle. Ignored when the segment
+    fills the capsule (`.badge-highlight--fill` overrides with full pill). */
+const highlightShapeStyle = computed(() => {
+    switch (highlightRadius.value) {
+        case 'left': return { borderRadius: '999px 0 0 999px' }
+        case 'right': return { borderRadius: '0 999px 999px 0' }
+        default: return { borderRadius: '0' }
     }
+})
+
+/** Reactive class object for a badge segment (project / branch / file).
+    NOTE: reads refs via .value — inside a plain function (not the template)
+    refs are NOT auto-unwrapped. */
+function segmentClass(source: 'project' | 'branch' | 'file') {
+    return {
+        'no-file': source === 'file' && !props.currentFileName,
+        'badge-segment-hidden': fillBadge.value !== null && fillBadge.value !== source,
+        'badge-highlight': highlightBadge.value === source,
+        'badge-highlight--fill': fillBadge.value === source,
+    }
+}
+
+/** Inline style for a highlighted segment: the position-dependent half-pill
+    shape when highlighted but not filling. */
+function segmentStyle(source: 'project' | 'branch' | 'file') {
+    return highlightBadge.value === source && fillBadge.value !== source ? highlightShapeStyle.value : undefined
+}
+
+function clearTimers() {
+    if (highlightTimer) { clearTimeout(highlightTimer); highlightTimer = null }
+    if (fillTimer) { clearTimeout(fillTimer); fillTimer = null }
+    if (clearTimer) { clearTimeout(clearTimer); clearTimer = null }
+}
+
+/** True when any badge segment's text is truncated (ellipsis) in the capsule.
+    Detected via the text spans that have overflow:hidden + text-overflow:
+    ellipsis — a truncated span has scrollWidth > clientWidth. The capsule
+    itself is a flex container without overflow:hidden, so its own
+    scrollWidth equals clientWidth even when children are clipped. */
+function capsuleOverflowing(): boolean {
+    const el = capsuleRef.value
+    if (!el) return false
+    const textSpans = el.querySelectorAll('.project-name, .branch-name, .current-file-name')
+    for (const span of textSpans) {
+        const s = span as HTMLElement
+        if (s.scrollWidth > s.clientWidth + 1) return true // +1 for rounding
+    }
+    return false
+}
+
+/** Segment DOM node for the highlighted badge (works for all three segment
+    wrappers: project-dropdown-wrapper / branch-badge / current-file-badge). */
+function highlightSegmentEl(source: 'project' | 'branch' | 'file'): HTMLElement | null {
+    const el = capsuleRef.value
+    if (!el) return null
+    const sel = source === 'project' ? '.project-dropdown-wrapper'
+        : source === 'branch' ? '.branch-badge' : '.current-file-badge'
+    return el.querySelector(sel)
+}
+
+/** Decide the highlighted segment's shape when it is NOT filling the capsule:
+    touching the capsule's left edge → round left side; right edge → round
+    right side; in the middle → rectangle. Positions are measured via
+    getBoundingClientRect and normalized into the capsule's coordinate space —
+    offsetLeft is relative to the offsetParent (the fixed <header>), which is a
+    different coordinate system than the capsule width. */
+function decideHighlightShape(left: number, right: number, capsuleW: number): 'left' | 'right' | 'none' {
+    if (left <= EDGE_THRESHOLD_PX) return 'left'
+    if (right >= capsuleW - EDGE_THRESHOLD_PX) return 'right'
+    return 'none'
+}
+
+function measureHighlightShape(source: 'project' | 'branch' | 'file') {
+    const capsule = capsuleRef.value
+    const seg = highlightSegmentEl(source)
+    if (!capsule || !seg) return
+    const cRect = capsule.getBoundingClientRect()
+    const sRect = seg.getBoundingClientRect()
+    // Normalize into the capsule coordinate space (capsule left edge = 0).
+    const left = sRect.left - cRect.left
+    const right = sRect.right - cRect.left
+    highlightRadius.value = decideHighlightShape(left, right, cRect.width)
+}
+
+// Animation generation guard: each pulseBadge bumps the sequence; async
+// callbacks (nextTick / timers) capture their own seq and bail out if a newer
+// change already superseded them. This prevents orphan fill timers and stale
+// measurements when two badge sources change within the same tick.
+let animSeq = 0
+
+function pulseBadge(source: 'project' | 'branch' | 'file') {
+    clearTimers()
+    const seq = ++animSeq
+
+    // Reset any previous fill/highlight state so a mid-fill change doesn't
+    // leave the old segment filling while the new one is highlighted.
+    fillBadge.value = null
+    highlightRadius.value = null
+
+    // 1. Highlight first (accent background on the changed segment) — always.
+    highlightBadge.value = source
+
+    // 2. Then, only if the capsule is space-constrained, fill it (collapse the
+    //    other segments). Measured after the new content has rendered. Also
+    //    decide the non-fill highlight shape from the segment's position.
+    nextTick(() => {
+        if (seq !== animSeq) return // superseded by a newer change
+        measureHighlightShape(source)
+        if (capsuleOverflowing()) {
+            fillTimer = setTimeout(() => {
+                if (seq !== animSeq) return // superseded while waiting
+                fillBadge.value = source
+                fillTimer = null
+
+                // 3. Expand back after the fill window...
+                clearTimer = setTimeout(() => {
+                    fillBadge.value = null
+                    clearTimer = null
+                    // 4. ...then, after HIGHLIGHT_POST_MS, drop the highlight.
+                    const postTimer = setTimeout(() => {
+                        if (seq !== animSeq) return
+                        highlightBadge.value = null
+                        highlightRadius.value = null
+                    }, HIGHLIGHT_POST_MS)
+                    // Track for cleanup (reuse the highlightTimer slot).
+                    if (highlightTimer) clearTimeout(highlightTimer)
+                    highlightTimer = postTimer
+                }, FILL_MS)
+            }, HIGHLIGHT_PRE_MS)
+        } else {
+            // No fill: keep the highlight briefly, then drop it. Short window
+            // so a plain highlight doesn't feel stuck for the full fill length.
+            if (highlightTimer) clearTimeout(highlightTimer)
+            highlightTimer = setTimeout(() => {
+                if (seq !== animSeq) return
+                highlightBadge.value = null
+                highlightRadius.value = null
+                highlightTimer = null
+            }, HIGHLIGHT_NO_FILL_MS)
+        }
+    })
+
+    // Safety net: ensure the highlight always resets, filled or not. Longest
+    // possible window; overwritten by the branch-specific timer above when it
+    // fires first.
+    highlightTimer = setTimeout(() => {
+        if (seq !== animSeq) return
+        fillBadge.value = null
+        highlightBadge.value = null
+        highlightRadius.value = null
+        highlightTimer = null
+    }, HIGHLIGHT_PRE_MS + FILL_MS + HIGHLIGHT_POST_MS)
+}
+
+watch(gitBranch, (newVal, oldVal) => {
+    if (newVal !== oldVal) pulseBadge('branch')
+})
+
+watch(() => props.currentFileName, (newVal, oldVal) => {
+    // Covers both file swaps AND opening a file when none was open
+    // (oldVal undefined → a real name), while the non-immediate watch never
+    // fires on the initial value.
+    if (newVal !== oldVal) pulseBadge('file')
+})
+
+watch(projectName, (newVal, oldVal) => {
+    if (newVal !== oldVal) pulseBadge('project')
 })
 
 function openHistory() {
@@ -581,6 +838,7 @@ function toggleDropdown() {
     } else {
         fileDropdownOpen.value = false
         branchDropdownOpen.value = false
+        themeMenuOpen.value = false
         loadRecentProjects()
         dropdownOpen.value = true
         updateDropdownPosition(true)
@@ -699,9 +957,11 @@ function onClickOutside(e: MouseEvent) {
     if (currentFileBadge && currentFileBadge.contains(target)) return
     const branchBadge = document.querySelector('.branch-badge')
     if (branchBadge && branchBadge.contains(target)) return
+    if (themeBtnRef.value && themeBtnRef.value.contains(target)) return
     dropdownOpen.value = false
     fileDropdownOpen.value = false
     branchDropdownOpen.value = false
+    themeMenuOpen.value = false
 }
 
 // Track whether the path element was dragged, so click can decide to bubble or not
@@ -776,6 +1036,7 @@ onUnmounted(() => {
     document.removeEventListener('visibilitychange', onBlinkVisibilityChange)
     stopBackgroundPolling()
     stopBlinking()
+    clearTimers()
 })
 
 // Keyboard navigation (↑/↓ select, Enter confirm, Esc close) for the three
@@ -806,14 +1067,17 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     transition: background 0.15s, border-color 0.15s;
 }
 
-.badge-capsule:hover {
+@media (hover: hover) {
+  .badge-capsule:hover {
     background: var(--bg-primary);
     border-color: var(--text-muted);
+  }
 }
 
 /* Divider between project and branch inside capsule */
 .badge-capsule-divider {
     width: 1px;
+    max-width: 1px;
     align-self: stretch;
     background: var(--border-color);
     flex-shrink: 0;
@@ -823,6 +1087,7 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     position: relative;
     flex: 0 1 auto;
     min-width: 0;
+    max-width: 220px;
 }
 
 .project-switch-btn {
@@ -845,9 +1110,11 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     line-height: 1;
 }
 
-.project-switch-btn:hover {
+@media (hover: hover) {
+  .project-switch-btn:hover {
     background: color-mix(in srgb, var(--accent-color) 10%, transparent);
     border-color: transparent;
+  }
 }
 
 .project-switch-btn svg:first-child {
@@ -886,9 +1153,11 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     line-height: 1;
 }
 
-.branch-badge:hover {
+@media (hover: hover) {
+  .branch-badge:hover {
     background: color-mix(in srgb, var(--accent-color) 10%, transparent);
     border-color: transparent;
+  }
 }
 
 /* Current file capsule — third segment of the badge capsule */
@@ -913,9 +1182,11 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     line-height: 1;
 }
 
-.current-file-badge:hover {
+@media (hover: hover) {
+  .current-file-badge:hover {
     background: color-mix(in srgb, var(--accent-color) 10%, transparent);
     border-color: transparent;
+  }
 }
 
 .current-file-badge:disabled {
@@ -944,29 +1215,62 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     font-weight: 400;
 }
 
-/* Branch switch animation — pulse + glow on the capsule */
-.badge-capsule:has(.branch-switch) {
-    animation: branch-pulse 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+/* Badge segment collapse — when a segment's content changes it becomes the only
+   visible one: the other segments slide shut (max-width → 0, fade out) and
+   expand back when the highlight window ends. Runs unconditionally. */
+.badge-capsule .project-dropdown-wrapper,
+.badge-capsule .branch-badge,
+.badge-capsule .current-file-badge,
+.badge-capsule .badge-capsule-divider {
+    transition: max-width 0.3s ease, opacity 0.25s ease,
+                padding-left 0.3s ease, padding-right 0.3s ease,
+                background-color 0.3s ease, color 0.3s ease,
+                border-radius 0.3s ease;
+    overflow: hidden;
 }
 
-@keyframes branch-pulse {
-    0% {
-        transform: scale(1);
-        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-color) 50%, transparent);
-    }
-    30% {
-        transform: scale(1.18);
-        box-shadow: 0 0 12px 3px color-mix(in srgb, var(--accent-color) 40%, transparent);
-        border-color: var(--accent-color);
-    }
-    60% {
-        transform: scale(0.95);
-        box-shadow: 0 0 6px 1px color-mix(in srgb, var(--accent-color) 20%, transparent);
-    }
-    100% {
-        transform: scale(1);
-        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-color) 0%, transparent);
-    }
+/* Hidden segment — collapses to zero width. !important on max-width/padding:
+   must beat each segment's own explicit max-width (e.g. .branch-badge
+   max-width:100%, .project-dropdown-wrapper max-width:220px). */
+.badge-capsule .badge-segment-hidden {
+    max-width: 0 !important;
+    opacity: 0;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    pointer-events: none;
+}
+
+/* Highlight — the changed segment gets an accent background with white
+   foreground (text + icon), fading in while it fills the capsule and fading
+   out when it restores. Without the fill the segment keeps its original
+   (right-angle) shape inside the capsule; only when it fills the capsule
+   (badge-highlight--fill, other segments collapsed) does it take the capsule
+   pill shape. */
+.badge-capsule .badge-highlight {
+    /* !important: must beat the segment's own hover background rule
+       (e.g. .project-switch-btn:hover) which would otherwise win. */
+    background: var(--accent-color) !important;
+    color: #fff;
+    border-radius: 0;
+}
+
+/* ORDER-SENSITIVE: .badge-highlight--fill is declared after .badge-highlight
+   and has the same specificity — if these are reordered the pill shape would
+   silently stop applying. */
+.badge-capsule .badge-highlight--fill {
+    border-radius: 999px;
+}
+
+.badge-capsule .badge-highlight .project-name,
+.badge-capsule .badge-highlight .branch-name,
+.badge-capsule .badge-highlight .current-file-name {
+    color: #fff;
+}
+
+/* !important: icons (e.g. .project-switch-btn svg:first-child) set
+   --accent-color with equal-or-higher specificity otherwise. */
+.badge-capsule .badge-highlight svg {
+    color: #fff !important;
 }
 
 .branch-icon {
@@ -982,6 +1286,29 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     line-height: 1.4;
 }
 
+/* Quick theme picker */
+.theme-quick-toggle {
+    padding: 6px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s, color 0.3s;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-color);
+    margin-left: auto;
+}
+
+@media (hover: hover) {
+    .theme-quick-toggle:hover {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+    }
+}
+
 /* Server icon button — merged gauge + status dot */
 .server-toggle {
     padding: 6px;
@@ -994,7 +1321,6 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-left: auto;
 }
 
 /* Shortcut tips fill the empty middle of the header (PC/web only) */
@@ -1095,8 +1421,10 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     font-size: 12px;
 }
 
-.app-menu-item:hover {
+@media (hover: hover) {
+  .app-menu-item:hover {
     background: var(--bg-tertiary);
+  }
 }
 
 /* Keyboard highlight (↑/↓ navigation) — mirrors the hover state so the
@@ -1167,18 +1495,20 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     cursor: pointer;
 }
 
-.app-menu-item .item-remove-btn:hover {
+@media (hover: hover) {
+  .app-menu-item .item-remove-btn:hover {
     color: var(--color-red, #ef4444);
     background: color-mix(in srgb, var(--color-red, #ef4444) 12%, transparent);
+  }
+
+  .app-menu-item.active .item-remove-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.18);
+  }
 }
 
 .app-menu-item.active .item-remove-btn {
     color: rgba(255, 255, 255, 0.75);
-}
-
-.app-menu-item.active .item-remove-btn:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.18);
 }
 
 .app-menu-item.other-item .item-icon {
@@ -1292,4 +1622,34 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     border-color: var(--border-color, #dee2e6);
     color: var(--text-secondary, #666);
 }
+
+/* ─── Theme picker popup (unified with terminal theme picker) ─────────── */
+.theme-picker { padding: 0; min-width: 160px; }
+.theme-picker-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 5px 10px 4px; border-bottom: 1px solid var(--border-color); }
+.theme-picker-list { max-height: 300px; overflow-y: auto; }
+.theme-item {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 5px 10px; border: none; border-radius: 0;
+  background: var(--tterm-preview-bg, transparent);
+  color: var(--tterm-preview-fg, var(--text-primary));
+  font-size: 12px; text-align: left; cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+}
+.theme-item:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+/* 预览底色不变，hover 加 accent 全边框高亮 */
+@media (hover: hover) {
+  .theme-item:hover {
+    background: var(--tterm-preview-bg, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent-color);
+  }
+}
+.theme-item.active { background: var(--tterm-preview-bg, transparent); color: var(--tterm-preview-fg, var(--text-primary)); }
+.theme-item-check { flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; border-radius: 50%; }
+.theme-item.active .theme-item-check { background: var(--accent-color); color: #fff; }
+.theme-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.theme-item-base-icon { flex-shrink: 0; color: var(--tterm-preview-accent, var(--text-muted)); }
+.theme-item.active .theme-item-base-icon { color: var(--tterm-preview-accent, var(--text-muted)); }
 </style>

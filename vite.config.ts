@@ -1,9 +1,9 @@
 import { defineConfig, Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
-import { resolve, dirname } from 'path'
+import { resolve, dirname, sep, extname } from 'path'
 import { fileURLToPath } from 'url'
-import { cpSync, existsSync, mkdirSync, readdirSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const publicDir = resolve(__dirname, 'public')
@@ -23,11 +23,16 @@ if (existsSync(srcAssets)) {
   }
 }
 
-// Vite plugin: copy material-icon-theme SVGs to web/src/assets/material-icons/
-// so import.meta.glob can reference them (Vite cannot glob into node_modules).
+// Vite plugin: copy material-icon-theme SVGs to public/material-icons/
+// so they are served as static assets at /material-icons/<name>.svg.
+//
+// The icons are NOT part of the JS module graph: materialIcons.ts resolves
+// them by URL at runtime. Keeping them as plain static files (instead of
+// import.meta.glob over 1250 SVGs) avoids inflating rollup's module graph,
+// which previously pushed peak build memory to ~3.4GB.
 function materialIconsCopy(): Plugin {
   const srcDir = resolve(__dirname, 'node_modules/material-icon-theme/icons')
-  const destDir = resolve(__dirname, 'web/src/assets/material-icons')
+  const destDir = resolve(__dirname, 'public/material-icons')
 
   function copy() {
     if (!existsSync(srcDir)) {
@@ -44,8 +49,32 @@ function materialIconsCopy(): Plugin {
 
   return {
     name: 'material-icons-copy',
-    buildStart() { copy() },
-    configureServer() { copy() },
+    // Build: copy after bundle is written so `emptyOutDir: true` (if ever
+    // enabled) cannot wipe the icons before they are emitted.
+    closeBundle() { copy() },
+    // Dev: public/ (the build outDir) is NOT served by the dev server — only
+    // publicDir is. Serve /material-icons/* straight from public/material-icons
+    // so getIconUrl() works identically in dev and production.
+    configureServer(server) {
+      copy()
+      server.middlewares.use('/material-icons', (req, res) => {
+        const url = decodeURIComponent((req.url || '').replace(/^\//, ''))
+        const file = resolve(destDir, url)
+        // Prevent path traversal outside the icons directory.
+        if (!file.startsWith(destDir + sep)) {
+          res.statusCode = 403
+          res.end('Forbidden')
+          return
+        }
+        if (!existsSync(file)) {
+          res.statusCode = 404
+          res.end('Not Found')
+          return
+        }
+        res.setHeader('Content-Type', 'image/svg+xml')
+        res.end(readFileSync(file))
+      })
+    },
   }
 }
 
@@ -110,47 +139,46 @@ function xtermRequestModeFix(): Plugin {
   }
 }
 
-// Vite plugin: preload the terminal chunk via <link rel="modulepreload"> in the
-// built index.html. TerminalPanelContent is a heavy lazy chunk (xterm.js + fit
-// addon + ~400KB minified), so the first time a user opens the terminal tab they
-// hit a blank panel while the chunk downloads + parses. modulepreload lets the
-// browser fetch it in the background right after initial load, so opening the
-// terminal is instant. We walk the terminal chunk's transitive imports so any
-// split-out dependencies (e.g. an xterm vendor chunk) are preloaded too.
-function terminalModulePreload(): Plugin {
+// Vite plugin: serve the isolated Excalidraw editor build during development.
+// The React+Excalidraw bundle lives in public/vendor/excalidraw/ (built by
+// build.sh step 1a) and is NOT part of the Vue module graph. The Vue dev server
+// only serves publicDir (assets/), so this middleware exposes /vendor/excalidraw/*
+// straight from public/vendor/excalidraw/ — mirroring the production path
+// where the backend serves it at /vendor/excalidraw/index.html.
+function excalidrawVendorServe(): Plugin {
+  const destDir = resolve(__dirname, 'public/vendor/excalidraw')
   return {
-    name: 'terminal-module-preload',
-    apply: 'build',
-    enforce: 'post',
-    generateBundle(_options, bundle) {
-      const html = bundle['index.html']
-      if (!html || html.type !== 'asset' || typeof html.source !== 'string') return
-
-      const chunks = Object.values(bundle).filter((c): c is { type: 'chunk'; fileName: string; imports: string[] } => {
-        return c.type === 'chunk' && 'imports' in c
-      })
-
-      const terminal = chunks.find((c) => c.fileName.startsWith('TerminalPanelContent-'))
-      if (!terminal) return
-
-      const seen = new Set<string>()
-      const toPreload: string[] = []
-      const visit = (chunk: { fileName: string; imports: string[] }) => {
-        if (seen.has(chunk.fileName)) return
-        seen.add(chunk.fileName)
-        toPreload.push(chunk.fileName)
-        for (const imp of chunk.imports) {
-          const c = bundle[imp]
-          if (c && c.type === 'chunk' && 'imports' in c) visit(c as { fileName: string; imports: string[] })
+    name: 'excalidraw-vendor-serve',
+    configureServer(server) {
+      server.middlewares.use('/vendor/excalidraw', (req, res) => {
+        const url = decodeURIComponent((req.url || '').replace(/^\//, ''))
+        const file = resolve(destDir, url)
+        // Prevent path traversal outside the excalidraw directory.
+        if (!file.startsWith(destDir + sep)) {
+          res.statusCode = 403
+          res.end('Forbidden')
+          return
         }
-      }
-      visit(terminal)
-
-      const links = toPreload
-        .map((f) => `    <link rel="modulepreload" crossorigin href="/${f}">`)
-        .join('\n')
-
-      html.source = html.source.replace('</head>', `${links}\n  </head>`)
+        const ext = extname(file)
+        const mime: Record<string, string> = {
+          '.html': 'text/html; charset=utf-8',
+          '.js': 'text/javascript',
+          '.mjs': 'text/javascript',
+          '.css': 'text/css',
+          '.json': 'application/json',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.woff2': 'font/woff2',
+          '.ttf': 'font/ttf',
+        }
+        if (!existsSync(file) || statSync(file).isDirectory()) {
+          res.statusCode = 404
+          res.end('Not Found')
+          return
+        }
+        res.setHeader('Content-Type', mime[ext] || 'application/octet-stream')
+        res.end(readFileSync(file))
+      })
     },
   }
 }
@@ -168,8 +196,8 @@ export default defineConfig({
     }),
     hljsThemeWrapper(),
     xtermRequestModeFix(),
-    terminalModulePreload(),
-    materialIconsCopy()
+    materialIconsCopy(),
+    excalidrawVendorServe()
   ],
   root: 'web',
   publicDir: srcAssets,

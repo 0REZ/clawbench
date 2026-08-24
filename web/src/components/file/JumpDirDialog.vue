@@ -6,7 +6,7 @@
         v-model="pathInput"
         class="jump-path-input"
         type="text"
-        :placeholder="t('jump.placeholder')"
+        :placeholder="placeholder || t('jump.placeholder')"
         spellcheck="false"
         @keydown.enter="doConfirm"
       />
@@ -25,6 +25,8 @@ import ModalDialog from '../common/ModalDialog.vue'
 
 const props = defineProps({
   open: Boolean,
+  /** Optional placeholder override. Defaults to the shared jump.placeholder. */
+  placeholder: String,
 })
 const emit = defineEmits(['close', 'confirm'])
 
@@ -75,7 +77,9 @@ function doConfirm() {
   cursor: pointer;
   flex-shrink: 0;
 }
-.jump-cancel-btn:hover { background: var(--bg-secondary); }
+@media (hover: hover) {
+  .jump-cancel-btn:hover { background: var(--bg-secondary); }
+}
 .jump-confirm-btn {
   padding: 7px 14px;
   background: var(--accent-color, #0066cc);
@@ -87,5 +91,7 @@ function doConfirm() {
   cursor: pointer;
   flex-shrink: 0;
 }
-.jump-confirm-btn:hover { background: #0055aa; }
+@media (hover: hover) {
+  .jump-confirm-btn:hover { background: #0055aa; }
+}
 </style>

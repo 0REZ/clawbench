@@ -171,10 +171,12 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **文件浏览独立 Tab**：目录浏览（`browse`）和文件查看（`view`）各自独立，打开文件自动切换到 `view` Tab，关闭文件后停留在 `view` 显示空状态（最近文件列表），不自动跳回文件管理器
 - **文件预览覆盖层**：点击文件直接在 `view` Tab 中弹出预览覆盖层，支持导航栈（多文件切换 + 返回），关闭即回到空状态
 - **二进制文件预览**：二进制文件显示占位界面，支持"以文本方式打开"；大文件自动截断（64KB 二进制 / 512KB 文本），截断时显示提示横幅
+- **OpenAPI/Swagger 预览**：OpenAPI 规范文件（YAML/JSON）渲染为交互式 Swagger UI，支持"Try it out"在线测试；CORS 代理（`/api/openapi-proxy`）使预览内可直接调用 API
 
 ### 🎨 代码预览与编辑
 - 基于 CodeMirror 的代码浏览/编辑双模式，只读模式默认，一键切换编辑模式
 - 语法高亮，粘性行号，自动换行切换，30+ 语言扩展（高频语言静态导入，低频语言懒加载）
+- **代码自动补全**：编辑模式下为 11 种语言提供语言感知的自动补全（JS/TS/HTML/CSS/Python/SQL/Go/Less/Sass/Liquid/Markdown），基于 CodeMirror 内置补全源
 - **Sticky Scroll**：VS Code 风格的粘性滚动，基于后端 tree-sitter 符号数据，滚动时自动显示当前所在的作用域上下文（函数/类/结构体等）
 - 双击复制代码行内容（闪烁动画反馈）
 - **文件改动闪烁高亮**：文件被外部修改时，删除字符红色脉冲闪烁，新增字符蓝色脉冲闪烁，快速定位改动
@@ -198,7 +200,7 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **深度思考档位**：支持按智能体选择思考深度（Low / Medium / High 等），Claude/CodeBuddy/OpenCode/Codex/MiMo/Pi/Copilot/Kimi/Antigravity/Grok 十后端支持，选择自动持久化
 - **模型选择模态框**：统一模型切换与思考深度选择，双 Tab 界面，搜索过滤，一键刷新模型列表（支持自动发现的智能体），长按设为默认模型
 - **模型选择持久化**：每个智能体的模型选择和思考档位自动保存到 localStorage，刷新/切换会话自动恢复
-- **定时任务**：AI 通过 CLI 子命令创建 Cron 调度，定时自动执行；独立标签页管理，4 级面包屑导航；频率预设（每小时/每天/每周/每月）+ 自定义 Cron 表达式；任务卡片内嵌聊天消息；执行级别已读追踪 + TTS 朗读；执行完成后自动摘要 + 完成通知（音效/震动/Toast）
+- **定时任务**：AI 通过 CLI 子命令创建 Cron 调度，定时自动执行；独立标签页管理，3 级面包屑导航（列表 → 详情「概览+历史合一」→ 执行详情）；频率预设（每小时/每天/每周/每月）+ 自定义 Cron 表达式；任务卡片内嵌聊天消息；执行级别已读追踪 + TTS 朗读；执行完成后自动摘要 + 完成通知（音效/震动/Toast）
 - **继续对话**：定时任务执行详情页可一键继续对话，自动复制历史消息和摘要到新会话，继承后端/智能体/模型/思考档位；会话列表中定时任务来源的会话显示紫色「定时」角标
 - **多会话管理**：创建、切换、归档独立会话，滑动切换；归档会话可通过搜索恢复，支持物理删除（不可恢复）和归档留存期自动清理；Ctrl/Cmd+Delete 快捷归档当前会话
 - **滑动会话切换开关**：可在设置中开关聊天区域左右滑动切换会话，默认关闭避免滚动宽内容时误触
@@ -300,6 +302,15 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 - **桌面端升级检查**：`GET /api/desktop/latest` 查询 npm registry 获取桌面端（Electron）最新版本和各平台下载链接
 - **Android 版本不匹配检测**：WebView 启动时对比 APK 版本与服务器版本，不匹配时展示 `VersionMismatchOverlay` 提示下载新版 APK
 
+### 🖥️ 桌面端 App
+- **跨平台 Electron 客户端**：Windows / macOS / Linux 桌面窗口承载同一套 Web UI，无需浏览器即可获得原生桌面体验
+- **原生上下文菜单**：可编辑输入框（剪切/复制/粘贴）、文本选择（复制）、链接（复制链接）、图片（复制图片）。剪切/复制/粘贴走系统自动本地化 role，自定义项按应用语言显示中文/英文
+- **外部链接默认浏览器打开**：服务器 Origin 之外的链接（第三方 URL、`mailto:`）交给系统默认浏览器打开，不会劫持应用窗口
+- **SSH 端口映射**：内置 ssh2 客户端将服务器端口映射到 localhost，AI 启动的 Web 服务可直接在桌面壳内访问
+- **系统通知**：原生 OS 通知，点击通知跳转到对应会话/任务；冷启动时挂起导航等待页面加载完成再派发
+- **硬刷新**：Ctrl+F5（macOS：Cmd+Shift+R）清空会话缓存并硬刷新窗口
+- **服务器管理**：保存多个服务器地址与凭据，通过内置登录页切换；密码经系统密钥链（safeStorage）加密存储
+
 ### 🔔 通知
 - 通知音效 + 触觉反馈（AI 完成时提醒）；可在设置中关闭音效，避免打断蓝牙耳机播放
 - 浏览器推送通知
@@ -309,7 +320,10 @@ docker run -d -p 20000:20000 -v clawbench-data:/data ghcr.io/clawbench-dev/clawb
 
 
 ### 🎨 主题
-- 亮色 / 暗色模式，跟随系统偏好
+- **18 个命名主题**：VSCode 风格自包含配色方案——GitHub Light/Dark、One Dark Pro、Catppuccin Mocha/Latte、Dracula、Nord、Tokyo Night、Solarized Dark/Light/Deep、Gruvbox Dark/Light、High Contrast Dark/Light、Night Owl、Ayu Dark、Vitesse Dark
+- **跟随系统**：`auto` 模式下根据系统深浅色自动选择默认 GitHub Light/Dark
+- **快捷主题选择器**：Header 上的调色板按钮可即时切换主题，并带实时配色预览
+- **持久化与状态栏适配**：选择本地保存、刷新后恢复；Android 状态栏颜色跟随当前主题
 
 ### 📱 PWA 支持
 - 可安装到主屏幕，独立窗口运行

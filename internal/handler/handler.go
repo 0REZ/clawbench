@@ -247,6 +247,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/ai/session/acp-load", middleware.Auth(ServeACPLoadSession))
 	register("/api/ai/session/acp-sync", middleware.Auth(ServeACPSyncSession))
 	register("/api/ai/session/fork", middleware.Auth(ServeForkSession))
+	register("/api/ai/session/reset", middleware.Auth(ServeSessionReset))
 	register("/api/ai/commands", middleware.Auth(ServeAICommands))
 	register("/api/ai/chat/count", middleware.Auth(ServeChatCount))
 	register("/api/ai/chat/user-messages", middleware.Auth(ServeUserMessageIndex))
@@ -399,6 +400,8 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// Serve static assets from frontend filesystem (disk public/ > embed fallback)
 	// http.FileServerFS internally cleans paths before Open(), preventing traversal.
 	// For embed.FS, Open() additionally rejects ".." paths. No explicit ISS-055 guard needed.
+	// NOTE: all other static paths (/index-*.js, /material-icons/*, etc.) are
+	// handled by ServeIndex, which reads directly from the frontend FS.
 	fsys := frontend.GetFS()
 	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServerFS(fsys)))
 	if !frontend.DiskPublicExists() {

@@ -43,6 +43,12 @@
               <span v-if="wideDockBadgeVisible(tab)" class="dock-badge dock-badge-count" :class="{ 'dock-badge-pop': wideDockBadgeAnim(tab) }" @animationend="wideDockBadgeAnimEnd(tab)">{{ formatBadgeCount(wideDockBadgeCount(tab)) }}</span>
             </div>
           </div>
+          <!-- Chat visibility toggle pinned to the bottom of the vertical dock -->
+          <div class="wide-dock-bottom">
+            <button class="dock-btn" :class="{ active: !chatCollapsed }" @click.stop="handleWideDockChatToggle" :title="chatToggleTitle" :aria-label="chatToggleTitle" :aria-pressed="!chatCollapsed">
+              <component :is="chatCollapsed ? MessageSquareOff : MessageSquare" />
+            </button>
+          </div>
         </div>
 
         <div class="content-area" id="contentArea">
@@ -50,6 +56,7 @@
             :enabled="isWideScreen"
             :ratio="splitRatio"
             :collapsed="leftCollapsed"
+            :right-collapsed="chatCollapsed && isWideScreen"
             @update:ratio="onSplitRatioChange"
           >
             <template #left>
@@ -394,10 +401,11 @@
 import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick, defineAsyncComponent } from 'vue'
 import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
+import { resolveThemeId, applyThemeAttributes } from '@/utils/themeMeta'
 import { useDockOverflow } from '@/composables/useDockOverflow'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
-import { MessageSquare, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
+import { MessageSquare, MessageSquareOff, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
 import FileOverlay from './components/file/FileOverlay.vue'
@@ -405,7 +413,7 @@ import Lightbox from './components/media/Lightbox.vue'
 import ChatPanelContent from './components/chat/ChatPanelContent.vue'
 import FileManagerContent from './components/file/FileManagerContent.vue'
 import FileIcon from './components/common/FileIcon.vue'
-import { baseName, dirName } from '@/utils/path.ts'
+import { baseName, dirName, isAbsolutePath } from '@/utils/path.ts'
 import GitHistoryContent from './components/git/GitHistoryContent.vue'
 import ProxyPanelContent from './components/proxy/ProxyPanelContent.vue'
 import AsyncComponentLoader from './components/common/AsyncComponentLoader.vue'
@@ -479,6 +487,7 @@ import {
   switchLeftTab,
   setSplitRatio,
   setLeftCollapsed,
+  setChatCollapsed,
   registerWideScreenCallbacks,
   WIDE_SCREEN_PRIMARY_TABS,
   wideDockTabOrder,
@@ -489,6 +498,7 @@ import './assets/hljs-light-override.css'
 import './assets/annotation-buttons.css'
 import './assets/code-viewer.css'
 import './assets/mono-icon-colors.css'
+import './assets/refresh-spin.css'
 import './assets/chat-actions.css'
 
 const isAuthenticated = ref(null)
@@ -584,7 +594,7 @@ async function hotSwitchProject(newProjectPath, pendingSessionId) {
 const activeTab = ref('chat')
 
 // ── Wide-screen layout state ──
-const { isWideScreen, leftTab, splitRatio, activePane, leftCollapsed } = useWideScreenLayout()
+const { isWideScreen, leftTab, splitRatio, activePane, leftCollapsed, chatCollapsed } = useWideScreenLayout()
 
 const chatActive = computed(() => (isWideScreen.value ? 'chat' : activeTab.value))
 const leftPanelActive = computed(() => (isWideScreen.value ? leftTab.value : activeTab.value))
@@ -598,6 +608,16 @@ const fileManagerShortcutActive = computed(() => (isWideScreen.value ? activePan
 
 function onSplitRatioChange(ratio) {
   setSplitRatio(ratio)
+}
+
+// Chat visibility toggle (wide-screen dock bottom button): hide → the chat pane
+// is removed and the left pane takes the full width; show → the split view is
+// restored. Hiding routes focus to the left pane so the user keeps working
+// there (chat shortcuts are intentionally inactive while hidden).
+function handleWideDockChatToggle() {
+  const hiding = !chatCollapsed.value
+  setChatCollapsed(hiding)
+  if (hiding) setActivePane('left')
 }
 
 // Clicking into the left pane must also move keyboard focus out of any text
@@ -617,6 +637,10 @@ function onLeftPanePointerDown() {
 // Dock active indicator — water-drop sliding highlight
 // Dynamic button count: chat, browse, view, history, [inline overflow...], [overflow btn]
 const DOCK_STEP = 46 // 34 (btn width) + 12 (gap)
+// Wide dock's .wide-dock-center top padding; kept in sync with the CSS
+// padding-top so the absolutely-positioned active indicator lines up with the
+// first button (both bottom dock and wide dock use the same constant name).
+const WIDE_DOCK_PAD_TOP = 8
 
 const dockActiveIndex = computed(() => {
   const visibleTabs = ['chat', 'browse', 'view', 'history', ...inlineOverflowTabs.value]
@@ -704,7 +728,7 @@ function handleOpenTask(e) {
 
   const navigateToTask = () => {
     switchTab('tasks')
-    navigateToTaskHistory(Number(taskId))
+    navigateToTaskSettings(Number(taskId))
     if (executionId) {
       // openExecDetail without execData will auto-fetch from API via refreshExecDetail
       openExecDetail(executionId)
@@ -822,7 +846,7 @@ watch(isTerminalDisabled, (disabled) => {
     switchTab(isWideScreen.value ? 'browse' : 'chat')
   }
 })
-const { navigateToTaskSettings, navigateToTaskHistory, openExecDetail, loadTasks } = useTaskTab()
+const { navigateToTaskSettings, openExecDetail, loadTasks } = useTaskTab()
 registerSwitchTab(switchTab)
 
 // Wire up WS global events
@@ -833,34 +857,24 @@ const removeTaskHandler = onEvent((event, data) => {
     }
 })
 
-const handleForeground = () => {
-    // Only refresh after initialization is complete — during cold start
-    // the onMounted handler loads fresh data; refreshing here with stale
-    // state (e.g. old currentDir from WebView cache) would show wrong dir.
-    if (!isAuthenticated.value) return
-    // Full state pull — refresh everything that may have changed while backgrounded
-    loadSessionsOnce()
-    store.loadFiles(store.state.currentDir, false, 0, true)
-    store.loadGitBranch()
-    loadTasks()
-    loadTerminalStatus()
-    if (store.state.currentFile?.path) {
-        refreshCurrentFile()
-    }
-}
-
-// WS reconnect: refresh WS-push state that may have changed while disconnected.
-// Lighter than handleForeground — skips file/dir refresh (SSE reconnects independently)
-// and terminal status (not WS-push state).
+// WS reconnect: refresh all state that may have changed while disconnected.
+// WS reconnect is the sole state-sync trigger — foreground no longer pulls data
+// (in browser mode WS stays alive and state is already live; only a real
+// disconnect→reconnect can make state stale).
 const handleReconnect = () => {
     if (!isAuthenticated.value) return
     // Re-establish project cookie — server restart invalidates the session
     // cookie, and without it all /api/dir, /api/file, /api/ai/chat calls
     // return 403 (requireProject: "project cookie is empty").
     store.loadProject().catch(() => {})
+    store.loadFiles(store.state.currentDir, false, 0, true)
+    store.loadGitBranch()
     loadSessionsOnce()
     loadTasks()
-    store.loadGitBranch()
+    loadTerminalStatus()
+    if (store.state.currentFile?.path) {
+        refreshCurrentFile()
+    }
 }
 
 // Edge swipe back gesture detection (right-edge-left-swipe → go back)
@@ -907,7 +921,6 @@ window.addEventListener('clawbench-back-press', () => {
         }
     }
 })
-window.addEventListener('clawbench-foreground', handleForeground)
 window.addEventListener('clawbench-reconnect', handleReconnect)
 const terminalRequestedCwd = ref(null)
 
@@ -1105,7 +1118,10 @@ function registerAppEventListeners() {
   document.addEventListener('click', handleOverflowOutsideClick)
   window.addEventListener('clawbench-theme-change', async (e) => {
       const resolved = e.detail
+      applyThemeAttributes(resolved)
       theme.value = resolved
+      // Notify native app to update status bar/nav bar colors
+      getNative()?.setTheme?.(resolved)
       const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
       await initMermaid()
       await reRenderMermaid()
@@ -1224,9 +1240,8 @@ function handleOpenProjectDialog() {
     projectDialogOpen.value = true
 }
 
-const theme = ref(localConfig.theme === 'auto'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : (localConfig.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')))
+const _rawTheme = String(localConfig.theme || 'auto')
+const theme = ref(resolveThemeId(_rawTheme))
 
 const dirEntries = computed(() => store.state.dirEntries)
 const currentDir = computed(() => store.state.currentDir)
@@ -1365,7 +1380,7 @@ async function handleOverlayOpenFile(payload) {
         }
     }
     // Open as file in the overlay nav stack
-    const isExternal = path.startsWith('/')
+    const isExternal = isAbsolutePath(path)
     const ok = await store.selectFile(path)
     if (ok) {
         if (lineStart) markdownViewMode.value = 'raw'
@@ -1549,7 +1564,10 @@ watch(isWideScreen, (val) => {
     onTabSwitch('chat')
     overflowMenuOpen.value = false
     // Focus continuity: the pane the user was working in becomes the active one.
-    setActivePane(resolveActivePaneOnEnter(activeTab.value))
+    // If the chat pane is collapsed (persisted), focus must stay on the left
+    // pane — the chat pane is invisible, so right-pane shortcuts would fire
+    // against a hidden panel.
+    setActivePane(chatCollapsed.value ? 'left' : resolveActivePaneOnEnter(activeTab.value))
     // Wide-screen: the bottom dock is hidden, so bottom-sheet drawers must sit
     // flush with the screen bottom — don't let a stale --dock-height leave a gap.
     document.documentElement.style.setProperty('--dock-height', '0px')
@@ -1670,6 +1688,8 @@ function wideDockTabIcon(tab) {
 function wideDockTabTitle(tab) {
   return wideScreenTabMeta[tab] ? t(wideScreenTabMeta[tab].titleKey) : ''
 }
+/** Chat toggle button tooltip: points at the action that will happen on click. */
+const chatToggleTitle = computed(() => (chatCollapsed.value ? t('nav.showChat') : t('nav.hideChat')))
 function wideDockBtnClass(tab) {
   return {
     // When the left pane is collapsed no dock tab is active (VS Code-style).
@@ -1714,7 +1734,10 @@ const wideDockActiveIndex = computed(() => {
   return i >= 0 ? i : 0
 })
 const wideDockIndicatorStyle = computed(() => ({
-  transform: `translateY(${wideDockActiveIndex.value * DOCK_STEP}px)`,
+  // .wide-dock-center has a top padding (v-bind WIDE_DOCK_PAD_TOP); the
+  // indicator is absolutely positioned at top:0 (padding-box origin), so
+  // offset by the same value to stay vertically centered on the first button.
+  transform: `translateY(${wideDockActiveIndex.value * DOCK_STEP + WIDE_DOCK_PAD_TOP}px)`,
 }))
 
 const isOverflowTabActive = computed(() => popupOverflowTabs.value.includes(activeTab.value))
@@ -1899,10 +1922,10 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
 
 
 async function applyTheme(t) {
-    document.documentElement.setAttribute('data-theme', t)
+    const resolved = resolveThemeId(t)
+    applyThemeAttributes(resolved)
     setSetting('theme', t)
-    document.documentElement.setAttribute('data-hljs-theme', t)
-    getNative()?.setTheme?.(t === 'light' ? 'light' : 'dark')
+    getNative()?.setTheme?.(resolved)
     const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
     await initMermaid()
     await reRenderMermaid()
@@ -2054,7 +2077,7 @@ onMounted(async () => {
         // Proceed anyway — the task list may already be populated
       }
       switchTab('tasks')
-      navigateToTaskHistory(Number(navTaskId))
+      navigateToTaskSettings(Number(navTaskId))
       if (navExecutionId) {
         // openExecDetail without execData will auto-fetch from API via refreshExecDetail
         openExecDetail(navExecutionId)
@@ -2204,7 +2227,6 @@ onUnmounted(() => {
     activeLineScrollCancel?.()
     stopDockResize()
     removeTaskHandler()
-    window.removeEventListener('clawbench-foreground', handleForeground)
     window.removeEventListener('clawbench-reconnect', handleReconnect)
     destroyGlobalEvents()
     window.removeEventListener('open-file-manager', handleOpenFileManager)
@@ -2489,8 +2511,9 @@ onUnmounted(() => {
     flex-shrink: 0;
     width: 48px;
     display: flex;
-    align-items: flex-start;
-    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
     background: var(--bg-primary);
     border-right: 1px solid var(--border-color);
     -webkit-tap-highlight-color: transparent;
@@ -2499,19 +2522,34 @@ onUnmounted(() => {
 
 .wide-dock-center {
     position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
     width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 12px;
+    /* Keep in sync with the JS constant WIDE_DOCK_PAD_TOP — the absolute
+       active indicator offsets by the same value to stay centered. */
+    padding-top: v-bind(WIDE_DOCK_PAD_TOP + 'px');
     /* All tabs are always rendered inline; on a very short window the dock
        scrolls instead of collapsing buttons into a menu. */
-    max-height: 100%;
     overflow-y: auto;
     scrollbar-width: none;
 }
 .wide-dock-center::-webkit-scrollbar {
     display: none;
+}
+
+/* Bottom section of the vertical dock: chat visibility toggle. The tab group
+   (.wide-dock-center) grows and scrolls; this stays pinned at the bottom. */
+.wide-dock-bottom {
+    flex-shrink: 0;
+    margin-top: auto;
+    padding-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
 /* VS Code activity-bar style active highlight: faint translucent theme tint

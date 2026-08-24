@@ -14,9 +14,7 @@
           <EyeOff v-if="!showHidden" :size="16" />
           <Eye v-else :size="16" />
         </button>
-        <button class="toolbar-btn" @click="loadBrowse" :title="t('nav.refresh')">
-          <RotateCw :size="16" />
-        </button>
+        <RefreshButton icon="RotateCw" :size="16" class="toolbar-btn" :loading="refreshing" :disabled="refreshing" :title="t('nav.refresh')" @click="doRefresh" />
         <SearchInput v-model="searchQuery" :placeholder="t('projectDialog.search')" />
         <button class="toolbar-btn jump-btn" @click="jumpOpen = true" :title="t('jump.button')">
           <LocateFixed :size="16" />
@@ -50,7 +48,7 @@
       </div>
     </div>
 
-    <JumpDirDialog :open="jumpOpen" @close="jumpOpen = false" @confirm="handleJumpConfirm" />
+    <JumpDirDialog :open="jumpOpen" :placeholder="t('jump.placeholderBrowse')" @close="jumpOpen = false" @confirm="handleJumpConfirm" />
 
     <template #footer>
       <button class="cancel-btn" @click="$emit('close')">{{ t('common.cancel') }}</button>
@@ -62,17 +60,19 @@
 </template>
 
 <script setup>
-import { Folder, FolderPlus, Eye, EyeOff, Pencil, Trash2, RotateCw, LocateFixed } from 'lucide-vue-next'
-import { ref, computed, watch, inject } from 'vue'
+import { Folder, FolderPlus, Eye, EyeOff, Pencil, Trash2, LocateFixed } from 'lucide-vue-next'
+import { ref, computed, watch, inject, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ModalDialog from './common/ModalDialog.vue'
 import LoadingIndicator from './common/LoadingIndicator.vue'
 import SearchInput from './common/SearchInput.vue'
+import RefreshButton from './common/RefreshButton.vue'
 import DirBreadcrumb from './file/DirBreadcrumb.vue'
 import FileIcon from './common/FileIcon.vue'
 import JumpDirDialog from './file/JumpDirDialog.vue'
 import { useDialog } from '@/composables/useDialog.ts'
 import { store } from '@/stores/app.ts'
+import { isWindowsAbsolutePath } from '@/utils/path'
 
 const { t } = useI18n()
 const dialog = useDialog()
@@ -94,6 +94,20 @@ const loading = ref(false)
 const selectedPath = ref('')
 const searchQuery = ref('')
 const showHidden = ref(false)
+
+// Refresh-button spin feedback with a 600ms minimum-visible window
+const refreshing = ref(false)
+let refreshTimer = null
+async function doRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  clearTimeout(refreshTimer)
+  try {
+    await loadBrowse()
+  } finally {
+    refreshTimer = setTimeout(() => { refreshing.value = false }, 600)
+  }
+}
 
 // Browse state
 // Default to homeDir on non-Windows; on Windows (multi-root) stay at root level
@@ -129,7 +143,7 @@ function onBreadcrumbNavigate(path) {
   if (!path) {
     // Navigate to root
     browseNavigate('')
-  } else if (/^[A-Za-z]:/.test(path)) {
+  } else if (isWindowsAbsolutePath(path)) {
     // Windows path from breadcrumb — normalize forward slashes to backslashes
     browseNavigate(path.replace(/\//g, '\\'))
   } else {
@@ -266,6 +280,10 @@ async function confirm() {
         await dialog.alert(t('projectDialog.setProjectFailedDetail', { error: err.message }))
     }
 }
+
+onBeforeUnmount(() => {
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
+})
 </script>
 
 <style scoped>
@@ -313,9 +331,11 @@ async function confirm() {
   height: 16px;
   flex-shrink: 0;
 }
-.toolbar-btn:hover {
-  background: var(--bg-secondary, #e0e0e0);
-  color: var(--accent-color, #0066cc);
+@media (hover: hover) {
+  .toolbar-btn:hover {
+    background: var(--bg-secondary, #e0e0e0);
+    color: var(--accent-color, #0066cc);
+  }
 }
 .toolbar-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -339,7 +359,9 @@ async function confirm() {
 .dialog-item + .dialog-item {
   border-top: 1px solid var(--border-color, #e5e5e5);
 }
-.dialog-item:hover { background: var(--bg-tertiary, #f0f0f0); }
+@media (hover: hover) {
+  .dialog-item:hover { background: var(--bg-tertiary, #f0f0f0); }
+}
 .dialog-item.selected { background: var(--accent-color, #0066cc); color: #fff; }
 .dialog-item.selected .item-name { color: #fff; }
 
@@ -362,19 +384,23 @@ async function confirm() {
   flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
 }
-.item-action-btn:hover {
-  background: var(--bg-tertiary, #f0f0f0);
-  color: var(--text-primary, #1a1a1a);
-}
-.item-action-btn.danger:hover {
-  color: #dc2626;
+@media (hover: hover) {
+  .item-action-btn:hover {
+    background: var(--bg-tertiary, #f0f0f0);
+    color: var(--text-primary, #1a1a1a);
+  }
+  .item-action-btn.danger:hover {
+    color: #dc2626;
+  }
 }
 .dialog-item.selected .item-action-btn {
   color: rgba(255,255,255,0.7);
 }
-.dialog-item.selected .item-action-btn:hover {
-  background: rgba(255,255,255,0.15);
-  color: #fff;
+@media (hover: hover) {
+  .dialog-item.selected .item-action-btn:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+  }
 }
 
 .dialog-empty {
@@ -396,7 +422,9 @@ async function confirm() {
   transition: background 0.15s;
   flex-shrink: 0;
 }
-.cancel-btn:hover { background: var(--bg-secondary); }
+@media (hover: hover) {
+  .cancel-btn:hover { background: var(--bg-secondary); }
+}
 
 .confirm-btn {
   display: flex;
@@ -413,6 +441,8 @@ async function confirm() {
   transition: background 0.15s, opacity 0.15s;
   flex-shrink: 0;
 }
-.confirm-btn:hover { background: #0055aa; }
+@media (hover: hover) {
+  .confirm-btn:hover { background: #0055aa; }
+}
 .confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

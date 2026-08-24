@@ -923,31 +923,19 @@ describe('useTaskTab', () => {
       expect(formViewOpen.value).toBe(false)
     })
 
-    it('navigateToTaskHistory sets currentView to history and calls markTaskRead', async () => {
-      const { navigateToTaskHistory, currentView, selectedTaskId } = useTaskTab()
+    it('navigateToTaskSettings calls markTaskRead (history is merged into settings)', async () => {
+      const { navigateToTaskSettings, currentView, selectedTaskId } = useTaskTab()
       store.state.tasks = [{ id: 1, unreadCount: 2, name: 'Task 1' }]
       mockFetch.mockResolvedValue({ ok: true })
 
-      navigateToTaskHistory(1)
-      expect(currentView.value).toBe('history')
+      navigateToTaskSettings(1)
+      expect(currentView.value).toBe('settings')
       expect(selectedTaskId.value).toBe(1)
 
-      // markTaskRead should be called
+      // markTaskRead should be called (unread badge cleared when viewing task details)
       await vi.waitFor(() => {
         expect(mockFetch).toHaveBeenCalledWith('/api/tasks/1', expect.objectContaining({ method: 'PUT' }))
       })
-    })
-
-    it('navigateToTaskHistory closes exec detail and form', () => {
-      const { navigateToTaskSettings, openExecDetail, openCreateForm, navigateToTaskHistory, execDetailOpen, formViewOpen } = useTaskTab()
-
-      navigateToTaskSettings(5)
-      openExecDetail('exec-1', { id: 'exec-1' })
-      openCreateForm()
-
-      navigateToTaskHistory(5)
-      expect(execDetailOpen.value).toBe(false)
-      expect(formViewOpen.value).toBe(false)
     })
 
     it('goBack navigates from settings to list', () => {
@@ -958,16 +946,6 @@ describe('useTaskTab', () => {
       goBack()
       expect(currentView.value).toBe('list')
       expect(selectedTaskId.value).toBeNull()
-    })
-
-    it('goBack navigates from history to settings', () => {
-      const { navigateToTaskSettings, navigateToTaskHistory, goBack, currentView } = useTaskTab()
-      navigateToTaskSettings(5)
-      navigateToTaskHistory(5)
-      expect(currentView.value).toBe('history')
-
-      goBack()
-      expect(currentView.value).toBe('settings')
     })
 
     it('goBack closes exec detail first, clearing selectedExecId', () => {
@@ -1072,85 +1050,6 @@ describe('useTaskTab', () => {
       expect(formViewOpen.value).toBe(true)
 
       closeForm()
-      expect(formViewOpen.value).toBe(false)
-    })
-  })
-
-  // ── openLatestExecDetail ──
-
-  describe('openLatestExecDetail', () => {
-    it('fetches latest execution and opens detail', async () => {
-      const { openLatestExecDetail, currentView, selectedTaskId, execDetailOpen, selectedExecId } = useTaskTab()
-
-      mockFetchOk({
-        executions: [{ id: 42, sessionId: 'session-42', status: 'completed', content: 'latest result' }],
-      })
-
-      await openLatestExecDetail(5)
-
-      expect(currentView.value).toBe('settings')
-      expect(selectedTaskId.value).toBe(5)
-      expect(execDetailOpen.value).toBe(true)
-      expect(selectedExecId.value).toBe('42')
-    })
-
-    it('marks task as read', async () => {
-      const { openLatestExecDetail } = useTaskTab()
-      store.state.tasks = [{ id: 5, unreadCount: 3, name: 'Task 5' }]
-
-      mockFetchOk({ executions: [{ id: 42, sessionId: 'session-42', status: 'completed', content: 'result' }] })
-
-      await openLatestExecDetail(5)
-
-      // Should have called markTaskRead which calls fetch with PUT
-      expect(mockFetch).toHaveBeenCalledWith('/api/tasks/5', expect.objectContaining({ method: 'PUT' }))
-    })
-
-    it('does nothing when API response is not ok', async () => {
-      const { openLatestExecDetail, execDetailOpen } = useTaskTab()
-      mockFetchNotOk()
-
-      await openLatestExecDetail(5)
-
-      expect(execDetailOpen.value).toBe(false)
-    })
-
-    it('does nothing when no executions returned', async () => {
-      const { openLatestExecDetail, execDetailOpen } = useTaskTab()
-      mockFetchOk({ executions: [] })
-
-      await openLatestExecDetail(5)
-
-      expect(execDetailOpen.value).toBe(false)
-    })
-
-    it('does nothing when executions is null', async () => {
-      const { openLatestExecDetail, execDetailOpen } = useTaskTab()
-      mockFetchOk({ executions: null })
-
-      await openLatestExecDetail(5)
-
-      expect(execDetailOpen.value).toBe(false)
-    })
-
-    it('handles fetch error gracefully', async () => {
-      const { openLatestExecDetail, execDetailOpen } = useTaskTab()
-      mockFetch.mockRejectedValue(new Error('Network error'))
-
-      await openLatestExecDetail(5)
-
-      expect(execDetailOpen.value).toBe(false)
-    })
-
-    it('closes form view', async () => {
-      const { openCreateForm, openLatestExecDetail, formViewOpen } = useTaskTab()
-
-      openCreateForm()
-      expect(formViewOpen.value).toBe(true)
-
-      mockFetchOk({ executions: [{ id: 1, content: 'test' }] })
-      await openLatestExecDetail(5)
-
       expect(formViewOpen.value).toBe(false)
     })
   })

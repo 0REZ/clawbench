@@ -24,7 +24,7 @@
       <div class="office-error-title">{{ t('file.viewer.loadFailed') }}</div>
       <div class="office-error-desc">{{ error }}</div>
       <div class="office-error-actions">
-        <button class="office-retry-btn" @click="reload">
+        <button class="office-retry-btn refresh-spin" :class="{ 'refresh-spin--active': loading }" :disabled="loading" @click="reload">
           <RefreshCw :size="14" />
           {{ t('common.retry') }}
         </button>
@@ -362,9 +362,11 @@ defineExpose({
   transition: all 0.15s;
 }
 
-.office-retry-btn:hover {
-  border-color: var(--accent-color);
-  color: var(--accent-color);
+@media (hover: hover) {
+  .office-retry-btn:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+  }
 }
 
 .office-download-btn {
@@ -384,7 +386,9 @@ defineExpose({
   transition: filter 0.15s;
 }
 
-.office-download-btn:hover {
-  filter: brightness(1.15);
+@media (hover: hover) {
+  .office-download-btn:hover {
+    filter: brightness(1.15);
+  }
 }
 </style>

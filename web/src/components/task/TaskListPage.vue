@@ -3,9 +3,7 @@
     <!-- Compact header: breadcrumb + refresh + create button -->
     <div class="list-header">
       <TaskBreadcrumb />
-      <button class="header-btn refresh-btn" :class="{ spinning: loading }" :disabled="loading" @click="refresh" :title="t('common.refresh')">
-        <RefreshCw :size="14" />
-      </button>
+      <RefreshButton class="header-btn refresh-btn" :loading="loading" :disabled="loading" :title="t('common.refresh')" @click="refresh" />
       <button class="header-btn clear-unread-btn" :class="{ active: hasUnread }" :disabled="!hasUnread" @click="markAllTasksRead" :title="t('task.clearUnread')">
         <CheckCheck :size="14" />
       </button>
@@ -48,22 +46,14 @@
                 <span v-if="task.repeatMode !== 'unlimited'" class="task-progress">({{ task.runCount }}/{{ task.maxRuns || 1 }})</span>
               </div>
             </div>
-            <div v-if="task.nextRunAt" class="task-item-next">
+            <div class="task-item-next">
               <Clock class="meta-icon" :size="12" />
-              <span>{{ t('task.nextRun', { time: formatDateTime(task.nextRunAt) }) }}</span>
+              <span v-if="task.nextRunAt">{{ t('task.nextRun', { time: formatDateTimeWithYear(task.nextRunAt) }) }}</span>
+              <span v-else>{{ t('task.nextRunNone') }}</span>
             </div>
           </div>
           <div class="task-item-right">
             <span class="task-item-status" :class="task.status">{{ statusLabel(task.status) }}</span>
-            <button
-              v-if="task.runCount > 0 || task.runningCount > 0"
-              class="task-item-history-btn"
-              :class="{ 'has-unread-flash': task.unreadCount > 0 }"
-              @click.stop="$emit('latestExec', task.id)"
-              :title="t('task.viewLatest')"
-            >
-              <Eye :size="16" />
-            </button>
           </div>
         </div>
       </div>
@@ -72,14 +62,15 @@
 </template>
 
 <script setup lang="ts">
-import { Plus, Loader2, CalendarX, Clock, Repeat, Eye, RefreshCw, CheckCheck } from 'lucide-vue-next'
+import { Plus, Loader2, CalendarX, Clock, Repeat, CheckCheck } from 'lucide-vue-next'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTaskTab } from '@/composables/useTaskTab'
 import { useAgents } from '@/composables/useAgents'
-import { humanizeCron, repeatLabel, statusLabel, formatDateTime } from '@/utils/format'
+import { humanizeCron, repeatLabel, statusLabel, formatDateTimeWithYear } from '@/utils/format'
 import { store } from '@/stores/app'
 import TaskBreadcrumb from '@/components/task/TaskBreadcrumb.vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 
 const { t } = useI18n()
@@ -107,13 +98,18 @@ const loading = ref(false)
 defineEmits<{
   create: []
   select: [taskId: number]
-  latestExec: [taskId: number]
 }>()
 
 async function refresh() {
+  if (loading.value) return
   loading.value = true
   try {
-    await Promise.all([loadTasks(), loadAgents()])
+    // Minimum spin duration so the refresh animation is always visible,
+    // even when the API responds almost instantly.
+    await Promise.all([
+      Promise.all([loadTasks(), loadAgents()]),
+      new Promise(resolve => setTimeout(resolve, 600)),
+    ])
   } finally {
     loading.value = false
   }
@@ -195,10 +191,6 @@ onMounted(refresh)
 .clear-unread-btn.active {
   color: var(--accent-color, #0066cc);
   background: color-mix(in srgb, var(--accent-color, #0066cc) 10%, var(--bg-secondary, #f1f3f5));
-}
-
-.header-btn.spinning svg {
-  animation: spin 1s linear infinite;
 }
 
 @media (hover: hover) {
@@ -447,41 +439,5 @@ onMounted(refresh)
   align-self: flex-start;
   margin-top: 2px;
   margin-left: 10px;
-}
-
-.task-item-history-btn {
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 17px;
-  background: var(--bg-tertiary, #eef1f4);
-  color: var(--text-secondary, #666);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-@media (hover: hover) {
-  .task-item-history-btn:hover {
-    background: var(--accent-color, #0066cc);
-    color: #fff;
-    box-shadow: 0 2px 8px rgba(0, 102, 204, 0.3);
-    transform: translateY(-1px);
-  }
-}
-
-.task-item-history-btn:active {
-  transform: scale(0.9);
-  background: var(--border-color, #e5e5e5);
-}
-
-/* Static indicator for history button when task has unread messages */
-.task-item-history-btn.has-unread-flash {
-  color: var(--accent-color, #0066cc);
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, var(--bg-tertiary, #eef1f4));
 }
 </style>

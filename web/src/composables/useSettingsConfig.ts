@@ -3,6 +3,7 @@ import { apiGet, apiPatch, apiPost } from '@/utils/api'
 import i18n, { STORAGE_KEY as LOCALE_KEY, setLocaleCookie } from '@/i18n'
 import { useAgents } from '@/composables/useAgents'
 import { getNative } from '@/utils/clawbenchNative'
+import { resolveThemeId, applyThemeAttributes } from '@/utils/themeMeta'
 
 const LOCAL_PREFIX = 'clawbench-settings-'
 
@@ -56,12 +57,8 @@ const legacyKeys: Record<string, {
     key: 'theme',
     format: 'raw',
     sideEffect(value: string) {
-      // Resolve 'auto' to actual theme
-      const resolved = value === 'auto'
-        ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-        : value
-      document.documentElement.setAttribute('data-theme', resolved)
-      document.documentElement.setAttribute('data-hljs-theme', resolved)
+      const resolved = resolveThemeId(value)
+      applyThemeAttributes(resolved)
       // Notify App.vue to sync its `theme` ref (used by provide/inject for chat rendering)
       window.dispatchEvent(new CustomEvent('clawbench-theme-change', { detail: resolved }))
     },

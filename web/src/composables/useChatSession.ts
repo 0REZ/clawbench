@@ -161,7 +161,70 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
     Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
     const prevMessages = messages.value
-    messages.value = parseMessages(rawMsgs, onParseAssistantContent, messages.value, isRunning)
+    const parsed = parseMessages(rawMsgs, onParseAssistantContent, messages.value, isRunning)
+
+    // Adopt DB data into recently-finalized streaming messages (drain-* IDs).
+    // When a stream ends, _forceCleanupStreamingState removes the streaming flag
+    // but the message still has its ephemeral drain-* id. loadHistory returns the
+    // same message with a numeric DB id. Replacing the object changes the v-for
+    // key from 'db-drain-*' to 'db-{number}', causing Vue to destroy and
+    // recreate the entire ChatMessageItem component tree — a costly DOM rebuild
+    // that creates the multi-second lag the user sees between content appearing
+    // and the meta bar / file-changes banner showing up.
+    //
+    // Instead, merge the DB fields into the existing object and reuse it.
+    // This keeps the v-for key stable and avoids the DOM rebuild.
+    // Match by: same role + createdAt within 5s + the drain-* id pattern.
+    // Only match non-streaming assistant messages (streaming=true means the
+    // session is still running and loadHistory is reconnecting, not finalizing).
+    const drainPrefix = 'drain-'
+    const recentlyFinalized = new Map<number, Record<string, unknown>>()
+    for (let i = prevMessages.length - 1; i >= 0; i--) {
+      const prev = prevMessages[i]
+      if (prev.role !== 'assistant') continue
+      if (prev.streaming) continue  // still streaming — don't adopt
+      const prevId = prev.id
+      if (typeof prevId !== 'string' || !prevId.startsWith(drainPrefix)) continue
+      recentlyFinalized.set(i, prev)
+    }
+
+    // Race guard (adf6c9e6): 'done' now unlocks the UI and runs loadHistory in
+    // the background. If the user sends a new message before that loadHistory
+    // arrives, a NEW streaming assistant message (drain-*) coexists with the just-
+    // finalized one. Adopting DB fields while a stream is live is unsafe: the
+    // new message's createdAt can fall inside the 5s tolerance of a DB row and get
+    // merged into (clobbered by) the wrong object. Skip the whole merge while any
+    // assistant message is currently streaming — the DB identity is adopted by the
+    // next loadHistory that runs after the stream ends.
+    if (!messages.value.some((m) => m.role === 'assistant' && m.streaming)) {
+      for (let pi = 0; pi < parsed.length; pi++) {
+        const newMsg = parsed[pi]
+        if (newMsg.role !== 'assistant') continue
+        if (typeof newMsg.id !== 'number') continue
+        const newCreatedAt = newMsg.createdAt as string | undefined
+        if (!newCreatedAt) continue
+        // Find a matching recently-finalized message
+        for (const [prevIdx, prevMsg] of recentlyFinalized) {
+          const prevCreatedAt = prevMsg.createdAt as string | undefined
+          if (!prevCreatedAt) continue
+          // Match by createdAt within 5 seconds tolerance
+          const prevTime = new Date(prevCreatedAt).getTime()
+          const newTime = new Date(newCreatedAt).getTime()
+          if (Math.abs(prevTime - newTime) > 5000) continue
+          // Merge DB fields into the existing object to preserve Vue component identity
+          prevMsg.id = newMsg.id
+          if (newMsg.summary) prevMsg.summary = newMsg.summary
+          if (newMsg.summaryCards) prevMsg.summaryCards = newMsg.summaryCards
+          if (newMsg.metadata && !prevMsg.metadata) prevMsg.metadata = newMsg.metadata
+          // Replace the parsed message with the reused existing object
+          parsed[pi] = prevMsg
+          recentlyFinalized.delete(prevIdx)
+          break
+        }
+      }
+    }
+
+    messages.value = parsed
     appendQueueItems(sessionData.queue as Array<Record<string, unknown>> | undefined)
     // Preserve in-flight queued user messages across the reload. parseMessages
     // only rebuilds DB-backed messages; appendQueueItems covers the backend
@@ -170,10 +233,64 @@ export function useChatSession(options: UseChatSessionOptions) {
     // still-pending messages with a string (queue) id are merged back, and the
     // final array is deduplicated by id (syncSessionState may run in both the
     // recovery and main paths, so this must be idempotent).
+    //
+    // A pending message that survived appendQueueItems but is NOT in the new
+    // array (its queueId is absent from the backend queue) has already been
+    // drained (dequeue removes it before queue_drain/done fire). If the DB also
+    // holds a persisted message with the same identity, this pending is a ghost
+    // — its queue_drain was missed while the client was offline/backgrounded,
+    // and no future event can clear it. Merging it back would re-create a stale
+    // "queued" bubble until a manual refresh.
+    //
+    // Identity = text content when present, otherwise attached file paths
+    // (file-only messages have empty content, e.g. image attachments).
+    const filePathsOf = (m: Record<string, unknown>): string[] =>
+      ((m.files as FileEntry[] | undefined) || []).map((f) => typeof f === 'string' ? f : f.path)
+    const sameIdentity = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+      const aContent = (a.content || '') as string
+      const bContent = (b.content || '') as string
+      if (aContent || bContent) return aContent === bContent && aContent.length > 0
+      // Both empty content — compare by attached file paths (order-insensitive).
+      const aPaths = filePathsOf(a).slice().sort().join('|')
+      const bPaths = filePathsOf(b).slice().sort().join('|')
+      return aPaths.length > 0 && aPaths === bPaths
+    }
+    // Time tolerance for the ghost-drain guard: a drained pending's DB row keeps
+    // roughly the send-time createdAt, so the persisted twin must be close. A
+    // later repeat turn with identical text is a different message and is newer.
+    const GHOST_DRAIN_TIME_TOLERANCE_MS = 5000
+    const parseMsgTime = (createdAt: unknown): number | null => {
+      if (typeof createdAt !== 'string' || !createdAt) return null
+      const t = new Date(createdAt).getTime()
+      return Number.isNaN(t) ? null : t
+    }
     for (const prev of prevMessages) {
       if (prev.role !== 'user' || !prev.pending) continue
       if (typeof prev.id !== 'string') continue
       if (messages.value.some((m) => m.role === 'user' && m.id === prev.id)) continue
+      // Gone from the queue (no longer in the new array). Drop only if the DB
+      // already persisted this identity — otherwise keep it conservatively.
+      //
+      // A pending message that genuinely drained is persisted at roughly the same
+      // createdAt it was sent. A later, still-queued turn with the SAME text is a
+      // different message whose createdAt is noticeably newer than the earlier
+      // persisted row. Without a time constraint, the identity-only match would
+      // wrongly drop the still-queued repeat when the backend's queue field is
+      // stale/empty. So require the persisted twin to be time-close to the pending
+      // (only applied when both timestamps are present, keeping pre-timestamp
+      // optimistic messages on the conservative legacy path).
+      const prevTime = parseMsgTime(prev.createdAt)
+      const persistedSameIdentity = messages.value.some((m) => {
+        if (m.role !== 'user' || m.pending || m._remote || m._drain) return false
+        if (!sameIdentity(prev, m)) return false
+        const mTime = parseMsgTime(m.createdAt)
+        if (prevTime && mTime && Math.abs(prevTime - mTime) > GHOST_DRAIN_TIME_TOLERANCE_MS) return false
+        return true
+      })
+      if (persistedSameIdentity) {
+        appLog.d(TAG, `syncSessionState: dropping drained ghost pending queueId=${String(prev.id).slice(0, 20)} text="${((prev.content || '') as string).slice(0, 40)}" files=${filePathsOf(prev).length}`)
+        continue
+      }
       messages.value.push(prev)
     }
     const seenPending = new Set<string | number>()
@@ -920,57 +1037,115 @@ export function useChatSession(options: UseChatSessionOptions) {
     await loadSessionsOnce()
   }
 
-  // Track which sessions have already had their completion notification fired.
-  // Prevents repeated sound/notification if an exception in the callback
-  // prevents runningSessions from being updated.
-
-  function handleVisibilityChange() {
-    if (document.visibilityState !== 'visible') return
-    if (loading.value) {
-      // Page became visible while streaming - disconnect stale stream first
-      // Don't force scroll to bottom — user may have scrolled up to read history
-      onDisconnectStream()
-    }
-    // Always reload history when returning to foreground to ensure state
-    // consistency (AI may have finished, mode may have changed, etc. while
-    // the app was backgrounded). skipIfUnchanged=true avoids unnecessary
-    // UI updates when nothing changed.
-    loadHistory(false, false, true).then(() => {
-      // Re-render Mermaid on the final DOM — Mermaid may have rendered on
-      // a DOM that was replaced by loadHistory's message sync.
-      onRenderUpdate(true)
-    }).catch(() => {
-      // loadHistory failed — if we were streaming, reset loading state
-      // so the user isn't stuck with a permanent spinner
-      loading.value = false
-    })
-  }
-
   /**
-   * Handle WS reconnection: if the AI finished during the disconnection,
-   * the frontend's loading state is stale. After loadSessionsOnce refreshes
-   * runningSessions, check whether the current session is still running.
-   * If not, clean up the stuck streaming state and reload history.
+   * Shared resync flow for both the WS reconnect and the manual refresh button.
+   * Refreshes runningSessions from the backend, then branches on session state.
+   *
+   * forceReload:false (WS reconnect) — lightweight, silent:
+   * - still running: re-subscribe the stream in place (subscribeOnly), preserving
+   *   the existing streaming message; no history fetch.
+   * - finished while disconnected: clean up the stuck loading state, then reload
+   *   history with skipIfUnchanged=true + forceNotRunning=true.
+   * - idle: reload history with skipIfUnchanged=true (no UI churn if unchanged).
+   * No switching overlay, no input lock, queued behind any in-flight loadHistory.
+   *
+   * forceReload:true (manual refresh) — always authoritative:
+   * - still running: force a history reload whose syncSessionState isRunning
+   *   branch re-subscribes the stream (reuseExistingStreaming).
+   * - finished while disconnected: same cleanup, then force reload history.
+   * - idle: force reload history with skipIfUnchanged=false so the UI always
+   *   re-renders against the latest server state.
+   * Shows the switching overlay, locks input, and runs immediately (bypasses
+   * the loadHistory in-flight queue) so the user sees the full resync.
    */
-  async function handleWsReconnect() {
-    if (!loading.value || !currentSessionId.value) return
-    // Wait for loadSessionsOnce (called by App.vue handleReconnect) to
-    // refresh runningSessions from the backend.
+  async function syncSessionOnReconnect(forceReload: boolean) {
+    if (!currentSessionId.value) return
+    // Refresh runningSessions from the backend so the current-session decision
+    // below reflects any change that happened on the server side.
     await loadSessionsOnceInner()
-    if (!runningSessions.value.has(currentSessionId.value)) {
-      appLog.w(TAG, `WS reconnect: session ${currentSessionId.value} no longer running — cleaning up stuck loading state`)
+    const source = forceReload ? 'Manual refresh' : 'WS reconnect'
+    // A manual refresh is always authoritative: it shows the switching overlay,
+    // scrolls to bottom, skips the snapshot check (skipIfUnchanged=false), and
+    // runs immediately (bypassing the loadHistory in-flight queue). The WS
+    // reconnect path stays silent — overlay off, skipIfUnchanged=true, queued.
+    const scrollBottom = forceReload
+    const showOverlay = forceReload
+    const skipIfUnchanged = !forceReload
+    const immediate = forceReload
+    if (loading.value) {
+      if (runningSessions.value.has(currentSessionId.value)) {
+        if (forceReload) {
+          // Still running — force a history reload. loadHistory's isRunning
+          // branch re-subscribes the stream (reuseExistingStreaming) and keeps
+          // loading=true, so the live stream is resumed from the authoritative
+          // DB state rather than merely re-subscribed in place.
+          appLog.i(TAG, `${source}: session ${currentSessionId.value} still running — force reload history + resubscribe stream`)
+          try {
+            await loadHistory(scrollBottom, showOverlay, skipIfUnchanged, false, immediate)
+            onRenderUpdate(true)
+          } catch {
+            loading.value = false
+          }
+          return
+        }
+        // WS reconnect: the live stream re-subscribes on reconnect. The
+        // useChatStream watch on `connected` only re-subscribes when its
+        // internal isStreaming is still true. If a stream watchdog timeout (or
+        // an explicit disconnectStream()) already set isStreaming=false while
+        // loading stayed true, that watch never fires and the session is left
+        // stuck on the loading spinner with no live stream and no history
+        // reload. Explicitly re-subscribe (subscribeOnly, so the existing
+        // streaming message is preserved) to guarantee the stream is resumed
+        // regardless of isStreaming.
+        onConnectStream(currentSessionId.value, { subscribeOnly: true })
+        return
+      }
+      // AI finished while the user was away — clean up the stuck loading state
+      // and reload history. forceNotRunning=true prevents loadHistory from
+      // re-connecting the stream if the server's in-memory running state
+      // hasn't been updated yet.
+      appLog.w(TAG, `${source}: session ${currentSessionId.value} no longer running — cleaning up stuck loading state`)
       onDisconnectStream()
       forceCleanupStreamingState(messages.value as ChatMessage[], { onRenderNeeded: (f) => onRenderUpdate(f ?? true), onExtractScheduledTasks })
       loading.value = false
-      // forceNotRunning=true prevents loadHistory from re-connecting the stream
-      // if the server's in-memory running state hasn't been updated yet.
-      loadHistory(false, false, true, true).then(() => {
-        // Re-render Mermaid on the final DOM — same race as onSessionEvent
+      try {
+        await loadHistory(scrollBottom, showOverlay, skipIfUnchanged, true, immediate)
         onRenderUpdate(true)
-      }).catch(() => {
+      } catch {
         loading.value = false
-      })
+      }
+    } else {
+      // Session idle — reload history to reflect changes that occurred while
+      // disconnected. skipIfUnchanged avoids UI churn when nothing changed;
+      // a manual refresh forces the reload (skipIfUnchanged=false) so the UI
+      // always re-renders against the latest server state.
+      try {
+        await loadHistory(scrollBottom, showOverlay, skipIfUnchanged, false, immediate)
+        onRenderUpdate(true)
+      } catch {
+        // Non-critical — keep current view on failure.
+      }
     }
+  }
+
+  /**
+   * Handle WS reconnection: resync the current session to reflect changes that
+   * occurred while disconnected. Lightweight variant — skips UI refresh when
+   * the message snapshot is unchanged, and re-subscribes a still-running stream
+   * in place.
+   */
+  async function handleWsReconnect() {
+    await syncSessionOnReconnect(false)
+  }
+
+  /**
+   * Manual refresh from the chat ActionBar refresh button. Mirrors the WS
+   * reconnect resync flow but ALWAYS forces a loadHistory so every refresh
+   * re-renders against the authoritative server state — messages, stream
+   * subscription, mode/usage/commands all stay consistent with the backend.
+   */
+  async function handleManualRefresh() {
+    await syncSessionOnReconnect(true)
   }
 
   /**
@@ -1114,8 +1289,8 @@ export function useChatSession(options: UseChatSessionOptions) {
     destroySession,
     onSessionEvent,
     loadSessionsOnce: loadSessionsOnceInner,
-    handleVisibilityChange,
     handleWsReconnect,
+    handleManualRefresh,
     continueFromExecution,
     forkSession,
     checkContinueSession,

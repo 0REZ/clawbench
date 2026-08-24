@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getModelProvider, getProviderIcon, extractSvgInner, extractViewBox, getProviderSvgHtml, getProviderViewBox } from '@/utils/providerIcons'
+import { getModelProvider, getProviderIcon, extractSvgInner, extractViewBox, getProviderSvgHtml, getProviderViewBox, getProviderFullSvg } from '@/utils/providerIcons'
 
 describe('providerIcons', () => {
     describe('getModelProvider', () => {
@@ -252,6 +252,75 @@ describe('providerIcons', () => {
 
         it('returns default viewBox for unknown provider', () => {
             expect(getProviderViewBox('unknown')).toBe('0 0 24 24')
+        })
+    })
+
+    describe('getProviderFullSvg', () => {
+        it('returns complete SVG tag for known provider', () => {
+            const svg = getProviderFullSvg('claude', 16, [], 'claude')
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('<svg')
+            expect(svg!).toContain('</svg>')
+            expect(svg!).toContain('width:16px')
+            expect(svg!).toContain('height:16px')
+            expect(svg!).toContain('viewBox=')
+            expect(svg!).toContain('role="img"')
+            expect(svg!).toContain('aria-label="claude"')
+            expect(svg!).toContain('provider-icon-svg')
+        })
+
+        it('escapes quotes and HTML in the injected aria-label', () => {
+            // ariaLabel derives from user/agent-controlled model names; a stray
+            // quote must not break the attribute or smuggle in extra attributes.
+            const malicious = 'gpt-4" onclick="alert(1)'
+            const svg = getProviderFullSvg('openai', 16, [], malicious)
+            expect(svg).not.toBeNull()
+            // Both embedded quotes are neutralized; the attribute cannot be broken.
+            expect(svg!).not.toContain('aria-label="gpt-4" onclick=')
+            expect(svg!).toContain('aria-label="gpt-4&quot; onclick=&quot;alert(1)"')
+            // An ampersand and angle brackets are also neutralized.
+            const svg2 = getProviderFullSvg('openai', 16, [], 'a<b>&c')
+            expect(svg2).toContain('aria-label="a&lt;b&gt;&amp;c"')
+        })
+
+        it('returns null for unknown provider', () => {
+            expect(getProviderFullSvg('unknown', 16)).toBeNull()
+        })
+
+        it('includes needsBg class for monochrome icons that need background', () => {
+            const svg = getProviderFullSvg('openai', 16)
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('provider-icon-bg')
+        })
+
+        it('includes monoCssClass for monochrome icons', () => {
+            const svg = getProviderFullSvg('openai', 16)
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('mono-openai')
+        })
+
+        it('preserves currentColor propagation for monochrome providers', () => {
+            const svg = getProviderFullSvg('openai', 16)
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('fill="currentColor"')
+        })
+
+        it('removes <title> elements', () => {
+            const svg = getProviderFullSvg('claude', 16)
+            expect(svg).not.toBeNull()
+            expect(svg!).not.toContain('<title>')
+        })
+
+        it('supports custom aria-label', () => {
+            const svg = getProviderFullSvg('claude', 14, [], 'Claude Sonnet 4')
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('aria-label="Claude Sonnet 4"')
+        })
+
+        it('supports custom CSS classes', () => {
+            const svg = getProviderFullSvg('claude', 16, ['custom-class'])
+            expect(svg).not.toBeNull()
+            expect(svg!).toContain('custom-class')
         })
     })
 })

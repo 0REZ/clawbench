@@ -395,8 +395,10 @@ defineExpose({ focusSearchInput })
   transition: background 0.15s, color 0.15s;
 }
 
-.fs-toggle-btn:hover {
-  background: var(--bg-hover, rgba(0,0,0,0.06));
+@media (hover: hover) {
+  .fs-toggle-btn:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.06));
+  }
 }
 
 .fs-toggle-btn.active {
@@ -443,8 +445,10 @@ defineExpose({ focusSearchInput })
   transition: background 0.1s;
 }
 
-.fs-result-item:hover {
-  background: var(--bg-secondary, #f8f9fa);
+@media (hover: hover) {
+  .fs-result-item:hover {
+    background: var(--bg-secondary, #f8f9fa);
+  }
 }
 
 .fs-result-item-active {
@@ -513,9 +517,11 @@ defineExpose({ focusSearchInput })
   transition: background 0.15s, color 0.15s;
 }
 
-.fs-result-dir-btn:hover {
-  background: var(--bg-hover, rgba(0,0,0,0.06));
-  color: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+  .fs-result-dir-btn:hover {
+    background: var(--bg-hover, rgba(0,0,0,0.06));
+    color: var(--accent-color, #4a90d9);
+  }
 }
 
 .fs-truncated {
@@ -531,7 +537,7 @@ defineExpose({ focusSearchInput })
 
 <style>
 /* Dark theme for search highlights - non-scoped for [data-theme] */
-[data-theme="dark"] .fs-result-name mark {
+[data-theme-base="dark"] .fs-result-name mark {
   background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }

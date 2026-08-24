@@ -1,8 +1,8 @@
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import { shouldRetryToolFetch, resolveEffectiveMsgId, type ContentBlock } from '@/utils/chatStreamUtils.ts'
-import { formatToolOutput } from '@/utils/renderToolDetail.ts'
+import { formatToolOutput, verifyToolOutputAnnotations } from '@/utils/renderToolDetail.ts'
 import { appLog } from '@/utils/appLog'
 
 const TAG = 'ToolDetailDrawer'
@@ -76,6 +76,19 @@ export function useToolDetailDrawer(options: ToolDetailDrawerOptions) {
     return `<div class="tool-call-empty"><span class="tool-call-empty-msg">${msg}</span><button class="tool-call-retry-btn" onclick="this.closest('.tool-call-empty').dataset.retry='1'">${t('chat.contentBlocks.retry')}</button></div>`
   }
 
+  /** After HTML is assigned to toolDetailData, verify file path and commit hash annotations. */
+  function _verifyAnnotations() {
+    nextTick(() => {
+      // ToolDetailDrawer's BottomSheet is teleported to <body>, find it by its body class
+      const body = document.querySelector('.tool-detail-body') as HTMLElement | null
+      if (!body) return
+      const inputEl = body.querySelector(':scope > div:not(.tool-output-section)') as HTMLElement | null
+      const outputEl = body.querySelector('.tool-output-body') as HTMLElement | null
+      if (inputEl) verifyToolOutputAnnotations('input', inputEl)
+      if (outputEl) verifyToolOutputAnnotations('output', outputEl)
+    })
+  }
+
   function handleShowToolDetail(block: ToolBlock) {
     const { formatToolInput, toolCallSummary } = chatRender
 
@@ -104,6 +117,9 @@ export function useToolDetailDrawer(options: ToolDetailDrawerOptions) {
       displayNameOverride: block.name === 'DeepThink' && !block.display_name ? t('chat.message.deepThinking') : '',
       _fetchIds: null,
     }
+
+    // Verify file path and commit hash annotations after DOM update
+    _verifyAnnotations()
 
     // Fetch tool call detail from API if input/output are missing
     if ((!hasInput || !hasOutput) && block.tool_id && block.msgId) {
@@ -173,6 +189,8 @@ export function useToolDetailDrawer(options: ToolDetailDrawerOptions) {
       if (data.output) {
         toolDetailData.value.outputHtml = formatToolOutput(data.output, block.name || data.name || '')
       }
+      // Verify file path and commit hash annotations after DOM update
+      _verifyAnnotations()
       // Sync done/status from API response so the polling watcher can stop
       if (data.done !== undefined) {
         toolDetailData.value.done = !!data.done
@@ -218,6 +236,31 @@ export function useToolDetailDrawer(options: ToolDetailDrawerOptions) {
   }
 
   const toolDetailOverlay = computed(() => ({ show: drawer.effectiveOpen.value, ...toolDetailData.value }))
+
+  // Keep the drawer's done/status in sync with the live message block while the
+  // drawer is open. The live block is the source of truth for streaming state;
+  // the API-backed fetch (fetchToolCallDetail) only fills in input/output HTML.
+  // Without this, the drawer would keep showing a spinner after the tool already
+  // finished (or vice-versa) when the live block's done flips during streaming.
+  if (findLiveBlock) {
+    watch(
+      () => {
+        if (!activeToolOverlay.value) return null
+        const block = findLiveBlock(activeToolOverlay.value)
+        return block ? { done: !!block.done, status: block.status || '', duration: block.duration_ms || 0 } : null
+      },
+      (snap) => {
+        if (!snap || !drawer.isOpen.value) return
+        // Direct assignment (no truthy guards): live block is the source of
+        // truth for streaming state, and its fields only ever accumulate
+        // ('' → 'running' → success/error, duration 0 → positive). Keeping the
+        // guards would leave stale values if a field were ever reset.
+        toolDetailData.value.done = snap.done
+        toolDetailData.value.status = snap.status
+        toolDetailData.value.duration = snap.duration
+      },
+    )
+  }
 
   return {
     drawer,

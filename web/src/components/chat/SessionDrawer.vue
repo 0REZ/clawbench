@@ -30,10 +30,7 @@
           :placeholder="t('chat.sessionSetting.searchPlaceholder')"
           v-model="searchQuery"
         />
-        <button v-if="canRefresh" class="refresh-btn" :class="{ loading: refreshing }" @click="handleRefresh" :disabled="refreshing" :title="t('chat.sessionSetting.refresh')">
-          <LoadingIndicator v-if="refreshing" size="sm" inline />
-          <RefreshCw v-else :size="14" />
-        </button>
+        <RefreshButton v-if="canRefresh" class="refresh-btn" :loading="refreshing" :disabled="refreshing" :title="t('chat.sessionSetting.refresh')" @click="handleRefresh" />
       </div>
       <!-- Model list -->
       <div class="model-list">
@@ -54,8 +51,11 @@
             <span class="model-item-indicator" :class="{ active: m.id === currentModelId }"></span>
             <ProviderIcon :model-name="m.name || m.id" :size="16" />
             <span class="model-item-name">{{ m.name }}</span>
-            <span v-if="m.id === defaultModelId" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
-            <button v-if="m.id !== defaultModelId" class="set-default-btn" @click.stop="setDefaultModel(m)" :title="t('chat.sessionSetting.setAsDefault')">
+            <span v-if="m.id === defaultModelId" class="default-label">
+              <span class="default-text">{{ t('chat.sessionSetting.defaultBadge') }}</span>
+              <span class="default-star"><Star :size="12" fill="currentColor" /></span>
+            </span>
+            <button v-if="m.id !== defaultModelId" class="set-default-btn" @click.stop="setDefaultModel(m)" :title="t('chat.sessionSetting.setAsDefault')" :aria-label="t('chat.sessionSetting.setAsDefault')" :aria-pressed="false">
               <Star :size="12" />
             </button>
           </button>
@@ -89,8 +89,11 @@
           >
             <span class="model-item-indicator" :class="{ active: level.id === currentThinkingEffort }"></span>
             <span class="model-item-name">{{ level.name }}</span>
-            <span v-if="level.id === defaultThinkingEffort" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
-            <button v-if="level.id !== defaultThinkingEffort" class="set-default-btn" @click.stop="setDefaultThinkingEffort(level.id)" :title="t('chat.sessionSetting.setAsDefault')">
+            <span v-if="level.id === defaultThinkingEffort" class="default-label">
+              <span class="default-text">{{ t('chat.sessionSetting.defaultBadge') }}</span>
+              <span class="default-star"><Star :size="12" fill="currentColor" /></span>
+            </span>
+            <button v-if="level.id !== defaultThinkingEffort" class="set-default-btn" @click.stop="setDefaultThinkingEffort(level.id)" :title="t('chat.sessionSetting.setAsDefault')" :aria-label="t('chat.sessionSetting.setAsDefault')" :aria-pressed="false">
               <Star :size="12" />
             </button>
           </button>
@@ -111,8 +114,11 @@
           >
             <span class="model-item-indicator" :class="{ active: isACP }"></span>
             <span class="model-item-name">{{ t('chat.transportSwitcher.acp') }}</span>
-            <span v-if="defaultTransport === 'acp-stdio'" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
-            <button v-if="defaultTransport !== 'acp-stdio'" class="set-default-btn" @click.stop="setDefaultTransport('acp-stdio')" :title="t('chat.sessionSetting.setAsDefault')">
+            <span v-if="defaultTransport === 'acp-stdio'" class="default-label">
+              <span class="default-text">{{ t('chat.sessionSetting.defaultBadge') }}</span>
+              <span class="default-star"><Star :size="12" fill="currentColor" /></span>
+            </span>
+            <button v-if="defaultTransport !== 'acp-stdio'" class="set-default-btn" @click.stop="setDefaultTransport('acp-stdio')" :title="t('chat.sessionSetting.setAsDefault')" :aria-label="t('chat.sessionSetting.setAsDefault')" :aria-pressed="false">
               <Star :size="12" />
             </button>
           </button>
@@ -127,8 +133,11 @@
           >
             <span class="model-item-indicator" :class="{ active: !isACP }"></span>
             <span class="model-item-name">{{ t('chat.transportSwitcher.cli') }}</span>
-            <span v-if="defaultTransport !== 'acp-stdio'" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
-            <button v-if="defaultTransport === 'acp-stdio'" class="set-default-btn" @click.stop="setDefaultTransport('cli')" :title="t('chat.sessionSetting.setAsDefault')">
+            <span v-if="defaultTransport !== 'acp-stdio'" class="default-label">
+              <span class="default-text">{{ t('chat.sessionSetting.defaultBadge') }}</span>
+              <span class="default-star"><Star :size="12" fill="currentColor" /></span>
+            </span>
+            <button v-if="defaultTransport === 'acp-stdio'" class="set-default-btn" @click.stop="setDefaultTransport('cli')" :title="t('chat.sessionSetting.setAsDefault')" :aria-label="t('chat.sessionSetting.setAsDefault')" :aria-pressed="false">
               <Star :size="12" />
             </button>
           </button>
@@ -159,8 +168,11 @@
           >
             <span class="model-item-indicator" :class="{ active: mode.id === currentModeId }"></span>
             <span class="model-item-name">{{ mode.name || mode.id }}</span>
-            <span v-if="mode.id === defaultModeId" class="default-badge">{{ t('chat.sessionSetting.defaultBadge') }}</span>
-            <button v-if="mode.id !== defaultModeId" class="set-default-btn" @click.stop="setDefaultMode(mode)" :title="t('chat.sessionSetting.setAsDefault')">
+            <span v-if="mode.id === defaultModeId" class="default-label">
+              <span class="default-text">{{ t('chat.sessionSetting.defaultBadge') }}</span>
+              <span class="default-star"><Star :size="12" fill="currentColor" /></span>
+            </span>
+            <button v-if="mode.id !== defaultModeId" class="set-default-btn" @click.stop="setDefaultMode(mode)" :title="t('chat.sessionSetting.setAsDefault')" :aria-label="t('chat.sessionSetting.setAsDefault')" :aria-pressed="false">
               <Star :size="12" />
             </button>
           </button>
@@ -196,10 +208,10 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RefreshCw, Star, Cpu, Brain, Compass, Cable } from 'lucide-vue-next'
+import { Star, Cpu, Brain, Compass, Cable } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
-import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useAgents, restoreOriginalModels, populateACPStateFromCache, invalidateACPStateCache } from '@/composables/useAgents'
 import { useListNav } from '@/composables/useListNav'
@@ -367,6 +379,15 @@ async function selectTransport(transport) {
   if (transport === 'acp-stdio' && isACP.value) return
   if (transport === 'cli' && !isACP.value) return
 
+  await applyTransportSwitch(transport)
+
+  emit('switch-transport', transport)
+  emit('close')
+}
+
+// Apply the session-side effects of switching transport (shared by selection
+// and set-as-default, which also selects the new transport as current).
+async function applyTransportSwitch(transport) {
   // Session-scoped: update local ref only (like selectModel)
   currentTransport.value = transport
 
@@ -384,9 +405,6 @@ async function selectTransport(transport) {
     invalidateACPStateCache(props.agentId || '')
     await populateACPStateFromCache(props.agentId || '')
   }
-
-  emit('switch-transport', transport)
-  emit('close')
 }
 
 // --- Refresh ---
@@ -415,12 +433,15 @@ async function handleRefresh() {
   }
 }
 
-// --- Set default model/thinking directly via star button ---
+// --- Set default model/thinking directly via set-as-default button ---
+// Setting an item as default also selects it as the current session choice.
 
 async function setDefaultModel(model) {
   try {
     await patchAgentPref(props.agentId, 'preferred_model', model.id)
     updateAgentField(props.agentId, 'preferredModel', model.id)
+    emit('switch-model', model)
+    toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: model.name || model.id }), { icon: '⭐', type: 'success', duration: 2000 })
   } catch {
     toast.show(t('settings.saveFailed'), { icon: '⚠️', type: 'error', duration: 3000 })
   }
@@ -430,6 +451,9 @@ async function setDefaultThinkingEffort(level) {
   try {
     await patchAgentPref(props.agentId, 'preferred_thinking_effort', level)
     updateAgentField(props.agentId, 'preferredThinkingEffort', level)
+    emit('switch-thinking-effort', level)
+    const levelName = thinkingLevels.value.find(l => l.id === level)?.name || level
+    toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: levelName }), { icon: '⭐', type: 'success', duration: 2000 })
   } catch {
     toast.show(t('settings.saveFailed'), { icon: '⚠️', type: 'error', duration: 3000 })
   }
@@ -439,6 +463,10 @@ async function setDefaultTransport(transport) {
   try {
     await patchAgentPref(props.agentId, 'transport', transport)
     updateAgentField(props.agentId, 'transport', transport)
+    await applyTransportSwitch(transport)
+    emit('switch-transport', transport)
+    const transportName = transport === 'acp-stdio' ? t('chat.transportSwitcher.acp') : t('chat.transportSwitcher.cli')
+    toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: transportName }), { icon: '⭐', type: 'success', duration: 2000 })
     // Clear preferred thinking effort if it's not valid for the new transport
     const currentPref = getAgent(props.agentId || '')?.preferredThinkingEffort || ''
     if (currentPref) {
@@ -459,6 +487,8 @@ async function setDefaultMode(mode) {
   try {
     await patchAgentPref(props.agentId, 'preferred_mode', mode.id)
     updateAgentField(props.agentId, 'preferredMode', mode.id)
+    emit('switch-mode', mode)
+    toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: mode.name || mode.id }), { icon: '⭐', type: 'success', duration: 2000 })
   } catch {
     toast.show(t('settings.saveFailed'), { icon: '⚠️', type: 'error', duration: 3000 })
   }
@@ -551,12 +581,21 @@ async function setAsDefault() {
     if (pendingDefaultModel.value !== null) {
       await patchAgentPref(props.agentId, 'preferred_model', pendingDefaultModel.value)
       updateAgentField(props.agentId, 'preferredModel', pendingDefaultModel.value)
+      const model = models.value.find(m => m.id === pendingDefaultModel.value)
+      if (model) emit('switch-model', model)
+      toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: model?.name || model?.id || pendingDefaultModel.value }), { icon: '⭐', type: 'success', duration: 2000 })
     } else if (pendingDefaultThinking.value !== null) {
       await patchAgentPref(props.agentId, 'preferred_thinking_effort', pendingDefaultThinking.value)
       updateAgentField(props.agentId, 'preferredThinkingEffort', pendingDefaultThinking.value)
+      emit('switch-thinking-effort', pendingDefaultThinking.value)
+      const levelName = thinkingLevels.value.find(l => l.id === pendingDefaultThinking.value)?.name || pendingDefaultThinking.value
+      toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: levelName }), { icon: '⭐', type: 'success', duration: 2000 })
     } else if (pendingDefaultMode.value !== null) {
       await patchAgentPref(props.agentId, 'preferred_mode', pendingDefaultMode.value)
       updateAgentField(props.agentId, 'preferredMode', pendingDefaultMode.value)
+      const mode = availableModes.value.find(m => m.id === pendingDefaultMode.value)
+      if (mode) emit('switch-mode', mode)
+      toast.show(t('chat.sessionSetting.setDefaultSuccess', { name: mode?.name || mode?.id || pendingDefaultMode.value }), { icon: '⭐', type: 'success', duration: 2000 })
     }
   } catch {
     toast.show(t('settings.saveFailed'), { icon: '⚠️', type: 'error', duration: 3000 })
@@ -668,9 +707,11 @@ defineExpose({
   transition: background 0.15s, color 0.15s;
 }
 
-.refresh-btn:hover:not(:disabled) {
-  background: var(--accent-color, #0066cc);
-  color: #fff;
+@media (hover: hover) {
+  .refresh-btn:hover:not(:disabled) {
+    background: var(--accent-color, #0066cc);
+    color: #fff;
+  }
 }
 
 .refresh-btn:disabled {
@@ -710,9 +751,11 @@ defineExpose({
   -webkit-tap-highlight-color: transparent;
 }
 
-.model-item:hover,
-.thinking-item:hover {
-  background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+  .model-item:hover,
+  .thinking-item:hover {
+    background: var(--bg-tertiary, #f0f0f0);
+  }
 }
 
 .model-item.nav-active,
@@ -752,19 +795,33 @@ defineExpose({
   font-weight: 600;
 }
 
-.default-badge {
+.default-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--accent-color, #0066cc);
+}
+
+.default-text {
   font-size: 10px;
   font-weight: 600;
-  color: #fff;
-  background: var(--accent-color, #0066cc);
-  padding: 1px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
   white-space: nowrap;
 }
 
+/* Fixed 22×22 slot so the default star stays aligned with the
+   set-default star on non-default rows. */
+.default-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
 .set-default-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 22px;
@@ -775,19 +832,21 @@ defineExpose({
   color: var(--text-muted, #999);
   cursor: pointer;
   flex-shrink: 0;
-  opacity: 0.4;
+  opacity: 0.7;
   transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
 
-.model-item:hover .set-default-btn,
-.thinking-item:hover .set-default-btn {
-  opacity: 0.7;
-}
+@media (hover: hover) {
+  .model-item:hover .set-default-btn,
+  .thinking-item:hover .set-default-btn {
+    opacity: 0.9;
+  }
 
-.set-default-btn:hover {
-  opacity: 1 !important;
-  color: var(--accent-color, #0066cc);
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
+  .set-default-btn:hover {
+    opacity: 1 !important;
+    color: var(--accent-color, #0066cc);
+    background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
+  }
 }
 
 .model-empty {
@@ -899,8 +958,10 @@ defineExpose({
   white-space: nowrap;
 }
 
-.popup-set-default:hover {
-  background: var(--accent-color, #0066cc);
-  color: #fff;
+@media (hover: hover) {
+  .popup-set-default:hover {
+    background: var(--accent-color, #0066cc);
+    color: #fff;
+  }
 }
 </style>

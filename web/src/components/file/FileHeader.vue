@@ -28,9 +28,7 @@
       </button>
 
       <!-- Refresh button -->
-      <button v-if="toolbarInlineIds.includes('refresh')" class="file-header-btn" @click.stop="handleRefresh" :title="t('nav.refresh')">
-        <RotateCw :size="14" />
-      </button>
+      <RefreshButton v-if="toolbarInlineIds.includes('refresh')" icon="RotateCw" class="file-header-btn" :loading="refreshing" :disabled="refreshing" :title="t('nav.refresh')" @click.stop="handleRefresh" />
 
       <!-- Toggle view button (source/rendered) -->
       <button v-if="toolbarInlineIds.includes('toggleView')" class="file-header-btn" @click.stop="handleToggleView" :title="effectiveViewMode === 'rendered' ? t('file.header.sourceView') : t('file.header.renderedView')">
@@ -117,7 +115,7 @@
               <Paperclip :size="14" />
               {{ isAttached ? t('chat.attach.removeFromChat') : t('chat.actions.attachToChat') }}
             </button>
-            <button v-if="toolbarCollapsedIds.includes('refresh')" class="dropdown-item" @click="handleRefresh">
+            <button v-if="toolbarCollapsedIds.includes('refresh')" class="dropdown-item refresh-spin" :class="{ 'refresh-spin--active': refreshing }" :disabled="refreshing" @click="handleRefresh">
               <RotateCw :size="14" />
               {{ t('nav.refresh') }}
             </button>
@@ -194,6 +192,8 @@
 
 <script setup>
 import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { isRefreshing } from '@/composables/useFileRefresh'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
 import { List, Search, MoreVertical, Code2, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil } from 'lucide-vue-next'
 import { getFileType } from '@/utils/fileType.ts'
@@ -232,6 +232,15 @@ const menuRef = ref(null)
 const menuStyle = ref({})
 const attachBtnRef = ref(null)
 const headerActionsRef = ref(null)
+
+// Refresh-button spin feedback. The refresh is delegated to the parent
+// (App.vue handleRefresh → refreshCurrentFile). Drive the spin from the shared
+// isRefreshing ref so it tracks the real load duration.
+const refreshing = computed(() => isRefreshing.value)
+function triggerRefresh() {
+  if (refreshing.value) return
+  emit('refresh')
+}
 
 // Responsive toolbar overflow — only the "More" dropdown is always-inline (1)
 const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObserving: startToolbarResize, stopObserving: stopToolbarResize } = useToolbarOverflow(
@@ -290,7 +299,7 @@ const isMarkdownRendered = computed(() => (isMarkdown.value || isHtml.value || i
 const effectiveViewMode = computed(() => (isMarkdownRendered.value) ? 'rendered' : 'raw')
 const isMediaFile = computed(() => {
     const ft = fileType.value
-    return ft?.isImage || ft?.isAudio || ft?.isVideo || ft?.isPdf || false
+    return ft?.isImage || ft?.isAudio || ft?.isVideo || ft?.isPdf || ft?.isExcalidraw || false
 })
 // File has usable text content for code-specific features.
 // An empty (but loaded) file has content === '' and must still be editable;
@@ -312,16 +321,16 @@ const hasToc = computed(() => {
     if (ft.isPdf) return true
     // Other file types: need content
     if (!props.file.content) return false
-    if (ft.isImage || ft.isAudio || ft.isVideo) return false
+    if (ft.isImage || ft.isAudio || ft.isVideo || ft.isExcalidraw) return false
     // OpenAPI rendered mode: ReDoc has its own sidebar, TOC/Search would operate on raw text
     if (isOpenapi.value && effectiveViewMode.value === 'rendered') return false
     return true
 })
 
-// Search requires file.content — PDF/Office don't have it, hide (not disable) search
+// Search requires file.content — PDF/Office/Excalidraw don't have usable text, hide (not disable) search
 const hasSearch = computed(() => {
     if (!props.file) return false
-    if (props.file.isPdf || props.file.isOffice) return false
+    if (props.file.isPdf || props.file.isOffice || props.file.isExcalidraw) return false
     return hasToc.value
 })
 
@@ -421,7 +430,7 @@ async function handleOpenDirectory() {
 
 function handleRefresh() {
     menuOpen.value = false
-    emit('refresh')
+    triggerRefresh()
 }
 
 function handleAttachToChat() {
@@ -508,8 +517,10 @@ onBeforeUnmount(() => {
     cursor: pointer;
     transition: color 0.15s;
 }
-.file-path-hint:hover {
-    color: var(--accent-color);
+@media (hover: hover) {
+    .file-path-hint:hover {
+        color: var(--accent-color);
+    }
 }
 .file-path-hint.copied {
     color: #22c55e;
@@ -539,8 +550,10 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
 }
-.file-header-btn:hover {
-    background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
+@media (hover: hover) {
+    .file-header-btn:hover {
+        background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
+    }
 }
 .file-header-btn svg {
     width: 14px;
@@ -551,9 +564,11 @@ onBeforeUnmount(() => {
     cursor: not-allowed;
     pointer-events: none;
 }
-.file-header-btn:disabled:hover {
-    background: transparent;
-    color: var(--text-secondary);
+@media (hover: hover) {
+    .file-header-btn:disabled:hover {
+        background: transparent;
+        color: var(--text-secondary);
+    }
 }
 .file-header-btn.active {
     background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
@@ -562,12 +577,14 @@ onBeforeUnmount(() => {
 .file-header-btn.danger {
     color: #ef4444;
 }
-.file-header-btn.danger:hover {
-    background: #fef2f2;
-    color: #dc2626;
-}
-[data-theme="dark"] .file-header-btn.danger:hover {
-    background: #2d1b1b;
+@media (hover: hover) {
+    .file-header-btn.danger:hover {
+        background: #fef2f2;
+        color: #dc2626;
+    }
+    [data-theme-base="dark"] .file-header-btn.danger:hover {
+        background: #2d1b1b;
+    }
 }
 
 /* Dropdown */
@@ -586,9 +603,11 @@ onBeforeUnmount(() => {
     border-radius: 0;
     color: #fff;
 }
-.overlay-close-btn:hover {
-    background: #991b1b;
-    color: #fff;
+@media (hover: hover) {
+    .overlay-close-btn:hover {
+        background: #991b1b;
+        color: #fff;
+    }
 }
 
 .wrap-check {
@@ -627,9 +646,11 @@ onBeforeUnmount(() => {
     text-decoration: none;
     white-space: nowrap;
 }
-.file-header-dropdown-menu .dropdown-item:hover {
-    background: var(--accent-color);
-    color: #fff;
+@media (hover: hover) {
+    .file-header-dropdown-menu .dropdown-item:hover {
+        background: var(--accent-color);
+        color: #fff;
+    }
 }
 .file-header-dropdown-menu .dropdown-item.active {
     background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
@@ -644,12 +665,14 @@ onBeforeUnmount(() => {
 .file-header-dropdown-menu .dropdown-item.danger {
     color: #ef4444;
 }
-.file-header-dropdown-menu .dropdown-item.danger:hover {
-    background: #fef2f2;
-    color: #dc2626;
-}
-[data-theme="dark"] .file-header-dropdown-menu .dropdown-item.danger:hover {
-    background: #2d1b1b;
+@media (hover: hover) {
+    .file-header-dropdown-menu .dropdown-item.danger:hover {
+        background: #fef2f2;
+        color: #dc2626;
+    }
+    [data-theme-base="dark"] .file-header-dropdown-menu .dropdown-item.danger:hover {
+        background: #2d1b1b;
+    }
 }
 .file-header-dropdown-menu .wrap-check {
     margin-left: auto;

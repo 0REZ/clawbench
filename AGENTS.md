@@ -38,6 +38,24 @@ npm test                             # Vitest 前端测试
 ./build.sh --restart --restart-port=8080  # 重启并指定端口
 ```
 
+### 运维：僵尸进程清理
+
+`./scripts/kill-zombies.sh` 清理僵尸（defunct）进程及其孤儿进程树。僵尸进程无法直接 kill，只能靠父进程 reap 或杀掉父进程后由 init 收养清理。
+
+```bash
+./scripts/kill-zombies.sh                  # dry-run：列出僵尸与将要杀的进程树
+./scripts/kill-zombies.sh --kill           # 实际清理（带确认）
+./scripts/kill-zombies.sh --kill --force   # 跳过确认
+./scripts/kill-zombies.sh --port 8080      # 额外保护 8080 端口的服务器
+```
+
+**安全规则（脚本默认强制执行）：**
+
+- **绝不触碰 20000 端口主服务器** 及其完整后代树（包括 `clawbench --acp` 会话派生的 vitest/build/worker 进程）——通过 `/proc` 树形遍历识别，非 `pgrep -f` 模糊匹配
+- 僵尸父进程是 init（PID 1）时自动跳过（init 会自动 reap）
+- 杀进程树按子孙先 TERM → 再 KILL 顺序，避免留下新僵尸
+- `--kill-protected` 可显式覆盖保护（危险，谨慎使用）
+
 ## 架构
 
 ### 后端（Go）
@@ -74,6 +92,21 @@ npm test                             # Vitest 前端测试
 Composable 按域分组：Chat、Session、Terminal、File、Navigation/Gesture、Settings、Agent、Task、Infrastructure、System。新建 composable 须放 `web/src/composables/` 并以 `useXxx` 命名，测试用 `*.test.ts` 同目录或 `__tests__/`。
 
 组件按域分组：Chat、File、Terminal、Git、Session/Agent、Task、Settings、Common。
+
+### 桌面端（Electron）
+
+源码根：`desktop/src/main/`。桌面端是纯"壳"，复用服务器 + Web 前端全部业务逻辑，仅提供 Web 环境之外的桌面能力。主进程模块通过 IPC（`native:*`）暴露给 Web 前端：
+
+| 模块 | 职责 |
+|------|------|
+| `window.ts` | 主窗口创建、原生上下文菜单（cut/copy/paste 走 OS role，copy-link/copy-image 按语言翻译）、外部链接拦截交给默认浏览器 |
+| `bridge.ts` | IPC 桥：服务器列表/凭据、SSH 端口映射、文件下载、分享、系统通知、主题、日志捕获、屏幕常亮 |
+| `tunnel.ts` | ssh2 客户端，读取 `/api/ssh/info` 建立 SSH 端口映射 |
+| `download.ts` | 文件下载（保存对话框 + 下载后定位）、URL/Blob 下载 |
+| `notification.ts` | 原生系统通知，点击导航到会话/任务（冷启动挂起派发） |
+| `updater.ts` | 桌面端升级检查（npm registry，国内时区换镜像源） |
+| `secrets.ts` / `store.ts` | safeStorage 加密存密码、electron-store 持久化服务器列表/主题 |
+| `powersave.ts` | 屏幕常亮（powerSaveBlocker） |
 
 ## 开发规则
 

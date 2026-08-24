@@ -1,5 +1,13 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+
+// Full-suite scheduling: this file contains voice-input / compact-popup / slash
+// tests that depend on timers, async watchers, and DOM popup open/close cycles.
+// In isolation each case finishes in <1s, but under the coverage-gate's
+// full-suite run the worker pool is busy and a few cases occasionally hit the
+// default 5s testTimeout, causing flaky `Test timed out in 5000ms` failures
+// that drag down src/components coverage. Bump this file's timeout only.
+vi.setConfig({ testTimeout: 30_000 })
 import { ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ChatInputBar from '../ChatInputBar.vue'
@@ -23,6 +31,7 @@ const i18n = createI18n({
           archiveCurrentSession: 'Archive',
           noSessionToArchive: 'No session',
           autoSpeech: 'Read aloud',
+          reloadSession: 'Reopen session',
           attachment: 'Attach',
         },
         create: { selectAgentOrLongPress: 'New' },
@@ -674,6 +683,29 @@ describe('ChatInputBar', () => {
     expect(wrapper.emitted('toggle-auto-speech')).toBeTruthy()
   })
 
+  it('refresh-session button renders next to auto-speech when a session exists', () => {
+    const wrapper = mountBar({ currentSessionId: 'sess-1' })
+    const btn = wrapper.find('[data-action="refresh-session"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('title')).toBe('Reopen session')
+    const autoSpeechBtn = wrapper.find('.auto-speech-btn')
+    // Refresh button sits after the auto-speech button in DOM order
+    const doc = wrapper.element.ownerDocument
+    const rel = btn.element.compareDocumentPosition(autoSpeechBtn.element)
+    expect(rel & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
+  it('refresh-session button is hidden when no session is active', () => {
+    const wrapper = mountBar({ currentSessionId: '' })
+    expect(wrapper.find('[data-action="refresh-session"]').exists()).toBe(false)
+  })
+
+  it('refresh-session button emits refresh-session on click', async () => {
+    const wrapper = mountBar({ currentSessionId: 'sess-1' })
+    await wrapper.find('[data-action="refresh-session"]').trigger('click')
+    expect(wrapper.emitted('refresh-session')).toBeTruthy()
+  })
+
   it('archive button does nothing when no currentSessionId', async () => {
     const wrapper = mountBar({ currentSessionId: '' })
     const archiveBtn = wrapper.find('.chat-action-btn-archive')
@@ -1211,30 +1243,38 @@ describe('ChatInputBar', () => {
       mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
       mockSessionTransport.value = 'acp-stdio'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      const btn = wrapper.find('.session-info-compact')
+      const btn = wrapper.find('.usage-popup-compact-btn')
       expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBeUndefined()
       expect(btn.text()).toContain('Compact context')
     })
 
-    it('hides compact button when usage < 75%', async () => {
+    it('shows compact button even when usage < 75%', async () => {
       mockContextUsed.value = 50000
       mockContextSize.value = 100000
       mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
       mockSessionTransport.value = 'acp-stdio'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+      const btn = wrapper.find('.usage-popup-compact-btn')
+      expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBeUndefined()
     })
 
-    it('hides compact button when /compact command not available', async () => {
+    it('disables compact button when /compact command not available', async () => {
       mockContextUsed.value = 80000
       mockContextSize.value = 100000
       mockAvailableCommands.value = [{ name: '/help', description: 'Show help' }]
       mockSessionTransport.value = 'acp-stdio'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+      const btn = wrapper.find('.usage-popup-compact-btn')
+      expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBeDefined()
     })
 
     it('shows compact button with command name without slash prefix', async () => {
@@ -1243,18 +1283,24 @@ describe('ChatInputBar', () => {
       mockAvailableCommands.value = [{ name: 'compact', description: 'Compact conversation' }]
       mockSessionTransport.value = 'acp-stdio'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      expect(wrapper.find('.session-info-compact').exists()).toBe(true)
+      const btn = wrapper.find('.usage-popup-compact-btn')
+      expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBeUndefined()
     })
 
-    it('hides compact button when not ACP transport', async () => {
+    it('disables compact button when not ACP transport', async () => {
       mockContextUsed.value = 80000
       mockContextSize.value = 100000
       mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
       mockSessionTransport.value = 'cli'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      expect(wrapper.find('.session-info-compact').exists()).toBe(false)
+      const btn = wrapper.find('.usage-popup-compact-btn')
+      expect(btn.exists()).toBe(true)
+      expect(btn.attributes('disabled')).toBeDefined()
     })
 
     it('clicking compact button emits send with /compact', async () => {
@@ -1263,8 +1309,9 @@ describe('ChatInputBar', () => {
       mockAvailableCommands.value = [{ name: '/compact', description: 'Compact conversation' }]
       mockSessionTransport.value = 'acp-stdio'
       const wrapper = mountBar({ currentModelName: 'gpt-4' })
+      await wrapper.find('.session-info-usage').trigger('click')
       await wrapper.vm.$nextTick()
-      const compactBtn = wrapper.find('.session-info-compact')
+      const compactBtn = wrapper.find('.usage-popup-compact-btn')
       await compactBtn.trigger('click')
       expect(wrapper.emitted('send')).toBeTruthy()
       expect(wrapper.emitted('send')![0]).toEqual(['/compact'])
@@ -1306,7 +1353,9 @@ describe('ChatInputBar', () => {
       const textarea = wrapper.find('.chat-textarea')
       const preventDefault = vi.fn()
       const imageFile = new File(['dummy content'], 'test.png', { type: 'image/png' })
-      const dupImageFile = new File(['dummy content'], 'test.png', { type: 'image/png' })
+      // Use the exact same File reference so dedup key (name+size+type+lastModified)
+      // collides and only one entry reaches uploadAndAttach.
+      const dupImageFile = imageFile
 
       const clipboardData = {
         items: [

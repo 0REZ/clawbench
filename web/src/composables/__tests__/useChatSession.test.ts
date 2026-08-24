@@ -1741,6 +1741,254 @@ describe('switchSession', () => {
     expect(contents).not.toContain('cancelled msg')
   })
 
+  it('keeps a genuinely queued repeat turn when the same content was already drained', async () => {
+    // Edge case: user sends "hi" twice. The first drained into the DB (id=1),
+    // the second is still genuinely queued (queueId=pending-2, same text). The
+    // drained-in-DB guard must skip ONLY the drained one — the queued repeat
+    // must survive the reload or it would vanish from the UI mid-flight.
+    const queuedMessages = [
+      { queueId: 'pending-2', text: 'hi', filePaths: [], files: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]
+    mockUtilsFns.parseMessages.mockReturnValue([
+      { id: 1, role: 'user', content: 'hi', blocks: [{ type: 'text', text: 'hi' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 2, role: 'assistant', content: 'first reply', blocks: [{ type: 'text', text: 'first reply' }], createdAt: '2026-01-01T00:00:00Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [{ id: 1, role: 'user', content: 'hi' }, { id: 2, role: 'assistant', content: 'first reply' }],
+        total: 2,
+        running: true,
+        queue: queuedMessages,
+      }),
+    })
+
+    const session = createSession()
+    lastSessionOptions!.messages.value = []
+
+    await session.loadHistory(true, false, false)
+
+    const userMsgs = lastSessionOptions!.messages.value.filter((m: any) => m.role === 'user')
+    // Both the persisted first turn and the queued repeat turn are present.
+    const pendingRepeat = userMsgs.filter((m: any) => m.pending && m.id === 'pending-2')
+    expect(pendingRepeat).toHaveLength(1)
+    expect(pendingRepeat[0].content).toBe('hi')
+  })
+
+  it('drops a ghost pending message whose content is already persisted in DB (drain missed while offline)', async () => {
+    // Regression: 切回前台 loadHistory 时后端 queue 已为空（消息已 drain），但
+    // prevMessages 里还残留旧的 pending 乐观消息。syncSessionState 的 merge 逻辑
+    // 若只按 id 去重就会把它加回来——它是幽灵（DB 已有同 content 正式消息），
+    // 且 queue_drain 不会再到达，残留到手动刷新。
+    mockUtilsFns.parseMessages.mockReturnValue([
+      { id: 1, role: 'user', content: 'queued during background', blocks: [{ type: 'text', text: 'queued during background' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 2, role: 'assistant', content: 'reply finished while offline', blocks: [{ type: 'text', text: 'reply finished while offline' }], createdAt: '2026-01-01T00:00:00Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [
+          { id: 1, role: 'user', content: 'queued during background' },
+          { id: 2, role: 'assistant', content: 'reply finished while offline' },
+        ],
+        total: 2,
+        running: false,
+        // queue is empty — the message drained while the client was disconnected
+      }),
+    })
+
+    const session = createSession()
+    // Simulate the stale optimistic pending message still present in the array
+    // from before the background transition.
+    lastSessionOptions!.messages.value = [{
+      role: 'user', id: 'pending-ghost1', content: 'queued during background', pending: true, seq: 1,
+    }]
+
+    await session.loadHistory(true, false, false)
+
+    const userMsgs = lastSessionOptions!.messages.value.filter((m: any) => m.role === 'user')
+    expect(userMsgs).toHaveLength(1)
+    expect(userMsgs[0].id).toBe(1)
+    expect(userMsgs[0].pending).toBeUndefined()
+    const pending = lastSessionOptions!.messages.value.filter((m: any) => m.pending)
+    expect(pending).toHaveLength(0)
+  })
+
+  it('drops the ghost but keeps the genuinely queued repeat when same content was sent twice', async () => {
+    // Composite scenario: user sends "hi" twice. pending-A drained into the DB
+    // (id=1) while the client was offline; pending-B is still genuinely queued
+    // (the backend queue field lists it). The authoritative queue-based guard
+    // must drop pending-A (its queueId is absent from the queue) while keeping
+    // pending-B (appendQueueItems restored it).
+    const queuedMessages = [
+      { queueId: 'pending-B', text: 'hi', filePaths: [], files: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]
+    mockUtilsFns.parseMessages.mockReturnValue([
+      { id: 1, role: 'user', content: 'hi', blocks: [{ type: 'text', text: 'hi' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 2, role: 'assistant', content: 'first reply', blocks: [{ type: 'text', text: 'first reply' }], createdAt: '2026-01-01T00:00:00Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [{ id: 1, role: 'user', content: 'hi' }, { id: 2, role: 'assistant', content: 'first reply' }],
+        total: 2,
+        running: true,
+        queue: queuedMessages,
+      }),
+    })
+
+    const session = createSession()
+    // Both stale optimistic pending messages from before the background transition.
+    lastSessionOptions!.messages.value = [
+      { role: 'user', id: 'pending-A', content: 'hi', pending: true, seq: 1 },
+      { role: 'user', id: 'pending-B', content: 'hi', pending: true, seq: 2 },
+    ]
+
+    await session.loadHistory(true, false, false)
+
+    const userMsgs = lastSessionOptions!.messages.value.filter((m: any) => m.role === 'user')
+    // Exactly two user turns: the persisted id=1 and the queued pending-B.
+    expect(userMsgs).toHaveLength(2)
+    expect(userMsgs.some((m: any) => m.id === 1 && !m.pending)).toBe(true)
+    expect(userMsgs.some((m: any) => m.id === 'pending-B' && m.pending)).toBe(true)
+    // The drained ghost pending-A must NOT reappear.
+    expect(userMsgs.some((m: any) => m.id === 'pending-A')).toBe(false)
+  })
+
+  it('drops a file-only ghost pending whose files are already persisted in DB', async () => {
+    // Regression: a file-only message (empty content, image attachment without a
+    // prompt) drained while the client was offline. The stale pending still sits
+    // in prevMessages. Content matching can't identify it (empty text), so the
+    // guard must fall back to matching its attached file paths against the
+    // persisted DB message.
+    mockUtilsFns.parseMessages.mockReturnValue([
+      {
+        id: 1, role: 'user', content: '', files: [{ path: '/tmp/photo.png', isDir: false }],
+        blocks: [], createdAt: '2026-01-01T00:00:00Z',
+      },
+      { id: 2, role: 'assistant', content: 'here is the image analysis', blocks: [{ type: 'text', text: 'here is the image analysis' }], createdAt: '2026-01-01T00:00:00Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [
+          { id: 1, role: 'user', content: '', files: [{ path: '/tmp/photo.png' }] },
+          { id: 2, role: 'assistant', content: 'here is the image analysis' },
+        ],
+        total: 2,
+        running: false,
+        // queue is empty — the message drained while the client was disconnected
+      }),
+    })
+
+    const session = createSession()
+    lastSessionOptions!.messages.value = [{
+      role: 'user', id: 'pending-file-ghost', content: '',
+      files: [{ path: '/tmp/photo.png', isDir: false }],
+      pending: true, seq: 1,
+    }]
+
+    await session.loadHistory(true, false, false)
+
+    const userMsgs = lastSessionOptions!.messages.value.filter((m: any) => m.role === 'user')
+    expect(userMsgs).toHaveLength(1)
+    expect(userMsgs[0].id).toBe(1)
+    expect(userMsgs[0].pending).toBeUndefined()
+    const pending = lastSessionOptions!.messages.value.filter((m: any) => m.pending)
+    expect(pending).toHaveLength(0)
+  })
+
+  it('keeps a later still-queued repeat turn when an earlier same-text turn is persisted (ghost time guard)', async () => {
+    // Regression (medium): user asked "hi" twice. Turn 1 is persisted in the DB
+    // (id=1). Turn 2 is STILL genuinely queued, but the backend's queue field is
+    // stale/empty in this response. Identity-only ghost matching would drop the
+    // still-queued turn 2 because it shares the text of the persisted turn 1. The
+    // time constraint (persisted twin must be time-close to the pending) keeps it.
+    mockUtilsFns.parseMessages.mockReturnValue([
+      { id: 1, role: 'user', content: 'hi', blocks: [{ type: 'text', text: 'hi' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 2, role: 'assistant', content: 'first reply', blocks: [{ type: 'text', text: 'first reply' }], createdAt: '2026-01-01T00:00:10Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [{ id: 1, role: 'user', content: 'hi' }, { id: 2, role: 'assistant', content: 'first reply' }],
+        total: 2,
+        running: false,
+        // queue is stale/empty — the still-queued turn 2 is NOT listed
+      }),
+    })
+
+    const session = createSession()
+    // The still-queued turn 2 pending (sent minutes after the persisted turn 1).
+    lastSessionOptions!.messages.value = [{
+      role: 'user', id: 'pending-2', content: 'hi', pending: true,
+      createdAt: '2026-01-01T00:05:00Z', seq: 1,
+    }]
+
+    await session.loadHistory(true, false, false)
+
+    const userMsgs = lastSessionOptions!.messages.value.filter((m: any) => m.role === 'user')
+    // Turn 1 persisted + turn 2 still queued — both must be present.
+    expect(userMsgs.some((m: any) => m.id === 1 && !m.pending)).toBe(true)
+    expect(userMsgs.some((m: any) => m.id === 'pending-2' && m.pending)).toBe(true)
+  })
+
+  it('does not merge DB identity into drain messages while a new turn is streaming (done→send→loadHistory race)', async () => {
+    // Regression (medium): 'done' unlocks the UI and fires loadHistory in the
+    // background. If the user immediately sends a new message, a NEW streaming
+    // assistant message (drain-B) coexists with the just-finalized one (drain-A).
+    // While a stream is live, the DB-identity merge must be deferred entirely —
+    // otherwise the new message's createdAt (inside the 5s tolerance) could get
+    // adopted into the wrong drain object.
+    const drainA = {
+      role: 'assistant', id: 'drain-A', content: '', blocks: [{ type: 'text', text: 'reply A' }],
+      createdAt: '2026-01-01T00:00:00Z', seq: 1,
+    }
+    const drainB = {
+      role: 'assistant', id: 'drain-B', content: '', blocks: [], streaming: true,
+      createdAt: '2026-01-01T00:00:01Z', seq: 2,
+    }
+    mockUtilsFns.parseMessages.mockReturnValue([
+      { id: 1, role: 'user', content: 'question A', blocks: [{ type: 'text', text: 'question A' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 2, role: 'assistant', content: '{"blocks":[{"type":"text","text":"reply A"}]}', blocks: [{ type: 'text', text: 'reply A' }], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 3, role: 'assistant', content: '', blocks: [], streaming: true, fromDB: true, createdAt: '2026-01-01T00:00:01Z' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1',
+        messages: [
+          { id: 1, role: 'user', content: 'question A' },
+          { id: 2, role: 'assistant', content: '{"blocks":[{"type":"text","text":"reply A"}]}' },
+          { id: 3, role: 'assistant', content: '', streaming: true },
+        ],
+        total: 3,
+        running: true,
+      }),
+    })
+
+    const session = createSession()
+    lastSessionOptions!.messages.value = [drainA, drainB]
+
+    await session.loadHistory(true, false, false)
+
+    const msgs = lastSessionOptions!.messages.value
+    // The new streaming turn survives and is still streaming (never clobbered).
+    const streamingMsgs = msgs.filter((m: any) => m.role === 'assistant' && m.streaming)
+    expect(streamingMsgs).toHaveLength(1)
+    expect(streamingMsgs[0].id).toBe(3)
+    // The just-finalized drain-A was NOT merged into the DB id=2 slot during the
+    // live stream — the merge is deferred until the stream ends.
+    const id2 = msgs.find((m: any) => m.id === 2)
+    expect(id2).toBeDefined()
+    expect(id2).not.toBe(drainA)
+  })
+
   it('restores usage state from API response after switch', async () => {
     resetAdditionalMocks() // Ensure mock call records are clean
     mockClearUsageState.mockClear()
@@ -3310,246 +3558,6 @@ describe('archiveSession', () => {
   })
 })
 
-// ───────────────────────────────────────────────────────────
-// handleVisibilityChange
-// ───────────────────────────────────────────────────────────
-
-describe('handleVisibilityChange', () => {
-  let originalFetch: typeof globalThis.fetch
-
-  beforeEach(() => {
-    resetMockState()
-    resetChatSessionState()
-    resetAdditionalMocks()
-    originalFetch = globalThis.fetch
-  })
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch
-  })
-
-  it('when visible and loading=true: disconnects stream, reloads history', async () => {
-    const loading = ref(true)
-    const onDisconnectStream = vi.fn()
-    const options = {
-      currentSessionId: ref('s1'),
-      messages: ref([]),
-      loading,
-      inputDisabled: ref(false),
-      blockTasks: {},
-      blockAskQuestions: {},
-      expandedTools: ref({}),
-      onParseAssistantContent: vi.fn(),
-      onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate: vi.fn(),
-      onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
-      onDisconnectStream,
-      onOpen: vi.fn(),
-    }
-    const session = useChatSession(options)
-
-    // Mock fetch for the loadHistory call
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        sessionId: 's1', messages: [], total: 0, running: false,
-      }),
-    })
-
-    // Mock visibilityState to 'visible'
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-
-    session.handleVisibilityChange()
-
-    // Wait for async loadHistory to complete
-    await vi.waitFor(() => {
-      expect(onDisconnectStream).toHaveBeenCalled()
-    })
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/ai/chat?session_id=s1'),
-      expect.objectContaining({ signal: expect.any(AbortSignal) })
-    )
-
-    vi.restoreAllMocks()
-  })
-
-  it('when visible and loading=false: reloads history (skipIfUnchanged)', async () => {
-    const loading = ref(false)
-    const onDisconnectStream = vi.fn()
-    const options = {
-      currentSessionId: ref('s1'),
-      messages: ref([]),
-      loading,
-      inputDisabled: ref(false),
-      blockTasks: {},
-      blockAskQuestions: {},
-      expandedTools: ref({}),
-      onParseAssistantContent: vi.fn(),
-      onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate: vi.fn(),
-      onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
-        onDisconnectStream,
-      onOpen: vi.fn(),
-    }
-    const session = useChatSession(options)
-
-    // Mock fetch for the loadHistory call
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        sessionId: 's1', messages: [], total: 0, running: false,
-      }),
-    })
-
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-
-    session.handleVisibilityChange()
-
-    // Should NOT disconnect stream (not streaming), but SHOULD reload history
-    expect(onDisconnectStream).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/ai/chat?session_id=s1'),
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
-      )
-    })
-
-    vi.restoreAllMocks()
-  })
-
-  it('when hidden: does nothing', async () => {
-    const loading = ref(true)
-    const onDisconnectStream = vi.fn()
-    const options = {
-      currentSessionId: ref('s1'),
-      messages: ref([]),
-      loading,
-      inputDisabled: ref(false),
-      blockTasks: {},
-      blockAskQuestions: {},
-      expandedTools: ref({}),
-      onParseAssistantContent: vi.fn(),
-      onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate: vi.fn(),
-      onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
-        onDisconnectStream,
-      onOpen: vi.fn(),
-    }
-    const session = useChatSession(options)
-
-    // Mock fetch to detect any loadHistory calls
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        sessionId: 's1', messages: [], total: 0, running: false,
-      }),
-    })
-
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
-
-    session.handleVisibilityChange()
-
-    expect(onDisconnectStream).not.toHaveBeenCalled()
-    expect(globalThis.fetch).not.toHaveBeenCalled()
-
-    vi.restoreAllMocks()
-  })
-
-  it('when visible and no session selected: reloads history via recovery path', async () => {
-    const loading = ref(false)
-    const onDisconnectStream = vi.fn()
-    const options = {
-      currentSessionId: ref(''),
-      messages: ref([]),
-      loading,
-      inputDisabled: ref(false),
-      blockTasks: {},
-      blockAskQuestions: {},
-      expandedTools: ref({}),
-      onParseAssistantContent: vi.fn(),
-      onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate: vi.fn(),
-      onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
-      onDisconnectStream,
-      onOpen: vi.fn(),
-    }
-    const session = useChatSession(options)
-
-    // Mock fetch for the recovery path (no session_id in URL)
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        sessionId: 'recovered-s1', messages: [], total: 0, running: false,
-      }),
-    })
-
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-
-    session.handleVisibilityChange()
-
-    expect(onDisconnectStream).not.toHaveBeenCalled()
-    await vi.waitFor(() => {
-      // Recovery path: URL does NOT contain session_id parameter
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/ai/chat?limit='),
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
-      )
-      expect(globalThis.fetch).not.toHaveBeenCalledWith(
-        expect.stringContaining('session_id'),
-        expect.anything()
-      )
-    })
-
-    vi.restoreAllMocks()
-  })
-
-  it('calls onRenderUpdate(true) after loadHistory resolves to re-render Mermaid on final DOM (#387)', async () => {
-    const loading = ref(false)
-    const onRenderUpdate = vi.fn()
-    const onDisconnectStream = vi.fn()
-    const options = {
-      currentSessionId: ref('s1'),
-      messages: ref([]),
-      loading,
-      inputDisabled: ref(false),
-      blockTasks: {},
-      blockAskQuestions: {},
-      expandedTools: ref({}),
-      onParseAssistantContent: vi.fn(),
-      onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate,
-      onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
-      onDisconnectStream,
-      onOpen: vi.fn(),
-    }
-    const session = useChatSession(options)
-
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        sessionId: 's1', messages: [], total: 0, running: false,
-      }),
-    })
-
-    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-
-    session.handleVisibilityChange()
-
-    await vi.waitFor(() => {
-      const forceFullCalls = onRenderUpdate.mock.calls.filter((c: any[]) => c[0] === true)
-      expect(forceFullCalls.length).toBeGreaterThanOrEqual(1)
-    })
-
-    vi.restoreAllMocks()
-  })
-})
-// ───────────────────────────────────────────────────────────
-
 describe('handleWsReconnect', () => {
   let originalFetch: typeof globalThis.fetch
 
@@ -3623,9 +3631,10 @@ describe('handleWsReconnect', () => {
     vi.restoreAllMocks()
   })
 
-  it('when loading=true and session still running: does nothing', async () => {
+  it('when loading=true and session still running: re-subscribes the stream (subscribeOnly) so loading cannot deadlock', async () => {
     const loading = ref(true)
     const onDisconnectStream = vi.fn()
+    const onConnectStream = vi.fn()
     const options = {
       currentSessionId: ref('s1'),
       messages: ref([]),
@@ -3638,7 +3647,7 @@ describe('handleWsReconnect', () => {
       onExtractScheduledTasks: vi.fn(),
       onRenderUpdate: vi.fn(),
       onScrollBottom: vi.fn(),
-      onConnectStream: vi.fn(),
+      onConnectStream,
       onDisconnectStream,
       onOpen: vi.fn(),
     }
@@ -3655,15 +3664,21 @@ describe('handleWsReconnect', () => {
 
     await session.handleWsReconnect()
 
+    // The still-running branch must NOT rely solely on the useChatStream
+    // connected-watch (which requires isStreaming === true). It explicitly
+    // re-subscribes with subscribeOnly so a watchdog-disconnected stream is
+    // guaranteed to resume and the loading spinner can never stay stuck.
+    expect(onConnectStream).toHaveBeenCalledWith('s1', { subscribeOnly: true })
     expect(onDisconnectStream).not.toHaveBeenCalled()
     expect(loading.value).toBe(true)
 
     vi.restoreAllMocks()
   })
 
-  it('when loading=false: does nothing', async () => {
+  it('when loading=false: reloads history (skipIfUnchanged)', async () => {
     const loading = ref(false)
     const onDisconnectStream = vi.fn()
+    const onRenderUpdate = vi.fn()
     const options = {
       currentSessionId: ref('s1'),
       messages: ref([]),
@@ -3674,7 +3689,7 @@ describe('handleWsReconnect', () => {
       expandedTools: ref({}),
       onParseAssistantContent: vi.fn(),
       onExtractScheduledTasks: vi.fn(),
-      onRenderUpdate: vi.fn(),
+      onRenderUpdate,
       onScrollBottom: vi.fn(),
       onConnectStream: vi.fn(),
       onDisconnectStream,
@@ -3682,9 +3697,35 @@ describe('handleWsReconnect', () => {
     }
     const session = useChatSession(options)
 
+    // First call: loadSessionsOnce. Second call: loadHistory.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ sessions: [{ id: 's1', running: false }], totalCount: 1 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ sessionId: 's1', messages: [], total: 0, running: false }),
+      })
+
     await session.handleWsReconnect()
 
     expect(onDisconnectStream).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat?session_id=s1'),
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+    })
+    await vi.waitFor(() => {
+      const forceFullCalls = onRenderUpdate.mock.calls.filter((c: any[]) => c[0] === true)
+      expect(forceFullCalls.length).toBeGreaterThanOrEqual(1)
+    })
+    // Regression guard: the WS reconnect path must stay silent — it must NOT
+    // show the switching overlay (that's reserved for the manual refresh /
+    // switchSession paths via immediate=true). The shared syncSessionOnReconnect
+    // refactor must keep immediate=false for forceReload=false.
+    expect(session.switching.value).toBe(false)
 
     vi.restoreAllMocks()
   })
@@ -3754,6 +3795,216 @@ describe('handleWsReconnect', () => {
       const forceFullCalls = onRenderUpdate.mock.calls.filter((c: any[]) => c[0] === true)
       expect(forceFullCalls.length).toBeGreaterThanOrEqual(1)
     })
+
+    vi.restoreAllMocks()
+  })
+})
+
+describe('handleManualRefresh', () => {
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    resetMockState()
+    resetChatSessionState()
+    resetAdditionalMocks()
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('when loading=true and session still running: force reloads history which re-subscribes the stream', async () => {
+    const loading = ref(true)
+    const onDisconnectStream = vi.fn()
+    const onConnectStream = vi.fn()
+    const onRenderUpdate = vi.fn()
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate,
+      onScrollBottom: vi.fn(),
+      onConnectStream,
+      onDisconnectStream,
+      onOpen: vi.fn(),
+    }
+    const session = useChatSession(options)
+
+    // First fetch: loadSessionsOnce — s1 is still running.
+    // Second fetch: loadHistory — returns running:true so syncSessionState's
+    // isRunning branch re-subscribes the stream.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [{ id: 's1', running: true }],
+          totalCount: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's1', messages: [], total: 0, running: true,
+        }),
+      })
+
+    await session.handleManualRefresh()
+
+    // loadHistory was executed (the fetch mock above also serves the chat fetch;
+    // assert a session-scoped fetch happened) — running branch must NOT just
+    // subscribeOnly; it forces the history reload whose syncSessionState
+    // isRunning path re-subscribes the stream.
+    expect(onConnectStream).toHaveBeenCalledWith('s1', { reuseExistingStreaming: true })
+    expect(onDisconnectStream).not.toHaveBeenCalled()
+    expect(loading.value).toBe(true)
+
+    vi.restoreAllMocks()
+  })
+
+  it('when loading=true and session no longer running: cleans up stuck loading, then forces history reload with forceNotRunning', async () => {
+    const loading = ref(true)
+    const onDisconnectStream = vi.fn()
+    const onRenderUpdate = vi.fn()
+    const onExtractScheduledTasks = vi.fn()
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks,
+      onRenderUpdate,
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream,
+      onOpen: vi.fn(),
+    }
+    const session = useChatSession(options)
+
+    // First fetch: loadSessionsOnce — s1 NOT running.
+    // Second fetch: loadHistory — the forced reload after cleanup.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [{ id: 's1', running: false }],
+          totalCount: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's1', messages: [], total: 0, running: false,
+        }),
+      })
+
+    await session.handleManualRefresh()
+
+    expect(onDisconnectStream).toHaveBeenCalled()
+    expect(mockForceCleanupStreamingState).toHaveBeenCalled()
+    expect(loading.value).toBe(false)
+    // The forced history reload must actually fire after the cleanup.
+    await vi.waitFor(() => {
+      const chatFetches = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: any[]) => String(c[0]).includes('/api/ai/chat?session_id=s1'))
+      expect(chatFetches.length).toBeGreaterThanOrEqual(1)
+    })
+
+    vi.restoreAllMocks()
+  })
+
+  it('when loading=false (idle): forces history reload even when the message snapshot is unchanged', async () => {
+    const loading = ref(false)
+    const onRenderUpdate = vi.fn()
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate,
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    const session = useChatSession(options)
+
+    // Step 1: establish a baseline snapshot ('snap-a') via a normal loadHistory.
+    // lastMessageSnapshot is a closure variable initialised to '' — a single
+    // handleManualRefresh would always see a *different* snapshot and could not
+    // distinguish skipIfUnchanged=false from true. Two-step setup makes the
+    // second load see newSnapshot === lastMessageSnapshot ('snap-a').
+    mockUtilsFns.buildMessageSnapshot.mockReturnValue('snap-a')
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1', messages: [{ id: 'm1' }], total: 1, running: false,
+      }),
+    })
+    await session.loadHistory(true, false, false)
+
+    // Step 2: refresh with the SAME snapshot. loadSessionsOnce (first fetch
+    // after baseline) returns s1 idle; the manual refresh must STILL fetch
+    // /api/ai/chat and re-render even though the snapshot is unchanged.
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await session.handleManualRefresh()
+
+    // A manual refresh must ALWAYS fetch history and re-render, unlike the
+    // WS reconnect path which passes skipIfUnchanged=true. Even with the same
+    // snapshot the UI is refreshed against the latest server state.
+    await vi.waitFor(() => {
+      const chatFetches = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+        .slice(fetchCallsBefore)
+        .filter((c: any[]) => String(c[0]).includes('/api/ai/chat?session_id=s1'))
+      expect(chatFetches.length).toBeGreaterThanOrEqual(1)
+    })
+    await vi.waitFor(() => {
+      const forceFullCalls = onRenderUpdate.mock.calls.filter((c: any[]) => c[0] === true)
+      expect(forceFullCalls.length).toBeGreaterThanOrEqual(1)
+    })
+
+    vi.restoreAllMocks()
+  })
+
+  it('when no currentSessionId: does nothing', async () => {
+    const options = {
+      currentSessionId: ref(''),
+      messages: ref([]),
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    const session = useChatSession(options)
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy
+
+    await session.handleManualRefresh()
+
+    expect(fetchSpy).not.toHaveBeenCalled()
 
     vi.restoreAllMocks()
   })

@@ -208,7 +208,7 @@ watch(() => props.file, () => {
     will-change: transform;
 }
 
-:global([data-theme="dark"]) .image-preview-img {
+:global([data-theme-base="dark"]) .image-preview-img {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
@@ -236,9 +236,11 @@ watch(() => props.file, () => {
     height: 18px;
 }
 
-.img-nav-hint:hover {
-    background: rgba(0, 0, 0, 0.6);
-    transform: translateY(-50%) scale(1.1);
+@media (hover: hover) {
+    .img-nav-hint:hover {
+        background: rgba(0, 0, 0, 0.6);
+        transform: translateY(-50%) scale(1.1);
+    }
 }
 
 .img-nav-prev {

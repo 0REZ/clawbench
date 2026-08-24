@@ -73,6 +73,7 @@
       @toggle-summary="$emit('toggle-summary', $event)"
       @ensure-content="$emit('ensure-content', $event)"
       @resume-session="$emit('resume-session', $event)"
+      @reset-session="$emit('reset-session', $event)"
 
       @remove-pending="$emit('remove-pending', $event)"
       @fork-from-message="$emit('fork-from-message', $event)"
@@ -170,7 +171,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'fork-from-message'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'file-open', 'load-more', 'task-card-click', 'send-message', 'remove-pending', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'fork-from-message', 'reset-session'])
 
 const messagesRef = ref(null)
 const { handleDblClick } = useDoubleClickCopy()
@@ -185,17 +186,25 @@ const remainingCount = computed(() => {
   return computeRemainingCount(props.hasMore, props.totalMessages, props.messages.length)
 })
 
-// "All loaded" brief hint: shown for 2s after last load completes with no more
+// "All loaded" brief hint: shown for 2s after a user-initiated load-more completes with no more.
+// Only triggers when loadingMore was recently true (i.e. user explicitly loaded more),
+// not when hasMore changes during initial session load.
 const showAllLoaded = ref(false)
 let allLoadedTimer = null
+let hadRecentLoadMore = false
+
+watch(() => props.loadingMore, (loading) => {
+  if (loading) hadRecentLoadMore = true
+})
 
 watch(() => props.hasMore, (hasMore, prevHasMore) => {
-  // When transitioning from hasMore=true to hasMore=false (just finished loading all)
-  if (!hasMore && prevHasMore && props.messages.length > 0) {
+  if (!hasMore && prevHasMore && props.messages.length > 0 && hadRecentLoadMore) {
     showAllLoaded.value = true
     clearTimeout(allLoadedTimer)
     allLoadedTimer = setTimeout(() => { showAllLoaded.value = false }, 2000)
   }
+  // Reset when hasMore becomes false (session fully loaded or switched)
+  if (!hasMore) hadRecentLoadMore = false
 })
 
 // Note: isAtBottom reset on session switch is handled by the currentSessionId watcher below.
@@ -467,8 +476,12 @@ function scrollToBottom(force = false) {
       // CRITICAL: only correct if the user hasn't scrolled up since we started.
       // Without this check, a rAF from a prior scrollToBottom call will override
       // the user's manual scroll-up, causing "sticky抖动" (snap-back jitter).
+      // force=true means "unconditionally pin to bottom" (session switch, message
+      // send, refresh) — async content growth (lazy-loaded original text, Mermaid,
+      // KaTeX) must still be corrected even if isAtBottom flipped false in between.
       requestAnimationFrame(() => {
-        if (!messagesRef.value || !isAtBottom.value) return
+        if (!messagesRef.value) return
+        if (!force && !isAtBottom.value) return
         const el = messagesRef.value
         const gap = el.scrollHeight - el.scrollTop - el.clientHeight
         if (gap > 0) {
@@ -476,10 +489,11 @@ function scrollToBottom(force = false) {
         }
       })
       // For force scrolls, also do a delayed re-scroll to catch async content
-      // rendering (Mermaid, KaTeX, collapse transitions) that settles later.
+      // rendering (Mermaid, KaTeX, collapse transitions, lazy original fetch)
+      // that settles later. force scrolls are unconditional — no isAtBottom guard.
       if (force) {
         setTimeout(() => {
-          if (!messagesRef.value || !isAtBottom.value) return
+          if (!messagesRef.value) return
           const el = messagesRef.value
           el.scrollTop = el.scrollHeight
         }, 300)
@@ -651,6 +665,10 @@ watch(() => props.currentSessionId, () => {
   scrollTick.value = 0
   userMsgIndexDrawer.close()
   userMsgIndexList.value = []
+  // Reset "all loaded" hint and load-more tracking on session switch
+  showAllLoaded.value = false
+  hadRecentLoadMore = false
+  clearTimeout(allLoadedTimer)
 })
 
 defineExpose({
@@ -951,10 +969,15 @@ defineExpose({
   -webkit-tap-highlight-color: transparent;
 }
 
-.scroll-fab-round:hover,
 .scroll-fab-round:focus-visible {
   opacity: 1;
   background: var(--bg-tertiary);
+}
+@media (hover: hover) {
+  .scroll-fab-round:hover {
+    opacity: 1;
+    background: var(--bg-tertiary);
+  }
 }
 
 .scroll-fab-round:not(:disabled):active {

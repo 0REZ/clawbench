@@ -35,6 +35,10 @@ const (
 	cancelReasonUser = "user"
 	// blockTypeWarning is the content block type for warning messages.
 	blockTypeWarning = "warning"
+	// eventTypeContentReset clears accumulated blocks from a failed Prompt before retry.
+	eventTypeContentReset = "content_reset"
+	// eventTypeDone is the stream event type for stream completion.
+	eventTypeDone = "done"
 
 	// transportACPStdio is the ACP stdio transport type.
 	transportACPStdio = "acp-stdio"
@@ -42,6 +46,8 @@ const (
 	transportCLI = "cli"
 	// eventTypeError is the stream event type for errors.
 	eventTypeError = "error"
+	// eventTypeSessionUpdate is the stream event type for session updates.
+	eventTypeSessionUpdate = "session_update"
 	// eventTypeToolUse is the stream event type for tool calls.
 	eventTypeToolUse = "tool_use"
 	// eventTypeToolResult is the stream event type for tool results.
@@ -56,6 +62,14 @@ const (
 	contentKeyType = "type"
 	// contentKeyReason is the JSON key for reason in content blocks.
 	contentKeyReason = "reason"
+
+	// flushInterval rate-limits streaming persistence of the assistant message.
+	// ACP backends emit bursts of incremental events (thinking/content deltas)
+	// at thousands per minute; flushing full-block JSON + SQLite on every N
+	// events saturates the consumer and the 512-slot stream channel fills,
+	// dropping events. Persisting at most once per 500ms keeps the DB fresh
+	// for reload-on-refresh without stalling the event loop.
+	flushInterval = 500 * time.Millisecond
 )
 
 // RunConfig configures a single SessionExecutor execution.
@@ -127,12 +141,16 @@ type SessionExecutor struct {
 	blocks           []model.ContentBlock
 	responseMetadata *ai.Metadata
 	rawOutput        string
-	eventCount       int
 	receivedTerminal bool
 	wallStart        int64 // unix millis at execution start
 	// toolStarts tracks the start time of each tool call (by tool ID) so the
 	// wall-clock duration can be computed when the tool completes.
 	toolStarts map[string]time.Time
+	// lastFlush is the last time flushStreamingMessage wrote to the DB.
+	// Used to rate-limit streaming persistence (flushInterval) so a burst of
+	// incremental events (e.g. ACP thinking deltas) does not saturate the
+	// consumer with full-block JSON marshal + SQLite writes.
+	lastFlush time.Time
 }
 
 // NewSessionExecutor creates a new executor for the given configuration.
@@ -150,6 +168,42 @@ func NewSessionExecutor(ctx context.Context, cfg RunConfig) *SessionExecutor {
 
 // handleNonTerminalEvent processes a single non-terminal stream event.
 func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
+	// content_reset: clear accumulated blocks from a failed Prompt before retry.
+	// Sent by ACPBackend.ExecuteStream when the first Prompt fails due to peer
+	// disconnect and the retry Prompt will re-emit the full response. Without
+	// this, AccumulateBlock would append the retry's content onto the stale
+	// partial content from the first attempt, producing duplicated text.
+	if event.Type == eventTypeContentReset {
+		slog.Warn("session executor: content_reset, clearing accumulated blocks",
+			slog.String("session", e.cfg.SessionID),
+			slog.Int("blocks_before", len(e.blocks)))
+		e.blocks = nil
+		e.rawOutput = ""
+		e.responseMetadata = nil
+		e.lastFlush = time.Time{}
+		e.toolStarts = make(map[string]time.Time)
+		// Reset the streaming message in DB to empty so stale partial content
+		// doesn't persist if the retry Prompt fails or the server crashes.
+		emptyContent, _ := json.Marshal(map[string]any{contentKeyBlocks: []any{}}) // safe: known structure
+		if err := UpdateStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, string(emptyContent)); err != nil {
+			slog.Error("failed to reset streaming message after content_reset",
+				slog.String("session", e.cfg.SessionID),
+				slog.String("err", err.Error()))
+		}
+		// Delete stale tool call rows from the first (failed) Prompt.
+		// The retry will re-insert them as fresh entries via upsertToolCallToDB.
+		if e.cfg.StreamingMessageID > 0 {
+			if _, err := WriteExec("DELETE FROM chat_tool_calls WHERE message_id = ?", e.cfg.StreamingMessageID); err != nil {
+				slog.Error("failed to delete stale tool calls after content_reset",
+					slog.Int64("message_id", e.cfg.StreamingMessageID),
+					slog.String("err", err.Error()))
+			}
+		}
+		// Forward to WS clients so the frontend clears its rendered partial content.
+		e.forwardEvent(event)
+		return
+	}
+
 	// raw_output: accumulate but don't forward or count
 	if event.Type == "raw_output" {
 		if e.rawOutput != "" {
@@ -190,10 +244,13 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 		}
 	}
 
-	// Incremental persistence (every 5 events)
-	e.eventCount++
-	if e.eventCount%5 == 0 {
+	// Incremental persistence (rate-limited). Persisting every N events is too
+	// aggressive for ACP backends that emit bursts of incremental deltas — the
+	// full-block JSON marshal + SQLite write stalls the consumer and the stream
+	// channel fills, dropping events. Persist at most once per flushInterval.
+	if time.Since(e.lastFlush) >= flushInterval {
 		e.flushStreamingMessage()
+		e.lastFlush = time.Now()
 	}
 }
 
@@ -221,7 +278,10 @@ func (e *SessionExecutor) RunWithChannel(eventCh <-chan ai.StreamEvent) RunResul
 	e.wallStart = time.Now().UnixMilli()
 	wallStart := time.Now()
 
-	flushTicker := time.NewTicker(1 * time.Second)
+	// flushTicker guarantees that sparse-but-ongoing streams (e.g. a long tool
+	// call with few content events) still get persisted periodically, even when
+	// no event trips the rate-limited flush in handleNonTerminalEvent.
+	flushTicker := time.NewTicker(flushInterval)
 	defer flushTicker.Stop()
 
 	for {
@@ -231,7 +291,7 @@ func (e *SessionExecutor) RunWithChannel(eventCh <-chan ai.StreamEvent) RunResul
 				// Channel closed without a terminal event — CLI process crash
 				return e.buildResult(false, wallStart)
 			}
-			if event.Type == "done" || event.Type == eventTypeError {
+			if event.Type == eventTypeDone || event.Type == eventTypeError {
 				e.receivedTerminal = true
 				// For "error" events, AccumulateBlock handles them.
 				// We process the error event but still finalize.
@@ -250,6 +310,7 @@ func (e *SessionExecutor) RunWithChannel(eventCh <-chan ai.StreamEvent) RunResul
 		case <-flushTicker.C:
 			if len(e.blocks) > 0 {
 				e.flushStreamingMessage()
+				e.lastFlush = time.Now()
 			}
 		}
 	}
@@ -411,10 +472,23 @@ func (e *SessionExecutor) upsertToolCallToDB(event ai.StreamEvent) {
 }
 
 // flushStreamingMessage persists the current accumulated blocks to the database.
+// Thinking blocks are excluded: they are process data rendered live over WS and
+// only persisted once at finalization via persistThinkingToDB. Excluding them
+// keeps the per-flush JSON small even when the agent streams tens of KB of
+// thinking, which is the dominant cost that previously stalled the consumer.
 func (e *SessionExecutor) flushStreamingMessage() {
-	serializedBlocks := e.blocks
-	if serializedBlocks == nil {
-		serializedBlocks = []model.ContentBlock{}
+	// No DB initialized (e.g. a bare executor in an isolated unit test) — there
+	// is nothing to persist to. Guarding here keeps the rate-limited streaming
+	// flush safe on every non-terminal event without assuming a DB exists.
+	if db == nil {
+		return
+	}
+	serializedBlocks := make([]model.ContentBlock, 0, len(e.blocks))
+	for _, b := range e.blocks {
+		if b.Type == "thinking" {
+			continue
+		}
+		serializedBlocks = append(serializedBlocks, b)
 	}
 	contentMap := map[string]any{contentKeyBlocks: serializedBlocks}
 	if e.responseMetadata != nil {
@@ -578,6 +652,15 @@ func (e *SessionExecutor) Finalize(result RunResult, eventCh <-chan ai.StreamEve
 		slog.Error("failed to finalize streaming message",
 			slog.String("session", e.cfg.SessionID),
 			slog.String("err", err.Error()))
+	}
+
+	// Trigger summarization for all assistant messages in this session that
+	// don't yet have a summary. SetSessionRunning(false) uses skipEvent=true
+	// (the caller emits its own terminal event), so triggerChatSummarization
+	// would never be reached via that path. Call it here instead, right after
+	// the message is finalized and streaming=0 is persisted.
+	if msgID > 0 {
+		triggerChatSummarization(e.ctx, e.cfg.SessionID)
 	}
 
 	// Save metadata to dedicated table for analytical queries

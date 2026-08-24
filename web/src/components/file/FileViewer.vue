@@ -74,6 +74,13 @@
         :file="file"
       />
 
+      <!-- Excalidraw diagram (opens directly in the editor) -->
+      <ExcalidrawViewer
+        v-else-if="file.isExcalidraw"
+        ref="excalidrawViewerRef"
+        :file="file"
+      />
+
       <!-- Too large -->
       <div v-else-if="file.tooLarge" class="raw-content-viewer">
         <div class="unsupported-file">
@@ -267,6 +274,7 @@ import AudioPreview from '@/components/media/AudioPreview.vue'
 import VideoPreview from '@/components/media/VideoPreview.vue'
 import { buildAsyncComponentOptions } from '@/composables/useAsyncComponent.ts'
 const OfficePreview = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('@/components/media/OfficePreview.vue') }))
+const ExcalidrawViewer = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('./ExcalidrawViewer.vue') }))
 import MarkdownPreview from './MarkdownPreview.vue'
 const CodeMirrorViewer = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('./CodeMirrorViewer.vue') }))
 const OpenApiPreview = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('./OpenApiPreview.vue') }))
@@ -324,11 +332,18 @@ const fileEditor = useFileEditor()
 const editing = fileEditor.editing
 const { saving, saveFile } = useCodeEditorSave()
 const cmEditorRef = ref(null)
+const excalidrawViewerRef = ref(null)
 
-// The global back handler calls exitEdit() → run CodeMirrorViewer's exit flow,
-// which confirms save/discard/cancel when there are unsaved changes.
+// The global back handler calls exitEdit() → run the active editor's exit flow,
+// which confirms save/discard/cancel when there are unsaved changes. For
+// Excalidraw files the iframe editor registers its own flow; otherwise it's
+// CodeMirrorViewer.
 function handleExitEditRequest() {
-    cmEditorRef.value?.handleExit?.()
+    if (props.file?.isExcalidraw) {
+        excalidrawViewerRef.value?.requestExit?.()
+    } else {
+        cmEditorRef.value?.handleExit?.()
+    }
 }
 
 let unregisterExitEdit = null
@@ -375,11 +390,21 @@ function handleToggleEdit() {
 }
 
 // Confirm-and-exit edit mode before an action that would leave the current
-// file's edit view. If there are unsaved changes, CodeMirrorViewer.handleExit
-// prompts save/discard/cancel; the action only runs once edit mode has really
-// ended (save completed or changes discarded). Returns true if the action may
+// file's edit view. If there are unsaved changes, the active editor's exit
+// flow (CodeMirrorViewer.handleExit or ExcalidrawViewer.requestExit) prompts
+// save/discard/cancel; the action only runs once edit mode has really ended
+// (save completed or changes discarded). Returns true if the action may
 // proceed, false if the user cancelled or a save failed.
 async function guardExitEdit(action) {
+    // Excalidraw opens directly in the editor and never leaves "edit mode",
+    // so the CodeMirror editing/exit bookkeeping doesn't apply — just confirm
+    // the scene is saved (requestExit resolves once the write completes).
+    if (props.file?.isExcalidraw) {
+        const exited = await excalidrawViewerRef.value?.requestExit?.()
+        if (exited !== true) return false
+        action()
+        return true
+    }
     if (editing.value) {
         const exited = await cmEditorRef.value?.handleExit?.()
         if (exited !== true) return false
@@ -518,6 +543,9 @@ function scrollElFor(viewMode, isEditing) {
     }
     if (isOpenapi.value && viewMode === 'rendered') {
         return null // ReDoc iframe handles its own scrolling
+    }
+    if (props.file?.isExcalidraw) {
+        return null // Excalidraw iframe handles its own scrolling
     }
     // CodeMirror-based viewers scroll inside .cm-scroller
     return el.querySelector('.cm-scroller')
@@ -696,7 +724,7 @@ watch(() => props.file, (f, oldF) => {
     clearRestoreTimer()
     if (!f) { currentFilePath = null; loading.value = true; return }
     currentFilePath = f.path
-    if (f.isImage || f.isPdf || f.isAudio || f.isVideo || f.isOffice || f.isBinary || f.tooLarge || f.error) {
+    if (f.isImage || f.isPdf || f.isAudio || f.isVideo || f.isOffice || f.isExcalidraw || f.isBinary || f.tooLarge || f.error) {
         loading.value = false
     } else {
         loading.value = f.content == null
@@ -713,7 +741,7 @@ watch(() => props.file, (f, oldF) => {
 
 watch(() => props.file?.content, (content) => {
     if (!props.file) return
-    if (props.file.isImage || props.file.isPdf || props.file.isAudio || props.file.isVideo || props.file.isOffice || props.file.isBinary || props.file.tooLarge || props.file.error) return
+    if (props.file.isImage || props.file.isPdf || props.file.isAudio || props.file.isVideo || props.file.isOffice || props.file.isExcalidraw || props.file.isBinary || props.file.tooLarge || props.file.error) return
     loading.value = content == null
     // Content loaded, try restore or attach listener
     if (content != null) {
@@ -829,9 +857,11 @@ defineExpose({
     pointer-events: none;
 }
 
-.file-nav-float:hover,
-.file-nav-float:focus-within {
-    opacity: 1;
+@media (hover: hover) {
+  .file-nav-float:hover,
+  .file-nav-float:focus-within {
+      opacity: 1;
+  }
 }
 
 .file-nav-float .file-nav-btn {
@@ -919,9 +949,11 @@ defineExpose({
     flex-shrink: 0;
 }
 
-.open-as-text-btn:hover {
-    border-color: var(--accent-color);
-    color: var(--accent-color);
+@media (hover: hover) {
+  .open-as-text-btn:hover {
+      border-color: var(--accent-color);
+      color: var(--accent-color);
+  }
 }
 
 .download-btn {
@@ -945,8 +977,10 @@ defineExpose({
     flex-shrink: 0;
 }
 
-.download-btn:hover {
-    filter: brightness(1.15);
+@media (hover: hover) {
+  .download-btn:hover {
+      filter: brightness(1.15);
+  }
 }
 
 .loading {
@@ -993,12 +1027,12 @@ defineExpose({
 </style>
 
 <style>
-[data-theme="dark"] .error-bubble {
+[data-theme-base="dark"] .error-bubble {
     background: rgba(239, 68, 68, 0.15);
     color: #fca5a5;
 }
 
-[data-theme="dark"] .truncated-notice {
+[data-theme-base="dark"] .truncated-notice {
     background: rgba(245, 158, 11, 0.15);
     color: #fbbf24;
     border-bottom-color: rgba(245, 158, 11, 0.3);

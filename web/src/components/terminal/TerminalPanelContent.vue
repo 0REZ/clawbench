@@ -29,6 +29,11 @@
           @click="handleTabClick(tab.id)"
         >
           <span class="terminal-tab-title" :title="tab.cwd">{{ tab.title }}</span>
+          <span
+            v-if="tab.hasUnread && tab.id !== activeTabId"
+            class="terminal-tab-unread-dot"
+            :title="t('terminal.unreadOutput')"
+          ></span>
           <button class="terminal-tab-menu-btn" @click.stop="openTabMenu($event, tab)" :title="t('terminal.title')">
             <MoreVerticalIcon :size="12" />
           </button>
@@ -114,12 +119,12 @@
 
       <!-- Main toolbar row -->
       <div class="main-toolbar-row">
-        <button class="toolbar-btn modifier gesture-toggle" :class="{ active: gestures.mode.value === 'gesture', 'mode-selection': gestures.mode.value === 'selection' }" @click="handleModeCycle" @contextmenu.prevent :title="t('terminal.modes')">
+        <button class="toolbar-btn modifier gesture-toggle btn-func" :class="{ active: gestures.mode.value === 'gesture', 'mode-selection': gestures.mode.value === 'selection' }" @click="handleModeCycle" @contextmenu.prevent :title="t('terminal.modes')">
           <EyeIcon v-if="gestures.mode.value === 'browse'" :size="14" />
           <HandIcon v-else-if="gestures.mode.value === 'gesture'" :size="14" />
           <TextCursorInputIcon v-else :size="14" />
         </button>
-        <button class="toolbar-btn modifier gesture-toggle" :class="{ active: showSymbolBar }" @click="toggleSymbolBar()" @contextmenu.prevent :title="t('terminal.symbols')">
+        <button class="toolbar-btn modifier gesture-toggle btn-func" :class="{ active: showSymbolBar }" @click="toggleSymbolBar()" @contextmenu.prevent :title="t('terminal.symbols')">
           <OmegaIcon :size="14" />
         </button>
         <div class="scroll-wrapper" :class="{ 'scroll-fade-left': toolbarScrollFade.left, 'scroll-fade-right': toolbarScrollFade.right }">
@@ -137,22 +142,22 @@
             <template v-else>{{ def.label }}</template>
           </button>
           <!-- Quick commands / theme / settings buttons -->
-          <div class="key-group">
-            <button ref="clipboardBtnRef" class="toolbar-btn btn-action" @click="openInput" :title="t('terminal.input')">
+          <div class="key-group btn-func-group">
+            <button ref="clipboardBtnRef" class="toolbar-btn btn-action btn-func" @click="openInput" :title="t('terminal.input')">
               <PenLineIcon :size="14" />
             </button>
-            <button ref="cmdBtnRef" class="toolbar-btn btn-action" @click="openCommands" :title="t('terminal.quickCommands')">
+            <button ref="cmdBtnRef" class="toolbar-btn btn-action btn-func" @click="openCommands" :title="t('terminal.quickCommands')">
               <ZapIcon :size="14" />
             </button>
-            <button class="toolbar-btn btn-action" @click="openThemeMenu" :title="t('terminal.theme')">
+            <button class="toolbar-btn btn-action btn-func" @click="openThemeMenu" :title="t('terminal.theme')">
               <PaletteIcon :size="14" />
             </button>
             <!-- Settings button (always present) -->
-            <button class="toolbar-btn btn-action" @click="keyConfigDrawer.open()" :title="t('terminal.keyConfigTitle')">
+            <button class="toolbar-btn btn-action btn-func" @click="keyConfigDrawer.open()" :title="t('terminal.keyConfigTitle')">
               <KeyboardIcon :size="14" />
             </button>
             <!-- Help button -->
-            <button class="toolbar-btn btn-action" @click="helpDrawer.open()" :title="t('terminal.helpTitle')">
+            <button class="toolbar-btn btn-action btn-func" @click="helpDrawer.open()" :title="t('terminal.helpTitle')">
               <CircleHelpIcon :size="14" />
             </button>
           </div>
@@ -210,18 +215,12 @@
       v-model:show="themeMenuOpen"
       :target-element="themeMenuTarget"
       :max-width="240"
-      :max-height="320"
+      :max-height="440"
       :menu-items-count="6"
       anchor="right"
     >
       <div class="theme-picker" @click.stop>
         <div class="theme-picker-title">{{ t('terminal.theme') }}</div>
-        <input
-          v-model="themeSearch"
-          class="theme-search-input"
-          type="text"
-          :placeholder="t('terminal.themeSearchPlaceholder')"
-        />
         <div v-if="themeLoading" class="theme-picker-status">{{ t('terminal.themeLoading') }}</div>
         <div v-else-if="themeLoadError" class="theme-picker-status theme-picker-error">
           <span>{{ t('terminal.themeLoadFailed') }}</span>
@@ -231,20 +230,24 @@
           <button
             class="theme-item"
             :class="{ active: themeSelection === TERMINAL_THEME_AUTO }"
+            :style="autoThemePreviewStyle"
             @click="selectTheme(TERMINAL_THEME_AUTO)"
           >
+            <span class="theme-item-check">{{ themeSelection === TERMINAL_THEME_AUTO ? '✓' : '' }}</span>
             <span class="theme-item-name">{{ t('terminal.themeFollowApp') }}</span>
-            <span v-if="themeSelection === TERMINAL_THEME_AUTO" class="theme-item-check">✓</span>
+            <component :is="autoThemeIsDark ? Moon : Sun" :size="12" class="theme-item-base-icon" />
           </button>
           <button
-            v-for="id in filteredThemes"
+            v-for="id in THEME_IDS"
             :key="id"
             class="theme-item"
             :class="{ active: themeSelection === id }"
+            :style="getTerminalThemePreviewStyle(id)"
             @click="selectTheme(id)"
           >
+            <span class="theme-item-check">{{ themeSelection === id ? '✓' : '' }}</span>
             <span class="theme-item-name">{{ formatThemeName(id) }}</span>
-            <span v-if="themeSelection === id" class="theme-item-check">✓</span>
+            <component :is="isTerminalThemeDark(id) ? Moon : Sun" :size="12" class="theme-item-base-icon" />
           </button>
         </div>
       </div>
@@ -266,7 +269,7 @@ import TerminalInputDrawer from '@/components/terminal/TerminalInputDrawer.vue'
 import TerminalHelpDrawer from '@/components/terminal/TerminalHelpDrawer.vue'
 import TerminalTabMenu from '@/components/terminal/TerminalTabMenu.vue'
 import { useTerminalTabs, type TerminalTab } from '@/composables/useTerminalTabs'
-import type { Terminal as TerminalType } from '@xterm/xterm'
+import type { Terminal as TerminalType, ITheme } from '@xterm/xterm'
 import { copyText } from '@/utils/clipboard.ts'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import { useTerminalViewport } from '@/composables/useTerminalViewport'
@@ -296,12 +299,14 @@ import {
   formatThemeName,
   loadThemesModule,
   resolveTheme,
+  resolveThemeSync,
+  resolveAutoThemeSync,
   isAppDarkTheme,
   darkTheme,
   lightTheme,
 } from '@/utils/terminalThemes'
 
-import { Zap as ZapIcon, Hand as HandIcon, Omega as OmegaIcon, Plus as PlusIcon, MoreVertical as MoreVerticalIcon, SquareTerminal as TerminalIcon, Keyboard as KeyboardIcon, PenLine as PenLineIcon, Eye as EyeIcon, TextCursorInput as TextCursorInputIcon, Palette as PaletteIcon, CircleHelp as CircleHelpIcon, Settings as SettingsIcon } from 'lucide-vue-next'
+import { Zap as ZapIcon, Hand as HandIcon, Omega as OmegaIcon, Plus as PlusIcon, MoreVertical as MoreVerticalIcon, SquareTerminal as TerminalIcon, Keyboard as KeyboardIcon, PenLine as PenLineIcon, Eye as EyeIcon, TextCursorInput as TextCursorInputIcon, Palette as PaletteIcon, CircleHelp as CircleHelpIcon, Settings as SettingsIcon, Sun, Moon } from 'lucide-vue-next'
 const props = defineProps<{
   requestedCwd?: string | null
   active?: boolean
@@ -459,24 +464,27 @@ function getWsUrl(cwd?: string, cols?: number, rows?: number) {
 }
 
 // Theme
+// Every new session reads its theme from here. It must respect the user's
+// selection (not just app dark/light), so newly created tabs inherit the
+// chosen terminal theme instead of falling back to the app default.
+// Auto 模式用模块级缓存同步匹配最接近 App 主题背景色的终端主题（不依赖
+// allThemes ref — 该 ref 只在打开调色板菜单时赋值，applyTheme 不会回填，
+// 否则第二个 tab 会落到默认主题）。固定主题由 resolveThemeSync 解析，
+// 需 xterm-theme 已加载（onMounted applyTheme / 调色板菜单会预热）。
 function getXtermTheme(): Record<string, unknown> {
-  return (isAppDarkTheme() ? darkTheme : lightTheme) as Record<string, unknown>
+  if (themeSelection.value === TERMINAL_THEME_AUTO) {
+    return resolveAutoThemeSync(isAppDarkTheme()) as Record<string, unknown>
+  }
+  return resolveThemeSync(themeSelection.value, isAppDarkTheme()) as Record<string, unknown>
 }
 
 // Terminal theme state + selection (persisted to localConfig)
 const themeSelection = ref<string>((localConfig.terminalTheme as string) || TERMINAL_THEME_AUTO)
 const themeMenuOpen = ref(false)
 const themeMenuTarget = ref<HTMLElement | null>(null)
-const themeSearch = ref('')
 const themeLoading = ref(false)
 const themeLoadError = ref(false)
-const allThemes = ref<Record<string, unknown> | null>(null)
-
-const filteredThemes = computed(() => {
-  const q = themeSearch.value.trim().toLowerCase()
-  if (!q) return THEME_IDS
-  return THEME_IDS.filter((id) => id.toLowerCase().includes(q) || formatThemeName(id).toLowerCase().includes(q))
-})
+const allThemes = ref<Record<string, ITheme> | null>(null)
 
 async function ensureThemesLoaded() {
   if (allThemes.value || themeLoading.value) return
@@ -494,7 +502,7 @@ async function ensureThemesLoaded() {
 async function applyTheme(selection: string) {
   themeSelection.value = selection
   setLocalConfig(TERMINAL_THEME_STORAGE_KEY, selection)
-  const theme = await resolveTheme(selection, isAppDarkTheme())
+  const theme = await resolveTheme(selection, isAppDarkTheme(), allThemes.value)
   tabManager.updateTheme(theme as Record<string, unknown>)
   document.documentElement.style.setProperty('--terminal-bg', theme.background || '')
 }
@@ -507,8 +515,57 @@ function openThemeMenu(e: Event) {
 
 function selectTheme(selection: string) {
   themeMenuOpen.value = false
-  themeSearch.value = ''
   applyTheme(selection)
+}
+
+// React to terminal theme changes made from the Settings panel. The palette
+// button routes through applyTheme() directly; the settings save only calls
+// setLocalConfig('terminalTheme'), so this watcher keeps existing sessions in
+// sync and keeps themeSelection current (which getXtermTheme reads for new
+// sessions). applyTheme also warms the xterm-theme cache so freshly created
+// sessions resolve the chosen fixed theme synchronously.
+watch(() => localConfig.terminalTheme, (selection) => {
+  if (typeof selection !== 'string') return
+  if (selection === themeSelection.value) return
+  applyTheme(selection).catch(() => {})
+})
+
+// Theme preview helpers
+const autoThemeIsDark = computed(() => isAppDarkTheme())
+
+const autoThemePreviewStyle = computed(() => {
+  const t = autoThemeIsDark.value ? darkTheme : lightTheme
+  return {
+    '--tterm-preview-bg': t.background,
+    '--tterm-preview-fg': t.foreground,
+    '--tterm-preview-accent': t.cursor || t.foreground,
+  }
+})
+
+function isTerminalThemeDark(id: string): boolean {
+  if (!allThemes.value) return true
+  const t = allThemes.value[id]
+  if (!t || !t.background) return true
+  const bg = t.background as string
+  // Parse hex color luminance
+  const hex = bg.replace('#', '')
+  if (hex.length !== 6) return true
+  const r = parseInt(hex.substring(0, 2), 16)
+  const g = parseInt(hex.substring(2, 4), 16)
+  const b = parseInt(hex.substring(4, 6), 16)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return luminance < 0.5
+}
+
+function getTerminalThemePreviewStyle(id: string): Record<string, string> | undefined {
+  if (!allThemes.value) return undefined
+  const t = allThemes.value[id] as { background?: string; foreground?: string; cursor?: string } | undefined
+  if (!t || !t.background) return undefined
+  return {
+    '--tterm-preview-bg': t.background,
+    '--tterm-preview-fg': t.foreground || (isTerminalThemeDark(id) ? '#e6edf3' : '#1f2328'),
+    '--tterm-preview-accent': t.cursor || t.foreground || (isTerminalThemeDark(id) ? '#89b4fa' : '#1e66f5'),
+  }
 }
 
 // Tab manager
@@ -715,7 +772,10 @@ watch(() => tabs.value.length, (count) => {
 // doesn't model reactive() auto-unwrapping, but using .value would
 // read the .value property of the already-unwrapped string (undefined).
 function isTabError(tab: TerminalTab): boolean {
-  return showErrorOverlayUtil(tab.session.connectionState as unknown as string)
+  return showErrorOverlayUtil(
+    tab.session.connectionState as unknown as string,
+    tab.session.hasConnectedOnce as unknown as boolean,
+  )
 }
 
 function isTabCanReconnect(tab: TerminalTab): boolean {
@@ -1080,12 +1140,14 @@ onMounted(async () => {
 
   themeObserver = new MutationObserver(() => {
     if (themeSelection.value === TERMINAL_THEME_AUTO) {
-      tabManager.updateTheme(getXtermTheme())
+      // App 主题变化时，auto 终端主题需重新匹配最接近的背景色主题。
+      // applyTheme 内部懒加载主题模块（缓存命中则同步返回），完成后更新 xterm。
+      applyTheme(TERMINAL_THEME_AUTO).catch(() => {})
     }
   })
   themeObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ['data-theme'],
+    attributeFilter: ['data-theme', 'data-theme-base'],
   })
 
   // Mount and connect the active tab (only if terminal panel is active)
@@ -1221,8 +1283,10 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   max-width: 120px;
 }
 
-.terminal-tab:hover {
-  background: var(--bg-tertiary);
+@media (hover: hover) {
+  .terminal-tab:hover {
+    background: var(--bg-tertiary);
+  }
 }
 
 .terminal-tab.active {
@@ -1245,6 +1309,14 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   font-weight: 700;
 }
 
+.terminal-tab-unread-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-color, #0066cc);
+}
+
 .terminal-tab-menu-btn {
   display: flex;
   align-items: center;
@@ -1262,14 +1334,21 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   transition: opacity 0.1s ease, background 0.1s ease;
 }
 
-.terminal-tab:hover .terminal-tab-menu-btn,
 .terminal-tab.active .terminal-tab-menu-btn {
   opacity: 1;
 }
 
-.terminal-tab-menu-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+@media (hover: hover) {
+  .terminal-tab:hover .terminal-tab-menu-btn {
+    opacity: 1;
+  }
+}
+
+@media (hover: hover) {
+  .terminal-tab-menu-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
 }
 
 .terminal-tab-add {
@@ -1288,9 +1367,11 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   transition: background 0.1s ease, color 0.1s ease;
 }
 
-.terminal-tab-add:hover:not(.disabled) {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+@media (hover: hover) {
+  .terminal-tab-add:hover:not(.disabled) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
 }
 
 .terminal-tab-add:active:not(.disabled) {
@@ -1352,11 +1433,11 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   border-radius: 999px !important;
 }
 
-[data-theme="dark"] .terminal-container {
+[data-theme-base="dark"] .terminal-container {
   background: var(--terminal-bg, #1e1e2e);
 }
 
-:root:not([data-theme="dark"]) .terminal-container {
+:root:not([data-theme-base="dark"]) .terminal-container {
   background: var(--terminal-bg, #eff1f5);
 }
 
@@ -1433,8 +1514,10 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   font-size: 13px;
 }
 
-.terminal-reconnect-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+@media (hover: hover) {
+  .terminal-reconnect-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 /* Toolbar styles (unchanged) */
@@ -1453,7 +1536,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   --toolbar-divider: color-mix(in srgb, var(--border-color) 48%, transparent);
 }
 
-[data-theme="dark"] .terminal-toolbar {
+[data-theme-base="dark"] .terminal-toolbar {
   background: var(--bg-secondary);
   --toolbar-key-hover: color-mix(in srgb, var(--text-primary) 9%, transparent);
   --toolbar-key-active: color-mix(in srgb, var(--text-primary) 16%, transparent);
@@ -1577,7 +1660,9 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   touch-action: manipulation;
   transition: background 100ms ease, color 100ms ease;
 }
-.toolbar-btn:hover { background: var(--toolbar-key-hover); }
+@media (hover: hover) {
+  .toolbar-btn:hover { background: var(--toolbar-key-hover); }
+}
 .toolbar-btn:active { background: var(--toolbar-key-active); }
 .toolbar-btn:focus-visible { outline: 2px solid color-mix(in srgb, var(--text-primary) 36%, transparent); outline-offset: 2px; }
 .toolbar-btn.modifier.active { background: var(--toolbar-key-selected-bg); color: var(--accent-color); box-shadow: inset 0 -2px 0 var(--accent-color); }
@@ -1585,7 +1670,9 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
 .toolbar-btn.shortcut { background: transparent; color: var(--toolbar-key-text); font-weight: 800; font-size: 11px; }
 .toolbar-btn.shortcut:active { background: var(--toolbar-key-active); }
 .toolbar-btn.danger { color: var(--toolbar-key-text); opacity: 0.78; }
-.toolbar-btn.danger:hover { opacity: 1; background: var(--toolbar-key-hover); }
+@media (hover: hover) {
+  .toolbar-btn.danger:hover { opacity: 1; background: var(--toolbar-key-hover); }
+}
 .toolbar-btn.gesture-toggle { min-width: 32px; border-radius: 0; }
 
 .btn-shift-tab {
@@ -1605,12 +1692,48 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   .toolbar-btn:hover { background: transparent; }
   .toolbar-btn.shortcut:hover { background: transparent; }
   .toolbar-btn.modifier.active:hover, .toolbar-btn.modifier.locked:hover { background: var(--toolbar-key-selected-bg); }
+  .toolbar-btn.btn-func:hover { background: transparent; }
+  .toolbar-btn.btn-func.modifier.active:hover, .toolbar-btn.btn-func.modifier.locked:hover { background: color-mix(in srgb, var(--accent-color) 14%, transparent); }
   .toolbar-btn:active { background: var(--toolbar-key-active); }
+  .toolbar-btn.btn-func:active { background: color-mix(in srgb, var(--accent-color) 18%, transparent); }
+}
+
+.toolbar-btn.btn-func {
+  color: var(--accent-color);
+  border-radius: 6px;
+}
+@media (hover: hover) {
+  .toolbar-btn.btn-func:hover { background: color-mix(in srgb, var(--accent-color) 10%, transparent); }
+}
+.toolbar-btn.btn-func:active { background: color-mix(in srgb, var(--accent-color) 18%, transparent); }
+/* Mode-selection keeps its outline, override the gesture-toggle active style for btn-func */
+.toolbar-btn.btn-func.modifier.active { background: color-mix(in srgb, var(--accent-color) 14%, transparent); color: var(--accent-color); box-shadow: none; }
+.toolbar-btn.btn-func.modifier.locked { background: color-mix(in srgb, var(--accent-color) 14%, transparent); color: var(--accent-color); box-shadow: none; }
+.btn-func-group + .key-group { position: relative; margin-left: 6px; }
+.btn-func-group + .key-group::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  width: 1px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--toolbar-divider);
 }
 
 .toolbar-btn.btn-modifier, .toolbar-btn.btn-nav, .toolbar-btn.btn-arrow, .toolbar-btn.btn-symbol, .toolbar-btn.btn-action { background: transparent; }
 .toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; }
 
+/* WebView bold compensation — same mechanism as chat markdown bold
+ * (markdown-common.css): font-weight alone renders lighter/softer in Android
+ * WebView (bold synthesized by fattening outlines), so thicken glyphs with a
+ * thin uniform -webkit-text-stroke under [data-app-mode] only. Applies to all
+ * virtual keys and symbol buttons; shift-tab labels inherit it from .toolbar-btn. */
+[data-app-mode] .toolbar-btn {
+  -webkit-text-stroke: 0.12px currentColor;
+}
+[data-app-mode] .toolbar-btn.shortcut {
+  -webkit-text-stroke: 0.1px currentColor;
+}
 
 .selection-copy-bar {
   position: absolute;
@@ -1676,24 +1799,31 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
 }
 
 /* Terminal theme picker (unscoped because PopupMenu teleports to body) */
-.theme-picker { padding: 6px; }
-.theme-picker-title { font-size: 12px; font-weight: 600; color: var(--text-muted); padding: 2px 6px 6px; }
-.theme-search-input {
-  width: 100%; box-sizing: border-box; padding: 6px 8px; margin-bottom: 6px;
-  border: 1px solid var(--border-color); border-radius: 6px;
-  background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; outline: none;
-}
-.theme-search-input:focus { border-color: var(--accent-color); }
-.theme-picker-status { padding: 12px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.theme-picker { padding: 0; min-width: 160px; }
+.theme-picker-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 5px 10px 4px; border-bottom: 1px solid var(--border-color); }
+.theme-picker-status { padding: 10px 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .theme-picker-error { display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.theme-retry-btn { padding: 4px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 13px; }
-.theme-picker-list { max-height: 220px; overflow-y: auto; }
+.theme-retry-btn { padding: 4px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 12px; }
+.theme-picker-list { max-height: 300px; overflow-y: auto; }
 .theme-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  width: 100%; padding: 6px 8px; border: none; border-radius: 6px;
-  background: transparent; color: var(--text-primary); font-size: 13px; text-align: left; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 5px 10px; border: none; border-radius: 0;
+  background: var(--tterm-preview-bg, transparent);
+  color: var(--tterm-preview-fg, var(--text-primary));
+  font-size: 12px; text-align: left; cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
 }
-.theme-item:hover { background: var(--bg-hover, rgba(128,128,128,0.1)); }
-.theme-item.active { background: color-mix(in srgb, var(--accent-color) 12%, transparent); color: var(--accent-color); }
-.theme-item-check { color: var(--accent-color); font-weight: 700; }
+/* 预览底色不变，hover 加 accent 全边框高亮 */
+@media (hover: hover) {
+  .theme-item:hover {
+    background: var(--tterm-preview-bg, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent-color);
+  }
+}
+.theme-item.active { background: var(--tterm-preview-bg, transparent); color: var(--tterm-preview-fg, var(--text-primary)); }
+.theme-item-check { flex-shrink: 0; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; font-size: 10px; border-radius: 50%; }
+.theme-item.active .theme-item-check { background: var(--accent-color); color: #fff; }
+.theme-item-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.theme-item-base-icon { flex-shrink: 0; color: var(--tterm-preview-accent, var(--text-muted)); }
+.theme-item.active .theme-item-base-icon { color: var(--tterm-preview-accent, var(--text-muted)); }
 </style>

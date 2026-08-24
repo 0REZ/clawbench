@@ -8,9 +8,7 @@
           <button v-if="currentUrl || currentSvg" class="lb-btn" @click="handleDownload" title="Download">
             <Download :size="20" />
           </button>
-          <button class="lb-btn" @click="resetAndRefresh" title="Reset & Reload">
-            <RotateCcw :size="20" />
-          </button>
+          <RefreshButton icon="RotateCcw" :size="20" class="lb-btn" :loading="imageLoading" :disabled="imageLoading" title="Reset & Reload" @click="resetAndRefresh" />
           <button class="lb-btn lb-close" @click="close" title="Close">
             <X :size="20" />
           </button>
@@ -62,8 +60,9 @@
 </template>
 
 <script setup>
-import { RotateCcw, X, Loader, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
+import { X, Loader, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
 import { ref, computed, provide, watch, onMounted, onUnmounted } from 'vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import { store } from '@/stores/app.ts'
 import { baseName, joinPath } from '@/utils/path.ts'
 import { getFileType } from '@/utils/fileType.ts'
@@ -459,7 +458,12 @@ function close() {
 }
 
 function resetAndRefresh() {
-    imageLoading.value = true
+    // SVG content is rendered synchronously from the in-memory string — there
+    // is no fetch/load cycle, so the loading state (and the spinning button)
+    // must not be engaged for it.
+    if (!currentSvg.value) {
+        imageLoading.value = true
+    }
     fitScale.value = 1
     naturalW.value = 0
     naturalH.value = 0
@@ -878,18 +882,20 @@ onUnmounted(() => {
     flex-shrink: 0;
 }
 
-.lb-btn:hover {
-    background: var(--accent-color);
-    transform: scale(1.05);
+@media (hover: hover) {
+    .lb-btn:hover {
+        background: var(--accent-color);
+        transform: scale(1.05);
+    }
+
+    .lb-btn.lb-close:hover {
+        background: #ef4444;
+    }
 }
 
 .lb-btn svg {
     width: 20px;
     height: 20px;
-}
-
-.lb-btn.lb-close:hover {
-    background: #ef4444;
 }
 
 .lightbox-content {

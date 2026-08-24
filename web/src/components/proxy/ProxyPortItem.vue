@@ -35,9 +35,7 @@
       <button class="port-action-btn open" :disabled="!enabled" @click.stop="$emit('openExternal', localPort, protocol, host)" :title="t('proxy.openInBrowser')">
         <ExternalLink :size="14" />
       </button>
-      <button class="port-action-btn reconnect" :class="{ spinning: reconnecting }" :disabled="reconnecting || !enabled" @click.stop="$emit('reconnect', localPort)" :title="t('proxy.reconnectPort')">
-        <RotateCcw :size="14" />
-      </button>
+      <RefreshButton icon="RotateCcw" class="port-action-btn reconnect" :loading="reconnecting" :disabled="reconnecting || !enabled" :title="t('proxy.reconnectPort')" @click.stop="$emit('reconnect', localPort)" />
       <span class="port-actions-spacer" />
       <button class="port-action-btn edit" @click.stop="$emit('edit', localPort)" :title="t('common.edit')">
         <Pencil :size="14" />
@@ -50,9 +48,10 @@
 </template>
 
 <script setup>
-import { Box, ExternalLink, RotateCcw, Pencil, Trash2 } from 'lucide-vue-next'
+import { Box, ExternalLink, Pencil, Trash2 } from 'lucide-vue-next'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 
 const { t } = useI18n()
 
@@ -104,9 +103,11 @@ const statusTitle = computed(() => {
   overflow: hidden;
 }
 
-.proxy-port-item:hover {
-  border-color: var(--accent-color, #0066cc);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+@media (hover: hover) {
+  .proxy-port-item:hover {
+    border-color: var(--accent-color, #0066cc);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  }
 }
 
 /* Disabled ports keep their normal card appearance (no whole-card dimming);
@@ -319,47 +320,35 @@ const statusTitle = computed(() => {
   transition: all 0.15s;
 }
 
-.port-action-btn:hover:not(:disabled) {
-  color: var(--text-secondary, #666);
-  background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+  .port-action-btn:hover:not(:disabled) {
+    color: var(--text-secondary, #666);
+    background: var(--bg-tertiary, #f0f0f0);
+  }
+  .port-action-btn.open:hover:not(:disabled) {
+    color: var(--accent-color, #0066cc);
+    background: var(--bg-tertiary, #f0f0f0);
+  }
+  .port-action-btn.sandbox:hover:not(:disabled) {
+    color: #8b5cf6;
+    background: var(--bg-tertiary, #f0f0f0);
+  }
+  .port-action-btn.reconnect:hover:not(:disabled) {
+    color: #22c55e;
+    background: var(--bg-tertiary, #f0f0f0);
+  }
+  .port-action-btn.edit:hover:not(:disabled) {
+    color: #f59e0b;
+    background: var(--bg-tertiary, #f0f0f0);
+  }
+  .port-action-btn.delete:hover:not(:disabled) {
+    color: #dc3545;
+    background: var(--bg-tertiary, #f0f0f0);
+  }
 }
 
 .port-action-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
-}
-
-.port-action-btn.open:hover:not(:disabled) {
-  color: var(--accent-color, #0066cc);
-  background: var(--bg-tertiary, #f0f0f0);
-}
-
-.port-action-btn.sandbox:hover:not(:disabled) {
-  color: #8b5cf6;
-  background: var(--bg-tertiary, #f0f0f0);
-}
-
-.port-action-btn.reconnect:hover:not(:disabled) {
-  color: #22c55e;
-  background: var(--bg-tertiary, #f0f0f0);
-}
-
-.port-action-btn.reconnect.spinning svg {
-  animation: spin 1s linear infinite;
-}
-
-.port-action-btn.edit:hover:not(:disabled) {
-  color: #f59e0b;
-  background: var(--bg-tertiary, #f0f0f0);
-}
-
-.port-action-btn.delete:hover:not(:disabled) {
-  color: #dc3545;
-  background: var(--bg-tertiary, #f0f0f0);
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 </style>

@@ -1,5 +1,5 @@
 import { escapeHtml } from '@/utils/html.ts'
-import { splitPath, dirName } from '@/utils/path.ts'
+import { splitPath, dirName, normalizeSlashes, isAbsolutePath, toProjectRelative } from '@/utils/path.ts'
 import { store } from '@/stores/app.ts'
 import { gt } from '@/composables/useLocale'
 import { clearCommitHashCache } from '@/composables/useCommitHashAnnotation.ts'
@@ -126,19 +126,24 @@ export function parseFileUri(rawInput: string): ParsedFileUri {
  * Resolve a relative path against a base directory.
  * Returns project-relative path if within project, absolute path if outside,
  * or null if resolution fails.
+ *
+ * All inputs are expected to be normalized to forward slashes.
+ * Windows drive prefixes ("E:") are preserved as the leading segment so the
+ * result stays a valid absolute drive path (e.g. "E:/git/…") instead of
+ * becoming "/E:/git/…".
  */
 function resolveRelativePathAgainstBase(path: string, baseDir: string, projectRoot: string): string | null {
-    const parts = baseDir.split('/').filter(Boolean)
+    const baseParts = baseDir.split('/').filter(Boolean)
     const segments = path.split('/')
     for (const seg of segments) {
         if (seg === '..') {
-            if (parts.length > 0) parts.pop()
+            if (baseParts.length > 0) baseParts.pop()
             else return null
         } else if (seg !== '.' && seg !== '') {
-            parts.push(seg)
+            baseParts.push(seg)
         }
     }
-    const absolutePath = '/' + parts.join('/')
+    const absolutePath = joinAbsolutePath(baseParts)
     if (projectRoot && absolutePath.startsWith(projectRoot + '/')) {
         return absolutePath.slice(projectRoot.length + 1)
     }
@@ -147,8 +152,22 @@ function resolveRelativePathAgainstBase(path: string, baseDir: string, projectRo
 }
 
 /**
+ * Join path segments into an absolute path, preserving a Windows drive-letter
+ * prefix ("E:") so "E:/git/x" stays "E:/git/x" rather than "/E:/git/x".
+ * Segments are expected to be forward-slash separated.
+ */
+function joinAbsolutePath(parts: string[]): string {
+    if (parts.length > 0 && /^[A-Za-z]:$/.test(parts[0])) {
+        return parts.join('/')
+    }
+    return '/' + parts.join('/')
+}
+
+/**
  * Resolve a relative path against projectRoot only.
  * Returns ResolveResult where primary === fallback (single candidate).
+ *
+ * projectRoot is expected to be normalized to forward slashes.
  */
 function resolveAgainstProjectRoot(path: string, projectRoot: string): ResolveResult | null {
     if (!projectRoot) return null
@@ -162,7 +181,7 @@ function resolveAgainstProjectRoot(path: string, projectRoot: string): ResolveRe
             parts.push(seg)
         }
     }
-    const absolutePath = '/' + parts.join('/')
+    const absolutePath = joinAbsolutePath(parts)
     if (absolutePath.startsWith(projectRoot + '/')) {
         const rel = absolutePath.slice(projectRoot.length + 1)
         return { primary: rel, fallback: rel }
@@ -178,7 +197,9 @@ function resolveAgainstProjectRoot(path: string, projectRoot: string): ResolveRe
  * Returns true if the path should be rejected (glob, URL, env var, bare identifier).
  */
 function shouldRejectPath(path: string): boolean {
-    if (/[*?\\[\]<>]/.test(path) || path.includes('**')) return true
+    // Note: backslash is NOT rejected — it is the Windows path separator
+    // (e.g. E:\git\...). Only glob wildcards and shell chars are rejected.
+    if (/[*?[\]<>]/.test(path) || path.includes('**')) return true
     if (/^https?:\/\//i.test(path)) return true
     if (/\$/.test(path)) return true
     return false
@@ -196,6 +217,18 @@ function shouldRejectPath(path: string): boolean {
  * When baseDir resolves to a different project-internal path, primary = baseDir result, fallback = projectRoot result.
  */
 export function resolveFilePathDual(path: string, projectRoot: string, homeDir?: string, baseDir?: string): ResolveResult | null {
+    // Normalize Windows backslashes to forward slashes so all prefix matching
+    // and segment splitting below is consistent across platforms. The backend
+    // returns absolute paths in platform-native form (E:\… on Windows), and
+    // chat annotations may carry either separator style.
+    // This must happen before the bare-identifier check below, so a Windows
+    // directory path written with backslashes (E:\git\…, no extension) is not
+    // rejected for lacking a "/" separator.
+    path = normalizeSlashes(path)
+    projectRoot = normalizeSlashes(projectRoot)
+    if (homeDir) homeDir = normalizeSlashes(homeDir)
+    if (baseDir) baseDir = normalizeSlashes(baseDir)
+
     // Reject glob patterns, URLs, env vars
     if (shouldRejectPath(path)) return null
     // Reject bare identifiers without / or file extension
@@ -214,8 +247,8 @@ export function resolveFilePathDual(path: string, projectRoot: string, homeDir?:
         return { primary: expanded, fallback: expanded }
     }
 
-    // ── Absolute path ──
-    if (path.startsWith('/')) {
+    // ── Absolute path (Unix "/" or Windows drive/UNC) ──
+    if (isAbsolutePath(path)) {
         if (!projectRoot) return { primary: path, fallback: path }
         if (path.startsWith(projectRoot + '/')) {
             const rel = path.slice(projectRoot.length + 1)
@@ -241,13 +274,13 @@ export function resolveFilePathDual(path: string, projectRoot: string, homeDir?:
     }
 
     // Normalize baseDir: if project-relative, convert to absolute
-    const absBaseDir = baseDir.startsWith('/') ? baseDir : (projectRoot + '/' + baseDir)
+    const absBaseDir = isAbsolutePath(baseDir) ? baseDir : (projectRoot + '/' + baseDir)
 
     // Compute baseDir candidate
     const baseDirResult = resolveRelativePathAgainstBase(path, absBaseDir, projectRoot)
 
     // baseDir failed or resolved to project-external absolute → projectRoot wins
-    if (!baseDirResult || baseDirResult.startsWith('/')) {
+    if (!baseDirResult || isAbsolutePath(baseDirResult)) {
         return projectResult
     }
 
@@ -259,11 +292,11 @@ export function resolveFilePathDual(path: string, projectRoot: string, homeDir?:
     if (!projectResult) return { primary: baseDirResult, fallback: baseDirResult }
 
     // projectResult is project-external → try stripped fallback
-    if (projectResult.primary.startsWith('/')) {
+    if (isAbsolutePath(projectResult.primary)) {
         const stripped = path.replace(/^(?:\.\.\/)+/, '')
         if (stripped !== path) {
             const strippedResult = resolveAgainstProjectRoot(stripped, projectRoot)
-            if (strippedResult && !strippedResult.primary.startsWith('/')) {
+            if (strippedResult && !isAbsolutePath(strippedResult.primary)) {
                 if (baseDirResult === strippedResult.primary) {
                     return strippedResult
                 }
@@ -306,7 +339,7 @@ export const FILE_OPEN_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="
  * Optionally includes line range attributes and a fallback path for dual-candidate verification.
  */
 export function fileOpenButtonHtml(resolvedPath: string, lineStart?: number, lineEnd?: number, fallbackPath?: string): string {
-    const isExternal = resolvedPath.startsWith('/')
+    const isExternal = isAbsolutePath(resolvedPath)
     const lineAttrs = lineStart ? ` data-line-start="${lineStart}"${lineEnd ? ` data-line-end="${lineEnd}"` : ''}` : ''
     const externalClass = isExternal ? ' external' : ''
     const fallbackAttr = fallbackPath && fallbackPath !== resolvedPath ? ` data-fallback-path="${escapeHtml(fallbackPath)}"` : ''
@@ -352,7 +385,7 @@ function extractLineInfoFromText(text: string): { path: string; lineStart?: numb
 
 // ── Path detection regex & helper ───────────────────────────────────────────────
 
-const FILE_PATH_RE = /(?:~?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)+\.[a-zA-Z][a-zA-Z0-9]*|\.\.?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)*\.[a-zA-Z][a-zA-Z0-9]*|[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z][a-zA-Z0-9]*)(?::(\d+)(?:-(\d+))?)?/g
+const FILE_PATH_RE = /(?:~?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)+\.[a-zA-Z][a-zA-Z0-9]*|\.\.?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)*\.[a-zA-Z][a-zA-Z0-9]*|[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z][a-zA-Z0-9]*|[A-Za-z]:[\\/](?![\\/])[^\s<>"')\]]+(?:[\\/][^\s<>"')\]]+)*(?:\.[a-zA-Z][a-zA-Z0-9]*)?)(?::(\d+)(?:-(\d+))?)?/g
 
 /**
  * Check if a string looks like a file path that should be annotated.
@@ -415,7 +448,7 @@ export function annotateFilePaths(
         if (/^(https?:|\/\/|mailto:|tel:|#)/i.test(href)) continue
         const parsed = parseFileUri(href)
         if (!parsed.path) continue
-        const resolved = (parsed.path.startsWith('/') || !baseDir)
+        const resolved = (isAbsolutePath(parsed.path) || !baseDir)
             ? resolveFilePath(parsed.path, projectRoot, homeDir)
             : resolveRelativePath(parsed.path, baseDir)
         if (!resolved) continue
@@ -442,7 +475,7 @@ export function annotateFilePaths(
         code.classList.add('chat-file-path')
         code.setAttribute('data-file-path', result.primary)
         if (result.fallback !== result.primary) code.setAttribute('data-fallback-path', result.fallback)
-        if (result.primary.startsWith('/')) code.setAttribute('data-external', 'true')
+        if (isAbsolutePath(result.primary)) code.setAttribute('data-external', 'true')
         if (lineStart) code.setAttribute('data-line-start', String(lineStart))
         if (lineEnd) code.setAttribute('data-line-end', String(lineEnd))
         code.insertAdjacentHTML('afterend', fileOpenButtonHtml(result.primary, lineStart, lineEnd, result.fallback !== result.primary ? result.fallback : undefined))
@@ -508,7 +541,7 @@ export function annotateFilePaths(
                 span.className = 'chat-file-path'
                 span.setAttribute('data-file-path', part.result.primary)
                 if (part.result.fallback !== part.result.primary) span.setAttribute('data-fallback-path', part.result.fallback)
-                if (part.result.primary.startsWith('/')) span.setAttribute('data-external', 'true')
+                if (isAbsolutePath(part.result.primary)) span.setAttribute('data-external', 'true')
                 if (part.lineStart) span.setAttribute('data-line-start', String(part.lineStart))
                 if (part.lineEnd) span.setAttribute('data-line-end', String(part.lineEnd))
                 span.textContent = part.text
@@ -656,7 +689,7 @@ export async function verifyFilePaths(paths: string[], containerEl: HTMLElement)
                 el.setAttribute('data-file-path', fallback)
                 el.removeAttribute('data-fallback-path')
                 // Update external status
-                const isNowExternal = fallback.startsWith('/')
+                const isNowExternal = isAbsolutePath(fallback)
                 if (isNowExternal) {
                     el.setAttribute('data-external', 'true')
                     el.classList.add('external')
@@ -772,17 +805,18 @@ export async function openFilePath(resolvedPath: string, lineStart?: number, lin
     let targetPath = parsed.path
     if (!targetPath) return false
 
+    // Normalize Windows backslashes so the project-root prefix match and the
+    // external-path check below work for drive-letter paths (C:\…/C:/…).
+    targetPath = normalizeSlashes(targetPath)
+
     const finalLineStart = lineStart ?? parsed.lineStart
     const finalLineEnd = lineEnd ?? parsed.lineEnd
 
     // Normalize an absolute project path (e.g. file:///root/… or /root/…) to
     // a project-relative path so it is opened inside the current project.
-    const root = store.state.projectRoot
-    if (root && targetPath.startsWith(root + '/')) {
-        targetPath = targetPath.slice(root.length + 1)
-    }
+    targetPath = toProjectRelative(targetPath, store.state.projectRoot)
 
-    const isExternal = targetPath.startsWith('/')
+    const isExternal = isAbsolutePath(targetPath)
 
     if (!isExternal) {
         try {
@@ -816,7 +850,7 @@ export async function openFilePath(resolvedPath: string, lineStart?: number, lin
             if (isExternal && type === 'dir') {
                 const { useToast } = await import('@/composables/useToast')
                 const { gt } = await import('@/composables/useLocale')
-                useToast().show(gt('file.toast.externalDirNotSupported'), { type: 'info', icon: '📁', duration: 2000 })
+                useToast().show(gt('file.toast.externalPathNotSupported'), { type: 'info', icon: '📁', duration: 2000 })
                 return false
             }
             if (type === 'dir') {
@@ -852,14 +886,22 @@ export async function navToFileInManager(resolvedPath: string): Promise<boolean>
     let targetPath = parsed.path
     if (!targetPath) return false
 
-    const root = store.state.projectRoot
-    if (root && targetPath.startsWith(root + '/')) {
-        targetPath = targetPath.slice(root.length + 1)
-    }
+    // Normalize Windows backslashes to forward slashes so the project-root
+    // prefix match below works for drive-letter paths (C:\…/C:/…).
+    targetPath = normalizeSlashes(targetPath)
 
-    const isExternal = targetPath.startsWith('/')
+    // Convert an absolute project path to a project-relative one so the /api/dir
+    // listing (whose relative paths resolve against the project root) can
+    // navigate into its parent directory.
+    targetPath = toProjectRelative(targetPath, store.state.projectRoot)
 
-    // Verify the path exists
+    // /api/dir only browses inside the project root, so external paths
+    // (Unix absolute outside the project, or other drives on Windows) cannot
+    // be revealed in the file manager — show the unsupported toast instead.
+    const isExternal = isAbsolutePath(targetPath)
+
+    // Verify the path exists. Project-relative paths resolve against the
+    // project root on the backend; external paths are stat'd directly.
     let pathType: 'file' | 'dir' | 'none' = 'none'
     try {
         const resp = await fetch('/api/file/batch-exists', {
@@ -879,9 +921,11 @@ export async function navToFileInManager(resolvedPath: string): Promise<boolean>
         return false
     }
 
-    if (isExternal && pathType === 'dir') {
+    // External paths (directories AND files) cannot be revealed: /api/dir only
+    // lists directories inside the project root.
+    if (isExternal && (pathType === 'dir' || pathType === 'file')) {
         const { useToast } = await import('@/composables/useToast')
-        useToast().show(gt('file.toast.externalDirNotSupported'), { type: 'info', icon: '📁', duration: 2000 })
+        useToast().show(gt('file.toast.externalPathNotSupported'), { type: 'info', icon: '📁', duration: 2000 })
         return false
     }
 

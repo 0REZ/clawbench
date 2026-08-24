@@ -115,11 +115,17 @@
       <div v-else-if="block.type === 'error'" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <button v-if="isResetableReason(block.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: block.reason })">
+          {{ t('chat.contentBlocks.resetSession') }}
+        </button>
       </div>
       <!-- Warning block: severe (disconnect/timeout/restart) renders as error-level red -->
       <div v-else-if="block.type === 'warning' && isSevereWarning(block)" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <button v-if="isResetableReason(block.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: block.reason })">
+          {{ t('chat.contentBlocks.resetSession') }}
+        </button>
       </div>
       <!-- Warning block: normal (parse errors, stderr) renders as amber -->
       <div v-else-if="block.type === 'warning'" class="chat-warning-card">
@@ -127,6 +133,9 @@
         <span class="warning-text">{{ getWarningText(block) }}</span>
         <button v-if="block.reason === 'restart'" class="warning-continue-btn" @click.stop="$emit('send-message', t('chat.contentBlocks.continue'))">
           {{ t('chat.contentBlocks.continue') }}
+        </button>
+        <button v-if="isResetableReason(block.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: block.reason })">
+          {{ t('chat.contentBlocks.resetSession') }}
         </button>
       </div>
       <!-- Scheduled task card(s) — simplified: click navigates to Tasks tab -->
@@ -201,7 +210,7 @@ import { ref, watch, onUnmounted, computed, onMounted, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { handleToolAction, shouldAutoExpandTool, updateAskSubmitState } from '@/utils/renderToolDetail.ts'
 import { getToolIcon, toolDisplayName } from '@/utils/icons'
-import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, Clock, Archive } from 'lucide-vue-next'
+import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, CheckCircle2, Clock, Archive } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { store } from '@/stores/app.ts'
@@ -269,6 +278,14 @@ async function fetchToolCallInputForAutoExpand(block: any, msgId: string | numbe
 
 // Re-export utility functions with i18n context bound
 function getWarningText(block: any) { return getWarningTextUtil(block, t) }
+
+/** Reasons that indicate a stuck/broken agent session — showing a "reset session"
+ *  button lets the user recycle the agent connection and recover.
+ *  User-initiated cancels (user_cancel/context_cancel) are excluded. */
+const RESETABLE_REASONS = new Set(['empty', 'request_failed', 'backend_exit', 'timeout', 'parse_error', 'panic', 'disconnect'])
+function isResetableReason(reason: string | undefined): boolean {
+  return !!reason && RESETABLE_REASONS.has(reason)
+}
 function statusClass(task: any) { return statusClassUtil(task) }
 function statusLabel(task: any) { return statusLabelUtil(task, t) }
 function statusLabelSimple(task: any) { return statusLabelSimpleUtil(task, t) }
@@ -330,7 +347,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'task-card-click', 'send-message', 'render-flush', 'resume-session', 'reset-session'])
 
 const elapsedSeconds = ref(0)
 let elapsedTimer: ReturnType<typeof setInterval> | null = null
@@ -658,19 +675,15 @@ function getBlockHtml(bi: number, block: any) {
     if (props.staticBlockCache) {
       const cached = props.staticBlockCache.get(props.msgId, bi, block.text)
       if (cached !== undefined) {
-        // If this entry was deferred (skipEnhancements=true), schedule an upgrade
-        // but return the fast-rendered version immediately for instant display
-        if (props.staticBlockCache.isDeferred(props.msgId, bi, block.text)) {
-          props.staticBlockCache.scheduleUpgrade()
-        }
         return cached
       }
-      // First render: use fast path (skipEnhancements=true) for instant display,
-      // then schedule upgrade to full pipeline (KaTeX, annotations, etc.)
-      const fastHtml = props.renderTextBlock(block.text, props.msgId, bi, false, true)
-      props.staticBlockCache.set(props.msgId, bi, block.text, fastHtml, true)
-      props.staticBlockCache.scheduleUpgrade()
-      return fastHtml
+      // First render: use full pipeline directly — no deferred rendering.
+      // Deferred rendering (skipEnhancements=true → scheduleUpgrade) causes
+      // scrollHeight to change after initial paint, creating a visible "snap"
+      // when scrollToBottom corrects for the height difference.
+      const fullHtml = props.renderTextBlock(block.text, props.msgId, bi, false, false)
+      props.staticBlockCache.set(props.msgId, bi, block.text, fullHtml, false)
+      return fullHtml
     }
     return props.renderTextBlock(block.text, props.msgId, bi, false)
   }
@@ -850,8 +863,10 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.thinking-retry-btn:hover {
-  background: rgba(239, 68, 68, 0.08);
+@media (hover: hover) {
+  .thinking-retry-btn:hover {
+    background: rgba(239, 68, 68, 0.08);
+  }
 }
 
 /* Inline cancelled marker inside thinking header — always visible even when thinking is collapsed */
@@ -889,16 +904,16 @@ onUnmounted(() => {
   color: #dc2626;
 }
 
-:root[data-theme="dark"] .chat-error-card {
+:root[data-theme-base="dark"] .chat-error-card {
   border-left-color: #f87171;
   background: rgba(248, 113, 113, 0.1);
 }
 
-:root[data-theme="dark"] .chat-error-card .error-icon {
+:root[data-theme-base="dark"] .chat-error-card .error-icon {
   color: #f87171;
 }
 
-:root[data-theme="dark"] .chat-error-card .error-text {
+:root[data-theme-base="dark"] .chat-error-card .error-text {
   color: #fca5a5;
 }
 
@@ -925,16 +940,16 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
-:root[data-theme="dark"] .chat-warning-card {
+:root[data-theme-base="dark"] .chat-warning-card {
   border-left-color: #fbbf24;
   background: rgba(251, 191, 36, 0.1);
 }
 
-:root[data-theme="dark"] .chat-warning-card .warning-icon {
+:root[data-theme-base="dark"] .chat-warning-card .warning-icon {
   color: #fbbf24;
 }
 
-:root[data-theme="dark"] .chat-warning-card .warning-text {
+:root[data-theme-base="dark"] .chat-warning-card .warning-text {
   color: #fcd34d;
 }
 
@@ -952,8 +967,32 @@ onUnmounted(() => {
   transition: background 0.2s;
 }
 
-.chat-warning-card .warning-continue-btn:hover {
-  background: #d97706;
+@media (hover: hover) {
+  .chat-warning-card .warning-continue-btn:hover {
+    background: #d97706;
+  }
+}
+
+/* Reset-session button — same amber styling as the continue button, matching
+   the warning banner color scheme. */
+.warning-reset-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: #f59e0b;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+@media (hover: hover) {
+  .warning-reset-btn:hover {
+    background: #d97706;
+  }
 }
 
 /* Thinking block — callout style distinct from tool calls */
@@ -968,7 +1007,7 @@ onUnmounted(() => {
   width: 100%;
 }
 
-:root[data-theme="dark"] .chat-thinking {
+:root[data-theme-base="dark"] .chat-thinking {
   --thinking-accent: #a78bfa;
 }
 
@@ -984,9 +1023,11 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.chat-thinking.thinking-collapsed:hover {
-  background: color-mix(in srgb, var(--thinking-accent) 12%, var(--bg-secondary));
-  border-color: color-mix(in srgb, var(--thinking-accent) 35%, var(--border-color));
+@media (hover: hover) {
+  .chat-thinking.thinking-collapsed:hover {
+    background: color-mix(in srgb, var(--thinking-accent) 12%, var(--bg-secondary));
+    border-color: color-mix(in srgb, var(--thinking-accent) 35%, var(--border-color));
+  }
 }
 
 /* Expanded-done state: callout style, header is clickable to collapse */
@@ -994,9 +1035,11 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-.chat-thinking.thinking-expanded-done:hover {
-  background: color-mix(in srgb, var(--thinking-accent) 7%, transparent);
-  border-left-color: color-mix(in srgb, var(--thinking-accent) 65%, transparent);
+@media (hover: hover) {
+  .chat-thinking.thinking-expanded-done:hover {
+    background: color-mix(in srgb, var(--thinking-accent) 7%, transparent);
+    border-left-color: color-mix(in srgb, var(--thinking-accent) 65%, transparent);
+  }
 }
 
 /* Streaming state: callout style */
@@ -1083,9 +1126,11 @@ onUnmounted(() => {
   transition: color 0.15s;
 }
 
-.chat-thinking.thinking-expanded-done:hover .thinking-chevron,
-.chat-thinking.thinking-collapsed:hover .thinking-chevron {
-  color: var(--thinking-accent);
+@media (hover: hover) {
+  .chat-thinking.thinking-expanded-done:hover .thinking-chevron,
+  .chat-thinking.thinking-collapsed:hover .thinking-chevron {
+    color: var(--thinking-accent);
+  }
 }
 
 /* Markdown styles inside thinking inline content */
@@ -1182,8 +1227,10 @@ onUnmounted(() => {
 .chat-tool-call[data-category="permission"] { --tool-accent: #eab308; }
 .chat-tool-call[data-category="fallback"] { --tool-accent: var(--text-muted); }
 
-.chat-tool-call:hover {
-  background: color-mix(in srgb, var(--tool-accent) 12%, var(--bg-secondary));
+@media (hover: hover) {
+  .chat-tool-call:hover {
+    background: color-mix(in srgb, var(--tool-accent) 12%, var(--bg-secondary));
+  }
 }
 
 .chat-tool-call .tool-icon {
@@ -1261,9 +1308,11 @@ onUnmounted(() => {
   transition: box-shadow 0.15s, border-color 0.15s;
 }
 
-.scheduled-task-card:hover {
-  border-color: color-mix(in srgb, var(--accent-color, #4a90d9) 50%, var(--border-color, #dee2e6));
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color, #4a90d9) 15%, transparent);
+@media (hover: hover) {
+  .scheduled-task-card:hover {
+    border-color: color-mix(in srgb, var(--accent-color, #4a90d9) 50%, var(--border-color, #dee2e6));
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color, #4a90d9) 15%, transparent);
+  }
 }
 
 .scheduled-task-card.deleted {
@@ -1377,7 +1426,7 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
-:root[data-theme="dark"] .at-command-badge {
+:root[data-theme-base="dark"] .at-command-badge {
   background: color-mix(in srgb, #a78bfa 15%, transparent);
   color: #a78bfa;
 }
@@ -1402,7 +1451,7 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
-:root[data-theme="dark"] .slash-command-badge {
+:root[data-theme-base="dark"] .slash-command-badge {
   background: color-mix(in srgb, #38bdf8 15%, transparent);
   color: #38bdf8;
 }
@@ -1422,11 +1471,11 @@ onUnmounted(() => {
 /* Non-scoped styles for v-html penetration — tool detail rendering */
 
 
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="bash"]   { --tool-accent: #34d399; }
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="search"] { --tool-accent: #a78bfa; }
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="task"]   { --tool-accent: #fbbf24; }
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="agent"]  { --tool-accent: #f472b6; }
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="skill"]  { --tool-accent: #22d3ee; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="bash"]   { --tool-accent: #34d399; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="search"] { --tool-accent: #a78bfa; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="task"]   { --tool-accent: #fbbf24; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="agent"]  { --tool-accent: #f472b6; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="skill"]  { --tool-accent: #22d3ee; }
 
 /* Tool output section */
 .content-blocks .tool-detail .tool-output-section {
@@ -1451,7 +1500,7 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .tool-output-label {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .tool-output-label {
   background: rgba(74, 222, 128, 0.15);
   color: #4ade80;
 }
@@ -1468,7 +1517,7 @@ onUnmounted(() => {
   color: #16a34a;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .tool-output-success {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .tool-output-success {
   background: rgba(74, 222, 128, 0.15);
   color: #4ade80;
 }
@@ -1478,7 +1527,7 @@ onUnmounted(() => {
   color: #dc2626;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .tool-output-error {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .tool-output-error {
   background: rgba(248, 113, 113, 0.15);
   color: #fca5a5;
 }
@@ -1575,17 +1624,17 @@ onUnmounted(() => {
   white-space: pre;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .edit-diff-del {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .edit-diff-del {
   background: rgba(248, 113, 113, 0.1);
   color: #fca5a5;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .edit-diff-add {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .edit-diff-add {
   background: rgba(74, 222, 128, 0.1);
   color: #86efac;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .edit-diff-replace-all {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .edit-diff-replace-all {
   background: rgba(251, 191, 36, 0.15);
   color: #fbbf24;
 }
@@ -1627,7 +1676,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .file-write-badge {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .file-write-badge {
   background: rgba(96, 165, 250, 0.15);
   color: #93c5fd;
 }
@@ -1686,7 +1735,7 @@ onUnmounted(() => {
   margin-right: 4px;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .bash-prompt {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .bash-prompt {
   color: #4ade80;
 }
 
@@ -1695,8 +1744,8 @@ onUnmounted(() => {
 }
 
 /* ── AskUserQuestion card ── */
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="ask"] { --tool-accent: #fb923c; }
-:root[data-theme="dark"] .content-blocks .chat-tool-call[data-category="permission"] { --tool-accent: #fbbf24; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="ask"] { --tool-accent: #fb923c; }
+:root[data-theme-base="dark"] .content-blocks .chat-tool-call[data-category="permission"] { --tool-accent: #fbbf24; }
 
 .content-blocks .tool-detail .ask-question-view {
   display: flex;
@@ -1722,7 +1771,7 @@ onUnmounted(() => {
   color: #f97316;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-header {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-header {
   color: #fb923c;
 }
 
@@ -1751,9 +1800,11 @@ onUnmounted(() => {
   transition: background 0.15s, border-color 0.15s;
 }
 
-.content-blocks .tool-detail .ask-question-option:hover {
-  background: color-mix(in srgb, #f97316 6%, var(--bg-secondary));
-  border-color: color-mix(in srgb, #f97316 30%, var(--border-color));
+@media (hover: hover) {
+  .content-blocks .tool-detail .ask-question-option:hover {
+    background: color-mix(in srgb, #f97316 6%, var(--bg-secondary));
+    border-color: color-mix(in srgb, #f97316 30%, var(--border-color));
+  }
 }
 
 .content-blocks .tool-detail .ask-question-option.selected {
@@ -1761,7 +1812,7 @@ onUnmounted(() => {
   border-color: #f97316;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-option.selected {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-option.selected {
   background: color-mix(in srgb, #fb923c 12%, var(--bg-secondary));
   border-color: #fb923c;
 }
@@ -1779,7 +1830,7 @@ onUnmounted(() => {
   color: #f97316;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-option.selected .ask-option-indicator {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-option.selected .ask-option-indicator {
   color: #fb923c;
 }
 
@@ -1825,17 +1876,21 @@ onUnmounted(() => {
   transition: background 0.15s, border-color 0.15s;
 }
 
-.content-blocks .tool-detail .ask-question-recommend:hover {
-  background: color-mix(in srgb, #8b5cf6 10%, var(--bg-secondary));
+@media (hover: hover) {
+  .content-blocks .tool-detail .ask-question-recommend:hover {
+    background: color-mix(in srgb, #8b5cf6 10%, var(--bg-secondary));
+  }
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-recommend {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-recommend {
   border-color: #a78bfa;
   color: #a78bfa;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-recommend:hover {
-  background: color-mix(in srgb, #a78bfa 12%, var(--bg-secondary));
+@media (hover: hover) {
+  :root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-recommend:hover {
+    background: color-mix(in srgb, #a78bfa 12%, var(--bg-secondary));
+  }
 }
 
 .content-blocks .tool-detail .ask-question-view.ask-submitted .ask-question-recommend {
@@ -1846,7 +1901,7 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-view.ask-submitted .ask-question-recommend {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-view.ask-submitted .ask-question-recommend {
   background: #a78bfa;
   border-color: #a78bfa;
 }
@@ -1864,8 +1919,10 @@ onUnmounted(() => {
   transition: opacity 0.15s, background 0.15s;
 }
 
-.content-blocks .tool-detail .ask-question-submit:hover:not(:disabled) {
-  background: #ea580c;
+@media (hover: hover) {
+  .content-blocks .tool-detail .ask-question-submit:hover:not(:disabled) {
+    background: #ea580c;
+  }
 }
 
 .content-blocks .tool-detail .ask-question-submit:disabled {
@@ -1880,16 +1937,18 @@ onUnmounted(() => {
   opacity: 1;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-submit {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-submit {
   background: #fb923c;
   border-color: #fb923c;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-submit:hover:not(:disabled) {
-  background: #f97316;
+@media (hover: hover) {
+  :root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-submit:hover:not(:disabled) {
+    background: #f97316;
+  }
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-question-view.ask-submitted .ask-question-submit {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-question-view.ask-submitted .ask-question-submit {
   background: #22c55e;
   border-color: #22c55e;
 }
@@ -1929,7 +1988,7 @@ onUnmounted(() => {
   border-color: #f97316;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .ask-supplementary-input:focus {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .ask-supplementary-input:focus {
   border-color: #fb923c;
 }
 
@@ -1961,7 +2020,7 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .grep-label {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .grep-label {
   background: rgba(167, 139, 250, 0.15);
   color: #a78bfa;
 }
@@ -1995,7 +2054,7 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .grep-mode-tag {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .grep-mode-tag {
   background: rgba(167, 139, 250, 0.12);
   color: #a78bfa;
 }
@@ -2028,7 +2087,7 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .glob-label {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .glob-label {
   background: rgba(167, 139, 250, 0.15);
   color: #a78bfa;
 }
@@ -2093,7 +2152,7 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .web-fetch-label {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .web-fetch-label {
   background: rgba(167, 139, 250, 0.15);
   color: #a78bfa;
 }
@@ -2151,7 +2210,7 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .agent-type-badge {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .agent-type-badge {
   background: rgba(244, 114, 182, 0.15);
   color: #f472b6;
 }
@@ -2251,7 +2310,7 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .skill-call-name {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .skill-call-name {
   color: #22d3ee;
 }
 
@@ -2283,7 +2342,7 @@ onUnmounted(() => {
   color: #d97706;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-header {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-header {
   color: #fbbf24;
 }
 
@@ -2297,7 +2356,7 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-title {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-title {
   color: #fbbf24;
 }
 
@@ -2326,7 +2385,7 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-detail-label {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-detail-label {
   background: rgba(251, 191, 36, 0.15);
   color: #fbbf24;
 }
@@ -2359,8 +2418,10 @@ onUnmounted(() => {
   color: white;
 }
 
-.content-blocks .tool-detail .permission-btn-allow:hover:not(:disabled) {
-  background: #16a34a;
+@media (hover: hover) {
+  .content-blocks .tool-detail .permission-btn-allow:hover:not(:disabled) {
+    background: #16a34a;
+  }
 }
 
 .content-blocks .tool-detail .permission-btn-reject {
@@ -2368,8 +2429,10 @@ onUnmounted(() => {
   color: white;
 }
 
-.content-blocks .tool-detail .permission-btn-reject:hover:not(:disabled) {
-  background: #dc2626;
+@media (hover: hover) {
+  .content-blocks .tool-detail .permission-btn-reject:hover:not(:disabled) {
+    background: #dc2626;
+  }
 }
 
 .content-blocks .tool-detail .permission-btn:disabled {
@@ -2377,22 +2440,26 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-btn-allow {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-btn-allow {
   background: #4ade80;
   color: #1a1a1a;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-btn-allow:hover:not(:disabled) {
-  background: #22c55e;
+@media (hover: hover) {
+  :root[data-theme-base="dark"] .content-blocks .tool-detail .permission-btn-allow:hover:not(:disabled) {
+    background: #22c55e;
+  }
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-btn-reject {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-btn-reject {
   background: #f87171;
   color: #1a1a1a;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-btn-reject:hover:not(:disabled) {
-  background: #ef4444;
+@media (hover: hover) {
+  :root[data-theme-base="dark"] .content-blocks .tool-detail .permission-btn-reject:hover:not(:disabled) {
+    background: #ef4444;
+  }
 }
 
 .content-blocks .tool-detail .permission-approval-view.permission-responded .permission-btn-allow {
@@ -2424,12 +2491,12 @@ onUnmounted(() => {
   color: #991b1b;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-result-approved {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-result-approved {
   background: #166534;
   color: #dcfce7;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-result-denied {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-result-denied {
   background: #991b1b;
   color: #fee2e2;
 }
@@ -2449,7 +2516,7 @@ onUnmounted(() => {
   border: 1px solid #bbf7d0;
 }
 
-:root[data-theme="dark"] .content-blocks .tool-detail .permission-result-auto-approved {
+:root[data-theme-base="dark"] .content-blocks .tool-detail .permission-result-auto-approved {
   background: #166534;
   color: #dcfce7;
   border-color: #15803d;

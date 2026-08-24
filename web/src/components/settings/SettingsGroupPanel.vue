@@ -1,8 +1,7 @@
 <template>
   <div class="group-panel">
-    <!-- Panel title separator -->
     <div class="group-panel__card">
-    <!-- Panel title as header row inside the card -->
+    <!-- Panel title inside the card, distinct from card body and page background -->
     <div v-if="showTitle && config.titleKey" class="group-panel__header">
       {{ t(config.titleKey) }}
     </div>
@@ -37,7 +36,7 @@
     </div>
 
     <!-- Field list with section headers -->
-    <template v-for="entry in renderList" :key="entry.key">
+    <template v-for="(entry, idx) in renderList" :key="entry.key">
       <div v-if="entry.type === 'header'" class="group-panel__section-header">{{ entry.label }}</div>
       <SettingsItem
         v-else
@@ -61,7 +60,7 @@
         :rebuildable="isRagRebuildField(entry.field)"
         :rebuilding="isVectorRebuildField(entry.field) ? ragVectorRebuilding : ragFtsRebuilding"
         :rebuild-title="getRebuildTitle(entry.field)"
-        :no-divider="false"
+        :no-divider="isLastInSection(idx)"
         @update:model-value="(v: unknown) => setLocalValue(entry.field.key, v)"
         @edit-toggle="(open: boolean) => handleEditToggle(entry.field.key, open)"
         @desc-toggle="(open: boolean) => handleEditToggle(entry.field.key, open)"
@@ -169,6 +168,7 @@ import { useFrp } from '@/composables/useFrp'
 import { useRagStatus } from '@/composables/useRagStatus'
 import { useDialog } from '@/composables/useDialog'
 import { apiPost } from '@/utils/api'
+import { THEME_IDS as TERMINAL_THEME_IDS, formatThemeName } from '@/utils/terminalThemes'
 
 // ── Props & Emits ──
 
@@ -329,6 +329,12 @@ const renderList = computed((): RenderEntry[] => {
   return result
 })
 
+/** A field is the last in its section if the next entry is a section header or it's the last entry. */
+function isLastInSection(idx: number): boolean {
+  const next = renderList.value[idx + 1]
+  return !next || next.type === 'header'
+}
+
 // ── Settings config for getLocalValue fallback ──
 
 const { getServerValueWithDefault, localConfig: settingsLocalConfig } = useSettingsConfig()
@@ -389,6 +395,13 @@ function resolveFieldOptions(field: ItemSpec): { label: string; value: unknown }
     if (voiceOpts.length > 0) {
       return voiceOpts.map(o => ({ label: t(o.labelKey), value: o.value }))
     }
+  }
+  // Dynamic terminal theme options
+  if (field.key === 'terminalTheme') {
+    return [
+      { label: t('terminal.themeFollowApp'), value: 'auto' },
+      ...TERMINAL_THEME_IDS.map(id => ({ label: formatThemeName(id), value: id })),
+    ]
   }
   // Static options from field spec
   if (field.options) {
@@ -514,15 +527,16 @@ watch(localValues, () => {
   background: transparent;
 }
 
-/* Panel title as a header row inside the card */
+/* Panel title inside the card, distinct from card body and page background */
 .group-panel__header {
   font-size: 12px;
   color: var(--text-muted);
-  padding: 8px 16px;
+  padding: 5px 16px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 500;
   position: relative;
+  background: var(--bg-tertiary);
 }
 .group-panel__header::after {
   content: '';
@@ -536,7 +550,7 @@ watch(localValues, () => {
 
 /* Compact iOS-style card container */
 .group-panel__card {
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   background: var(--bg-primary);
   margin-bottom: 8px;
@@ -622,7 +636,7 @@ watch(localValues, () => {
 }
 
 .group-panel__switch-input:checked + .group-panel__switch-track {
-  background: var(--color-green);
+  background: var(--accent-color);
 }
 
 .group-panel__switch-input:checked + .group-panel__switch-track::after {
@@ -701,10 +715,11 @@ watch(localValues, () => {
 .group-panel__section-header {
   font-size: 12px;
   color: var(--text-muted);
-  padding: 8px 16px 4px;
+  padding: 5px 16px 3px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 500;
+  background: var(--bg-tertiary);
 }
 
 /* Sticky save bar (I3 fix) */

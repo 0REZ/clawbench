@@ -41,9 +41,7 @@
             </div>
             </Teleport>
           </div>
-          <button v-if="toolbarInlineIds.includes('refresh')" class="toolbar-btn" @click="$emit('refresh')" :title="t('nav.refresh')">
-            <RotateCw :size="16" />
-          </button>
+          <RefreshButton v-if="toolbarInlineIds.includes('refresh')" icon="RotateCw" :size="16" class="toolbar-btn" :loading="dirRefreshing" :disabled="dirRefreshing" :title="t('nav.refresh')" @click="triggerRefresh()" />
           <button v-if="toolbarInlineIds.includes('newFile')" class="toolbar-btn" @click="doNewFile()" :title="t('file.context.newFile')">
             <FilePlus :size="16" />
           </button>
@@ -78,7 +76,7 @@
             <Teleport to="body">
               <div v-if="moreMenuOpen" class="toolbar-dropdown" :style="moreMenuStyle" @click.stop>
               <template v-if="toolbarCollapsedIds.includes('refresh')">
-                <button class="toolbar-dropdown-item" @click="$emit('refresh'); moreMenuOpen = false">
+                <button class="toolbar-dropdown-item refresh-spin" :class="{ 'refresh-spin--active': dirRefreshing }" :disabled="dirRefreshing" @click="triggerRefresh(); moreMenuOpen = false">
                   <RotateCw :size="14" />
                   <span>{{ t('nav.refresh') }}</span>
                 </button>
@@ -414,7 +412,9 @@
 
 <script setup>
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import { ref, computed, reactive, inject, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { isRefreshing } from '@/composables/useFileRefresh'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
@@ -427,6 +427,7 @@ import {
   numberedName,
 } from '@/utils/fileManager.ts'
 import { store } from '@/stores/app.ts'
+import { navToFileInManager } from '@/composables/useFilePathAnnotation.ts'
 import { localConfig, setLocalConfig, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { useDialog } from '@/composables/useDialog.ts'
@@ -454,6 +455,16 @@ const TAG = 'FileManager'
 const { dirUploading, dirUploadProgress, dirUploadTotal, dirUploadDone, cancelDirUpload, handleFileSelectToDir, handleFileDropToDir, handleFolderSelect, handleFolderDropExpanded, downloadDirAsTree } = useFileUpload()
 const uploadInputRef = ref(null)
 const folderInputRef = ref(null)
+
+// Refresh button spin feedback. The refresh request is delegated to the parent
+// (App.vue handleRefresh → refreshCurrentFile) which deliberately runs with
+// noLoading=true to avoid flicker, so dirLoading never lights up. Drive the
+// button from the shared isRefreshing ref so the spin tracks the real load.
+const dirRefreshing = computed(() => isRefreshing.value)
+function triggerRefresh() {
+  if (dirRefreshing.value) return
+  emit('refresh')
+}
 
 // Drag-and-drop state (shared between file-list and file-grid)
 const isDragOver = ref(false)
@@ -625,7 +636,10 @@ const dialog = useDialog()
 const jumpOpen = ref(false)
 async function handleJumpConfirm(path) {
   jumpOpen.value = false
-  await store.navigateToDir(path)
+  // Jump supports files and directories, relative and absolute paths, but
+  // only inside the project root. navToFileInManager handles path
+  // normalization, existence checks and the out-of-project toast.
+  await navToFileInManager(path)
 }
 const { addAttachedFile, hasAttachedFile, removeAttachedFileByPath } = useChatContext()
 const { terminalRuntimeEnabled } = useTerminalStatus()
@@ -1567,7 +1581,7 @@ async function handleKeydown(e) {
     // Ctrl+R / F5 — refresh
     if ((isCtrl && e.key === 'r') || e.key === 'F5') {
         e.preventDefault()
-        emit('refresh')
+        triggerRefresh()
         return
     }
 
@@ -1730,8 +1744,10 @@ function scrollSelectedIntoView(path) {
     color: var(--text-muted, #999);
     transition: color 0.15s;
 }
-.fm-copy-icon:hover {
-    color: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+    .fm-copy-icon:hover {
+        color: var(--accent-color, #4a90d9);
+    }
 }
 
 .dir-nav {
@@ -1798,9 +1814,11 @@ function scrollSelectedIntoView(path) {
     padding: 0;
 }
 
-.ms-info-btn:hover {
-    background: var(--bg-secondary, #e0e0e0);
-    color: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+    .ms-info-btn:hover {
+        background: var(--bg-secondary, #e0e0e0);
+        color: var(--accent-color, #4a90d9);
+    }
 }
 
 .ms-select-all-btn {
@@ -1863,8 +1881,10 @@ function scrollSelectedIntoView(path) {
     flex-shrink: 0;
 }
 
-.ms-action-btn:hover {
-    background: var(--bg-secondary, #e0e0e0);
+@media (hover: hover) {
+    .ms-action-btn:hover {
+        background: var(--bg-secondary, #e0e0e0);
+    }
 }
 
 .ms-action-btn.ms-danger {
@@ -1872,16 +1892,20 @@ function scrollSelectedIntoView(path) {
     border-color: #fecaca;
 }
 
-.ms-action-btn.ms-danger:hover {
-    background: #fef2f2;
+@media (hover: hover) {
+    .ms-action-btn.ms-danger:hover {
+        background: #fef2f2;
+    }
 }
 
-[data-theme="dark"] .ms-action-btn.ms-danger {
+[data-theme-base="dark"] .ms-action-btn.ms-danger {
     border-color: #7f1d1d;
 }
 
-[data-theme="dark"] .ms-action-btn.ms-danger:hover {
-    background: #2d1b1b;
+@media (hover: hover) {
+    [data-theme-base="dark"] .ms-action-btn.ms-danger:hover {
+        background: #2d1b1b;
+    }
 }
 
 /* ── File list area ── */
@@ -1923,11 +1947,12 @@ function scrollSelectedIntoView(path) {
     flex-shrink: 0;
 }
 
-.toolbar-btn:hover {
-    background: var(--bg-secondary, #e0e0e0);
-    color: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+    .toolbar-btn:hover {
+        background: var(--bg-secondary, #e0e0e0);
+        color: var(--accent-color, #4a90d9);
+    }
 }
-
 .toolbar-btn.active {
     background: var(--accent-color, #4a90d9);
     color: #fff;
@@ -1947,10 +1972,11 @@ function scrollSelectedIntoView(path) {
     opacity: 0.35;
     cursor: not-allowed;
 }
-
-.toolbar-btn:disabled:hover {
-    background: transparent;
-    color: var(--text-secondary, #666);
+@media (hover: hover) {
+    .toolbar-btn:disabled:hover {
+        background: transparent;
+        color: var(--text-secondary, #666);
+    }
 }
 
 .toolbar-btn svg {
@@ -1986,8 +2012,10 @@ function scrollSelectedIntoView(path) {
     -webkit-user-select: none;
 }
 
-.file-item:hover {
-    background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+    .file-item:hover {
+        background: var(--bg-tertiary, #f0f0f0);
+    }
 }
 
 .file-item.active {
@@ -2003,8 +2031,10 @@ function scrollSelectedIntoView(path) {
     color: var(--accent-color, #4a90d9);
 }
 
-.file-item.dir-item:hover {
-    background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+    .file-item.dir-item:hover {
+        background: var(--bg-tertiary, #f0f0f0);
+    }
 }
 
 .file-item.dir-item.drag-target {
@@ -2020,8 +2050,10 @@ function scrollSelectedIntoView(path) {
     color: white;
 }
 
-.file-item.dir-item.active:hover {
-    background: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+    .file-item.dir-item.active:hover {
+        background: var(--accent-color, #4a90d9);
+    }
 }
 
 .file-item.dir-item .file-meta {
@@ -2094,9 +2126,11 @@ function scrollSelectedIntoView(path) {
     transition: transform 0.15s, background 0.15s;
 }
 
-.attach-badge:hover {
-    transform: scale(1.2);
-    background: #ef4444;
+@media (hover: hover) {
+    .attach-badge:hover {
+        transform: scale(1.2);
+        background: #ef4444;
+    }
 }
 
 .symlink-badge {
@@ -2202,8 +2236,10 @@ function scrollSelectedIntoView(path) {
     -webkit-user-select: none;
 }
 
-.grid-item:hover {
-    background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+    .grid-item:hover {
+        background: var(--bg-tertiary, #f0f0f0);
+    }
 }
 
 .grid-item.grid-active {
@@ -2258,9 +2294,11 @@ function scrollSelectedIntoView(path) {
     transition: transform 0.15s, background 0.15s;
 }
 
-.grid-thumb .attach-badge:hover {
-    transform: scale(1.2);
-    background: #ef4444;
+@media (hover: hover) {
+    .grid-thumb .attach-badge:hover {
+        transform: scale(1.2);
+        background: #ef4444;
+    }
 }
 
 .grid-thumb img {
@@ -2303,25 +2341,25 @@ function scrollSelectedIntoView(path) {
 }
 
 /* Grid multi-select check */
-[data-theme="dark"] .grid-thumb {
+[data-theme-base="dark"] .grid-thumb {
     background: var(--bg-secondary, #2a2a2a);
 }
 
-[data-theme="dark"] .grid-item.grid-dir .grid-thumb {
+[data-theme-base="dark"] .grid-item.grid-dir .grid-thumb {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, var(--bg-secondary, #2a2a2a));
 }
 
-[data-theme="dark"] .grid-item.grid-active .grid-thumb,
-[data-theme="dark"] .grid-item.ctx-highlight .grid-thumb {
+[data-theme-base="dark"] .grid-item.grid-active .grid-thumb,
+[data-theme-base="dark"] .grid-item.ctx-highlight .grid-thumb {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 18%, var(--bg-secondary, #2a2a2a));
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #4a90d9) 50%, transparent);
 }
 
-[data-theme="dark"] .file-item.active .file-icon-wrap {
+[data-theme-base="dark"] .file-item.active .file-icon-wrap {
     background: color-mix(in srgb, white 30%, var(--accent-color, #4a90d9));
 }
 
-[data-theme="dark"] .file-item.ctx-highlight .file-icon-wrap {
+[data-theme-base="dark"] .file-item.ctx-highlight .file-icon-wrap {
     background: color-mix(in srgb, white 30%, var(--accent-color, #4a90d9));
 }
 
@@ -2366,9 +2404,11 @@ function scrollSelectedIntoView(path) {
     transition: all 0.15s;
 }
 
-.dir-upload-cancel:hover {
-    background: var(--danger-color, #ef4444);
-    color: #fff;
+@media (hover: hover) {
+    .dir-upload-cancel:hover {
+        background: var(--danger-color, #ef4444);
+        color: #fff;
+    }
 }
 
 .dir-upload-progress-count {
@@ -2395,7 +2435,7 @@ function scrollSelectedIntoView(path) {
     border-radius: 4px;
 }
 
-[data-theme="dark"] .drop-overlay {
+[data-theme-base="dark"] .drop-overlay {
     background: color-mix(in srgb, var(--accent-color, #4a90d9) 12%, var(--bg-primary, #1a1a1a));
 }
 
@@ -2416,7 +2456,7 @@ function scrollSelectedIntoView(path) {
     border-radius: 4px;
 }
 
-[data-theme="dark"] .paste-overlay {
+[data-theme-base="dark"] .paste-overlay {
     background: color-mix(in srgb, var(--success-color, #22c55e) 12%, var(--bg-primary, #1a1a1a));
 }
 
@@ -2460,8 +2500,10 @@ function scrollSelectedIntoView(path) {
     white-space: nowrap;
 }
 
-.toolbar-dropdown .toolbar-dropdown-item:hover {
-    background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+    .toolbar-dropdown .toolbar-dropdown-item:hover {
+        background: var(--bg-tertiary, #f0f0f0);
+    }
 }
 
 .toolbar-dropdown .toolbar-dropdown-item.active {

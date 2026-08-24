@@ -115,6 +115,59 @@ func TestSessionExecutor_Finalize_TransportFromSessionOverride(t *testing.T) {
 	}
 }
 
+func TestSessionExecutor_Finalize_TriggerChatSummarization(t *testing.T) {
+	// Finalize should trigger triggerChatSummarization after FinalizeStreamingMessage
+	// succeeds (msgID > 0), so that assistant messages get reading summaries.
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+
+	// Look up the streaming message ID created by setupExecutorSession
+	streamMsgID := GetStreamingMessageID(sid)
+	if streamMsgID == 0 {
+		t.Fatal("expected streaming message placeholder to exist")
+	}
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: streamMsgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+	// Simulate blocks accumulated during the event loop (Finalize reads e.blocks)
+	executor.blocks = []model.ContentBlock{{Type: "text", Text: "The answer is 42."}}
+
+	result := RunResult{
+		ReceivedTerminal: true,
+		Blocks:           executor.blocks,
+		Metadata:         &ai.Metadata{},
+	}
+	finalized := executor.Finalize(result, nil)
+
+	if finalized.MsgID == 0 {
+		t.Fatal("expected non-zero MsgID after Finalize")
+	}
+
+	// After Finalize, triggerChatSummarization should have been called,
+	// so the message should have a summary in the DB.
+	summary, found := GetSummary("chat_message", finalized.MsgID)
+	if !found {
+		t.Fatalf("expected summary to be generated for msgID=%d after Finalize", finalized.MsgID)
+	}
+	if summary == "" {
+		t.Fatal("expected non-empty summary after Finalize")
+	}
+}
+
 func TestSessionExecutor_Finalize_ModelFromSession(t *testing.T) {
 	// Cover line 360-362: model from session model.
 	setupExecutorDB(t)
@@ -2120,6 +2173,263 @@ func setupStreamingMessage(t *testing.T, sessionID string) int64 {
 	return msgID
 }
 
+func TestSessionExecutor_ContentReset(t *testing.T) {
+	// Verify that a content_reset event clears accumulated blocks, rawOutput,
+	// and responseMetadata — this is the mechanism that prevents content
+	// duplication when ACPBackend retries a Prompt after a peer disconnect.
+	// Without content_reset, the first Prompt's partial events would remain
+	// in the executor's blocks, and the retry Prompt's full output would be
+	// appended, producing duplicated text.
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+
+	events := []ai.StreamEvent{
+		{Type: "content", Content: "stale partial from first prompt"},
+		{Type: "metadata", Meta: &ai.Metadata{InputTokens: 999}},
+		{Type: "raw_output", RawOutput: "stale raw"},
+		{Type: "content_reset"}, // simulates the retry boundary
+		{Type: "content", Content: "fresh content from retry"},
+		{Type: "metadata", Meta: &ai.Metadata{InputTokens: 100, OutputTokens: 50}},
+		{Type: "raw_output", RawOutput: "fresh raw"},
+		{Type: "done"},
+	}
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:        ModeScheduled,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+		ChatRequest: ai.ChatRequest{Prompt: "hello"},
+	}
+	ch := make(chan ai.StreamEvent, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	close(ch)
+
+	executor := NewSessionExecutor(ctx, cfg)
+	result := executor.RunWithChannel(ch)
+
+	if !result.ReceivedTerminal {
+		t.Fatal("expected ReceivedTerminal=true")
+	}
+
+	// Only the retry's content should survive
+	if len(result.Blocks) != 1 {
+		t.Fatalf("expected 1 text block after content_reset, got %d: %+v", len(result.Blocks), result.Blocks)
+	}
+	if result.Blocks[0].Text != "fresh content from retry" {
+		t.Fatalf("expected 'fresh content from retry', got %q", result.Blocks[0].Text)
+	}
+
+	// Only the retry's metadata should survive
+	if result.Metadata == nil {
+		t.Fatal("expected Metadata to be set")
+	}
+	if result.Metadata.InputTokens != 100 {
+		t.Fatalf("expected InputTokens=100 from retry metadata, got %d", result.Metadata.InputTokens)
+	}
+
+	// Only the retry's raw output should survive
+	if result.RawOutput != "fresh raw" {
+		t.Fatalf("expected RawOutput='fresh raw', got %q", result.RawOutput)
+	}
+}
+
+func TestSessionExecutor_ContentReset_DBReset(t *testing.T) {
+	// Verify that content_reset also resets the streaming message in DB to empty,
+	// and deletes stale tool call rows, so stale data doesn't persist if the
+	// retry fails.
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+
+	// Find the streaming message ID created by setupExecutorSession
+	var streamingMsgID int64
+	err := dbRead.QueryRow(
+		"SELECT id FROM chat_history WHERE session_id = ? AND role = 'assistant' AND streaming = 1 ORDER BY id DESC LIMIT 1",
+		sid,
+	).Scan(&streamingMsgID)
+	if err != nil {
+		t.Fatalf("failed to find streaming message: %v", err)
+	}
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: streamingMsgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// First, accumulate some blocks and insert a tool call row, then flush to DB
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: "stale"})
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Read", ID: "stale-tool-1", Done: true},
+	})
+	executor.upsertToolCallToDB(ai.StreamEvent{
+		Type: "tool_use",
+		Tool: &ai.ToolCall{Name: "Read", ID: "stale-tool-1", Done: true},
+	})
+	executor.flushStreamingMessage()
+
+	// Verify stale content in DB
+	var content string
+	err = dbRead.QueryRow(
+		"SELECT content FROM chat_history WHERE session_id = ? AND streaming = 1",
+		sid,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("failed to query streaming message: %v", err)
+	}
+	if !contains(content, "stale") {
+		t.Fatalf("expected stale content in DB before reset, got: %q", content)
+	}
+
+	// Verify stale tool call row exists
+	var toolCount int
+	err = dbRead.QueryRow(
+		"SELECT COUNT(*) FROM chat_tool_calls WHERE message_id = ?",
+		streamingMsgID,
+	).Scan(&toolCount)
+	if err != nil {
+		t.Fatalf("failed to query tool calls: %v", err)
+	}
+	if toolCount != 1 {
+		t.Fatalf("expected 1 tool call row before reset, got %d", toolCount)
+	}
+
+	// Now simulate content_reset
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content_reset"})
+
+	// Verify blocks were cleared
+	if len(executor.blocks) != 0 {
+		t.Fatalf("expected empty blocks after content_reset, got %d", len(executor.blocks))
+	}
+
+	// Verify DB was reset to empty blocks
+	err = dbRead.QueryRow(
+		"SELECT content FROM chat_history WHERE session_id = ? AND streaming = 1",
+		sid,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("failed to query streaming message after reset: %v", err)
+	}
+	if contains(content, "stale") {
+		t.Fatalf("expected stale content to be cleared from DB after reset, got: %q", content)
+	}
+	if !contains(content, `"blocks":[]`) {
+		t.Fatalf("expected empty blocks in DB after reset, got: %q", content)
+	}
+
+	// Verify stale tool call rows were deleted
+	err = dbRead.QueryRow(
+		"SELECT COUNT(*) FROM chat_tool_calls WHERE message_id = ?",
+		streamingMsgID,
+	).Scan(&toolCount)
+	if err != nil {
+		t.Fatalf("failed to query tool calls after reset: %v", err)
+	}
+	if toolCount != 0 {
+		t.Fatalf("expected 0 tool call rows after content_reset, got %d", toolCount)
+	}
+}
+
+func TestSessionExecutor_ContentReset_WithToolAndThinking(t *testing.T) {
+	// Verify content_reset clears tool_use and thinking blocks too, and
+	// that toolStarts is properly reset so stale duration entries don't
+	// affect the retry's tool duration calculations.
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+
+	events := []ai.StreamEvent{
+		{Type: "thinking", Content: "stale thinking"},
+		{Type: "tool_use", Tool: &ai.ToolCall{Name: "Read", ID: "tool-1", Done: false}},
+		{Type: "content", Content: "stale text"},
+		{Type: "content_reset"},
+		// Retry output
+		{Type: "thinking", Content: "fresh thinking"},
+		{Type: "thinking_done"},
+		{Type: "content", Content: "fresh text"},
+		{Type: "tool_use", Tool: &ai.ToolCall{Name: "Bash", ID: "tool-2", Done: true, DurationMs: 100}},
+		{Type: "tool_result", Tool: &ai.ToolCall{ID: "tool-2", Output: "ok", Status: "success", Done: true}},
+		{Type: "done"},
+	}
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:        ModeScheduled,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+		ChatRequest: ai.ChatRequest{Prompt: "hello"},
+	}
+	ch := make(chan ai.StreamEvent, len(events))
+	for _, e := range events {
+		ch <- e
+	}
+	close(ch)
+
+	executor := NewSessionExecutor(ctx, cfg)
+	result := executor.RunWithChannel(ch)
+
+	if !result.ReceivedTerminal {
+		t.Fatal("expected ReceivedTerminal=true")
+	}
+
+	// Should only have retry's blocks: 1 thinking + 1 text + 1 tool_use
+	// (MergeConsecutiveThinkingBlocks + thinking_done in buildResult)
+	toolCount := 0
+	textCount := 0
+	thinkingCount := 0
+	for _, b := range result.Blocks {
+		switch b.Type {
+		case "tool_use":
+			toolCount++
+		case "text":
+			textCount++
+		case "thinking":
+			thinkingCount++
+		}
+	}
+	if toolCount != 1 {
+		t.Fatalf("expected 1 tool_use block after content_reset, got %d", toolCount)
+	}
+	if textCount != 1 {
+		t.Fatalf("expected 1 text block after content_reset, got %d", textCount)
+	}
+	if thinkingCount != 1 {
+		t.Fatalf("expected 1 thinking block after content_reset, got %d", thinkingCount)
+	}
+
+	// Verify stale tool IDs are gone from toolStarts
+	if _, exists := executor.toolStarts["tool-1"]; exists {
+		t.Fatal("stale toolStarts entry 'tool-1' should have been cleared by content_reset")
+	}
+}
+
 func TestSessionExecutor_Finalize_SlimsThinkingToDB(t *testing.T) {
 	setupExecutorDB(t)
 	model.Agents = map[string]*model.Agent{
@@ -2206,5 +2516,158 @@ func TestSessionExecutor_Finalize_SlimsThinkingToDB(t *testing.T) {
 	}
 	if rec.Text != "Let me think about this deeply." {
 		t.Errorf("record text = %q", rec.Text)
+	}
+}
+
+// TestSessionExecutor_FlushIntervalLimit verifies that a burst of incremental
+// events does not trigger a DB write for every event — persistence is
+// rate-limited to once per flushInterval. With lastFlush zeroed, the first
+// event flushes immediately; a rapid burst right after must NOT write again
+// until the interval elapses.
+func TestSessionExecutor_FlushIntervalLimit(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:        ModeInteractive,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+		ChatRequest: ai.ChatRequest{Prompt: "hello"},
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// First event: lastFlush is zero value, so time.Since(zero) is huge and
+	// this flushes immediately — the streaming row gets content.
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content", Content: "first"})
+	assertStreamingContentContains(t, sid, "first")
+
+	// Record the flush time and fire a rapid burst within flushInterval.
+	// None of these should trigger an additional flush (rate-limited).
+	executor.lastFlush = time.Now()
+	for range 50 {
+		executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content", Content: "burst"})
+	}
+	assertStreamingContentContains(t, sid, "first")
+	assertStreamingContentNotContains(t, sid, "burst")
+
+	// After the interval elapses, the next event flushes again.
+	executor.lastFlush = time.Now().Add(-flushInterval - time.Millisecond)
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content", Content: "after"})
+	assertStreamingContentContains(t, sid, "burst")
+	assertStreamingContentContains(t, sid, "after")
+}
+
+// TestSessionExecutor_FlushSkipsThinking verifies flushStreamingMessage excludes
+// thinking blocks from the DB content while streaming, and that Finalize
+// restores them to chat_thinking.
+func TestSessionExecutor_FlushSkipsThinking(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	streamingMsgID := GetStreamingMessageID(sid)
+	if streamingMsgID == 0 {
+		t.Fatal("expected non-zero streaming message ID from setup")
+	}
+
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: streamingMsgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	// Accumulate a thinking block plus normal content.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "secret thinking"})
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: "visible text"})
+
+	// Streaming flush must NOT persist the thinking block.
+	executor.flushStreamingMessage()
+	var content string
+	err := dbRead.QueryRow("SELECT content FROM chat_history WHERE id = ?", streamingMsgID).Scan(&content)
+	if err != nil {
+		t.Fatalf("read streaming content: %v", err)
+	}
+	if strings.Contains(content, "secret thinking") {
+		t.Error("streaming DB content should not include thinking text")
+	}
+	if !strings.Contains(content, "visible text") {
+		t.Error("streaming DB content should include text blocks")
+	}
+
+	// Finalize restores thinking into chat_thinking.
+	result := executor.buildResult(true, time.Now())
+	finalized := executor.Finalize(result, nil)
+	if finalized.MsgID == 0 {
+		t.Fatal("expected non-zero message ID after Finalize")
+	}
+
+	var thinkIDs []string
+	rows, err := dbRead.Query("SELECT think_id, text FROM chat_thinking WHERE message_id = ?", finalized.MsgID)
+	if err != nil {
+		t.Fatalf("query chat_thinking: %v", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var tid, text string
+		if err := rows.Scan(&tid, &text); err != nil {
+			t.Fatalf("scan thinking row: %v", err)
+		}
+		thinkIDs = append(thinkIDs, tid)
+		if text == "secret thinking" {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate thinking rows: %v", err)
+	}
+	if !found {
+		t.Errorf("expected thinking text in chat_thinking, records=%v", thinkIDs)
+	}
+}
+
+func assertStreamingContentContains(t *testing.T, sid, want string) {
+	t.Helper()
+	var content string
+	err := dbRead.QueryRow(
+		"SELECT content FROM chat_history WHERE session_id = ? AND streaming = 1",
+		sid,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("read streaming content: %v", err)
+	}
+	if !strings.Contains(content, want) {
+		t.Errorf("streaming content missing %q, got %q", want, content)
+	}
+}
+
+func assertStreamingContentNotContains(t *testing.T, sid, notWant string) {
+	t.Helper()
+	var content string
+	err := dbRead.QueryRow(
+		"SELECT content FROM chat_history WHERE session_id = ? AND streaming = 1",
+		sid,
+	).Scan(&content)
+	if err != nil {
+		t.Fatalf("read streaming content: %v", err)
+	}
+	if strings.Contains(content, notWant) {
+		t.Errorf("streaming content should not contain %q, got %q", notWant, content)
 	}
 }

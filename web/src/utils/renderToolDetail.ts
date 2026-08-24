@@ -13,7 +13,9 @@ import { appLog } from '@/utils/appLog'
 const TAG = 'renderToolDetail'
 import { gt } from '@/composables/useLocale'
 import { store } from '@/stores/app.ts'
-import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
+import { renderMarkdown } from '@/composables/useMarkdownRenderer.ts'
+import { verifyFilePaths } from '@/composables/useFilePathAnnotation.ts'
+import { verifyCommitHashes } from '@/composables/useCommitHashAnnotation.ts'
 import { getSessionId } from '@/composables/useSessionIdentity.ts'
 import { copyText } from '@/utils/clipboard.ts'
 
@@ -547,11 +549,12 @@ function renderAgentCall(input: ToolInput): string {
 
   // Prompt (full content, markdown rendered)
   if (prompt) {
-    const rendered = renderMarkdownHtml(prompt, {
+    const { html: rendered, detectedPaths, detectedSHAs } = renderMarkdown(prompt, {
       sanitize: true,
-      skipEnhancements: true,
       wrapTables: false,
     })
+    _pendingInputPaths.push(...detectedPaths)
+    _pendingInputSHAs.push(...detectedSHAs)
     html += `<div class="agent-call-prompt">${rendered}</div>`
   }
 
@@ -960,7 +963,9 @@ function renderDeepThink(input: ToolInput): string {
     html += '</div>'
 
     if (prompt) {
-      const rendered = renderMarkdownHtml(prompt, { sanitize: true, skipEnhancements: true, wrapTables: false })
+      const { html: rendered, detectedPaths, detectedSHAs } = renderMarkdown(prompt, { sanitize: true, wrapTables: false })
+      _pendingInputPaths.push(...detectedPaths)
+      _pendingInputSHAs.push(...detectedSHAs)
       html += `<div class="agent-call-prompt">${rendered}</div>`
     }
   }
@@ -980,7 +985,10 @@ function renderDeepThinkOutput(output: string): string {
     .replace(/^<task[^>]*>\n?/, '')
     .replace(/\n?<\/task>$/, '')
     .trim()
-  return renderMarkdownHtml(result, { sanitize: true, skipEnhancements: true, wrapTables: false })
+  const { html, detectedPaths, detectedSHAs } = renderMarkdown(result, { sanitize: true, wrapTables: false })
+  _pendingOutputPaths.push(...detectedPaths)
+  _pendingOutputSHAs.push(...detectedSHAs)
+  return `<div class="agent-call-prompt">${html}</div>`
 }
 
 /**
@@ -1294,6 +1302,9 @@ export function shouldAutoExpandTool(toolName: string): boolean {
  * Looks up the tool name in the renderer registry; falls back to JSON.
  */
 export function formatToolInput(input: unknown, toolName?: string, blockCtx?: ToolBlockCtx): string {
+  // Clear pending input annotations from any previous render
+  _pendingInputPaths = []
+  _pendingInputSHAs = []
   if (toolName) {
     const renderer = TOOL_RENDERERS[toolName.toLowerCase()]
     if (renderer && input && typeof input === 'object') {
@@ -1368,6 +1379,54 @@ function renderCodeOutput(output: string): string {
   return `<div class="tool-output-content"><pre>${annotated}</pre></div>`
 }
 
+// Accumulated detected paths/SHAs from tool Markdown rendering.
+// Separate accumulators for input and output to avoid cross-contamination
+// when formatToolInput and formatToolOutput are called in sequence.
+let _pendingInputPaths: string[] = []
+let _pendingInputSHAs: string[] = []
+let _pendingOutputPaths: string[] = []
+let _pendingOutputSHAs: string[] = []
+
+/**
+ * After tool input/output HTML is inserted into the DOM, call this to verify
+ * file path and commit hash annotations detected during rendering.
+ * @param scope 'input' or 'output' — which accumulator to drain
+ * @param containerEl the specific DOM element to scope verification to
+ */
+export function verifyToolOutputAnnotations(scope: 'input' | 'output', containerEl: HTMLElement): void {
+  const paths = scope === 'input' ? _pendingInputPaths : _pendingOutputPaths
+  const shas = scope === 'input' ? _pendingInputSHAs : _pendingOutputSHAs
+  // Drain accumulators
+  if (scope === 'input') {
+    _pendingInputPaths = []
+    _pendingInputSHAs = []
+  } else {
+    _pendingOutputPaths = []
+    _pendingOutputSHAs = []
+  }
+  const uniquePaths = [...new Set(paths)]
+  const uniqueSHAs = [...new Set(shas)]
+  if (uniquePaths.length === 0 && uniqueSHAs.length === 0) return
+  // nextTick so the HTML is in the DOM before we query
+  import('vue').then(({ nextTick }) => {
+    nextTick(() => {
+      if (uniquePaths.length > 0) verifyFilePaths(uniquePaths, containerEl)
+      if (uniqueSHAs.length > 0) verifyCommitHashes(uniqueSHAs, containerEl)
+    })
+  })
+}
+
+/**
+ * Render tool output as Markdown (for Agent, SendMessage, Skill, etc.).
+ * Uses .agent-call-prompt class to reuse the same Markdown styling as tool input.
+ */
+function renderMarkdownOutput(output: string): string {
+  const { html, detectedPaths, detectedSHAs } = renderMarkdown(output, { sanitize: true, wrapTables: false })
+  _pendingOutputPaths.push(...detectedPaths)
+  _pendingOutputSHAs.push(...detectedSHAs)
+  return `<div class="agent-call-prompt">${html}</div>`
+}
+
 /**
  * Render a simple success/error status message.
  * For tools that just return "ok" or short status strings.
@@ -1384,18 +1443,21 @@ function renderStatusOutput(output: string): string {
 }
 
 /**
- * Try to parse output as JSON and pretty-print it.
+ * Try to parse output as JSON and pretty-print with syntax highlighting.
  * If parsing fails, treat as plain text.
+ * Note: localhost URL annotation is skipped for highlighted JSON because hljs
+ * splits string values into <span> tokens, and regex-based annotation would
+ * produce invalid HTML by inserting tags mid-span.
  */
 function renderSmartOutput(output: string): string {
   const trimmed = output.trim()
-  // Try JSON parse + pretty print
+  // Try JSON parse + pretty print with highlighting
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(trimmed)
       const pretty = JSON.stringify(parsed, null, 2)
-      const escaped = escapeHtml(pretty)
-      return `<div class="tool-output-content"><pre>${escaped}</pre></div>`
+      const highlighted = highlightCode(pretty, 'json')
+      return `<div class="tool-output-content"><pre>${highlighted}</pre></div>`
     } catch {
       // Not valid JSON, treat as plain text
     }
@@ -1411,6 +1473,9 @@ function renderSmartOutput(output: string): string {
  */
 export function formatToolOutput(output: string, toolName?: string): string {
   if (!output) return ''
+  // Clear pending output annotations from any previous render
+  _pendingOutputPaths = []
+  _pendingOutputSHAs = []
   // Check for a registered output renderer
   if (toolName) {
     const renderer = TOOL_OUTPUT_RENDERERS[toolName.toLowerCase()]
@@ -1447,17 +1512,17 @@ registerToolOutputRenderer('ls', renderCodeOutput)
 registerToolOutputRenderer('websearch', renderCodeOutput)
 registerToolOutputRenderer('webfetch', renderCodeOutput)
 
-// Agent/communication output
-registerToolOutputRenderer('agent', renderCodeOutput)
-registerToolOutputRenderer('sendmessage', renderCodeOutput)
+// Agent/communication output — Markdown rendered
+registerToolOutputRenderer('agent', renderMarkdownOutput)
+registerToolOutputRenderer('sendmessage', renderMarkdownOutput)
 
 // Search/indexing tools
 registerToolOutputRenderer('lsp', renderCodeOutput)
 registerToolOutputRenderer('monitor', renderCodeOutput)
 
-// Skill/task output
-registerToolOutputRenderer('skill', renderCodeOutput)
-registerToolOutputRenderer('skillmanage', renderCodeOutput)
+// Skill/task output — Markdown rendered
+registerToolOutputRenderer('skill', renderMarkdownOutput)
+registerToolOutputRenderer('skillmanage', renderMarkdownOutput)
 registerToolOutputRenderer('todowrite', renderStatusOutput)
 registerToolOutputRenderer('todoread', renderCodeOutput)
 registerToolOutputRenderer('deepthink', renderDeepThinkOutput)

@@ -23,6 +23,7 @@ func TestIsSupportedFile(t *testing.T) {
 		{"office docx", "report.docx", true},
 		{"office xlsx", "data.xlsx", true},
 		{"office pptx", "slides.pptx", true},
+		{"excalidraw file", "diagram.excalidraw", true},
 		{"unsupported file", "data.bin", false},
 		{"empty string", "", false},
 	}
@@ -74,6 +75,39 @@ func TestDetectSubtype(t *testing.T) {
 	t.Run("JSONC extension with openapi", func(t *testing.T) {
 		got := model.DetectSubtype("api.jsonc", `{"openapi":"3.0.0","info":{"title":"Test"}}`)
 		assert.Equal(t, model.SubtypeOpenAPI, got)
+	})
+
+	t.Run("Excalidraw JSON", func(t *testing.T) {
+		got := model.DetectSubtype("diagram.excalidraw", `{"type":"excalidraw","version":2,"source":"https://excalidraw.com","elements":[],"appState":{},"files":{}}`)
+		assert.Equal(t, model.SubtypeExcalidraw, got)
+	})
+
+	t.Run("Excalidraw extension suffices regardless of content", func(t *testing.T) {
+		// A brand-new blank .excalidraw file has empty content, but the
+		// extension alone must identify it as Excalidraw — otherwise it falls
+		// back to plain text and the editor never opens.
+		got := model.DetectSubtype("diagram.excalidraw", "")
+		assert.Equal(t, model.SubtypeExcalidraw, got)
+	})
+
+	t.Run("Excalidraw malformed JSON", func(t *testing.T) {
+		got := model.DetectSubtype("diagram.excalidraw", `{type: invalid}`)
+		assert.Equal(t, model.SubtypeExcalidraw, got)
+	})
+
+	t.Run("Excalidraw case insensitive extension", func(t *testing.T) {
+		got := model.DetectSubtype("DIAGRAM.EXCALIDRAW", `{}`)
+		assert.Equal(t, model.SubtypeExcalidraw, got)
+	})
+
+	t.Run("Excalidraw large file with embedded image", func(t *testing.T) {
+		// Diagrams with base64-embedded images can exceed maxSpecSniffSize.
+		// The extension must be recognized BEFORE the size check so such
+		// files still open in the Excalidraw editor.
+		big := `{"type":"excalidraw","elements":[],"files":{"img":{"dataURL":"data:image/png;base64,` +
+			strings.Repeat("A", 1<<20) + `"}}}`
+		got := model.DetectSubtype("big.excalidraw", big)
+		assert.Equal(t, model.SubtypeExcalidraw, got)
 	})
 
 	t.Run("Non YAML/JSON file", func(t *testing.T) {
@@ -316,6 +350,10 @@ func TestIsTextFile(t *testing.T) {
 		// Regex
 		{"regex", "pattern.regex", true},
 		{"regexp", "pattern.regexp", true},
+
+		// Excalidraw
+		{"excalidraw", "diagram.excalidraw", true},
+		{"excalidraw case insensitive", "DIAGRAM.EXCALIDRAW", true},
 
 		// Case insensitivity
 		{"case insensitive .GO", "main.GO", true},

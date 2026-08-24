@@ -23,7 +23,7 @@ interface TaskExecData {
 }
 
 // Module-level singleton refs (shared across all consumers)
-const currentView = ref<'list' | 'settings' | 'history'>('list')
+const currentView = ref<'list' | 'settings'>('list')
 const selectedTaskId = ref<number | null>(null)
 const selectedExecId = ref<string | null>(null)
 const selectedExecData = ref<TaskExecData | null>(null)
@@ -88,7 +88,7 @@ function onTaskCompleted(task: TaskItem) {
             // Non-critical
         }
     }
-    // Navigate to task history on click
+    // Navigate to the tasks tab on click
     const navigateToHistory = () => {
         if (switchTabCallback) switchTabCallback('tasks')
     }
@@ -253,14 +253,7 @@ export function useTaskTab() {
         currentView.value = 'settings'
         execDetailOpen.value = false
         formViewOpen.value = false
-    }
-
-    function navigateToTaskHistory(taskId: number) {
-        selectedTaskId.value = taskId
-        currentView.value = 'history'
-        execDetailOpen.value = false
-        formViewOpen.value = false
-        // Clear unread badge for this task — user is viewing its execution history
+        // Clear unread badge for this task — user is viewing its details (incl. history)
         markTaskRead(taskId)
     }
 
@@ -270,8 +263,6 @@ export function useTaskTab() {
         } else if (execDetailOpen.value) {
             execDetailOpen.value = false
             selectedExecId.value = null
-        } else if (currentView.value === 'history') {
-            currentView.value = 'settings'
         } else {
             currentView.value = 'list'
             selectedTaskId.value = null
@@ -293,25 +284,6 @@ export function useTaskTab() {
         // Always refresh from API — the list data may lack content/sessionId,
         // and running executions need the latest content for live preview
         refreshExecDetail()
-    }
-
-    /** Open the latest execution detail for a task directly (skip history list) */
-    async function openLatestExecDetail(taskId: number) {
-        selectedTaskId.value = taskId
-        currentView.value = 'settings'
-        formViewOpen.value = false
-        markTaskRead(taskId)
-        try {
-            const resp = await fetch(`/api/tasks/${taskId}/executions?limit=1`)
-            if (!resp.ok) return
-            const data = await resp.json() as { executions: TaskExecData[] }
-            const latest = (data.executions || [])[0]
-            if (latest) {
-                openExecDetail(String(latest.id), latest)
-            }
-        } catch {
-            // Silently ignore
-        }
     }
 
     function closeExecDetail() {
@@ -361,7 +333,7 @@ export function useTaskTab() {
 
     return {
         // Navigation state
-        currentView: currentView as Ref<'list' | 'settings' | 'history'>,
+        currentView: currentView as Ref<'list' | 'settings'>,
         selectedTaskId,
         selectedExecId,
         selectedExecData,
@@ -371,11 +343,9 @@ export function useTaskTab() {
 
         // Navigation methods
         navigateToTaskSettings,
-        navigateToTaskHistory,
         navigateToList,
         goBack,
         openExecDetail,
-        openLatestExecDetail,
         closeExecDetail,
         refreshExecDetail,
         openCreateForm,

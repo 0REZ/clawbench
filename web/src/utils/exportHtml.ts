@@ -175,11 +175,12 @@ function serializeCss(_markdownBodyEl: HTMLElement): string {
             if (rule instanceof CSSStyleRule) {
                 const sel = rule.selectorText
                 // Include rules that target markdown-body or its descendants,
-                // :root custom property blocks, or [data-theme="dark"] variable blocks
+                // :root custom property blocks, or theme variable blocks
                 if (
                     sel.includes('.markdown-body') ||
                     sel === ':root' ||
                     sel.startsWith('[data-theme') ||
+                    sel.startsWith('[data-theme-base') ||
                     sel.includes('.markdown-content') ||
                     sel.includes('.hljs') ||
                     sel.includes('.katex') ||
@@ -218,11 +219,11 @@ function serializeCss(_markdownBodyEl: HTMLElement): string {
                 ) {
                     let text = rule.cssText
 
-                    // Rewrite [data-hljs-theme="light"] → [data-theme="light"]
-                    // Rewrite [data-hljs-theme="dark"]  → [data-theme="dark"]
+                    // Rewrite [data-hljs-theme="light"] → [data-theme-base="light"]
+                    // Rewrite [data-hljs-theme="dark"]  → [data-theme-base="dark"]
                     // This allows hljs overrides to respond to the theme toggle
-                    text = text.replace(/\[data-hljs-theme="light"\]/g, '[data-theme="light"]')
-                    text = text.replace(/\[data-hljs-theme="dark"\]/g, '[data-theme="dark"]')
+                    text = text.replace(/\[data-hljs-theme="light"\]/g, '[data-theme-base="light"]')
+                    text = text.replace(/\[data-hljs-theme="dark"\]/g, '[data-theme-base="dark"]')
 
                     rules.push(text)
                 }
@@ -245,8 +246,8 @@ function serializeCss(_markdownBodyEl: HTMLElement): string {
                         const sel = inner.selectorText
                         if (sel.includes('.markdown-body') || sel.includes('.hljs') || sel.includes('.katex')) {
                             let text = inner.cssText
-                            text = text.replace(/\[data-hljs-theme="light"\]/g, '[data-theme="light"]')
-                            text = text.replace(/\[data-hljs-theme="dark"\]/g, '[data-theme="dark"]')
+                            text = text.replace(/\[data-hljs-theme="light"\]/g, '[data-theme-base="light"]')
+                            text = text.replace(/\[data-hljs-theme="dark"\]/g, '[data-theme-base="dark"]')
                             innerRules.push(text)
                         }
                     } else if (inner instanceof CSSKeyframesRule) {
@@ -270,13 +271,27 @@ function serializeCss(_markdownBodyEl: HTMLElement): string {
 
 /**
  * Replace unrendered Mermaid blocks (pre.mermaid without SVG child)
- * with error indicators.
+ * with error indicators. Also handles data-mermaid-error containers
+ * (from retry-enabled error fallbacks) by replacing them with static
+ * error divs (stripping the retry button which is meaningless in export).
  */
 function handleFailedMermaid(clone: HTMLElement): void {
     const mermaidBlocks = clone.querySelectorAll('pre.mermaid, div.mermaid, code.mermaid')
     for (const block of Array.from(mermaidBlocks)) {
         // If it contains an SVG, Mermaid rendered successfully
         if (block.querySelector('svg')) continue
+
+        // Already an error container with data-mermaid-error — replace with
+        // a static error div (strip retry button, avoid double-nesting)
+        if ((block as HTMLElement).dataset.mermaidError) {
+            const errorDiv = document.createElement('div')
+            errorDiv.className = 'mermaid-error'
+            const em = document.createElement('em')
+            em.textContent = 'Diagram failed to render'
+            errorDiv.appendChild(em)
+            block.parentNode?.replaceChild(errorDiv, block)
+            continue
+        }
 
         // Mermaid failed — wrap in error div
         const errorDiv = document.createElement('div')
@@ -299,11 +314,11 @@ function handleFailedMermaid(clone: HTMLElement): void {
  * 2. Render the SVG for the OPPOSITE theme using mermaid.render()
  * 3. Wrap both SVGs in a container with .mermaid-light / .mermaid-dark classes
  *
- * CSS rules then show/hide the correct version based on [data-theme].
+ * CSS rules then show/hide the correct version based on [data-theme-base].
  */
 async function renderDualThemeMermaid(clone: HTMLElement): Promise<void> {
-    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light'
-    const oppositeTheme = currentTheme === 'dark' ? 'default' : 'dark'
+    const currentThemeBase = document.documentElement.getAttribute('data-theme-base') || 'light'
+    const oppositeTheme = currentThemeBase === 'dark' ? 'default' : 'dark'
 
     const mermaidBlocks = Array.from(clone.querySelectorAll('div.mermaid'))
     if (mermaidBlocks.length === 0) return
@@ -344,7 +359,7 @@ async function renderDualThemeMermaid(clone: HTMLElement): Promise<void> {
                 // Current theme SVG — insert directly (content is from trusted
                 // Mermaid renderer; we already stripped <script>/<iframe> from clone)
                 const currentDiv = clone.ownerDocument.createElement('div')
-                currentDiv.className = currentTheme === 'dark' ? 'mermaid-dark' : 'mermaid-light'
+                currentDiv.className = currentThemeBase === 'dark' ? 'mermaid-dark' : 'mermaid-light'
                 currentDiv.innerHTML = existingSvg.outerHTML
 
                 // Opposite theme SVG — also insert directly, then strip
@@ -379,7 +394,7 @@ async function renderDualThemeMermaid(clone: HTMLElement): Promise<void> {
         // Always restore mermaid to the current app theme
         mermaid.initialize({
             startOnLoad: false,
-            theme: currentTheme === 'dark' ? 'dark' : 'default',
+            theme: currentThemeBase === 'dark' ? 'dark' : 'default',
             securityLevel: 'loose',
             fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         })
@@ -692,7 +707,7 @@ export async function exportRenderedHtml(options: ExportOptions): Promise<Export
     const title = escapeHtml(fileName.replace(/\.md$/i, ''))
     const bodyContent = clone.outerHTML
 
-    // Use light theme as default for exported HTML
+    // Use light theme base as default for exported HTML
     const currentAppTheme = 'light'
 
     // Theme toggle button (sun/moon icon)
@@ -707,26 +722,26 @@ export async function exportRenderedHtml(options: ExportOptions): Promise<Export
     updateIcon();
     btn.addEventListener('click', function(e) {
         e.stopPropagation();
-        var current = document.documentElement.getAttribute('data-theme') || 'light';
+        var current = document.documentElement.getAttribute('data-theme-base') || 'light';
         var next = current === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
+        document.documentElement.setAttribute('data-theme-base', next);
         localStorage.setItem('exported-html-theme', next);
         updateIcon();
     });
     function updateIcon() {
-        var isDark = (document.documentElement.getAttribute('data-theme') || 'light') === 'dark';
+        var isDark = (document.documentElement.getAttribute('data-theme-base') || 'light') === 'dark';
         moonIcon.style.display = isDark ? 'none' : 'block';
         sunIcon.style.display = isDark ? 'block' : 'none';
     }
 })();`
 
     const html = `<!DOCTYPE html>
-<html lang="en" data-theme="${currentAppTheme}">
+<html lang="en" data-theme-base="${currentAppTheme}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<script>/* Restore saved theme before CSS renders to prevent flash */(function(){var t=localStorage.getItem('exported-html-theme');if(t)document.documentElement.setAttribute('data-theme',t)})()</script>
+<script>/* Restore saved theme before CSS renders to prevent flash */(function(){var t=localStorage.getItem('exported-html-theme');if(t)document.documentElement.setAttribute('data-theme-base',t)})()</script>
 <style>
 /* ─── Universal box-sizing reset (matches app base.css) ─── */
 *, *::before, *::after { box-sizing: border-box; }
@@ -754,8 +769,8 @@ body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'S
 .mermaid-dual svg { max-width: 100%; height: auto; }
 .mermaid-dual .mermaid-light { display: block; }
 .mermaid-dual .mermaid-dark { display: none; }
-[data-theme="dark"] .mermaid-dual .mermaid-light { display: none; }
-[data-theme="dark"] .mermaid-dual .mermaid-dark { display: block; }
+[data-theme-base="dark"] .mermaid-dual .mermaid-light { display: none; }
+[data-theme-base="dark"] .mermaid-dual .mermaid-dark { display: block; }
 
 /* ─── Copied feedback text ─── */
 .copied-feedback { font-size: 11px; color: var(--accent-color); }

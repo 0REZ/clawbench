@@ -381,8 +381,10 @@ defineExpose({ focusSearchInput })
   color: #fff;
 }
 
-.mode-btn:not(.active):hover {
-  background: var(--bg-secondary, #f8f9fa);
+@media (hover: hover) {
+  .mode-btn:not(.active):hover {
+    background: var(--bg-secondary, #f8f9fa);
+  }
 }
 
 .session-search-content {
@@ -439,8 +441,10 @@ defineExpose({ focusSearchInput })
   transition: background 0.1s;
 }
 
-.session-search-item:hover {
-  background: var(--bg-secondary, #f8f9fa);
+@media (hover: hover) {
+  .session-search-item:hover {
+    background: var(--bg-secondary, #f8f9fa);
+  }
 }
 
 .session-search-item-active {
@@ -537,8 +541,15 @@ defineExpose({ focusSearchInput })
   margin-right: 2px;
 }
 
-.detail-back-btn:hover {
-  background: rgba(0, 102, 204, 0.1);
+@media (hover: hover) {
+  .detail-back-btn:hover {
+    background: rgba(0, 102, 204, 0.1);
+  }
+
+  .acp-resume-header-btn:hover {
+    background: rgba(0, 102, 204, 0.1);
+    color: var(--accent-color, #4a90d9);
+  }
 }
 
 /* ACP "load external session" button — right side of the search header */
@@ -558,11 +569,6 @@ defineExpose({ focusSearchInput })
   margin-left: auto;
   flex-shrink: 0;
   white-space: nowrap;
-}
-
-.acp-resume-header-btn:hover {
-  background: rgba(0, 102, 204, 0.1);
-  color: var(--accent-color, #4a90d9);
 }
 
 /* Higher specificity than .bs-header-title so flex:1 reliably wins, keeping the
@@ -702,8 +708,14 @@ defineExpose({ focusSearchInput })
   transition: opacity 0.15s;
 }
 
-.detail-footer-row .detail-resume-btn:hover {
-  opacity: 0.85;
+@media (hover: hover) {
+  .detail-footer-row .detail-resume-btn:hover {
+    opacity: 0.85;
+  }
+
+  .detail-destroy-btn:hover {
+    opacity: 0.8;
+  }
 }
 
 .detail-footer-row .detail-resume-btn:active {
@@ -728,10 +740,6 @@ defineExpose({ focusSearchInput })
   transition: opacity 0.15s;
 }
 
-.detail-destroy-btn:hover {
-  opacity: 0.8;
-}
-
 .detail-destroy-btn:active {
   opacity: 0.6;
 }
@@ -739,39 +747,41 @@ defineExpose({ focusSearchInput })
 
 <style>
 /* Dark theme overrides — non-scoped for [data-theme] selector */
-[data-theme="dark"] .session-search-item-preview mark {
+[data-theme-base="dark"] .session-search-item-preview mark {
   background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }
 
-[data-theme="dark"] .detail-chunk-text mark.search-hl {
+[data-theme-base="dark"] .detail-chunk-text mark.search-hl {
   background: color-mix(in srgb, var(--accent-color, #0066cc) 28%, transparent);
   color: inherit;
 }
 
-[data-theme="dark"] .detail-chunk {
+[data-theme-base="dark"] .detail-chunk {
   border-color: rgba(255, 255, 255, 0.06);
 }
 
-[data-theme="dark"] .mode-selector {
+[data-theme-base="dark"] .mode-selector {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
-[data-theme="dark"] .mode-btn {
+[data-theme-base="dark"] .mode-btn {
   background: transparent;
   color: var(--text-muted, #999);
 }
 
-[data-theme="dark"] .mode-btn:not(:last-child) {
+[data-theme-base="dark"] .mode-btn:not(:last-child) {
   border-right-color: rgba(255, 255, 255, 0.12);
 }
 
-[data-theme="dark"] .mode-btn.active {
+[data-theme-base="dark"] .mode-btn.active {
   background: var(--accent-color, #4a90d9);
   color: #fff;
 }
 
-[data-theme="dark"] .mode-btn:not(.active):hover {
-  background: rgba(255, 255, 255, 0.06);
+@media (hover: hover) {
+  [data-theme-base="dark"] .mode-btn:not(.active):hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
 }
 </style>

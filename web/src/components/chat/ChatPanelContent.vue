@@ -28,6 +28,7 @@
       @toggle-summary="handleToggleSummary"
       @ensure-content="(msg) => ensureMessageContent(msg)"
       @resume-session="handleResumeSession"
+      @reset-session="handleResetSession"
       @fork-from-message="handleForkFromMessage"
     />
 
@@ -77,6 +78,7 @@
       :quotes="stagedQuotes"
       :messages="renderedMessages"
       :autoSpeechEnabled="autoSpeech.enabled.value"
+      :refreshingSession="refreshingSession"
       :currentSessionId="identity.currentSessionId.value"
       :chatUnreadCount="store.state.chatUnreadCount"
       :chatRunning="identity.runningSessions.value.size > 0"
@@ -104,6 +106,7 @@
       @archive-session="() => manager.archiveCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @destroy-session="() => manager.destroyCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @open-user-msg-index="handleOpenUserMsgIndex"
+      @refresh-session="handleRefreshSession"
       @switch-model="handleSwitchModel"
       @switch-thinking-effort="handleSwitchThinkingEffort"
       @switch-mode="handleSwitchMode"
@@ -960,7 +963,7 @@ async function handleToggleSummary(msgId) {
     }
     const mode = (localConfig.messageDisplayMode === 'original' ? 'original' : 'summary')
     const showingNow = isShowingSummary(msg, mode)
-    // Switching FROM summary TO original: if blocks weren't loaded (content omitted in view=summary), fetch the full message.
+    // Switching FROM summary TO original: if blocks weren't loaded (content stripped by backend), fetch the full message.
     // Reset _loadAttempted so a previously failed load can be retried on explicit user action.
     if (showingNow && (!msg.blocks || msg.blocks.length === 0)) {
         msg._loadAttempted = false
@@ -991,7 +994,7 @@ async function generateMessageSummary(msg) {
 }
 
 // Lazily fetch the full message content when the original view is requested but
-// blocks were omitted (view=summary omits content for summarized messages).
+// blocks were omitted (backend strips content for summarized messages).
 async function ensureMessageContent(msg) {
     if (msg._loadingOriginal) return
     msg._loadingOriginal = true
@@ -1000,6 +1003,12 @@ async function ensureMessageContent(msg) {
         const { blocks } = render.parseAssistantContent(full.content || '')
         msg.blocks = blocks
         if (full.files) msg.files = full.files
+        // The newly filled blocks grow the container height, but the browser
+        // keeps the old scrollTop — so a force-scrolled view (session switch
+        // back into this chat) ends up visually stuck mid-list. Re-sync once:
+        // - at bottom (session switch): isAtBottom=true → pinned back to bottom
+        // - user manually toggled original while reading: isAtBottom=false → keep position
+        scrollBottom()
     } catch (err) {
         appLog.w(TAG, 'failed to load original content', err)
     } finally {
@@ -1008,6 +1017,44 @@ async function ensureMessageContent(msg) {
     }
 }
 
+
+// Reload/reopen the current session from the ActionBar refresh button.
+// Delegates to session.handleManualRefresh which mirrors the WS reconnect
+// resync flow (refresh runningSessions + branch on running state) but ALWAYS
+// forces a loadHistory so every refresh re-renders against the authoritative
+// server state — messages, stream subscription, mode/usage/commands all stay
+// consistent with the backend.
+const refreshingSession = ref(false)
+async function handleRefreshSession() {
+  if (refreshingSession.value || !identity.currentSessionId.value) return
+  refreshingSession.value = true
+  try {
+    await session.handleManualRefresh()
+  } catch (err) {
+    appLog.w(TAG, 'failed to refresh session', err)
+  } finally {
+    refreshingSession.value = false
+  }
+}
+
+// Reset a stuck ACP agent session: kill the connection so the next prompt
+// starts a fresh agent session, then re-send the last user message to recover.
+async function handleResetSession() {
+    const sid = identity.currentSessionId.value
+    if (!sid) return
+    const confirmed = await dialog.confirm(t('chat.contentBlocks.resetSessionConfirm'))
+    if (!confirmed) return
+    try {
+        await apiPost('/api/ai/session/reset', { sessionId: sid })
+        toast.show(t('chat.contentBlocks.resetSessionDone'), { icon: '🔄', type: 'success' })
+        // Re-send the last persisted user message so the conversation continues
+        // in the freshly-reset agent session.
+        const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user' && !m.pending)
+        if (lastUserMsg?.content) await sendMessage(lastUserMsg.content)
+    } catch {
+        toast.show(t('chat.contentBlocks.resetSessionFailed'), { icon: '⚠️', type: 'error' })
+    }
+}
 
 // Resume a session from RAG search results (direct event, no detail drawer)
 async function handleResumeSession({ sessionId, sessionTitle }) {
@@ -1091,7 +1138,6 @@ onMounted(() => {
     })
 
     session.loadSessionsOnce()
-    document.addEventListener('visibilitychange', session.handleVisibilityChange)
     window.addEventListener('clawbench-reconnect', session.handleWsReconnect)
     window.addEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.addEventListener('keydown', handleCtrlArrowSessionSwitch)
@@ -1108,7 +1154,6 @@ onUnmounted(() => {
     // Clear tool update debounce timers
     for (const timer of toolUpdateFetchDebounce.values()) clearTimeout(timer)
     toolUpdateFetchDebounce.clear()
-    document.removeEventListener('visibilitychange', session.handleVisibilityChange)
     window.removeEventListener('clawbench-reconnect', session.handleWsReconnect)
     window.removeEventListener('clawbench-summary-update', handleSummaryUpdate)
     document.removeEventListener('keydown', handleCtrlArrowSessionSwitch)
@@ -1324,8 +1369,10 @@ onUnmounted(() => {
   cursor: pointer;
   transition: all 0.15s;
 }
-.tool-call-retry-btn:hover {
-  background: var(--bg-tertiary, #e5e7eb);
-  color: var(--text-primary, #111827);
+@media (hover: hover) {
+  .tool-call-retry-btn:hover {
+    background: var(--bg-tertiary, #e5e7eb);
+    color: var(--text-primary, #111827);
+  }
 }
 </style>

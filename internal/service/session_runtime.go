@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ var (
 var (
 	sessionCancels       sync.Map // map[string]context.CancelFunc
 	sessionCancelReasons sync.Map // map[string]string — "user", "disconnect"
+	// terminalPushDone tracks whether a terminal push notification has already been
+	// claimed for a session. Guarded via LoadOrStore so only one of the done/cancel
+	// race paths can send a push; cleared when a new run starts (TrySetSessionRunning).
+	terminalPushDone sync.Map // map[string]struct{}
 )
 
 // responsePreviewMaxRunes is an alias for model.ResponsePreviewMaxRunes for local use.
@@ -39,6 +44,14 @@ const responsePreviewMaxRunes = model.ResponsePreviewMaxRunes
 // EmitSessionEvent broadcasts a session_update event to connected clients.
 // toolName and toolInput are optional and only used for "permission_pending" status.
 func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolNameAndInput ...string) {
+	emitSessionEvent(sessionID, status, hasNewMessages, true, toolNameAndInput...)
+}
+
+// emitSessionEvent is EmitSessionEvent with an explicit push control. Callers
+// that manage their own terminal-push guard (e.g. CancelSession) pass pushEnabled
+// based on whether they won the guard, so a duplicate "cancelled" push is avoided
+// while the WS broadcast always happens.
+func emitSessionEvent(sessionID, status string, hasNewMessages bool, pushEnabled bool, toolNameAndInput ...string) {
 	mgr := ws.GetManager()
 	if mgr == nil {
 		return
@@ -82,21 +95,93 @@ func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolNameAnd
 		Event: "session_update",
 		Data:  data,
 	}
-	// Write-ahead: persist before broadcast so event log has no gaps
-	// Skip when push_mode is "disabled" — no notifications desired
-	if model.ConfigInstance.PushMode != "disabled" {
+	// Write-ahead: persist before broadcast so event log has no gaps.
+	// Skip when push_mode is "disabled" — no notifications desired.
+	// When pushEnabled is false (a terminal state already reported elsewhere, e.g.
+	// the goroutine pushed "completed" before CancelSession ran), neither the
+	// notifiable pending event nor a push is produced — only the live WS broadcast.
+	if model.ConfigInstance.PushMode != "disabled" && pushEnabled {
 		StoreNotifiableEvent(msg)
 	}
 	mgr.BroadcastEvent(msg)
 
-	// DingTalk push notification for session events.
-	// Pass raw (untruncated) preview — DingTalk package applies its own limit.
-	// If push succeeds, remove from pending_events to avoid duplicate
-	// Android notification when the app comes back online.
+	if !pushEnabled {
+		return
+	}
+
+	pushSessionEvent(sessionID, status, msg, data, responsePreviewRaw)
+}
+
+// pushSessionEvent sends the DingTalk/Feishu push for a session event. Pass the
+// raw (untruncated) preview — DingTalk/Feishu packages apply their own limit.
+// If the push succeeds, the pending event is removed to avoid a duplicate
+// Android notification when the app comes back online.
+func pushSessionEvent(sessionID, status string, msg ws.ServerMessage, data *ws.SessionUpdateData, responsePreviewRaw string) {
 	if dingtalk.IsStarted() && dingtalk.PushSessionEvent(sessionID, status, data.SessionTitle, responsePreviewRaw, data.ProjectPath, data.ToolName, data.ToolInput) {
 		_ = DeletePendingEvent(msg.ID)
 	} else if feishu.IsStarted() && feishu.PushSessionEvent(sessionID, status, data.SessionTitle, responsePreviewRaw, data.ProjectPath, data.ToolName, data.ToolInput) {
 		_ = DeletePendingEvent(msg.ID)
+	}
+}
+
+// EmitSessionPushNotification sends DingTalk/Feishu push for a session terminal event.
+// Extracted from EmitSessionEvent so markDoneAndSendFinal can also trigger push
+// without going through the full EmitSessionEvent path (which broadcasts WS events).
+// Also stores a pending_event for Android offline replay (like EmitSessionEvent does),
+// and deletes it if push succeeds.
+// markTerminalPushDone atomically claims the single terminal push slot for a session.
+// Returns true if this call is the first to claim it (caller should send the push),
+// false if a push was already claimed. Prevents the done/cancel race from sending two
+// contradictory terminal notifications.
+func markTerminalPushDone(sessionID string) bool {
+	_, loaded := terminalPushDone.LoadOrStore(sessionID, struct{}{})
+	return !loaded
+}
+
+func EmitSessionPushNotification(sessionID, status string) {
+	// Only the first terminal state to arrive sends a push. Guards against the
+	// race where CancelSession already pushed "cancelled" but the goroutine then
+	// completes and would otherwise push "completed".
+	if !markTerminalPushDone(sessionID) {
+		return
+	}
+	title, err := GetSessionTitle(sessionID)
+	if err != nil {
+		title = ""
+	}
+	projectPath := GetSessionProjectPath(sessionID)
+	var responsePreviewRaw string
+	if status == statusCompleted {
+		responsePreviewRaw = getSessionResponsePreviewRaw(sessionID)
+	}
+
+	// Store pending event for Android offline replay (mirrors EmitSessionEvent's
+	// write-ahead logic). Skip when push_mode is "disabled".
+	if model.ConfigInstance.PushMode != "disabled" {
+		data := &ws.SessionUpdateData{
+			SessionID:       sessionID,
+			Status:          status,
+			HasNewMessages:  true,
+			SessionTitle:    title,
+			ProjectPath:     projectPath,
+			ResponsePreview: truncatePreview(responsePreviewRaw),
+		}
+		if responsePreviewRaw != "" {
+			data.ResponsePreviewPlain = truncatePreview(summarize.StripMarkdown(responsePreviewRaw))
+		}
+		msg := ws.ServerMessage{
+			Type:  ws.MessageTypeEvent,
+			ID:    ws.GenerateEventID(),
+			Event: "session_update",
+			Data:  data,
+		}
+		StoreNotifiableEvent(msg)
+
+		if dingtalk.IsStarted() && dingtalk.PushSessionEvent(sessionID, status, title, responsePreviewRaw, projectPath, "", "") {
+			_ = DeletePendingEvent(msg.ID)
+		} else if feishu.IsStarted() && feishu.PushSessionEvent(sessionID, status, title, responsePreviewRaw, projectPath, "", "") {
+			_ = DeletePendingEvent(msg.ID)
+		}
 	}
 }
 
@@ -197,10 +282,6 @@ func SetSessionRunning(sessionID string, running bool, skipEvent ...bool) {
 	if len(skipEvent) == 0 || !skipEvent[0] {
 		if !running {
 			EmitSessionEvent(sessionID, "completed", true)
-
-			// Trigger async summarization for chat messages on normal completion
-			// (cancel/disconnect uses skipEvent=true, so this only runs on "completed")
-			triggerChatSummarization(sessionID)
 		} else {
 			EmitSessionEvent(sessionID, "running", false)
 		}
@@ -302,6 +383,9 @@ func TrySetSessionRunning(sessionID string) bool {
 	activeSessions[sessionID] = true
 	activeMu.Unlock()
 
+	// Reset the terminal-push guard so a new run of the same session can push again.
+	terminalPushDone.Delete(sessionID)
+
 	// Emit event so frontends know the session started running
 	EmitSessionEvent(sessionID, "running", false)
 
@@ -393,7 +477,12 @@ func CancelSession(sessionID string) bool {
 
 	ai.GetACPConnManager().CancelTurn(sessionID)
 
-	EmitSessionEvent(sessionID, "cancelled", false)
+	// Claim the terminal push slot BEFORE emitting. If a concurrent terminal path
+	// (the goroutine's done) already claimed it, we lose the guard — suppress the
+	// "cancelled" push (which would otherwise contradict the "completed" push the
+	// goroutine already sent) while still broadcasting "cancelled" over WS.
+	wonPush := markTerminalPushDone(sessionID)
+	emitSessionEvent(sessionID, "cancelled", false, wonPush)
 
 	// Mark session as not running (skip completed event — we already sent "cancelled")
 	SetSessionRunning(sessionID, false, true)
@@ -439,7 +528,10 @@ func ForceCancelSession(sessionID string) {
 // completes and a queued message is drained immediately, only the final reply
 // used to get a summary and every intermediate reply was skipped. Summarizing
 // each missing message closes that gap.
-func triggerChatSummarization(sessionID string) {
+func triggerChatSummarization(ctx context.Context, sessionID string) {
+	if dbRead == nil {
+		return
+	}
 	projectPath := GetSessionProjectPath(sessionID)
 	messages, err := GetMessagesBySessionID(sessionID)
 	if err != nil || len(messages) == 0 {
@@ -459,7 +551,7 @@ func triggerChatSummarization(sessionID string) {
 		if _, found := GetSummary("chat_message", messages[i].ID); found {
 			continue
 		}
-		summarizeTarget("chat_message", messages[i].ID, blocks, projectPath, sessionID)
+		summarizeMessageOnce(messages[i].ID, blocks, projectPath, sessionID)
 	}
 
 	// 推荐回复: only for the last assistant message. If enabled, generate a
@@ -469,7 +561,17 @@ func triggerChatSummarization(sessionID string) {
 		return
 	}
 	if blocks, err := parseMessageBlocks(lastAssistant.Content); err == nil && len(blocks) > 0 {
-		triggerChatRecommendation(sessionID, projectPath, lastAssistant.ID, blocks)
+		// Run the recommendation in a background goroutine: RecommendNextStep makes
+		// a blocking LLM call (up to the 60s internal timeout) that would otherwise
+		// stall Finalize() and delay the terminal 'done' WS event by seconds. The
+		// frontend keys the message meta bar AND the completion sound to that 'done'
+		// event, so an inline call here makes the whole reply feel laggy after the
+		// content stops streaming. It also leaves the session reporting running=true
+		// and the DB message streaming=1 for the duration, which surfaces a phantom
+		// "loading" placeholder when the user switches to the session meanwhile. The
+		// recommendation chip is a nice-to-have and can arrive whenever the LLM
+		// responds. blocks is a fresh slice parsed above — safe to hand to the goroutine.
+		go triggerChatRecommendation(ctx, sessionID, projectPath, lastAssistant.ID, blocks)
 	}
 }
 
@@ -487,7 +589,23 @@ func parseMessageBlocks(content string) ([]model.ContentBlock, error) {
 // triggerChatRecommendation generates a next-step recommendation (推荐回复) after
 // an assistant reply completes, using the shared ai_summary LLM config. Emits a
 // chat_recommendation WS event when a recommendation is produced.
-func triggerChatRecommendation(sessionID, projectPath string, messageID int64, blocks []model.ContentBlock) {
+//
+// ctx is the session execution context: when the session is cancelled/closed its
+// cancel func fires and this goroutine (whose LLM call can otherwise run up to
+// 60s) is aborted. A recover() wraps the body so a panic here can never crash the
+// process — it runs detached from the main session goroutine.
+func triggerChatRecommendation(ctx context.Context, sessionID, projectPath string, messageID int64, blocks []model.ContentBlock) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("chat recommendation goroutine panicked",
+				slog.String("session_id", sessionID),
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())))
+		}
+	}()
+	if ctx.Err() != nil {
+		return
+	}
 	if !model.ConfigInstance.Chat.RecommendEnabled {
 		return
 	}
@@ -511,7 +629,7 @@ func triggerChatRecommendation(sessionID, projectPath string, messageID int64, b
 	commands := quickCommandList(projectPath)
 	projContext := projectContext(projectPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	recommendation, err := summarize.RecommendNextStep(ctx, summarizer, conversation, commands, projContext, conclusion, "zh")
@@ -565,7 +683,8 @@ func SaveChatRecommendation(sessionID, projectPath string, messageID int64, reco
 // stale recommendation from a previous reply. Returns empty string if none.
 func LatestChatRecommendation(ctx context.Context, sessionID string, messageID int64) string {
 	var rec string
-	err := dbRead.QueryRowContext(ctx,
+	err := dbRead.QueryRowContext(
+		ctx,
 		"SELECT recommendation FROM chat_recommendations WHERE session_id = ? AND message_id = ? ORDER BY id DESC LIMIT 1",
 		sessionID, messageID,
 	).Scan(&rec)
@@ -742,13 +861,6 @@ func readContextFile(projectPath, name string) string {
 		return ""
 	}
 	return text
-}
-
-// summarizeChatSimple extracts the last answer text and saves it as a summary.
-// Kept as a thin wrapper over the shared summarizeSimple for the existing simple-mode
-// tests; new callers should use summarizeTarget directly.
-func summarizeChatSimple(msg *model.ChatMessage, blocks []model.ContentBlock, projectPath, sessionID string) {
-	_ = summarizeSimple("chat_message", msg.ID, blocks, projectPath, sessionID)
 }
 
 // RespondPermission delivers a user's approval/rejection response to a pending

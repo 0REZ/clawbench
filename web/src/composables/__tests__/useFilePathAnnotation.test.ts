@@ -24,11 +24,26 @@ vi.mock('@/utils/path', () => ({
   dirName: (p: string) => {
     const parts = p.split('/')
     parts.pop()
-    return parts.join('/')
+    if (parts.length === 0) return ''
+    const result = parts.join('/')
+    // Drive-root special case (matches the real dirName): a lone "D:" → "D:/"
+    if (/^[A-Za-z]:$/.test(result)) return result + '/'
+    return result
   },
   baseName: (p: string) => {
     const parts = p.split('/')
     return parts[parts.length - 1] || ''
+  },
+  isWindowsAbsolutePath: (p: string) => /^[A-Za-z]:[/\\]/.test(p) || p.startsWith('\\\\'),
+  normalizeSlashes: (p: string) => p.replace(/\\/g, '/'),
+  isAbsolutePath: (p: string) => p.startsWith('/') || /^[A-Za-z]:[/\\]/.test(p) || p.startsWith('\\\\'),
+  toProjectRelative: (p: string, root: string) => {
+    if (!root) return p
+    const np = p.replace(/\\/g, '/')
+    const nr = root.replace(/\\/g, '/')
+    const prefix = nr + '/'
+    if (np.toLowerCase().startsWith(prefix.toLowerCase())) return np.slice(nr.length + 1)
+    return np
   },
 }))
 
@@ -65,6 +80,46 @@ describe('resolveFilePathDual', () => {
 
     it('returns null for path equal to projectRoot', () => {
       expect(resolveFilePathDual('/home/user/project', projectRoot)).toBeNull()
+    })
+
+    it('resolves a Windows drive absolute path inside the project (backslash projectRoot)', () => {
+      // The backend returns projectRoot in platform-native form (E:\…) while
+      // chat annotations may use forward slashes. Both must be normalized so
+      // the prefix match works.
+      const winRoot = 'E:\\git\\vllm-input'
+      const result = resolveFilePathDual('E:/git/vllm-input/test-results/some.log', winRoot)
+      expect(result).toEqual({ primary: 'test-results/some.log', fallback: 'test-results/some.log' })
+    })
+
+    it('resolves a Windows drive absolute path inside the project (forward-slash projectRoot)', () => {
+      const result = resolveFilePathDual('E:/git/vllm-input/test-results/some.log', 'E:/git/vllm-input')
+      expect(result).toEqual({ primary: 'test-results/some.log', fallback: 'test-results/some.log' })
+    })
+
+    it('resolves a backslash Windows drive absolute path inside the project', () => {
+      const winRoot = 'E:\\git\\vllm-input'
+      const result = resolveFilePathDual('E:\\git\\vllm-input\\test-results\\some.log', winRoot)
+      expect(result).toEqual({ primary: 'test-results/some.log', fallback: 'test-results/some.log' })
+    })
+
+    it('resolves a backslash Windows drive directory path inside the project', () => {
+      // Directory path with no extension — must not be rejected by the
+      // bare-identifier check after backslash normalization.
+      const winRoot = 'E:\\git\\vllm-input'
+      const result = resolveFilePathDual('E:\\git\\vllm-input\\test-results', winRoot)
+      expect(result).toEqual({ primary: 'test-results', fallback: 'test-results' })
+    })
+
+    it('keeps a Windows drive absolute path outside the project as external', () => {
+      const winRoot = 'E:\\git\\vllm-input'
+      const result = resolveFilePathDual('D:/other/project/a.go', winRoot)
+      expect(result).toEqual({ primary: 'D:/other/project/a.go', fallback: 'D:/other/project/a.go' })
+    })
+
+    it('resolves a relative path against a Windows project root', () => {
+      const winRoot = 'E:\\git\\vllm-input'
+      const result = resolveFilePathDual('test-results/a.log', winRoot)
+      expect(result).toEqual({ primary: 'test-results/a.log', fallback: 'test-results/a.log' })
     })
   })
 
@@ -446,6 +501,22 @@ describe('annotateFilePaths', () => {
     expect(result.detectedPaths).toContain('src/main.go')
     expect(result.html).toContain('chat-file-path')
     expect(result.html).toContain('chat-file-open-btn')
+  })
+
+  it('annotates a Windows drive path under a backslash projectRoot', () => {
+    const winRoot = 'E:\\git\\vllm-input'
+    const input = 'See E:/git/vllm-input/test-results/some.log for details'
+    const result = annotateFilePaths(input, { projectRoot: winRoot })
+    expect(result.detectedPaths).toContain('test-results/some.log')
+    expect(result.html).toContain('chat-file-path')
+    expect(result.html).toContain('chat-file-open-btn')
+  })
+
+  it('annotates a Windows drive path under a forward-slash projectRoot', () => {
+    const input = 'See E:/git/vllm-input/test-results/some.log for details'
+    const result = annotateFilePaths(input, { projectRoot: 'E:/git/vllm-input' })
+    expect(result.detectedPaths).toContain('test-results/some.log')
+    expect(result.html).toContain('chat-file-path')
   })
 
   it('annotates <a> with file:// absolute path and line range', () => {
@@ -1829,6 +1900,8 @@ describe('openFilePath', () => {
     await vi.advanceTimersByTimeAsync(400)
 
     expect(result).toBe(true)
+    // /api/dir resolves relative paths against the project root, so project
+    // paths stay project-relative.
     expect(mockLoadFiles).toHaveBeenCalledWith('src', false, 0, true)
     const eventTypes = mockDispatchEvent.mock.calls.map((call: any[]) => call[0].type)
     expect(eventTypes).toContain('close-file-overlay')
@@ -1885,6 +1958,123 @@ describe('openFilePath', () => {
     window.dispatchEvent = origDispatch
     vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  // ── Windows drive-letter path handling ──
+
+  describe('navToFileInManager: Windows paths', () => {
+    // Store mock projectRoot is '/home/user/project' — override per test.
+    let origProjectRoot: string
+
+    beforeEach(async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      origProjectRoot = storeMock.state.projectRoot
+    })
+
+    afterEach(async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      storeMock.state.projectRoot = origProjectRoot
+    })
+
+    it('converts an absolute project-internal drive path to project-relative before navigating', async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      storeMock.state.projectRoot = 'C:/Users/foo/project'
+      vi.useFakeTimers()
+      // batch-exists receives the project-relative form
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ results: { 'src/main.go': 'file' } }) })
+
+      vi.stubGlobal('fetch', mockFetch)
+
+      const mockDispatchEvent = vi.fn()
+      const origDispatch = window.dispatchEvent
+      window.dispatchEvent = mockDispatchEvent
+
+      const result = await navToFileInManager('C:/Users/foo/project/src/main.go')
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(result).toBe(true)
+      expect(mockLoadFiles).toHaveBeenCalledWith('src', false, 0, true)
+      const highlightCall = mockDispatchEvent.mock.calls.find((call: any[]) => call[0].type === 'highlight-file-item')
+      expect(highlightCall![0].detail.path).toBe('src/main.go')
+
+      window.dispatchEvent = origDispatch
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    })
+
+    it('shows the unsupported toast for a project-external drive file (backslash normalized)', async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      storeMock.state.projectRoot = 'C:/Users/foo/project'
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ results: { 'D:/Users/foo/other/a.go': 'file' } }) })
+
+      vi.stubGlobal('fetch', mockFetch)
+
+      const mockShow = vi.fn()
+      vi.doMock('@/composables/useToast', () => ({
+        useToast: () => ({ show: mockShow }),
+      }))
+
+      // Backslash input must be normalized to a forward-slash drive path so
+      // isWindowsAbsolutePath recognizes it as external.
+      const result = await navToFileInManager('D:\\Users\\foo\\other\\a.go')
+
+      expect(result).toBe(false)
+      expect(mockShow).toHaveBeenCalledWith('file.toast.externalPathNotSupported', expect.any(Object))
+      // /api/dir cannot browse outside the project root — no navigation attempted
+      expect(mockLoadFiles).not.toHaveBeenCalled()
+
+      vi.unstubAllGlobals()
+      vi.doUnmock('@/composables/useToast')
+    })
+
+    it('rejects an external directory on another drive with the unsupported toast', async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      storeMock.state.projectRoot = 'C:/Users/foo/project'
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ results: { 'D:/external/dir': 'dir' } }) })
+
+      vi.stubGlobal('fetch', mockFetch)
+
+      const mockShow = vi.fn()
+      vi.doMock('@/composables/useToast', () => ({
+        useToast: () => ({ show: mockShow }),
+      }))
+
+      const result = await navToFileInManager('D:/external/dir')
+
+      expect(result).toBe(false)
+      expect(mockShow).toHaveBeenCalledWith('file.toast.externalPathNotSupported', expect.any(Object))
+      // loadFiles should not be called for an unsupported external directory
+      expect(mockLoadFiles).not.toHaveBeenCalled()
+
+      vi.unstubAllGlobals()
+      vi.doUnmock('@/composables/useToast')
+    })
+
+    it('shows the unsupported toast for a file at the top of an external drive', async () => {
+      const { store: storeMock } = await import('@/stores/app')
+      storeMock.state.projectRoot = 'C:/Users/foo/project'
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ results: { 'D:/a.go': 'file' } }) })
+
+      vi.stubGlobal('fetch', mockFetch)
+
+      const mockShow = vi.fn()
+      vi.doMock('@/composables/useToast', () => ({
+        useToast: () => ({ show: mockShow }),
+      }))
+
+      const result = await navToFileInManager('D:/a.go')
+
+      expect(result).toBe(false)
+      expect(mockShow).toHaveBeenCalledWith('file.toast.externalPathNotSupported', expect.any(Object))
+      expect(mockLoadFiles).not.toHaveBeenCalled()
+
+      vi.unstubAllGlobals()
+      vi.doUnmock('@/composables/useToast')
+    })
   })
 
   describe('parseFileUri', () => {

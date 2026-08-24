@@ -80,6 +80,11 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		mgr.DisconnectClient(clientID)
 		mgr.StreamHub().UnsubscribeAll(clientID)
+		// Stop the async writer goroutine for this connection before returning.
+		// Events arriving after this point are buffered for reconnect replay.
+		// Pass conn so StopWriter only stops this connection's writer (an old
+		// handler's deferred StopWriter must not kill a reconnected writer).
+		mgr.StopWriter(clientID, conn)
 	}()
 
 	// Replay buffered events on reconnect
@@ -99,6 +104,12 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 			writeMu.Unlock()
 		}
 	}
+
+	// Start the async writer goroutine that drains the send queue to the socket.
+	// Chat events enqueued via broadcastToSubscription are written here instead
+	// of synchronously on the producer's goroutine, so a slow client can no
+	// longer stall the session event loop.
+	mgr.StartWriter(clientID, conn, &writeMu)
 
 	// Ping ticker
 	pingTicker := time.NewTicker(30 * time.Second)

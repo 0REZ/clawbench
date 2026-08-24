@@ -50,11 +50,11 @@
         @click="$emit('toggle-auto-speech')"
         :title="t('chat.actions.autoSpeech')">
         <Volume2 :size="14" />
-        <span class="chat-action-label">{{ t('chat.actions.autoSpeech') }}</span>
       </button>
+      <RefreshButton v-if="currentSessionId" data-action="refresh-session" class="chat-action-btn" :loading="refreshingSession" :title="t('chat.actions.reloadSession')" @click="$emit('refresh-session')" />
     </div>
     <!-- Conversation recommendation banner (推荐回复) — sits above the input box so it never steals input space -->
-    <Transition name="paste-fade">
+    <Transition name="recommend-slide">
       <div v-if="showRecommendationChip && recommendation" class="recommendation-chip">
         <Sparkles :size="14" :stroke-width="1.5" class="recommendation-icon" />
         <span class="recommendation-text" :class="{ expanded: recommendationExpanded }" @click="toggleRecommendationExpand" :title="recommendationExpanded ? t('chat.recommendationCollapse') : t('chat.recommendationExpand')">{{ recommendation }}</span>
@@ -81,7 +81,7 @@
         <!-- Attached file reference cards (shared component, includes pending uploads with local Blob preview) -->
         <AttachmentTags :files="attachedFiles" :pending-files="pendingFiles" @file-click="$emit('file-tag-click', $event)" @remove="handleRemoveAttached" @remove-pending="removeFile" />
       </div>
-      <!-- Input row: attach + textarea + stop + send -->
+      <!-- Input row: attach + clear + textarea + stop + send -->
       <div class="chat-input-row">
         <div class="attach-menu-wrapper" ref="attachMenuRef">
           <button v-if="voiceState === 'recording' || voiceState === 'transcribing'" class="chat-attach-btn voice-rec-btn" :class="{ recording: voiceState === 'recording', transcribing: voiceState === 'transcribing' }" disabled :title="voiceState === 'recording' ? t('chat.voice.recording') : t('chat.voice.transcribing')">
@@ -231,11 +231,18 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
             <span class="usage-popup-value">${{ contextCost.toFixed(2) }} {{ contextCurrency || 'USD' }}</span>
           </div>
+          <div class="usage-popup-compact">
+            <button class="usage-popup-compact-btn" :disabled="inputDisabled || !hasCompactCommand || !isACPTransport" @click.stop="handleCompact(); showUsagePopup = false" :title="t('chat.sessionInfo.compact')" :aria-label="t('chat.sessionInfo.compact')">
+              <Minimize2 :size="13" />
+              {{ t('chat.sessionInfo.compact') }}
+            </button>
+          </div>
         </div>
       </PopupMenu>
     </div>
-    <!-- Session info bar (model + mode) -->
-    <div class="chat-session-info" v-if="currentModelName || showModeInfo || showUsageInfo">
+    <!-- Session info bar (model + mode) — always rendered to reserve vertical space,
+         preventing layout shift when async model/mode data loads after messages -->
+    <div class="chat-session-info">
       <span class="session-info-model" @click.stop="openSettingsDrawer('model')"><ProviderIcon :model-name="currentModelName || ''" :size="11" />{{ currentModelName }}</span>
       <template v-if="showModeInfo">
         <span class="session-info-divider"></span>
@@ -250,13 +257,7 @@
           </span>
         </span>
       </template>
-      <template v-if="showCompactBtn">
-        <span class="session-info-divider"></span>
-        <button class="session-info-compact" :disabled="inputDisabled" @click.stop="handleCompact" :title="t('chat.sessionInfo.compact')" :aria-label="t('chat.sessionInfo.compact')">
-          <Minimize2 :size="11" />
-          {{ t('chat.sessionInfo.compact') }}
-        </button>
-      </template>
+
     </div>
   </div>
 </template>
@@ -270,6 +271,7 @@ import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import PopupMenu from '@/components/common/PopupMenu.vue'
+import RefreshButton from '@/components/common/RefreshButton.vue'
 import AttachDrawer from '@/components/chat/AttachDrawer.vue'
 import AttachmentTags from '@/components/chat/AttachmentTags.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
@@ -370,7 +372,7 @@ const usageColor = computed(() => {
   return '#22c55e'
 })
 const hasCompactCommand = computed(() => availableCommands.value.some(cmd => cmd.name === '/compact' || cmd.name === 'compact'))
-const showCompactBtn = computed(() => usagePct.value >= 75 && hasCompactCommand.value && isACPTransport.value)
+
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
 const { items: quickSendItems, fetchItems } = quickSendStore
@@ -435,6 +437,7 @@ const props = defineProps({
   quoteData: Object,
   messages: Array,
   autoSpeechEnabled: Boolean,
+  refreshingSession: Boolean,
   currentSessionId: String,
   chatUnreadCount: Number,
   chatRunning: Boolean,
@@ -465,6 +468,7 @@ const emit = defineEmits([
   'archive-session',
   'destroy-session',
   'open-user-msg-index',
+  'refresh-session',
   'switch-model',
   'switch-thinking-effort',
   'switch-mode',
@@ -1416,38 +1420,7 @@ defineExpose({
   cursor: pointer;
 }
 
-.session-info-compact {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0;
-  border-radius: 4px;
-  color: var(--text-muted, #999);
-  font-size: 11px;
-  line-height: 1.4;
-  transition: color 0.15s;
-  user-select: none;
-  -webkit-user-select: none;
-}
 
-.session-info-compact:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.session-info-compact:active:not(:disabled) {
-  color: var(--accent-color, #0066cc);
-}
-
-@media (hover: hover) {
-  .session-info-compact:hover:not(:disabled) {
-    color: var(--accent-color, #0066cc);
-  }
-}
 
 .usage-bar {
   position: relative;
@@ -1727,9 +1700,11 @@ defineExpose({
   transition: color 0.15s, background 0.15s;
 }
 
-.chat-attach-btn:hover:not(:disabled) {
-  color: var(--accent-color, #0066cc);
-  background: var(--bg-tertiary, #f0f0f0);
+@media (hover: hover) {
+  .chat-attach-btn:hover:not(:disabled) {
+    color: var(--accent-color, #0066cc);
+    background: var(--bg-tertiary, #f0f0f0);
+  }
 }
 
 .chat-attach-btn:disabled {
@@ -1759,6 +1734,39 @@ defineExpose({
   padding: 0;
 }
 
+/* Conversation recommendation banner slide transition — animates height + opacity so the message area isn't jolted */
+.recommend-slide-enter-active {
+  transition: max-height 0.25s ease-out, opacity 0.25s ease-out, margin 0.25s ease-out, padding-top 0.25s ease-out, padding-bottom 0.25s ease-out, border-width 0.25s ease-out;
+  overflow: hidden;
+}
+.recommend-slide-leave-active {
+  transition: max-height 0.25s ease-in, opacity 0.25s ease-in, margin 0.25s ease-in, padding-top 0.25s ease-in, padding-bottom 0.25s ease-in, border-width 0.25s ease-in;
+  overflow: hidden;
+}
+.recommend-slide-enter-from,
+.recommend-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+}
+.recommend-slide-enter-to,
+.recommend-slide-leave-from {
+  max-height: 600px;
+}
+
+/* Respect users who prefer reduced motion — snap the banner in/out instead of
+   animating height/opacity. */
+@media (prefers-reduced-motion: reduce) {
+  .recommend-slide-enter-active,
+  .recommend-slide-leave-active {
+    transition: none;
+  }
+}
+
 /* Conversation recommendation banner (推荐回复) — rendered above the input box */
 .recommendation-chip {
   display: flex;
@@ -1767,15 +1775,15 @@ defineExpose({
   margin: 0 0 6px;
   padding: 6px 10px;
   border-radius: 10px;
-  background: var(--color-accent-soft, rgba(88, 120, 255, 0.12));
-  border: 1px solid rgba(88, 120, 255, 0.35);
+  background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
   font-size: 12px;
   color: var(--color-text-primary);
 }
 
 .recommendation-icon {
   flex-shrink: 0;
-  color: var(--color-accent, #5878ff);
+  color: var(--accent-color, #0066cc);
 }
 
 .recommendation-text {
@@ -1795,7 +1803,7 @@ defineExpose({
 .recommendation-accept {
   flex-shrink: 0;
   border: none;
-  background: var(--color-accent, #5878ff);
+  background: var(--accent-color, #0066cc);
   color: #fff;
   border-radius: 8px;
   padding: 3px 10px;
@@ -1885,8 +1893,10 @@ defineExpose({
   z-index: 1;
 }
 
-.attachment-close-btn:hover {
-  background: var(--danger-color, #dc3545);
+@media (hover: hover) {
+  .attachment-close-btn:hover {
+    background: var(--danger-color, #dc3545);
+  }
 }
 
 /* Input area attachment card style */
@@ -1900,8 +1910,14 @@ defineExpose({
   color: var(--accent-color, #0066cc);
 }
 
-.chat-attachment-tags .attachment-ref:hover {
-  background: color-mix(in srgb, var(--accent-color, #0066cc) 18%, transparent);
+@media (hover: hover) {
+  .chat-attachment-tags .attachment-ref:hover {
+    background: color-mix(in srgb, var(--accent-color, #0066cc) 18%, transparent);
+  }
+
+  .chat-attachment-tags .attachment-quote:hover {
+    background: color-mix(in srgb, var(--accent-color, #4f9cf7) 15%, transparent);
+  }
 }
 
 /* Quote card — accent-colored, same size as file cards */
@@ -1914,10 +1930,6 @@ defineExpose({
 
 .chat-attachment-tags .attachment-quote .attachment-filename {
   color: var(--accent-color, #4f9cf7);
-}
-
-.chat-attachment-tags .attachment-quote:hover {
-  background: color-mix(in srgb, var(--accent-color, #4f9cf7) 15%, transparent);
 }
 
 /* Input row */
@@ -1967,7 +1979,9 @@ defineExpose({
   transition: background 0.15s, opacity 0.15s, transform 0.15s;
   flex-shrink: 0;
 }
-.chat-send-btn:hover { background: #0055aa; }
+@media (hover: hover) {
+  .chat-send-btn:hover { background: #0055aa; }
+}
 .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .chat-send-btn.disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -1975,13 +1989,17 @@ defineExpose({
 .chat-send-btn.queued {
   background: #e67e22;
 }
-.chat-send-btn.queued:hover { background: #d35400; }
+@media (hover: hover) {
+  .chat-send-btn.queued:hover { background: #d35400; }
+}
 
 /* Send button when input is empty: green lightning (quick-menu shortcut) */
 .chat-send-btn.shortcut {
   background: #27ae60;
 }
-.chat-send-btn.shortcut:hover { background: #219a52; }
+@media (hover: hover) {
+  .chat-send-btn.shortcut:hover { background: #219a52; }
+}
 
 /* Stop button — default: dim red solid */
 .chat-stop-btn {
@@ -2002,7 +2020,7 @@ defineExpose({
 .chat-stop-btn:active { opacity: 0.75; }
 
 /* Light theme: boost stop button default visibility */
-:not([data-theme="dark"]) .chat-stop-btn:not(.primed):not(.cancelling) {
+:not([data-theme-base="dark"]) .chat-stop-btn:not(.primed):not(.cancelling) {
   background: color-mix(in srgb, var(--danger-color, #dc3545) 55%, transparent);
   color: color-mix(in srgb, #fff 75%, var(--danger-color, #dc3545));
 }
@@ -2087,11 +2105,6 @@ defineExpose({
   50% { height: 13px; }
 }
 
-.chat-action-label {
-  font-size: 11px;
-  line-height: 1.3;
-}
-
 
 </style>
 
@@ -2123,9 +2136,11 @@ defineExpose({
   overflow: hidden;
 }
 
-.quick-send-item:hover {
-  background: var(--accent-color, #0066cc);
-  color: #fff;
+@media (hover: hover) {
+  .quick-send-item:hover {
+    background: var(--accent-color, #0066cc);
+    color: #fff;
+  }
 }
 
 /* Quick-send: pressing state → subtle accent tint hints at long-press (fills input) */
@@ -2177,9 +2192,13 @@ defineExpose({
   transition: background 0.1s;
 }
 
-.at-menu-item:hover,
 .at-menu-item.at-menu-selected {
   background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+@media (hover: hover) {
+  .at-menu-item:hover {
+    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  }
 }
 
 .at-menu-label {
@@ -2189,7 +2208,7 @@ defineExpose({
   white-space: nowrap;
 }
 
-:root[data-theme="dark"] .at-menu-label {
+:root[data-theme-base="dark"] .at-menu-label {
   color: #a78bfa;
 }
 
@@ -2197,7 +2216,7 @@ defineExpose({
   color: #0ea5e9;
 }
 
-:root[data-theme="dark"] .at-menu-label.slash-label {
+:root[data-theme-base="dark"] .at-menu-label.slash-label {
   color: #38bdf8;
 }
 
@@ -2208,7 +2227,7 @@ defineExpose({
   font-weight: 700;
 }
 
-:root[data-theme="dark"] .at-menu-label mark {
+:root[data-theme-base="dark"] .at-menu-label mark {
   background: rgba(255, 230, 0, 0.35);
 }
 
@@ -2281,5 +2300,47 @@ defineExpose({
   color: var(--text-primary);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+.usage-popup-compact {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
+  display: flex;
+  justify-content: center;
+}
+
+.usage-popup-compact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 5px 12px;
+  color: var(--text-secondary, #6c757d);
+  font-size: 12px;
+  line-height: 1.4;
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.usage-popup-compact-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.usage-popup-compact-btn:active:not(:disabled) {
+  color: var(--accent-color, #0066cc);
+  border-color: var(--accent-color, #0066cc);
+}
+
+@media (hover: hover) {
+  .usage-popup-compact-btn:hover:not(:disabled) {
+    color: var(--accent-color, #0066cc);
+    border-color: var(--accent-color, #0066cc);
+  }
 }
 </style>

@@ -179,7 +179,15 @@ import { store } from '@/stores/app.ts'
 import { useCommitNavigation, consumePendingCommitNavigation, pendingSha as pendingCommitSha, consumePendingManageNavigation, pendingManageView } from '@/composables/useCommitNavigation.ts'
 import { useDiffNavigation } from '@/composables/useDiffNavigation.ts'
 import { useFeatureBackHandler, PRIORITY_PAGE } from '@/composables/useEdgeSwipeBack'
+import { gitFetch, GitTimeoutError, createSeqGuard } from '@/utils/gitApi'
+import { shouldShowFullLoading } from '@/utils/gitFileHistory'
+import { appLog } from '@/utils/appLog'
 const { t } = useI18n()
+
+// Sequence guard to suppress stale concurrent loads. A refresh, tab
+// re-activation, or load-more can overlap an in-flight request; only the
+// latest call may write data and reset the loading flag.
+const historySeq = createSeqGuard()
 
 const props = defineProps({
   mode: {
@@ -203,6 +211,10 @@ function onOpenFile(path) {
 // ─── Unified state ─────────────────────────────────────────────────────────
 
 const loading = ref(false)
+// True while a full reload is in flight WITHOUT the full-screen spinner (i.e.
+// a background refresh that keeps the existing list). loadMore must not run
+// concurrently with it — it would paginate the old commits with stale counts.
+const fullReloading = ref(false)
 const error = ref('')
 const commits = ref([])
 const hasMore = ref(false)
@@ -302,9 +314,15 @@ const commitSearch = ref('')
 // ─── Data loading ───────────────────────────────────────────────────────────
 
 async function loadProjectHistory() {
-  loading.value = true
+  const seq = historySeq.token()
+  // Keep the existing list visible during background refreshes — only show the
+  // full-screen spinner when there is nothing to render yet (first load/empty),
+  // so the refresh button stays mounted and its spin feedback is visible.
+  const isFirstLoad = shouldShowFullLoading(commits.value, error.value)
+  loading.value = isFirstLoad
+  fullReloading.value = !isFirstLoad
   error.value = ''
-  commits.value = []
+  if (isFirstLoad) commits.value = []
   hasMore.value = false
   selectedSHA.value = null
   files.value = []
@@ -314,15 +332,18 @@ async function loadProjectHistory() {
   isGit.value = true
 
   try {
-    const resp = await fetch('/api/git/project-history')
+    const resp = await gitFetch('/api/git/project-history', { signal: seq.signal })
+    if (!historySeq.isCurrent(seq)) return // superseded by a newer load
     if (!resp.ok) {
       const data = await resp.json()
+      commits.value = []
       error.value = data.error || t('git.history.loadError')
       return
     }
     const data = await resp.json()
 
     if (!data.isGit) {
+      commits.value = []
       isGit.value = false
       return
     }
@@ -330,13 +351,15 @@ async function loadProjectHistory() {
     isGit.value = true
 
     // Check working tree changes
-    const wtResp = await fetch('/api/git/working-tree')
+    const wtResp = await gitFetch('/api/git/working-tree', { signal: seq.signal })
     let loadedWtFiles = []
     if (wtResp.ok) {
       const wt = await wtResp.json()
       loadedWtFiles = wt.files || []
       wtFiles.value = loadedWtFiles
     }
+
+    if (!historySeq.isCurrent(seq)) return // superseded while working-tree was in flight
 
     const histCommits = data.commits || []
 
@@ -350,53 +373,89 @@ async function loadProjectHistory() {
     // Record git state after successful load
     lastGitState.value = { branch: store.state.gitBranch, head: store.state.gitHead, dirty: store.state.gitDirty, changeCount: store.state.gitWorkingTreeChangeCount }
     refreshHint.value = false
-  } catch {
+  } catch (err) {
+    // A superseded request's abort must not surface as an error.
+    if (err instanceof Error && err.name === 'AbortError') return
+    if (!historySeq.isCurrent(seq)) return
+    // Timeout: the request is not coming back — surface a distinct message
+    // so the user can retry instead of staring at an endless spinner.
+    commits.value = []
+    if (err instanceof GitTimeoutError) {
+      appLog.w('GitHistory', err.message)
+      error.value = t('git.history.loadTimeout')
+      return
+    }
     error.value = t('git.history.loadError')
   } finally {
-    loading.value = false
+    // Only the latest request may clear the loading flag.
+    if (historySeq.isCurrent(seq)) {
+      loading.value = false
+      fullReloading.value = false
+    }
   }
 }
 
 async function loadFileHistory(filePath) {
-  loading.value = true
+  const seq = historySeq.token()
+  // Keep the existing list visible during background refreshes (see
+  // loadProjectHistory) so the refresh button's spin stays visible.
+  const isFirstLoad = shouldShowFullLoading(commits.value, error.value)
+  loading.value = isFirstLoad
+  fullReloading.value = !isFirstLoad
   error.value = ''
-  commits.value = []
+  if (isFirstLoad) commits.value = []
   selectedSHA.value = null
   isGit.value = true
   untracked.value = false
 
   try {
-    const resp = await fetch(`/api/git/history?path=${encodeURIComponent(filePath)}`)
+    const resp = await gitFetch(`/api/git/history?path=${encodeURIComponent(filePath)}`, { signal: seq.signal })
+    if (!historySeq.isCurrent(seq)) return
     if (!resp.ok) {
       const data = await resp.json()
+      commits.value = []
       error.value = data.error || t('git.history.loadError')
       return
     }
     const hist = await resp.json()
+    if (!historySeq.isCurrent(seq)) return
     if (!hist.isGit) {
+      commits.value = []
       isGit.value = false
-      loading.value = false
       return
     }
     isGit.value = true
     untracked.value = !!hist.untracked
     commits.value = hist.commits || []
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') return
+    if (!historySeq.isCurrent(seq)) return
+    commits.value = []
+    if (err instanceof GitTimeoutError) {
+      appLog.w('GitHistory', err.message)
+      error.value = t('git.history.loadTimeout')
+      return
+    }
     error.value = t('git.history.loadError')
   } finally {
-    loading.value = false
+    if (historySeq.isCurrent(seq)) {
+      loading.value = false
+      fullReloading.value = false
+    }
   }
 }
 
 async function loadMoreCommits() {
-  if (loadingMore.value || !hasMore.value || !isGit.value) return
+  // Skip while a full reload is in flight: loading replaces the commit list
+  // and loadMore would paginate the OLD commits with stale skip counts.
+  if (loading.value || fullReloading.value || loadingMore.value || !hasMore.value || !isGit.value) return
   loadingMore.value = true
   hasLoadedMore.value = true
   try {
     // Count only git commits (exclude WT node) for the skip parameter,
     // since WT is a frontend-only entry not present in git log output.
     const gitCount = commits.value.filter(c => !c.isWT).length
-    const resp = await fetch(`/api/git/project-history?skip=${gitCount}`)
+    const resp = await gitFetch(`/api/git/project-history?skip=${gitCount}`)
     if (!resp.ok) return
     const data = await resp.json()
     commits.value.push(...(data.commits || []))
@@ -411,17 +470,24 @@ async function loadMoreCommits() {
 // When searching, auto-load all commits so filtering covers the full history
 async function onSearch(q) {
   if (!q.trim() || !isGit.value || props.mode === 'file') return
+  const seq = historySeq.token()
   searchLoading.value = true
   if (hasMore.value) hasLoadedMore.value = true
   try {
     while (hasMore.value) {
+      if (!historySeq.isCurrent(seq)) return // superseded by a refresh/load
       const gitCount = commits.value.filter(c => !c.isWT).length
-      const resp = await fetch(`/api/git/project-history?skip=${gitCount}`)
+const resp = await gitFetch(`/api/git/project-history?skip=${gitCount}`, { signal: seq.signal })
       if (!resp.ok) break
       const data = await resp.json()
       commits.value.push(...(data.commits || []))
       hasMore.value = data.hasMore
     }
+  } catch (err) {
+    if (err instanceof GitTimeoutError) {
+      appLog.w('GitHistory', err.message)
+    }
+    // Search is best-effort: ignore failures, the already-loaded commits remain visible.
   } finally {
     searchLoading.value = false
   }
@@ -544,7 +610,7 @@ async function loadCommitFiles(sha) {
   files.value = []
   mergeGroups.value = []
   try {
-    const resp = await fetch(`/api/git/commit-files?sha=${encodeURIComponent(sha)}`)
+    const resp = await gitFetch(`/api/git/commit-files?sha=${encodeURIComponent(sha)}`)
     if (!resp.ok) { files.value = []; return }
     const data = await resp.json()
     if (data && data.merge === true && Array.isArray(data.groups)) {
@@ -571,11 +637,11 @@ async function loadDiff() {
   try {
     let resp
     if (props.mode === 'project') {
-      resp = await fetch(
+      resp = await gitFetch(
         `/api/git/file-diff?sha=${encodeURIComponent(selectedSHA.value)}&path=${encodeURIComponent(selectedFilePath.value)}`
       )
     } else {
-      resp = await fetch(
+      resp = await gitFetch(
         `/api/git/diff?path=${encodeURIComponent(props.file.path)}&commit=${encodeURIComponent(selectedSHA.value)}`
       )
     }
@@ -647,6 +713,21 @@ watch(() => props.active, async (nowActive) => {
 })
 
 onMounted(async () => {
+  // Refresh git working-tree state (dock badge) on mount. TabPanel conditionally
+  // mounts this component the first time history is opened — at that point
+  // props.active is already true, so the props.active watch never fires and the
+  // dock badge would stay stale (e.g. a session finished while the user was
+  // elsewhere, then they open history for the first time). Refreshing on mount
+  // guarantees opening history is a reliable badge-refresh trigger.
+  // Only refresh when actually active: during a project hot-switch the whole
+  // component tree is rebuilt while the history tab is NOT the active tab, so
+  // the mount-time refresh would be a redundant duplicate of App.vue's own
+  // state sync (the props.active watch picks it up when the user later enters
+  // the tab).
+  if (props.active) {
+    store.loadGitBranch().catch(() => {})
+  }
+
   const currentProject = store.state.projectRoot
   const currentFile = props.file?.path
   const identityChanged =
@@ -662,7 +743,7 @@ onMounted(async () => {
   // If navigating from branch badge click, go directly to manage view
   if (consumePendingManageNavigation()) {
     currentView.value = 'manage'
-    if (commits.value.length === 0 && !error.value) {
+    if (shouldShowFullLoading(commits.value, error.value)) {
       await loadProjectHistory()
     }
     return
@@ -675,7 +756,7 @@ onMounted(async () => {
     return
   }
 
-  if (commits.value.length === 0 && !error.value) {
+  if (shouldShowFullLoading(commits.value, error.value)) {
     if (props.mode === 'file' && props.file?.path) {
       await loadFileHistory(props.file.path)
     } else {
@@ -765,9 +846,11 @@ onMounted(async () => {
   transition: background 0.15s, color 0.15s;
 }
 
-.diff-nav-btn:hover:not(:disabled) {
-  background: var(--bg-tertiary, #e9ecef);
-  color: var(--accent-color, #4a90d9);
+@media (hover: hover) {
+  .diff-nav-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary, #e9ecef);
+    color: var(--accent-color, #4a90d9);
+  }
 }
 
 .diff-nav-btn:disabled {
@@ -802,8 +885,10 @@ onMounted(async () => {
   border-bottom: 1px solid var(--border-color, #dee2e6);
 }
 
-.drilldown-item:hover {
-  background: var(--bg-secondary, #f8f9fa);
+@media (hover: hover) {
+  .drilldown-item:hover {
+    background: var(--bg-secondary, #f8f9fa);
+  }
 }
 
 .drilldown-item:active {

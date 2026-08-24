@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -90,6 +92,10 @@ const (
 	// idleConnTimeout is the maximum duration a connection can be idle
 	// before it is closed and removed from the pool.
 	idleConnTimeout = 5 * time.Minute
+	// minAliveConns is the minimum number of alive connections to keep
+	// regardless of idle timeout. Even if more connections are idle,
+	// the sweep will not kill them if only minAliveConns remain alive.
+	minAliveConns = 3
 	// defaultACPStallTimeout is the default no-progress watchdog window for a
 	// running ACP prompt. The idle sweep skips actively-running sessions, and
 	// conn.Prompt has no hard timeout, so without this a hung agent process
@@ -146,13 +152,53 @@ func (m *ACPConnManager) idleSweep() {
 	}
 }
 
+// idleEntry records an idle ACP connection candidate for the sweep to kill.
+type idleEntry struct {
+	sid          string
+	lastActivity int64 // nano timestamp
+}
+
 // sweepOnce performs a single idle sweep pass.
 // Connections that have been idle longer than idleConnTimeout are killed
 // (but acpSID is preserved so the session can be recovered via ResumeSession).
 // Connections with actively running sessions are skipped.
+// At least minAliveConns alive connections are always preserved, even if idle.
+// When more idle connections exist than can be killed, the least recently used
+// ones are killed first (LRU eviction order).
 func (m *ACPConnManager) sweepOnce() {
-	var toClose []string
+	toClose, aliveCount := m.collectIdleConns()
 
+	// Sort oldest-first so that the least recently used connections are
+	// killed first when the list must be truncated to maxKill.
+	slices.SortFunc(toClose, func(a, b idleEntry) int {
+		return cmp.Compare(a.lastActivity, b.lastActivity)
+	})
+
+	// Preserve at least minAliveConns alive connections.
+	// maxKill may exceed len(toClose) when some alive connections are
+	// recently-used or running (not in toClose); the cap only matters
+	// when all idle candidates exceed the minimum.
+	//
+	// Note: aliveCount is based on the alive flag at scan time, but a
+	// connection can become dead between the scan and the kill loop
+	// (e.g., CloseConn). The kill loop re-checks conn.alive and skips
+	// already-dead connections, so the actual number killed may be
+	// fewer than maxKill. This is conservative: we end up preserving
+	// more connections than the minimum, which is always safe.
+	maxKill := aliveCount - minAliveConns
+	if maxKill <= 0 {
+		return // cannot kill any without dropping below minimum
+	}
+	if len(toClose) > maxKill {
+		toClose = toClose[:maxKill]
+	}
+
+	m.killIdleConns(toClose)
+}
+
+// collectIdleConns scans the pool and returns idle connection candidates
+// along with the total number of alive connections.
+func (m *ACPConnManager) collectIdleConns() (toClose []idleEntry, aliveCount int) {
 	m.mu.Lock()
 	now := time.Now()
 	for sid, conn := range m.conns {
@@ -167,6 +213,7 @@ func (m *ACPConnManager) sweepOnce() {
 		if !alive {
 			continue // already dead, will be respawned on next use
 		}
+		aliveCount++
 		if now.Sub(time.Unix(0, lastActivity)) < idleConnTimeout {
 			continue // not idle enough yet
 		}
@@ -174,11 +221,19 @@ func (m *ACPConnManager) sweepOnce() {
 		if m.isSessionRunning != nil && m.isSessionRunning(sid) {
 			continue
 		}
-		toClose = append(toClose, sid)
+		toClose = append(toClose, idleEntry{sid: sid, lastActivity: lastActivity})
 	}
 	m.mu.Unlock()
+	return
+}
 
-	for _, sid := range toClose {
+// killIdleConns re-checks and kills the given idle connection candidates.
+// Each connection is re-checked under conn.mu to handle TOCTOU races:
+// if the connection was used or started running between the scan and now,
+// it is skipped.
+func (m *ACPConnManager) killIdleConns(toClose []idleEntry) {
+	for _, entry := range toClose {
+		sid := entry.sid
 		m.mu.Lock()
 		conn, ok := m.conns[sid]
 		m.mu.Unlock()
@@ -674,6 +729,15 @@ type ACPConn struct {
 	// cached in cmdWaitState for subsequent readers.
 	cmdWaitOnce  sync.Once
 	cmdWaitState *os.ProcessState
+
+	// procMu serializes every process kill+reap operation (spawnLocked's old
+	// process teardown, killAndMarkDeadLocked, close, killProcessLocked).
+	// exec.Cmd.Wait() / Process.Wait() are NOT safe for concurrent invocation,
+	// and the ACP idle sweep can race a new prompt for the same connection,
+	// both trying to reap the same agent process. Only one goroutine may wait
+	// on a given process at a time; otherwise the concurrent Wait can deadlock
+	// and permanently hang the session (see the idle-sweep vs. new-prompt race).
+	procMu sync.Mutex
 
 	// cached state — populated from NewSession/ResumeSession responses
 	currentModeID           string
@@ -1413,6 +1477,39 @@ func (c *ACPConn) ProcessPID() int {
 	return 0
 }
 
+// reapProcess kills the given agent process group and reaps it exactly once,
+// bounded by crashDiagWaitTimeout. procMu serializes every kill+reap so only
+// one goroutine ever waits on a given process at a time — concurrent
+// exec.Cmd.Wait() on the same Cmd is unsafe and can deadlock (idle sweep vs.
+// new prompt). It deliberately uses Process.Wait (via waitProcessExitOnce),
+// NOT exec.Cmd.Wait, so it never blocks on the stderr-copy goroutine that a
+// surviving descendant (e.g. an MCP server) can keep alive indefinitely.
+//
+// oldFilter must be the stdout filter belonging to oldCmd (not the connection's
+// current c.stdoutFilter). The caller captures it while holding c.mu so the
+// reap never closes the freshly respawned process's filter during the
+// idle-sweep vs. new-prompt race.
+//
+// Must NOT be called with c.mu held (it blocks up to crashDiagWaitTimeout).
+func (c *ACPConn) reapProcess(oldCmd *exec.Cmd, oldFilter *acpStdoutFilter) {
+	if oldCmd == nil || oldCmd.Process == nil {
+		return
+	}
+	c.procMu.Lock()
+	defer c.procMu.Unlock()
+
+	// Close the old process's stdout filter (already disowned from the
+	// connection by the caller) to unblock pending reads on its pipe so the
+	// reaped process's I/O goroutines can settle.
+	if oldFilter != nil {
+		oldFilter.Close()
+	}
+	// Kill the entire process group (npx + child processes) so the pipes are
+	// closed once every descendant exits.
+	killProcessGroup(oldCmd.Process)
+	c.waitProcessExitOnce(oldCmd)
+}
+
 // killAndMarkDead kills the agent process and marks the connection as dead,
 // but preserves acpSID so ensureAliveWithSession can recover the session via
 // LoadSession/ResumeSession on the next prompt. Used by the stall watchdog
@@ -1429,14 +1526,11 @@ func (c *ACPConn) killAndMarkDead() {
 // Must be called with c.mu held; temporarily releases c.mu during Wait().
 func (c *ACPConn) killAndMarkDeadLocked() {
 	if c.cmd != nil && c.cmd.Process != nil {
-		if c.stdoutFilter != nil {
-			c.stdoutFilter.Close()
-			c.stdoutFilter = nil
-		}
-		killProcessGroup(c.cmd.Process)
 		oldCmd := c.cmd
+		oldFilter := c.stdoutFilter
+		c.stdoutFilter = nil
 		c.mu.Unlock()
-		_ = oldCmd.Wait()
+		c.reapProcess(oldCmd, oldFilter)
 		c.mu.Lock()
 		if c.cmd == oldCmd {
 			c.cmd = nil
@@ -1459,23 +1553,11 @@ func (c *ACPConn) close() {
 	c.mu.Lock()
 
 	if c.cmd != nil && c.cmd.Process != nil {
-		// Close the stdout filter first to unblock pending reads on the pipe.
-		// Without this, cmd.Wait() hangs when the process is killed but
-		// stdout hasn't been closed yet (same pattern as killProcessLocked).
-		if c.stdoutFilter != nil {
-			c.stdoutFilter.Close()
-			c.stdoutFilter = nil
-		}
-
-		// Kill the entire process group (not just the parent process).
-		// ACP agents like Claude are spawned via npx, which creates a child
-		// process (claude). Killing only npx leaves the child alive, which
-		// holds the stderr pipe open and causes cmd.Wait() to hang.
-		killProcessGroup(c.cmd.Process)
-
 		oldCmd := c.cmd
+		oldFilter := c.stdoutFilter
+		c.stdoutFilter = nil
 		c.mu.Unlock()
-		_ = oldCmd.Wait()
+		c.reapProcess(oldCmd, oldFilter)
 		c.mu.Lock()
 		if c.cmd == oldCmd {
 			c.cmd = nil

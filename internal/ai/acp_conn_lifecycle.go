@@ -13,11 +13,64 @@ import (
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
+
+	"clawbench/internal/model"
 )
 
 // ---------------------------------------------------------------------------
 // ACPConn lifecycle — spawn, ensure alive, resume, session creation
 // ---------------------------------------------------------------------------
+
+// advertiseTerminalCapability returns whether ClawBench should advertise the
+// Terminal=true client capability for the given agent in ACP Initialize.
+//
+// Background: CodeBuddy's run_in_background Bash tool relies on the agent's
+// OWN background-task registry (TaskOutput/TaskStop/TaskList). When ClawBench
+// advertises Terminal=true, CodeBuddy delegates background commands to the
+// host via terminal/* RPCs — but then CodeBuddy's TaskOutput tool can't find
+// the host-created "term-N" task, producing "Background task not found" on
+// every query. Hiding the Terminal capability makes CodeBuddy run background
+// commands internally, keeping its task registry consistent.
+//
+// Other agents (Claude, OpenCode, etc.) either have their own task management
+// decoupled from the host terminals or no background-task feature, so the
+// capability is kept enabled for them.
+//
+// Tests can override via SetAdvertiseTerminalForTest (the override takes
+// precedence over the per-agent default).
+
+var (
+	advertiseTerminal         = true
+	advertiseTerminalOverride *bool
+)
+
+// advertiseTerminalCapability returns the current Terminal capability value.
+func advertiseTerminalCapability(agent *model.Agent) bool {
+	if advertiseTerminalOverride != nil {
+		return *advertiseTerminalOverride
+	}
+	if agent != nil && isCodeBuddyBackend(agent) {
+		// CodeBuddy's background-task registry (TaskOutput/TaskStop) is not
+		// compatible with host-managed terminals: its tools query an internal
+		// registry that never sees host-created "term-N" tasks, so every
+		// TaskOutput fails with "Background task not found". Hide the
+		// capability so CodeBuddy manages background commands internally.
+		return false
+	}
+	return advertiseTerminal
+}
+
+// SetAdvertiseTerminalForTest overrides the Terminal capability for tests.
+// Production code must not use this.
+func SetAdvertiseTerminalForTest(enabled bool) {
+	advertiseTerminalOverride = &enabled
+}
+
+// ResetAdvertiseTerminalForTest clears the test override.
+// Production code must not use this.
+func ResetAdvertiseTerminalForTest() {
+	advertiseTerminalOverride = nil
+}
 
 // EnsureAlive ensures the connection has a live agent process and initialized
 // ACP connection, but does NOT create/resume a session. Used by ListSessions
@@ -346,19 +399,11 @@ func (c *ACPConn) killProcessLocked() {
 		return
 	}
 
-	// Close the stdout filter first to unblock pending reads on the pipe.
-	// This prevents cmd.Wait() from hanging when the process is killed but
-	// stdout hasn't been closed yet.
-	if c.stdoutFilter != nil {
-		c.stdoutFilter.Close()
-		c.stdoutFilter = nil
-	}
-
-	// Kill the entire process group (see killProcessGroup for rationale).
-	killProcessGroup(c.cmd.Process)
 	oldCmd := c.cmd
+	oldFilter := c.stdoutFilter
+	c.stdoutFilter = nil
 	c.mu.Unlock()
-	_ = oldCmd.Wait()
+	c.reapProcess(oldCmd, oldFilter)
 	c.mu.Lock()
 	if c.cmd == oldCmd {
 		c.cmd = nil
@@ -381,16 +426,11 @@ func (c *ACPConn) spawnLocked(ctx context.Context) error {
 			_ = c.conn.Cancel(cancelCtx, acp.CancelNotification{SessionId: acp.SessionId(c.acpSID)})
 			cancelCancel()
 		}
-		// Close the old stdout filter to unblock pending reads before killing
-		if c.stdoutFilter != nil {
-			c.stdoutFilter.Close()
-			c.stdoutFilter = nil
-		}
-		// Kill the entire process group (npx + child processes).
-		killProcessGroup(c.cmd.Process)
 		oldCmd := c.cmd
+		oldFilter := c.stdoutFilter
+		c.stdoutFilter = nil
 		c.mu.Unlock()
-		_ = oldCmd.Wait()
+		c.reapProcess(oldCmd, oldFilter)
 		c.mu.Lock()
 		slog.Info("acp perf: spawnLocked.kill_old_process", "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(killStart))
 		if c.cmd == oldCmd {
@@ -512,7 +552,7 @@ func (c *ACPConn) spawnLocked(ctx context.Context) error {
 				ReadTextFile:  true,
 				WriteTextFile: true,
 			},
-			Terminal: true,
+			Terminal: advertiseTerminalCapability(c.agent),
 		},
 		ClientInfo: &acp.Implementation{
 			Name:    "clawbench",

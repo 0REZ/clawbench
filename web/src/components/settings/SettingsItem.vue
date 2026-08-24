@@ -57,10 +57,10 @@
     <!-- Info-type: detail line with action icons (quantity on left, icons on right) -->
     <div v-if="type === 'info' && displayValue" class="settings-item__info-row">
       <span class="settings-item__info-detail">{{ displayValue }}</span>
-      <span v-if="refreshable" class="settings-item__refresh" :class="{ 'settings-item__refresh--active': refreshing }" @click.stop="emit('refresh')">
+      <span v-if="refreshable" class="settings-item__refresh refresh-spin" :class="{ 'refresh-spin--active': refreshing }" @click.stop="emit('refresh')">
         <RefreshCw :size="12" />
       </span>
-      <span v-if="rebuildable" class="settings-item__rebuild" :class="{ 'settings-item__rebuild--active': rebuilding }" :title="rebuildTitle" @click.stop="emit('rebuild')">
+      <span v-if="rebuildable" class="settings-item__rebuild refresh-spin" :class="{ 'refresh-spin--active': rebuilding }" :title="rebuildTitle" @click.stop="emit('rebuild')">
         <RotateCcw :size="12" />
       </span>
     </div>
@@ -530,14 +530,14 @@ function confirmEdit() {
   transition: color 0.15s ease;
 }
 
-.settings-item__refresh:hover {
+.settings-item__refresh.refresh-spin--active {
   color: var(--accent-color);
 }
 
-.settings-item__refresh--active {
-  animation: spin 0.8s linear infinite;
-  pointer-events: none;
-  color: var(--accent-color);
+@media (hover: hover) {
+  .settings-item__refresh:hover {
+    color: var(--accent-color);
+  }
 }
 
 /* Rebuild icon beside progress bar */
@@ -553,19 +553,14 @@ function confirmEdit() {
   transition: color 0.15s ease;
 }
 
-.settings-item__rebuild:hover {
+.settings-item__rebuild.refresh-spin--active {
   color: var(--accent-color);
 }
 
-.settings-item__rebuild--active {
-  animation: spin 0.8s linear infinite;
-  pointer-events: none;
-  color: var(--accent-color);
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@media (hover: hover) {
+  .settings-item__rebuild:hover {
+    color: var(--accent-color);
+  }
 }
 
 /* Section header */
@@ -616,7 +611,7 @@ function confirmEdit() {
 }
 
 .settings-item__switch-input:checked + .settings-item__switch-track {
-  background: var(--color-green);
+  background: var(--accent-color);
 }
 
 .settings-item__switch-input:checked + .settings-item__switch-track::after {
@@ -763,7 +758,7 @@ function confirmEdit() {
 .settings-item__option {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 12px 16px;
   cursor: pointer;
   min-height: 44px;
@@ -801,11 +796,15 @@ function confirmEdit() {
 .settings-item__option-label {
   font-size: 15px;
   color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
 }
 
 .settings-item__option-check {
   font-size: 15px;
   color: var(--accent-color);
   font-weight: 600;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 </style>

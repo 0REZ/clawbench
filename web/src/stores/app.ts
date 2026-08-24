@@ -2,7 +2,7 @@
 import { reactive } from 'vue'
 import { apiGet, apiPost } from '@/utils/api'
 import { appLog } from '@/utils/appLog'
-import { baseName, dirName } from '@/utils/path.ts'
+import { baseName, dirName, isAbsolutePath, normalizeSlashes, toProjectRelative } from '@/utils/path.ts'
 import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
@@ -100,6 +100,7 @@ interface CurrentFile {
     isVideo?: boolean
     isHtml?: boolean
     isOffice?: boolean
+    isExcalidraw?: boolean
     isBinary?: boolean
     tooLarge?: boolean
     truncated?: boolean
@@ -347,6 +348,16 @@ let selectFileSeq = 0 // monotonic counter to suppress stale concurrent file loa
 
 async function loadFiles(dir = '', silent = false, _depth = 0, noLoading = false): Promise<void> {
     const seq = ++loadFilesSeq // this call supersedes any earlier in-flight call
+    // Normalize Windows backslashes to forward slashes so currentDir and item
+    // data-path attributes use a consistent separator style (the Go backend
+    // returns paths via filepath.ToSlash).
+    dir = normalizeSlashes(dir)
+    // Relativize an absolute path that lies inside the current project root.
+    // /api/dir resolves relative paths against the project root, so passing an
+    // absolute path (E:/git/…, possibly from file search or chat annotation)
+    // must be converted to project-relative first. Without this the backend
+    // rejects it (AccessDenied).
+    dir = toProjectRelative(dir, state.projectRoot)
     // Defensive: strip leading slashes so currentDir is always a project-relative path.
     // The Go backend treats paths starting with "/" as absolute filesystem paths,
     // which causes 500 errors when they're not under configured root paths.
@@ -439,6 +450,9 @@ async function selectFile(path: string, isImageFile = false, isAudioFile = false
         state.currentFile = { name: fileName, path, content: null, isOffice: true }
         saveOpenFile(); return true
     }
+    // .excalidraw files need their JSON content (the scene), so they go
+    // through the normal fetch path below instead of short-circuiting like
+    // media. The backend returns content + subtype="excalidraw".
 
     try {
         // Absolute paths (project-external) use query parameter to avoid URL path
@@ -446,7 +460,7 @@ async function selectFile(path: string, isImageFile = false, isAudioFile = false
         // Go's ServeMux decodes back to /, making it look like a relative path.
         // Project-internal relative paths continue to use URL path encoding.
         if (!noLoading) state.fileLoading = true
-        const isAbsPath = path.startsWith('/')
+        const isAbsPath = isAbsolutePath(path)
         let url: string
         if (isAbsPath) {
             url = forceText
@@ -485,6 +499,10 @@ async function selectFile(path: string, isImageFile = false, isAudioFile = false
         const htmlExts = ['.html', '.htm', '.xhtml']
         if (htmlExts.some(ext => lower.endsWith(ext))) {
             data.isHtml = true
+        }
+        // Detect Excalidraw files (backend reports subtype="excalidraw")
+        if (data.subtype === 'excalidraw') {
+            data.isExcalidraw = true
         }
         // Backend may also mark as binary if the file somehow passes frontend check
         // When refreshing the same file (auto-refresh from file watcher),

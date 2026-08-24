@@ -1616,7 +1616,7 @@ func TestTriggerChatSummarization_BroadcastsWSUpdate(t *testing.T) {
 	assistantContent := `{"blocks":[{"type":"text","text":"Here's the answer."}]}`
 	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (201, '/test', 'assistant', ?, ?, 0)", assistantContent, sessionID)
 
-	triggerChatSummarization(sessionID)
+	triggerChatSummarization(context.Background(), sessionID)
 
 	// Should have saved the summary
 	summary, found := GetSummary("chat_message", 201)
@@ -1647,7 +1647,7 @@ func TestTriggerChatSummarization_SaveSummaryError(t *testing.T) {
 	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (501, '/test', 'assistant', ?, ?, 0)", assistantContent, sessionID)
 
 	// Should not panic, just log warning and return
-	triggerChatSummarization(sessionID)
+	triggerChatSummarization(context.Background(), sessionID)
 }
 
 // --- truncatePreview tests ---
@@ -2135,7 +2135,7 @@ func TestTriggerChatSummarization_AlwaysExtracts(t *testing.T) {
 	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (601, '/test', 'assistant', ?, ?, 0)", assistantContent, sessionID)
 
 	// Summarization is always enabled — a summary should be created.
-	triggerChatSummarization(sessionID)
+	triggerChatSummarization(context.Background(), sessionID)
 
 	summary, found := GetSummary("chat_message", 601)
 	assert.True(t, found, "summary should always be created (no disable switch)")
@@ -2167,7 +2167,7 @@ func TestParseMessageBlocks_ValidBlocks(t *testing.T) {
 
 // --- summarizeChatSimple with nil ws manager ---
 
-func TestSummarizeChatSimple_NilWSManager(t *testing.T) {
+func TestSummarizeSimple_NilWSManager(t *testing.T) {
 	db, teardown := setupTestDBForChatSummary(t)
 	defer teardown()
 
@@ -2175,72 +2175,34 @@ func TestSummarizeChatSimple_NilWSManager(t *testing.T) {
 	ws.SetManagerForTest(nil)
 	defer ws.SetManagerForTest(origMgr)
 
-	// Insert session + messages
 	sessionID := "test-simple-nil-ws"
 	_, _ = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, '/test', 'claude', 'test')", sessionID)
-	assistantContent := `{"blocks":[{"type":"text","text":"The answer."}]}`
-	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (800, '/test', 'user', 'hello', ?, 0)", sessionID)
-	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (801, '/test', 'assistant', ?, ?, 0)", assistantContent, sessionID)
 
-	messages, err := GetMessagesBySessionID(sessionID)
-	require.NoError(t, err)
-
-	var lastAssistant *model.ChatMessage
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "assistant" {
-			lastAssistant = &messages[i]
-			break
-		}
-	}
-	require.NotNil(t, lastAssistant)
-
-	var content struct {
-		Blocks []model.ContentBlock `json:"blocks"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(lastAssistant.Content), &content))
+	blocks := []model.ContentBlock{{Type: "text", Text: "The answer."}}
 
 	// Should not panic with nil ws manager
-	summarizeChatSimple(lastAssistant, content.Blocks, "/test", sessionID)
+	err := summarizeMessage(801, blocks, "/test", sessionID)
+	assert.NoError(t, err)
 
 	// Summary should still be saved even without WS broadcast
-	summary, found := GetSummary("chat_message", lastAssistant.ID)
+	summary, found := GetSummary("chat_message", 801)
 	assert.True(t, found)
 	assert.Equal(t, "The answer.", summary)
 }
 
-// --- summarizeChatSimple with empty extracted text ---
+// --- summarizeSimple with empty extracted text ---
 
-func TestSummarizeChatSimple_EmptyExtractedText(t *testing.T) {
-	db, teardown := setupTestDBForChatSummary(t)
+func TestSummarizeSimple_EmptyExtractedText(t *testing.T) {
+	_, teardown := setupTestDBForChatSummary(t)
 	defer teardown()
 
-	// Assistant message with only tool_use blocks (no text)
-	toolOnlyContent := `{"blocks":[{"type":"tool_use","name":"Bash","id":"t1"}]}`
-	_, _ = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, '/test', 'claude', 'test')", "test-simple-empty")
-	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (802, '/test', 'assistant', ?, ?, 0)", toolOnlyContent, "test-simple-empty")
+	// Tool-use only blocks (no text) → no summary saved
+	blocks := []model.ContentBlock{{Type: "tool_use", Text: "read_file", ID: "t1"}}
 
-	messages, err := GetMessagesBySessionID("test-simple-empty")
-	require.NoError(t, err)
+	err := summarizeMessage(802, blocks, "/test", "test-simple-empty")
+	assert.NoError(t, err)
 
-	var lastAssistant *model.ChatMessage
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "assistant" {
-			lastAssistant = &messages[i]
-			break
-		}
-	}
-	require.NotNil(t, lastAssistant)
-
-	var content struct {
-		Blocks []model.ContentBlock `json:"blocks"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(lastAssistant.Content), &content))
-
-	// ExtractLastAnswerFromBlocks returns "" for tool_use only blocks
-	summarizeChatSimple(lastAssistant, content.Blocks, "/test", "test-simple-empty")
-
-	// No summary should be saved
-	_, found := GetSummary("chat_message", lastAssistant.ID)
+	_, found := GetSummary("chat_message", 802)
 	assert.False(t, found, "no summary should be created for empty extracted text")
 }
 
@@ -2496,6 +2458,171 @@ func TestEmitSessionEvent_Completed_DingTalkStarted(t *testing.T) {
 
 	// Should not panic — DingTalk code path exercised (IsStarted()=true, PushSessionEvent returns false)
 	EmitSessionEvent("session-dt-1", "completed", true)
+}
+
+// --- EmitSessionPushNotification ---
+
+// setupPushNotificationTest prepares DB tables + a WS manager with a disconnected
+// client so StoreNotifiableEvent persists pending_events (matching real usage).
+func setupPushNotificationTest(t *testing.T, sessionID string) *sql.DB {
+	t.Helper()
+	// Isolate the global terminal-push guard across tests.
+	terminalPushDone.Delete(sessionID)
+	t.Cleanup(func() { terminalPushDone.Delete(sessionID) })
+
+	db := setupChatTestDB(t)
+	cleanup := SetDBForTest(db, db)
+	t.Cleanup(cleanup)
+
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS pending_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_id TEXT NOT NULL UNIQUE,
+			event_type TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_event_id ON pending_events(event_id);
+		CREATE INDEX IF NOT EXISTS idx_pending_expires ON pending_events(expires_at);
+	`)
+	require.NoError(t, err)
+	_, err = db.Exec("CREATE TABLE IF NOT EXISTS chat_sessions (id TEXT PRIMARY KEY, project_path TEXT, backend TEXT, title TEXT, agent_id TEXT DEFAULT '', external_session_id TEXT DEFAULT '', archived INTEGER NOT NULL DEFAULT 0)")
+	require.NoError(t, err)
+	_, err = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, ?, ?, ?)",
+		sessionID, "/home/user/project", "codebuddy", "Push Test")
+	require.NoError(t, err)
+
+	mgr := ws.NewManagerForTest()
+	ws.SetManagerForTest(mgr)
+	t.Cleanup(func() { ws.SetManagerForTest(nil) })
+	var writeMu sync.Mutex
+	_ = mgr.Subscribe(nil, &writeMu, "test-client-push", "")
+	mgr.DisconnectClient("test-client-push")
+
+	origMgr := dingtalk.GetManager()
+	dtMgr := dingtalk.NewManager(&model.DingTalkConfig{AppKey: "k", AppSecret: "s", AgentID: 1})
+	dtMgr.SetStartedForTest(true)
+	dingtalk.SetManager(dtMgr)
+	t.Cleanup(func() {
+		dtMgr.SetStartedForTest(false)
+		dingtalk.SetManager(origMgr)
+	})
+
+	return db
+}
+
+func pendingEventCount(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM pending_events").Scan(&n))
+	return n
+}
+
+func TestEmitSessionPushNotification_Completed(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-push-1")
+
+	content := model.ContentBlock{Type: "text", Text: "AI response for push"}
+	blocks := map[string]any{"blocks": []model.ContentBlock{content}}
+	contentJSON, _ := json.Marshal(blocks)
+	insertTestMessage(t, db, "session-push-1", "user", "question")
+	insertTestMessage(t, db, "session-push-1", "assistant", string(contentJSON))
+
+	// First call: terminal push claimed → one pending_event stored.
+	EmitSessionPushNotification("session-push-1", "completed")
+	assert.Equal(t, 1, pendingEventCount(t, db))
+
+	// Second call on the same run: guard suppresses duplicate push.
+	EmitSessionPushNotification("session-push-1", "completed")
+	assert.Equal(t, 1, pendingEventCount(t, db))
+}
+
+func TestEmitSessionPushNotification_GuardResetsOnNewRun(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-push-2")
+
+	content := model.ContentBlock{Type: "text", Text: "AI response"}
+	blocks := map[string]any{"blocks": []model.ContentBlock{content}}
+	contentJSON, _ := json.Marshal(blocks)
+	insertTestMessage(t, db, "session-push-2", "user", "q")
+	insertTestMessage(t, db, "session-push-2", "assistant", string(contentJSON))
+
+	EmitSessionPushNotification("session-push-2", "completed")
+	assert.Equal(t, 1, pendingEventCount(t, db))
+
+	// A new run resets the terminal-push guard, allowing the next push.
+	require.True(t, TrySetSessionRunning("session-push-2"))
+	t.Cleanup(func() { SetSessionRunning("session-push-2", false, true) })
+	EmitSessionPushNotification("session-push-2", "completed")
+	assert.Equal(t, 2, pendingEventCount(t, db))
+}
+
+func TestEmitSessionPushNotification_Cancelled(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-push-3")
+
+	EmitSessionPushNotification("session-push-3", "cancelled")
+
+	// Cancelled is a terminal state → stored as a pending event, no response preview.
+	assert.Equal(t, 1, pendingEventCount(t, db))
+	var payload string
+	require.NoError(t, db.QueryRow("SELECT payload FROM pending_events").Scan(&payload))
+	var msg ws.ServerMessage
+	require.NoError(t, json.Unmarshal([]byte(payload), &msg))
+	data, ok := msg.Data.(map[string]any)
+	require.True(t, ok, "session_update payload should unmarshal to a map")
+	assert.Equal(t, "cancelled", data["status"])
+	assert.Empty(t, data["response_preview"])
+}
+
+// TestCancelSession_DoesNotDoublePush verifies the M2 fix: when the session
+// goroutine completes first (claiming the terminal push guard and pushing
+// "completed"), CancelSession's "cancelled" broadcast must NOT send a second,
+// contradictory push.
+func TestCancelSession_DoesNotDoublePush(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-cancel-race")
+
+	// Set up a running session with a registered cancel func so CancelSession
+	// reaches its emit path.
+	require.True(t, TrySetSessionRunning("session-cancel-race"))
+	t.Cleanup(func() { SetSessionRunning("session-cancel-race", false, true) })
+	_, cancel := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-cancel-race", cancel)
+	t.Cleanup(func() {
+		cancel()
+		UnregisterSessionCancel("session-cancel-race")
+	})
+
+	// Simulate the goroutine completing first: claim the terminal push guard and
+	// push "completed" (stores one pending event).
+	EmitSessionPushNotification("session-cancel-race", "completed")
+	assert.Equal(t, 1, pendingEventCount(t, db))
+
+	// CancelSession must broadcast "cancelled" over WS but must NOT push a second
+	// notification (the guard is already claimed).
+	require.True(t, CancelSession("session-cancel-race"))
+	assert.Equal(t, 1, pendingEventCount(t, db), "CancelSession must not add a duplicate push after 'completed'")
+
+	// Session must no longer be running.
+	assert.False(t, IsSessionRunning("session-cancel-race"))
+}
+
+// TestCancelSession_PushesWhenFirst confirms the reverse ordering: when
+// CancelSession claims the guard first (no goroutine push yet), it DOES push
+// "cancelled" (one pending event).
+func TestCancelSession_PushesWhenFirst(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-cancel-first")
+
+	require.True(t, TrySetSessionRunning("session-cancel-first"))
+	t.Cleanup(func() { SetSessionRunning("session-cancel-first", false, true) })
+	_, cancel := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-cancel-first", cancel)
+	t.Cleanup(func() {
+		cancel()
+		UnregisterSessionCancel("session-cancel-first")
+	})
+
+	require.True(t, CancelSession("session-cancel-first"))
+	assert.Equal(t, 1, pendingEventCount(t, db), "CancelSession as the first terminal state must push 'cancelled'")
+	assert.False(t, IsSessionRunning("session-cancel-first"))
 }
 
 // --- getSessionResponsePreview: query error path (lines 93-96) ---

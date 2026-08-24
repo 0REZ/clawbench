@@ -9,6 +9,7 @@ import { updatePlanEntries } from './usePlanProgress'
 import { FILE_MODIFYING_TOOLS, findLastBlockOfType, forceCleanupStreamingState as _forceCleanupStreamingState, findStreamingMsg, drainQueueMessage, cancelPendingMessages, sortMessages, nextClientSeq, computeAfterSort, type ChatMessage, type ContentBlock, type ContentEventData, type ThinkingEventData, type ToolUseEventData, type QueueEventData, type ErrorEventData } from '@/utils/chatStreamUtils.ts'
 import type { FileEntry } from '@/utils/fileAttachmentUtils'
 import type { ChatStreamEventData } from '@/utils/chatStreamUtils.ts'
+import { ToolUseWatchdog } from '@/utils/toolUseWatchdog'
 
 const TAG = 'ChatStream'
 
@@ -58,8 +59,10 @@ export function useChatStream(options: UseChatStreamOptions) {
 
   let streamTimeout: ReturnType<typeof setTimeout> | null = null
   const renderScheduler = new StreamFrameScheduler()
-  // Track tool_use timeout timers so we can clean them up
-  const toolUseTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map()
+  // Watchdog for tool_use blocks: a tool that goes silent for TOOL_USE_TIMEOUT_MS
+  // is considered stalled and marked done. Restarted on every tool_use progress
+  // event so long-running tools aren't falsely marked finished.
+  const toolUseWatchdog = new ToolUseWatchdog()
   // Counter for assigning stable _key to thinking blocks during streaming
   let thinkingBlockCounter = 0
   // Whether we are currently streaming (subscribed to a session)
@@ -137,10 +140,7 @@ export function useChatStream(options: UseChatStreamOptions) {
   }
 
   function clearToolUseTimeouts() {
-    for (const timer of toolUseTimeouts.values()) {
-      clearTimeout(timer)
-    }
-    toolUseTimeouts.clear()
+    toolUseWatchdog.clearAll()
   }
 
   /**
@@ -225,7 +225,16 @@ export function useChatStream(options: UseChatStreamOptions) {
         break
       }
 
-
+      case 'content_reset': {
+        if (sessionChanged()) return
+        const sm = findStreamingMsg(messages.value)
+        if (!sm) return
+        sm.blocks = []
+        sm.streamingText = ''
+        sm.metadata = undefined
+        onRenderNeeded()
+        break
+      }
 
       case 'content': {
         if (sessionChanged()) return
@@ -312,8 +321,7 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.duration_ms !== undefined) newBlock.duration_ms = data.duration_ms
             blocks.push(newBlock)
           }
-          const timer = toolUseTimeouts.get(data.id!)
-          if (timer) { clearTimeout(timer); toolUseTimeouts.delete(data.id!) }
+          toolUseWatchdog.clear(data.id!)
 
           if (data.name && FILE_MODIFYING_TOOLS.has(data.name) && onFileModified) {
             const filePath = data.file_path || existing?.file_path
@@ -331,6 +339,18 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.summary !== undefined) existing.summary = data.summary
             if (data.display_name !== undefined) existing.display_name = data.display_name
             if (data.file_path !== undefined) existing.file_path = data.file_path
+            // Progress event: reset the stall watchdog so long-running tools
+            // that keep emitting updates are never falsely marked done.
+            // Check the event's name (may be more up-to-date than the block's).
+            if (data.name !== 'PermissionApproval' && !isSubagentToolName(data.name)) {
+              toolUseWatchdog.start(data.id!, TOOL_USE_TIMEOUT_MS, () => {
+                if (!existing.done) {
+                  appLog.w(TAG, `tool_use block ${data.id} stalled without 'done' for ${TOOL_USE_TIMEOUT_MS}ms, marking as done`)
+                  existing.done = true
+                  onRenderNeeded()
+                }
+              })
+            }
           } else {
             const newBlock: ContentBlock = {
               type: 'tool_use', name: data.name!, id: data.id!, done: false,
@@ -344,15 +364,13 @@ export function useChatStream(options: UseChatStreamOptions) {
             if (data.file_path) newBlock.file_path = data.file_path
             blocks.push(newBlock)
             if (data.name !== 'PermissionApproval' && !isSubagentToolName(data.name)) {
-              const timer = setTimeout(() => {
+              toolUseWatchdog.start(data.id!, TOOL_USE_TIMEOUT_MS, () => {
                 if (!newBlock.done) {
-                  appLog.w(TAG, `tool_use block ${data.id} timed out without 'done', marking as done`)
+                  appLog.w(TAG, `tool_use block ${data.id} stalled without 'done' for ${TOOL_USE_TIMEOUT_MS}ms, marking as done`)
                   newBlock.done = true
                   onRenderNeeded()
                 }
-                toolUseTimeouts.delete(data.id!)
-              }, TOOL_USE_TIMEOUT_MS)
-              toolUseTimeouts.set(data.id!, timer)
+              })
             }
           }
         }
@@ -379,8 +397,7 @@ export function useChatStream(options: UseChatStreamOptions) {
           existing.done = true
           if (data.duration_ms !== undefined) existing.duration_ms = data.duration_ms
         }
-        const timer = toolUseTimeouts.get(data.id!)
-        if (timer) { clearTimeout(timer); toolUseTimeouts.delete(data.id!) }
+        toolUseWatchdog.clear(data.id!)
         onRenderNeeded()
         if (onToolResult && data.id) {
           onToolResult(data.id)
@@ -415,6 +432,35 @@ export function useChatStream(options: UseChatStreamOptions) {
         appLog.d(TAG, `[done] pending msgs: ${pendingCount}; messages: ${doneSummary}`)
 
         disconnectStream()
+
+        // Unlock input bar and fire stream-end callbacks immediately so the user
+        // sees the final state (meta bar, file-changes banner, summary toggle)
+        // without waiting for the loadHistory REST round-trip. Previously these
+        // were in the .finally() of onLoadHistory(), which meant the UI stayed
+        // in a limbo state (streaming indicator gone but meta bar not yet shown)
+        // for 50-500ms+ while the REST call completed and the message array was
+        // replaced. Moving them here eliminates that perceived lag.
+        loading.value = false
+        onMessage()
+        if (isOpen.value) {
+          onScrollBottom()
+        }
+        onStreamEnd?.('done')
+        if (!isOpen.value) {
+          const lastMsg = messages.value[messages.value.length - 1]
+          if (lastMsg?.role === 'assistant') {
+            onToast(gt('chat.stream.aiReplied'), { icon: '🤖', duration: 5000, onClick: () => onOpen() })
+            onNotification(gt('chat.stream.aiReplied'), {
+              body: gt('chat.stream.clickToViewReply'),
+              onClick: () => onOpen()
+            })
+          }
+        }
+
+        // Sync messages from DB in the background. loadHistory replaces the
+        // entire messages array (DB IDs replace drain-* keys, summary is
+        // populated, etc.) but this is a non-urgent consistency refresh — the
+        // user already sees the correct final state from forceCleanupStreamingState.
         onLoadHistory().then(() => {
           const afterSummary = messages.value.map((m, i: number) =>
             `[${i}] ${m.role}${m.id ? ` id=${m.id}` : ''}${m.streaming ? ' STREAMING' : ''} content="${(m.content || '').slice(0, 30)}" blocks=${m.blocks?.length || 0}`
@@ -424,23 +470,9 @@ export function useChatStream(options: UseChatStreamOptions) {
           // and Vue rebuilt the DOM, destroying any Mermaid SVGs rendered by the
           // earlier forceCleanupStreamingState onRenderNeeded(true) call.
           onRenderNeeded(true)
-        }).finally(() => {
-          loading.value = false
-          onMessage()
-          if (isOpen.value) {
-            onScrollBottom()
-          }
-          onStreamEnd?.('done')
-          if (!isOpen.value) {
-            const lastMsg = messages.value[messages.value.length - 1]
-            if (lastMsg?.role === 'assistant') {
-              onToast(gt('chat.stream.aiReplied'), { icon: '🤖', duration: 5000, onClick: () => onOpen() })
-              onNotification(gt('chat.stream.aiReplied'), {
-                body: gt('chat.stream.clickToViewReply'),
-                onClick: () => onOpen()
-              })
-            }
-          }
+        }).catch(() => {
+          // Non-critical: loadHistory has its own error handling (toast).
+          // UI already finalized by forceCleanupStreamingState above.
         })
         break
       }
@@ -453,15 +485,17 @@ export function useChatStream(options: UseChatStreamOptions) {
         thinkingBlockCounter = 0
         disconnectStream()
         onReplayDone?.()
+        // Unlock input immediately — don't wait for loadHistory REST round-trip.
+        loading.value = false
+        if (isOpen.value) {
+          onScrollBottom()
+        }
+        // Sync from DB in the background.
         onLoadHistory().then(() => {
-          loading.value = false
           // Force full render — loadHistory replaced DOM, Mermaid needs re-render
           onRenderNeeded(true)
-          if (isOpen.value) {
-            onScrollBottom()
-          }
         }).catch(() => {
-          loading.value = false
+          // Non-critical: UI already finalized.
         })
         break
       }
@@ -484,21 +518,23 @@ export function useChatStream(options: UseChatStreamOptions) {
         if (sessionChanged()) return
         disconnectStream()
         const errorData = payload as unknown as ErrorEventData
+        // Set error block on streaming message immediately so user sees the
+        // error without waiting for loadHistory REST round-trip.
+        const sm = findStreamingMsg(messages.value)
+        if (sm) {
+          const errorBlock: ContentBlock = { type: 'error', text: errorData?.error || 'Unknown error' }
+          if (errorData?.reason) errorBlock.reason = errorData.reason
+          sm.blocks = [errorBlock]
+        }
+        _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
+        loading.value = false
+        onStreamEnd?.('error')
+        // Sync from DB in the background (same pattern as 'done' handler).
         onLoadHistory().then(() => {
-          // Re-render Mermaid on the final DOM — same race as 'done' handler
           onRenderNeeded(true)
         }).catch(() => {
-          if (sessionChanged()) return
-          const sm = findStreamingMsg(messages.value)
-          if (sm) {
-            const errorBlock: ContentBlock = { type: 'error', text: errorData?.error || 'Unknown error' }
-            if (errorData?.reason) errorBlock.reason = errorData.reason
-            sm.blocks = [errorBlock]
-          }
-          _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
-          loading.value = false
+          // Non-critical: error block already displayed.
         })
-        onStreamEnd?.('error')
         break
       }
 

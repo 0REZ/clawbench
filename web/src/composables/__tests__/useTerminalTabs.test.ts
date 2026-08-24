@@ -66,10 +66,12 @@ vi.mock('@/composables/useTerminalSession', () => {
 // Mock xterm — useTerminalTabs creates Terminal/FitAddon/WebLinksAddon instances
 vi.mock('@xterm/xterm', () => {
   class MockTerminal {
-    options: Record<string, unknown> = {}
+    options: Record<string, unknown>
     element: HTMLElement | null = null
     private _dataCallbacks: ((data: string) => void)[] = []
     private _resizeCallbacks: (() => void)[] = []
+
+    constructor(options: Record<string, unknown> = {}) { this.options = { ...options } }
 
     loadAddon() {}
     open(el: HTMLElement) { this.element = el }
@@ -108,12 +110,13 @@ function createTabManager(overrides?: {
   onTermCreated?: (term: unknown) => void
   autoExecCommand?: ReturnType<typeof ref<{ command: string } | null>>
   onAutoExec?: (tabId: string, command: string) => void
+  getXtermTheme?: () => Record<string, unknown>
 }) {
   return useTerminalTabs(
     (cwd?: string) => `ws://localhost:8080/api/terminal/ws${cwd ? `?cwd=${cwd}` : ''}`,
     {
       fontSize: ref(14),
-      getXtermTheme: () => ({}),
+      getXtermTheme: overrides?.getXtermTheme ?? (() => ({})),
       errorMessages: defaultErrorMessages,
       onCloseSessionViaHttp: overrides?.onCloseSessionViaHttp,
       onExit: overrides?.onExit,
@@ -602,6 +605,21 @@ describe('useTerminalTabs', () => {
     })
   })
 
+  describe('createXtermInstance theme', () => {
+    it('applies the configured getXtermTheme() theme to newly created tabs', () => {
+      // Simulates the user having picked a fixed terminal theme: every new
+      // session (tab) must be created with that theme, not the app default.
+      const selectedTheme = { background: '#1e1f29', foreground: '#f8f8f2' }
+      const mgr = createTabManager({ getXtermTheme: () => selectedTheme })
+
+      mgr.createTab()
+
+      for (const tab of mgr.tabs.value) {
+        expect(tab.xterm!.options.theme).toStrictEqual(selectedTheme)
+      }
+    })
+  })
+
   describe('getTab', () => {
     it('returns the tab with the given ID', () => {
       const mgr = createTabManager()
@@ -777,6 +795,66 @@ describe('useTerminalTabs', () => {
       setCallbacksCall.onStatus({ running: true, cwd: '/home/b' })
 
       expect(onAutoExec).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('unread dot (hasUnread)', () => {
+    /** Wire onOutput for a tab and fire it with given data. */
+    function fireOutput(mgr: ReturnType<typeof useTerminalTabs>, tab: TerminalTab, data: string) {
+      const rawSession = getRawSession(tabIndex(mgr, tab))
+      const setCallbacksCall = rawSession.setCallbacks.mock.calls[0][0]
+      setCallbacksCall.onOutput(data)
+    }
+
+    it('defaults hasUnread to false', () => {
+      const mgr = createTabManager()
+      const tab = mgr.tabs.value[0]
+      expect(tab.hasUnread).toBe(false)
+    })
+
+    it('sets hasUnread when output arrives for a background tab', () => {
+      const mgr = createTabManager()
+      const bgTab = mgr.tabs.value[0]
+      const activeTab = mgr.createTab() // becomes active
+      expect(activeTab.id).toBe(mgr.activeTabId.value)
+
+      fireOutput(mgr, bgTab, 'background output')
+      expect(bgTab.hasUnread).toBe(true)
+    })
+
+    it('does not set hasUnread when output arrives for the active tab', () => {
+      const mgr = createTabManager()
+      const activeTab = mgr.tabs.value[0]
+      expect(activeTab.id).toBe(mgr.activeTabId.value)
+
+      fireOutput(mgr, activeTab, 'active output')
+      expect(activeTab.hasUnread).toBe(false)
+    })
+
+    it('clears hasUnread on switchTab', () => {
+      const mgr = createTabManager()
+      const bgTab = mgr.tabs.value[0]
+      const activeTab = mgr.createTab()
+
+      fireOutput(mgr, bgTab, 'background output')
+      expect(bgTab.hasUnread).toBe(true)
+
+      mgr.switchTab(bgTab.id)
+      expect(bgTab.hasUnread).toBe(false)
+    })
+
+    it('clears hasUnread on the tab switched to after closing the active tab', () => {
+      const mgr = createTabManager()
+      const firstTab = mgr.tabs.value[0]
+      const activeTab = mgr.createTab()
+
+      fireOutput(mgr, firstTab, 'background output')
+      expect(firstTab.hasUnread).toBe(true)
+
+      // Closing the active tab auto-switches to the adjacent tab (firstTab)
+      mgr.closeTab(activeTab.id)
+      expect(mgr.activeTabId.value).toBe(firstTab.id)
+      expect(firstTab.hasUnread).toBe(false)
     })
   })
 

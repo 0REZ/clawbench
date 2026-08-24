@@ -159,10 +159,12 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Separate File View Tab**: Directory browsing (`browse`) and file viewing (`view`) are independent tabs — opening a file auto-switches to `view`, closing it stays on `view` showing empty state (recent files list), no auto-return to file manager
 - **File Preview Overlay**: Click a file to open a preview overlay in the `view` tab; supports navigation stack (multi-file switching + back), close to return to empty state
 - **Binary File Preview**: Binary files show a placeholder UI with "Open as text" option; large files auto-truncate (64KB binary / 512KB text), truncation notice banner when truncated
+- **OpenAPI/Swagger Preview**: OpenAPI spec files (YAML/JSON) rendered as interactive Swagger UI with "Try it out" support; CORS proxy (`/api/openapi-proxy`) enables direct API testing from the preview
 
 ### 🎨 Code Preview & Editing
 - CodeMirror-based code browsing and editing dual mode, read-only by default, one-click switch to edit mode
 - Syntax highlighting, sticky line numbers, word wrap toggle, 30+ language extensions (high-frequency static imports, low-frequency lazy loading)
+- **Code Autocompletion**: Language-aware autocompletion for 11 languages (JS/TS/HTML/CSS/Python/SQL/Go/Less/Sass/Liquid/Markdown) in edit mode, leveraging CodeMirror's built-in completion sources
 - **Sticky Scroll**: VS Code-style sticky scroll based on backend tree-sitter symbol data, showing enclosing scope context (functions, classes, structs, etc.) as you scroll
 - Double-click to copy code line content (flash animation feedback)
 - **File Change Flash Highlight**: When files are modified externally, deleted characters flash red and new characters flash blue for quick change identification
@@ -186,7 +188,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Thinking Effort Levels**: Per-agent thinking depth selection (Low / Medium / High, etc.), supported by 10 backends (Claude/CodeBuddy/OpenCode/Codex/MiMo/Pi/Copilot/Kimi/Antigravity/Grok), selection auto-persisted
 - **Model Selection Modal**: Unified model switching and thinking effort selection in a dual-tab interface, with search filtering, one-click model list refresh (for agents supporting auto-discovery), and long-press to set default model
 - **Model Selection Persistence**: Model choice and thinking effort per agent auto-saved to localStorage, restored on reload/session switch
-- **Scheduled Tasks**: AI creates Cron schedules via CLI subcommands, executes automatically; independent tab with 4-level breadcrumb navigation; task cards embedded in chat messages; frequency presets (hourly/daily/weekly/monthly) + custom cron expressions; per-execution read tracking + TTS playback; execution auto-summary + completion notification (sound/haptic/toast)
+- **Scheduled Tasks**: AI creates Cron schedules via CLI subcommands, executes automatically; independent tab with 3-level breadcrumb navigation (list → detail with merged overview & history → execution detail); task cards embedded in chat messages; frequency presets (hourly/daily/weekly/monthly) + custom cron expressions; per-execution read tracking + TTS playback; execution auto-summary + completion notification (sound/haptic/toast)
 - **Continue Conversation**: One-click continue conversation from task execution detail, auto-copies history messages and summaries to a new session, inherits backend/agent/model/thinking effort; sessions originated from scheduled tasks show a purple "Task" badge in session list
 - **Multi-Session Management**: Create, switch, archive independent sessions, swipe to switch; archived sessions recoverable via search, physical delete (irreversible) and archive retention auto-cleanup available; Ctrl/Cmd+Delete to quick-archive current session
 - **Swipe Session Toggle**: Toggle left/right swipe session switching in Settings → Chat; defaults to off to prevent accidental switches when scrolling wide content
@@ -287,6 +289,15 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Desktop App Upgrade**: `GET /api/desktop/latest` checks npm registry for the latest ClawBench desktop (Electron) version and per-platform download links
 - **Android Version Mismatch Detection**: WebView startup compares APK version with server version; shows `VersionMismatchOverlay` prompting APK update when mismatched
 
+### 🖥️ Desktop App
+- **Cross-platform Electron client**: Windows / macOS / Linux desktop window wrapping the same Web UI — a full native experience without a browser
+- **Native Context Menu**: Right-click in editable fields (cut/copy/paste), text selection (copy), links (copy link), and images (copy image). Cut/copy/paste use OS-localized roles; custom items follow the app language
+- **External Links in Default Browser**: Links outside the configured server origin (third-party URLs, `mailto:`) open in your system browser instead of hijacking the app window
+- **SSH Port Forwarding**: Built-in ssh2 client maps server ports to `localhost`, so AI-started web services are reachable directly from the desktop shell
+- **System Notifications**: Native OS notifications with click-through navigation to the session/task; pending navigation is deferred on cold start
+- **Hard Refresh**: Ctrl+F5 (macOS: Cmd+Shift+R) clears session cache and hard-reloads the window
+- **Server Management**: Save multiple server URLs with credentials, switch via the built-in login page, passwords encrypted via OS keychain (safeStorage)
+
 ### 🔔 Notifications
 - Notification sound + haptic feedback (alerts when AI completes); sound can be toggled off in settings to prevent Bluetooth headphone interruption
 - Browser push notifications
@@ -296,7 +307,10 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 
 
 ### 🎨 Themes
-- Light / Dark mode, follows system preference
+- **18 Named Themes**: VSCode-style self-contained color schemes — GitHub Light/Dark, One Dark Pro, Catppuccin Mocha/Latte, Dracula, Nord, Tokyo Night, Solarized Dark/Light/Deep, Gruvbox Dark/Light, High Contrast Dark/Light, Night Owl, Ayu Dark, Vitesse Dark
+- **Follow System**: `auto` mode picks the default GitHub Light/Dark based on the system color scheme
+- **Quick Theme Picker**: Palette button in the header switches themes on the fly with live color previews
+- **Persistent & Status Bar Aware**: Selection is saved locally and restored on reload; Android status bar color follows the active theme
 
 ### 📱 PWA Support
 - Installable to home screen, runs in standalone window

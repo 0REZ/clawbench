@@ -37,6 +37,7 @@
         @render-flush="$emit('render-flush')"
         @toggle-summary="$emit('toggle-summary', msg.id)"
         @resume-session="$emit('resume-session', $event)"
+        @reset-session="$emit('reset-session', $event)"
 
       />
     </div>
@@ -162,7 +163,7 @@ const props = defineProps({
   active: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'remove-pending', 'fork-from-message'])
+const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'remove-pending', 'fork-from-message', 'reset-session'])
 
 const autoSpeech = inject('autoSpeech')
 const wrapperRef = ref(null)
@@ -226,7 +227,7 @@ const msgText = computed(() => {
 const showSummary = computed(() => (props.msg ? isShowingSummary(props.msg, displayMode.value) : false))
 
 // In global original mode, a summarized message whose content was stripped by
-// view=summary has nothing to render in original view — request the full text
+// Backend stripped content has nothing to render in original view — request the full text
 // once. Guarded by _loadingOriginal, blocks-present, and _loadAttempted (latch
 // set after the first fetch completes) to fire exactly once even on failure.
 const needsLazyOriginal = computed(() =>
@@ -422,10 +423,12 @@ function handleCopyMessage() {
     transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
-.chat-file-changes-banner:hover {
+@media (hover: hover) {
+  .chat-file-changes-banner:hover {
     background: color-mix(in srgb, var(--accent-color, #0066cc) 16%, transparent);
     border-color: color-mix(in srgb, var(--accent-color, #0066cc) 55%, transparent);
     box-shadow: 0 1px 3px color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
+  }
 }
 
 .chat-file-changes-banner svg {
@@ -489,8 +492,10 @@ function handleCopyMessage() {
     font-weight: 500;
 }
 
-.chat-action-btn.active:hover {
+@media (hover: hover) {
+  .chat-action-btn.active:hover {
     background: color-mix(in srgb, var(--accent-color, #0066cc) 10%, transparent);
+  }
 }
 
 /* Meta bar action buttons container */
@@ -566,8 +571,10 @@ function handleCopyMessage() {
     transition: color 0.15s;
 }
 
-.pending-remove:hover {
+@media (hover: hover) {
+  .pending-remove:hover {
     color: rgba(255, 255, 255, 1);
+  }
 }
 
 @keyframes pending-spin {
@@ -579,17 +586,21 @@ function handleCopyMessage() {
     to { opacity: 1; transform: translateY(0); }
 }
 
-.chat-meta-bar-user:hover {
+@media (hover: hover) {
+  .chat-meta-bar-user:hover {
     color: var(--text-secondary);
+  }
 }
 
 .chat-info-btn-user {
     color: rgba(255, 255, 255, 0.7);
 }
 
-.chat-info-btn-user:hover {
+@media (hover: hover) {
+  .chat-info-btn-user:hover {
     color: rgba(255, 255, 255, 0.9);
     background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 .chat-meta-bar-user .chat-meta-info {
@@ -742,10 +753,12 @@ function handleCopyMessage() {
   padding: 2px;
 }
 
-.chat-message.user .attachment-upload:hover,
-.chat-message.user .attachment-ref:hover,
-.chat-message.user .chat-file-tag:hover {
-  background: rgba(255, 255, 255, 0.25);
+@media (hover: hover) {
+  .chat-message.user .attachment-upload:hover,
+  .chat-message.user .attachment-ref:hover,
+  .chat-message.user .chat-file-tag:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
 }
 
 /* Assistant message: common colors */
@@ -766,10 +779,12 @@ function handleCopyMessage() {
   border: 1px solid var(--border-color);
 }
 
-.chat-message.assistant .attachment-upload:hover,
-.chat-message.assistant .attachment-ref:hover,
-.chat-message.assistant .chat-file-tag:hover {
-  background: var(--bg-secondary);
+@media (hover: hover) {
+  .chat-message.assistant .attachment-upload:hover,
+  .chat-message.assistant .attachment-ref:hover,
+  .chat-message.assistant .chat-file-tag:hover {
+    background: var(--bg-secondary);
+  }
 }
 
 .chat-message.user {
@@ -865,8 +880,10 @@ function handleCopyMessage() {
     text-underline-offset: 2px;
 }
 
-.chat-message.user a:hover {
+@media (hover: hover) {
+  .chat-message.user a:hover {
     color: rgba(255, 255, 255, 0.85);
+  }
 }
 
 .chat-message.user img {
@@ -881,7 +898,7 @@ function handleCopyMessage() {
 .chat-message.user .table-wrap {
     overflow-x: auto;
     border: none;
-    border-radius: 6px;
+    border-radius: 6px 6px 0 0;
     margin: 0.75em 0;
 }
 
@@ -924,9 +941,11 @@ function handleCopyMessage() {
     color: rgba(255, 255, 255, 0.7);
 }
 
-.chat-message.user .chat-file-open-btn:hover {
+@media (hover: hover) {
+  .chat-message.user .chat-file-open-btn:hover {
     color: white;
     background: rgba(255, 255, 255, 0.15);
+  }
 }
 .chat-message.user .chat-file-open-btn.external {
     color: #f0a04b;
@@ -944,9 +963,11 @@ function handleCopyMessage() {
     color: rgba(255, 255, 255, 0.7);
 }
 
-.chat-message.user .chat-commit-open-btn:hover {
+@media (hover: hover) {
+  .chat-message.user .chat-commit-open-btn:hover {
     color: white;
     background: rgba(255, 255, 255, 0.15);
+  }
 }
 
 .chat-message.assistant pre {
@@ -1025,7 +1046,7 @@ function handleCopyMessage() {
 .chat-message.assistant .table-wrap {
     overflow-x: auto;
     border: none;
-    border-radius: 6px;
+    border-radius: 6px 6px 0 0;
     margin: 0.75em 0;
 }
 
