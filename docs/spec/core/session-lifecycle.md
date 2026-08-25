@@ -96,7 +96,7 @@ sequenceDiagram
 - **僵尸进程清理**：`ForceCancelSession` 直接 kill CLI 子进程，用于处理卡死的执行。这是最后的兜底手段，保证系统不会因异常进程而资源泄漏
 - **会话归档**：归档会话仅标记 `archived=1`，消息仍然保留在数据库中供 RAG 检索。用户可通过会话搜索恢复归档的会话，整理对话列表时不会丢失历史知识
 - **会话物理删除（Destroy）**：`HardDeleteSession` 事务性地删除会话及所有关联数据（消息、工具调用、thinking、原始响应、摘要、任务执行记录），同时清理该会话的 RAG 索引条目（FTS + 向量）。对正在运行的会话先取消执行并关闭 ACP 连接，再执行删除。不可逆，适用于确信不再需要的历史会话
-- **过期归档自动清理**：`SessionCleanupWorker` 后台定时清理超过保留期限（`ArchiveRetentionDays`）的归档会话，批量执行物理删除（含 RAG 索引清理）。保留天数可配置，0 表示永久保留；清理功能可通过 `ArchiveRetentionEnabled` 开关控制。启动 5 分钟后首次执行，之后每 24 小时一次
+- **过期归档自动清理**：`SessionCleanupWorker` 后台定时清理超过保留期限（`ArchiveRetentionDays`）的归档会话，批量执行物理删除（含 RAG 索引清理）。清理功能默认关闭（`ArchiveRetentionEnabled=false`），保留天数默认 0 即永久保留——归档会话默认不自动消失，只有用户显式开启清理并设置天数后才触发。启动 5 分钟后首次执行，之后每 24 小时一次
 - **ACP context_state 持久化**：ACP 会话的模式（mode）、思考深度（thinking effort）和上下文使用率（usage）持久化到 `chat_sessions.context_state` 列。服务重启后，前端加载会话时即可恢复这些状态显示，无需等待 ACP 重连。部分更新通过原子合并操作写入，避免并发读-写-合并竞态
 - **会话身份持久化**：用户在会话中选择的模型、思考深度、工作模式和传输方式会被即时持久化（通过 PATCH `/api/ai/session/update`），页面重载后自动恢复——避免每次都需要重新配置
 - **续接对话**：定时任务的执行结果可以续接为新的聊天会话，继承源会话的消息、摘要和 `external_session_id`。用户看到定时任务结果后想继续追问，无需重新描述上下文。已续接的会话显示"定时"标识，已归档的续接会话会自动恢复
