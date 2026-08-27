@@ -77,6 +77,7 @@ flowchart LR
 - **LocalLinkGuard 全局链接拦截**：`initLocalLinkGuard` 在 document 冒泡阶段拦截本地/相对/file:// 链接，作为站点级处理器（如 useDoubleClickCopy）的最后兜底。已 defaultPrevented 的事件、修饰键点击、下载链接、`/api/` 端点和外部链接均不拦截——防止 DOMPurify 放行的 `file://` 链接被浏览器错误导航
 - **文本选择感知**：`useTextSelectionActive` 检测用户正在选择文本（非空 Selection），浮动 UI（如返回/前进导航、聊天滚动按钮）在选择期间自动隐藏，避免干扰拖拽选择和长按选择
 - **消息排队与 needs_start 重提交**：`chatQueueSend` 封装共享的"排队→needs_start 重提交"编排逻辑——AI 忙碌时消息入队，后端因会话已停止而出队时，消息自动重提交为新聊天而非静默丢失。正常输入路径和 AskUserQuestion 卡片路径共用此逻辑
+- **历史加载 DB 权威重建**：`useChatSession` 加载历史（`db_load`）采用 `rebuildFromDb`「DB 权威重建」语义——只保留与数据库行精确对应的 transient 消息（live streaming 占位按 id/queue_id 匹配、pending 按 queued+queueId、_remote 按 id），其余全部丢弃。每次加载历史（含刷新按钮）都收敛到与重启 APP 完全一致的结果，从根源消除消息重复，不再依赖启发式合并
 - **文件刷新与差异高亮**：`useFileRefresh` 统一三种刷新触发（手动刷新、fsnotify 自动刷新、聊天驱动刷新），保存滚动位置并高亮变更。Markdown 使用块级差异标记（无闪烁动画），代码文件使用行级差异 + 两阶段闪烁（红色删除→蓝色新增）。编辑中文件被外部修改时弹窗确认，防止静默覆盖
 - **Diff 前后导航**：`useDiffNavigation` 为 Git 提交详情中的文件列表提供 prev/next 顺序导航，用户无需返回文件列表即可逐个浏览文件差异
 - **搜索工具集**：`searchUtils` 提供纯搜索工具函数：文本高亮、语法感知标记、原始内容搜索、基于 rune 的位置匹配（RAG 搜索）和 Markdown 图片布局稳定性检测（搜索跳转修正）。`markdownScroll` 提供 Markdown 渲染预览与源码编辑间的标题锚定滚动同步
@@ -84,6 +85,7 @@ flowchart LR
 - **前台恢复自包含重连**：App 从后台恢复时，WS 重连分支自包含地执行 `reset → connect`，不依赖后台分支中可能被 Android `pauseTimers()` 冻结的 `setTimeout` 定时器——消除旧方案中 reset 定时器被冻结导致重连状态不一致的竞态
 - **Excalidraw 画布编辑器**：`.excalidraw` 文件类型（`isExcalidraw`）直接在应用内打开画布编辑，无需切换外部工具。实现上使用 iframe 内嵌独立构建（`web/vendor-build/excalidraw`，React 应用，与 Vue 不共享 bundle），通过 postMessage 通信：宿主向 iframe 发送 `load`（初始内容 + 语言 + 主题）、`theme`/`lang` 更新，iframe 向宿主回传 `ready`/`changed`/`save`/`exit`。主题与语言分开发送，避免 Excalidraw 初始化时重置语言。脏检查复用统一的 `useCodeEditorSave` 保存流程——保存写回原文件，退出时未保存修改触发确认，与代码编辑器行为一致
 - **会话重置**：AI 错误/警告横幅上的"重置会话"按钮（`POST /api/ai/session/reset`）解决 ACP 会话卡死问题（如工具已批准但从未执行的悬挂状态，后续 prompt 毫秒级空响应）。重置语义是**刻意保留外部会话 ID 映射**——只回收卡死的 agent 进程，下一次 prompt 通过 ResumeSession 重新附着到同一 agent 会话，对话上下文和聊天历史都完整保留。前端重置后自动重发最后一条用户消息，会话无感恢复
+- **完成弹窗**：`useCompletionPopover` + `CompletionPopover` 在会话/任务完成且聊天界面不在前台时弹出 Android 通知风格卡片。后端 `session_update`/`task_update` 的 completed 事件携带摘要、`last_user_message`（最近一条用户消息纯文本）、`projectName`/`projectPath`（跨项目时）和 `agent_id`（渲染 agent 后端图标）。多个完成事件经模块级单例队列排队依次展示，卡片内置快捷输入框追问、点击跳转会话/任务详情。取代了旧的会话结束 Toast 气泡
 - **宽屏聊天区切换**：宽屏布局下（`useWideScreenLayout` 管理），Dock 底部固定一个聊天区显示/隐藏切换按钮。隐藏时聊天面板从 SplitView 移除、左侧面板占满全宽，焦点转移到左侧面板，聊天快捷键同步停用；显示时恢复分栏。专注模式（coding focus）与聊天模式一键切换
 - **统一刷新按钮**：`RefreshButton` 组件统一全系统刷新交互——加载中旋转动画、成功确认勾选动画、最短旋转时长兜底防闪烁。聊天、文件、任务、Git 等场景共用同一控件，避免各面板刷新交互不一致。配套 `.refresh-spin` 工具类和 600ms 最短旋转时长保证视觉连贯
 

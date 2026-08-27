@@ -112,6 +112,7 @@ sequenceDiagram
 - **Grok Build 双传输模式**：Grok Build 后端同时支持 ACP（`grok agent stdio`）和 CLI（`grok -p ... --output-format streaming-json`）两种传输。ACP 为首选传输，CLI 作为流式 JSON 回退。`GrokStreamParser` 解析 CLI 的 JSON Lines 输出（text/thought/end/error 事件类型），从 end 事件捕获 session ID 和 token 用量
 - **OPENCODE_PERMISSION 注入**：OpenCode 的 ACP 连接自动注入 `OPENCODE_PERMISSION` 环境变量，将默认需人工审批的三个权限（文件读取、文件写入、命令执行）转为自动通过——防止 OpenCode 子 Agent 在无人值守的定时任务场景中因权限审批而挂起
 - **ACP ListSessions 磁盘扫描回退**：对于不支持 ACP `session/list` RPC 的后端（如 CodeBuddy），系统回退到磁盘扫描枚举会话。每个后端在 `init()` 时注册自己的磁盘扫描函数（`ListSessionsFromDiskFn`），`ACPConnManager` 的 `ListSessions` 方法优先尝试 RPC，失败时回退到磁盘扫描
+- **Codex 项目级会话发现**：Codex 的 ACP `session/list` 第一页会与磁盘扫描结果合并（`CODEX_HOME/sessions` 下的 `rollout-*.jsonl`，上限 10k 文件 / 200 结果，只读 session_meta 头），按 `sessionId` 去重、`updatedAt` 排序。ACP 列表失败时纯磁盘扫描兜底，恢复抽屉隐藏无标题会话——让 Codex 历史会话跨项目可靠恢复
 - **ACP EnsureAlive**：仅确保 ACP 连接存活，不创建或恢复会话。用于 `ListSessions` 等不需要会话上下文的场景
 - **ACP 用户取消保护存活连接**：用户取消（context cancel）时，如果 ACP 进程仍然存活，不调用 `markDeadIfCurrent`——避免不必要的 kill+respawn+ResumeSession 周期。只有当进程已死亡时才标记连接为 dead。此外，`handlePromptCancel` 保护 stale-conn：旧的 cancel 回调不会 clobber 已重生的连接。旧 cancel 的 `connRef` 通过 `isSameConn` 比较拒绝
 - **ACP ensureAliveWithSession 使用 ResumeSession**：`ensureAliveWithSession` 始终使用 `ResumeSession` 恢复会话，不使用 `LoadSession`（LoadSession 回放完整历史，慢且可能超时）。`loadTargetSID` 仅由显式的 `/api/ai/session/acp-load` 端点设置

@@ -221,6 +221,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Attach Drawer Footer**: Selected files shown as persistent scrollable tags at the bottom of the attach drawer, with direct removal support
 - **Auto-Approve Indicator**: Mode chip turns green when auto-approve is enabled, providing visual feedback for ACP permission mode
 - **Reset Session**: A "Reset session" button on AI error/warning banners restarts a stuck agent process (e.g., a tool approved but never executed); the external session ID and chat history are preserved, context is restored on reconnect and the last user message is re-sent
+- **Completion Popup**: When a session or scheduled task finishes while the chat UI is not in the foreground (you're on another tab or a different session), an Android-notification-style card slides in from the top — showing the full summary, project name/path, the last user message and the agent backend icon, with a built-in quick input to follow up and a jump button to the session/task detail. Multiple completions queue up and show one at a time; replaces the old in-UI toast
 
 ### 🖼️ Media Preview
 - In-app preview of images, audio, video
@@ -291,6 +292,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Self-Update**: One-click version check, binary download, and service restart from the Web UI; disconnect recovery with polling fallback; version skip option
 - **Desktop App Upgrade**: `GET /api/desktop/latest` checks npm registry for the latest ClawBench desktop (Electron) version and per-platform download links
 - **Android Version Mismatch Detection**: WebView startup compares APK version with server version; shows `VersionMismatchOverlay` prompting APK update when mismatched
+- **Floating Status Window**: System-level overlay capsule (Android 8.0+ `TYPE_APPLICATION_OVERLAY`) that shows the current session status (running / permission-pending breathing / error / completed) in real time via the background WebSocket channel. Draggable with edge-snapping and position persistence; tap returns to the main interface with the session deep link. Toggle + `SYSTEM_ALERT_WINDOW` permission flow in Settings
 
 ### 🖥️ Desktop App
 - **Cross-platform Electron client**: Windows / macOS / Linux desktop window wrapping the same Web UI — a full native experience without a browser
