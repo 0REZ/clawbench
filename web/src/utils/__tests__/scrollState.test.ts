@@ -1,0 +1,159 @@
+import { describe, expect, it } from 'vitest'
+import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS, NEAR_BOTTOM_PX, STREAM_FOLLOW_GRACE_PX, type ScrollStateInput } from '../scrollState'
+
+function baseInput(overrides: Partial<ScrollStateInput> = {}): ScrollStateInput {
+  return {
+    owner: 'idle',
+    userTouching: false,
+    lastScrollAt: 0,
+    now: 0,
+    nearBottomDist: 500,
+    ...overrides,
+  }
+}
+
+describe('isUserScrolling', () => {
+  it('returns true while the user is touching/dragging', () => {
+    expect(isUserScrolling(baseInput({ userTouching: true }))).toBe(true)
+  })
+
+  it('returns true when owner=user and last scroll event was within the stop window', () => {
+    const now = 10000
+    expect(isUserScrolling(baseInput({ owner: 'user', lastScrollAt: now - 100, now }))).toBe(true)
+    // Fling keeps firing scroll events — window auto-extends
+    expect(isUserScrolling(baseInput({ owner: 'user', lastScrollAt: now - SCROLL_STOP_MS + 1, now }))).toBe(true)
+  })
+
+  it('returns false when the last scroll event is older than the stop window', () => {
+    const now = 10000
+    expect(isUserScrolling(baseInput({ owner: 'user', lastScrollAt: now - SCROLL_STOP_MS - 1, now }))).toBe(false)
+  })
+
+  it('returns false when owner is not user (idle/programmatic) and no touch', () => {
+    const now = 10000
+    expect(isUserScrolling(baseInput({ owner: 'idle', lastScrollAt: now - 10, now }))).toBe(false)
+    expect(isUserScrolling(baseInput({ owner: 'programmatic', lastScrollAt: now - 10, now }))).toBe(false)
+  })
+
+  it('returns true for userTouching regardless of owner (touch takes priority)', () => {
+    expect(isUserScrolling(baseInput({ owner: 'programmatic', userTouching: true }))).toBe(true)
+    expect(isUserScrolling(baseInput({ owner: 'idle', userTouching: true }))).toBe(true)
+  })
+
+  it('boundary: exactly SCROLL_STOP_MS since the last scroll is NOT scrolling (strict <)', () => {
+    const now = 10000
+    expect(isUserScrolling(baseInput({ owner: 'user', lastScrollAt: now - SCROLL_STOP_MS, now }))).toBe(false)
+  })
+})
+
+describe('shouldFollowStream', () => {
+  it('returns false while the user is scrolling even with force=true (force never overrides active scrolling)', () => {
+    const now = 10000
+    const input = baseInput({ owner: 'user', userTouching: false, lastScrollAt: now - 50, now, nearBottomDist: 0 })
+    expect(shouldFollowStream(input, true)).toBe(false)
+    // Touch held — the root cause of the snap-back bug
+    expect(shouldFollowStream(baseInput({ userTouching: true, nearBottomDist: 0 }), true)).toBe(false)
+  })
+
+  it('returns true when stationary and already near the bottom', () => {
+    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ nearBottomDist: 0 }), false)).toBe(true)
+  })
+
+  it('returns false when stationary but scrolled away (no force)', () => {
+    expect(shouldFollowStream(baseInput({ nearBottomDist: 500 }), false)).toBe(false)
+  })
+
+  it('returns true for force pins when stationary even if scrolled away', () => {
+    expect(shouldFollowStream(baseInput({ nearBottomDist: 500 }), true)).toBe(true)
+  })
+
+  it('returns false for programmatic owner when jumped to the middle', () => {
+    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: 500 }), false)).toBe(false)
+  })
+
+  it('returns true for programmatic owner when target is near the bottom', () => {
+    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: 50 }), false)).toBe(true)
+  })
+
+  it('boundary: exactly NEAR_BOTTOM_PX follows; NEAR_BOTTOM_PX+1 does not (non-force)', () => {
+    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
+  })
+
+  it('returns true for programmatic owner at exactly NEAR_BOTTOM_PX, false just beyond', () => {
+    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
+  })
+
+  it('force + userTouching never follows even when near the bottom', () => {
+    expect(shouldFollowStream(baseInput({ userTouching: true, nearBottomDist: 0 }), true)).toBe(false)
+  })
+})
+
+describe('shouldFollowStream — streaming grace band', () => {
+  it('follows when streaming and the viewport gap is within the grace band (DOM lags tokens)', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 200 }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX }), false)).toBe(true)
+  })
+
+  it('does not follow when streaming but the user scrolled far beyond the grace band', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX + 1 }), false)).toBe(false)
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 2000 }), false)).toBe(false)
+  })
+
+  it('still follows when streaming near the bottom (unchanged base behavior)', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 50 }), false)).toBe(true)
+  })
+
+  it('does not follow a streamed-away viewport when NOT streaming', () => {
+    expect(shouldFollowStream(baseInput({ streaming: false, nearBottomDist: 200 }), false)).toBe(false)
+  })
+
+  it('never overrides an active user scroll, even within the grace band', () => {
+    const now = 10000
+    const input = baseInput({ streaming: true, owner: 'user', lastScrollAt: now - 50, now, nearBottomDist: 200 })
+    expect(shouldFollowStream(input, true)).toBe(false)
+    expect(shouldFollowStream(baseInput({ streaming: true, userTouching: true, nearBottomDist: 200 }), true)).toBe(false)
+  })
+})
+
+describe('shouldFollowStream — user left the bottom (must never be yanked back)', () => {
+  const now = 100000
+
+  it('suppresses follow entirely once the user scrolled away, regardless of distance', () => {
+    // Far away
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 5000 }), false)).toBe(false)
+    // Small gap inside the grace band — leaving is still respected
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 200 }), false)).toBe(false)
+  })
+
+  it('suppresses follow inside the grace band once the user left', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX }), false)).toBe(false)
+  })
+
+  it('force pins still apply when the user left the bottom (send message / session switch)', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 5000 }), true)).toBe(true)
+  })
+
+  it('follow resumes once the user scrolls back to the bottom', () => {
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: false, nearBottomDist: 0 }), false)).toBe(true)
+  })
+
+  it('near-bottom check wins even if a stale userLeftBottom flag is set (user returned)', () => {
+    expect(shouldFollowStream(baseInput({ userLeftBottom: true, nearBottomDist: 50 }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
+  })
+
+  it('an active user scroll while leaving is never overridden (userLeftBottom + scrolling)', () => {
+    const input = baseInput({
+      streaming: true,
+      userLeftBottom: true,
+      owner: 'user',
+      lastScrollAt: now - 50,
+      now,
+      nearBottomDist: 3000,
+    })
+    expect(shouldFollowStream(input, true)).toBe(false)
+  })
+})

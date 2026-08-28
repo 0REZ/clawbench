@@ -25,8 +25,17 @@ interface ServerEvent {
         session_title?: string
         response_preview?: string
         response_preview_plain?: string // Markdown-stripped preview for Android/browser notifications
+        last_user_message?: string // plain-text preview of the most recent user message (completed only)
+        agent_id?: string // agent that ran the session/execution (completed only)
         tool_name?: string
         project_path?: string
+        // chat_stream events (e.g. user_message) carry a ChatStreamData body:
+        // { session_id, event_type, payload }. These are optional and loose —
+        // existing notification/status fields above remain untouched. The
+        // actual shape is validated downstream in useChatStream's onEvent
+        // handler (it casts to ChatStreamEventData and guards session_id).
+        event_type?: string
+        payload?: unknown
     }
 }
 
@@ -149,6 +158,26 @@ async function fetchPendingEvents() {
         const data = await resp.json()
         const events: Array<{ event_id: string; event_type: string; payload: string }> = data.events || []
         if (events.length === 0) return
+
+        // No cursor (fresh install — localStorage was cleared, e.g. by
+        // uninstall/reinstall): the client has never seen any event, so there
+        // is nothing to replay. The server's pending_events table keeps up to
+        // 24h of terminal events (completed/cancelled/failed); replaying them
+        // all would flood a fresh client with dozens of stale completion
+        // popups/notifications. Instead, advance the cursor to the newest
+        // event so future reconnects start from here.
+        if (!lastSeenId) {
+            const latest = events[events.length - 1]
+            if (latest.event_id) {
+                localStorage.setItem(LAST_SEEN_KEY, latest.event_id)
+                // Sync cursor to Android SharedPreferences so native
+                // fetchPendingEvents() won't re-deliver these events either.
+                try {
+                    getNative()?.updateLastSeenEventId(latest.event_id)
+                } catch {}
+            }
+            return
+        }
 
         let latestId = lastSeenId
         for (const event of events) {

@@ -100,7 +100,7 @@ func TestRecentConversation_LoadError(t *testing.T) {
 
 	_, _ = db.Exec("DROP TABLE chat_history")
 
-	assert.Nil(t, recentConversation("sess-rc-load-err", 5))
+	assert.Nil(t, recentConversation(context.Background(), "sess-rc-load-err", 5))
 }
 
 func TestRecentConversation_SkipsOtherRolesAndEmptyText(t *testing.T) {
@@ -117,19 +117,44 @@ func TestRecentConversation_SkipsOtherRolesAndEmptyText(t *testing.T) {
 
 	// system role (902) and empty-text user (903) are skipped; remaining
 	// messages returned in chronological order.
-	got := recentConversation(sessionID, 10)
+	got := recentConversation(context.Background(), sessionID, 10)
 	assert.Equal(t, []string{"hello", "reply", "world"}, got)
 }
 
-// --- assistantConclusion ---
+// --- recentConversation legacy-content fallback ---
+//
+// Legacy assistant messages whose content is not blocks JSON (plain text,
+// broken JSON) used to be handled by assistantConclusion's ExtractPlainText
+// pass-through. That function is gone; the fallback now lives in
+// recentConversation, so these cases must still contribute context.
 
-func TestAssistantConclusion_InvalidJSON(t *testing.T) {
-	content := `{"blocks": broken`
-	assert.Equal(t, content, assistantConclusion(content))
+func TestRecentConversation_PlainTextAssistantFallback(t *testing.T) {
+	db, teardown := setupTestDBForChatSummary(t)
+	defer teardown()
+
+	sessionID := "sess-rc-plain"
+	_, _ = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, '/test', 'claude', 't')", sessionID)
+	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (910, '/test', 'user', 'hi', ?, 0)", sessionID)
+	// Plain-text assistant content (no blocks JSON) → ExtractPlainText fallback.
+	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (911, '/test', 'assistant', 'plain reply', ?, 0)", sessionID)
+
+	got := recentConversation(context.Background(), sessionID, 5)
+	assert.Equal(t, []string{"hi", "plain reply"}, got)
 }
 
-func TestAssistantConclusion_NonBlocksPrefix(t *testing.T) {
-	assert.Equal(t, "plain reply", assistantConclusion("plain reply"))
+func TestRecentConversation_BrokenJSONAssistantFallback(t *testing.T) {
+	db, teardown := setupTestDBForChatSummary(t)
+	defer teardown()
+
+	sessionID := "sess-rc-broken"
+	_, _ = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, '/test', 'claude', 't')", sessionID)
+	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (920, '/test', 'user', 'hi', ?, 0)", sessionID)
+	// Broken blocks JSON → parseMessageBlocks fails → rawAssistantBlocks returns
+	// the DB content and the fallback ExtractPlainText keeps the original text.
+	_, _ = db.Exec("INSERT INTO chat_history (id, project_path, role, content, session_id, streaming) VALUES (921, '/test', 'assistant', '{\"blocks\": broken', ?, 0)", sessionID)
+
+	got := recentConversation(context.Background(), sessionID, 5)
+	assert.Equal(t, []string{"hi", "{\"blocks\": broken"}, got)
 }
 
 // --- askQuestionText ---

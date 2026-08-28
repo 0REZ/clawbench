@@ -238,7 +238,6 @@ func strPtr(s string) *string { return &s }
 type mockSessionMessenger struct {
 	sessions []common.SessionInfo
 	running  map[string]bool
-	enqueued []string
 }
 
 func (m *mockSessionMessenger) FindSessionsByPrefix(_ string, _ bool) ([]common.SessionInfo, error) {
@@ -255,13 +254,6 @@ func (m *mockSessionMessenger) ListRecentSessions(limit int) ([]common.SessionIn
 func (m *mockSessionMessenger) IsSessionRunning(sessionID string) bool {
 	return m.running[sessionID]
 }
-
-func (m *mockSessionMessenger) EnqueueMessage(sessionID, message string) error {
-	m.enqueued = append(m.enqueued, sessionID+":"+message)
-	return nil
-}
-
-func (m *mockSessionMessenger) ClearQueue(_ string) {}
 
 func (m *mockSessionMessenger) SendMessageToSession(_, _ string) error {
 	return nil
@@ -330,10 +322,6 @@ func (m *mockSessionMessengerListError) ListRecentSessions(_ int) ([]common.Sess
 	return nil, fmt.Errorf("db error")
 }
 func (m *mockSessionMessengerListError) IsSessionRunning(_ string) bool { return false }
-func (m *mockSessionMessengerListError) EnqueueMessage(_, _ string) error {
-	return nil
-}
-func (m *mockSessionMessengerListError) ClearQueue(_ string) {}
 func (m *mockSessionMessengerListError) SendMessageToSession(_, _ string) error {
 	return nil
 }

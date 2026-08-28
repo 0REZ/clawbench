@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -411,7 +412,7 @@ func (a *mockACPAgent) Prompt(_ context.Context, params acp.PromptRequest) (acp.
 
 // simulateTurn sends a realistic sequence of ACP session notifications,
 // including available_commands_update, thinking, tool calls, and message chunks.
-func (a *mockACPAgent) simulateTurn(ctx context.Context, sid string, params acp.PromptRequest, currentMode string) error { //nolint:gocyclo // mock agent simulates many ACP protocol steps
+func (a *mockACPAgent) simulateTurn(ctx context.Context, sid string, params acp.PromptRequest, currentMode string) error { //nolint:gocyclo,gocognit // mock agent simulates many ACP protocol steps
 	// 1. Send available_commands_update at the start of each turn
 	if err := a.conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: acp.SessionId(sid),
@@ -523,6 +524,16 @@ func (a *mockACPAgent) simulateTurn(ctx context.Context, sid string, params acp.
 	}
 
 	// 5. Send the main response text word-by-word
+	// ACP_MOCK_REPLY_DELAY_MS (env) simulates a slow real AI agent: the delay is
+	// applied BEFORE the first word so queued messages pile up while the reply
+	// streams — reproducing real-world ordering conditions in E2E.
+	if d := os.Getenv("ACP_MOCK_REPLY_DELAY_MS"); d != "" {
+		if ms, err := strconv.Atoi(d); err == nil && ms > 0 {
+			if err := pause(ctx, time.Duration(ms)*time.Millisecond); err != nil {
+				return err
+			}
+		}
+	}
 	response := "Hello! I am a mock ACP agent for E2E testing. I received your message and processed it successfully."
 	words := strings.Fields(response)
 	for i, word := range words {
