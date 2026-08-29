@@ -21,10 +21,8 @@
               <span v-if="active.projectPath" class="completion-popover-project-path">{{ active.projectPath }}</span>
             </span>
           </div>
-          <div v-if="active.userMessage" class="completion-popover-meta">
-            <span class="completion-popover-user-msg" :title="active.userMessage">
-              <MessageSquare :size="11" /> {{ active.userMessage }}
-            </span>
+          <div v-if="active.userMessage" class="completion-popover-meta completion-popover-meta-user">
+            <span class="completion-popover-user-msg" :title="active.userMessage">{{ active.userMessage }}</span>
           </div>
           <div class="completion-popover-summary markdown-body" v-html="summaryHtml" @click="handleSummaryClick"></div>
           <div class="completion-popover-input">
@@ -49,7 +47,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search, Folder, MessageSquare, Send } from 'lucide-vue-next'
+import { Search, Folder, Send } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { useCompletionPopover } from '@/composables/useCompletionPopover'
 import { useAgents } from '@/composables/useAgents'
@@ -252,6 +250,25 @@ function handleSummaryClick(event: MouseEvent): void {
 
 .completion-popover-project {
     gap: 5px;
+}
+
+/* 用户消息：袖珍版聊天用户气泡 — 靠右、实底主题色、右下直角圆角、单行省略 */
+.completion-popover-meta-user {
+    justify-content: flex-end;
+    padding-left: 0;
+}
+
+.completion-popover-user-msg {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 3px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #fff;
+    background: var(--user-msg-color);
+    border-radius: 20px 20px 0 20px;
 }
 
 .completion-popover-project-name {

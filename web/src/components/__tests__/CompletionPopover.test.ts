@@ -77,11 +77,66 @@ describe('CompletionPopover', () => {
         expect(styles.whiteSpace).toBe('nowrap')
     })
 
+    it('styles the user message as a mini chat bubble (right-aligned, solid color, chat-style corner)', () => {
+        mockState.active = ref(makeItem({ userMessage: '请帮我修复登录 bug' }))
+        mountPopover()
+
+        const row = document.querySelector('.completion-popover-meta-user')!
+        const el = document.querySelector('.completion-popover-user-msg')!
+        const rowStyles = window.getComputedStyle(row)
+        // 行容器靠右对齐
+        expect(rowStyles.justifyContent).toBe('flex-end')
+        // 气泡：袖珍尺寸、白字（jsdom 可解析字面量计算值，
+        // 能证明专属块胜出公共块的 11px 灰字）
+        const styles = window.getComputedStyle(el)
+        expect(styles.fontSize).toBe('12px')
+        expect(styles.padding).toBe('3px 8px')
+        expect(styles.color).toBe('rgb(255, 255, 255)')
+        // 单行省略，宽度不超过容器
+        expect(styles.maxWidth).toBe('100%')
+        expect(styles.whiteSpace).toBe('nowrap')
+        expect(styles.overflow).toBe('hidden')
+        expect(styles.textOverflow).toBe('ellipsis')
+        // 不再渲染图标
+        expect(row.querySelector('svg')).toBeFalsy()
+
+        // jsdom 无法解析 var() 引用与 border-radius 计算值，
+        // 这两项改为断言组件注入的 CSS 规则文本（其余走计算值）
+        const cssText = Array.from(document.styleSheets)
+            .map((s) => {
+                try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n') }
+                catch { return '' }
+            })
+            .join('\n')
+        const bubbleRule = cssText.split('\n').filter((line) => line.includes('.completion-popover-user-msg')).join('\n')
+        expect(bubbleRule).toContain('background: var(--user-msg-color)')
+        expect(bubbleRule).toContain('border-radius: 20px 20px 0 20px')
+    })
+
     it('hides the user message row when empty', () => {
         mockState.active = ref(makeItem({ userMessage: '' }))
         mountPopover()
 
         expect(document.querySelector('.completion-popover-user-msg')).toBeFalsy()
+    })
+
+    it('keeps a long user message on a single line and preserves the full text via title', () => {
+        const longMessage = '这是一个非常非常非常非常非常非常非常非常非常非常非常非常长的用户消息，用来验证气泡内的文本超出宽度时保持单行并显示省略号'
+        mockState.active = ref(makeItem({ userMessage: longMessage }))
+        mountPopover()
+
+        const el = document.querySelector('.completion-popover-user-msg')!
+        // 完整文本仍在 DOM（省略号只是视觉裁剪，title 兜底完整内容）
+        expect(el.textContent).toBe(longMessage)
+        expect(el.getAttribute('title')).toBe(longMessage)
+        const styles = window.getComputedStyle(el)
+        // 单行不换行：white-space 为 nowrap 时 overflow-wrap 无意义，
+        // 断言关键三件套——不换行 + 溢出隐藏 + 省略号
+        expect(styles.whiteSpace).toBe('nowrap')
+        expect(styles.overflow).toBe('hidden')
+        expect(styles.textOverflow).toBe('ellipsis')
+        // flex 子项可收缩（min-width: 0），否则 max-width: 100% 下长文本会撑破容器
+        expect(styles.minWidth).toBe('0px')
     })
 
     it('renders the project name and path when provided', () => {
