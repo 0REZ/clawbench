@@ -1606,6 +1606,55 @@ func TestAIChat_Post_SessionBelongsToDifferentProject(t *testing.T) {
 	assertStatus(t, w, http.StatusForbidden)
 }
 
+// TestAIChat_Post_ExternalProjectPath verifies that POST /api/ai/chat with
+// ?project_path= (the session's owning project) succeeds for an external
+// project's session — backing the completion popover's quick reply to another
+// project's conversation. A mismatched project_path is still rejected.
+func TestAIChat_Post_ExternalProjectPath(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	otherProject := "/other-project-chat-post-ext"
+	sessionID, err := service.CreateSession(otherProject, "claude", "Other Session", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// POST from env.ProjectDir context to the external session, carrying its
+	// project path → must pass ownership check and enqueue/persist.
+	service.TrySetSessionRunning(sessionID)
+	defer func() {
+		service.SetSessionRunning(sessionID, false)
+		service.ClearQueuedMessages(sessionID)
+	}()
+
+	body := map[string]any{"message": "hello from popover"}
+	req := newRequest(t, http.MethodPost, "/api/ai/chat?session_id="+sessionID+"&project_path="+otherProject, body)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(AIChat, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["queued"])
+}
+
+// TestAIChat_Post_ExternalProjectPath_Mismatch verifies that a project_path
+// that does NOT match the session's owning project is rejected (no bypass).
+func TestAIChat_Post_ExternalProjectPath_Mismatch(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	otherProject := "/other-project-chat-post-mismatch"
+	sessionID, err := service.CreateSession(otherProject, "claude", "Other Session", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	body := map[string]any{"message": "hello"}
+	// project_path points at a third project that is NOT the session's owner
+	req := newRequest(t, http.MethodPost, "/api/ai/chat?session_id="+sessionID+"&project_path=/wrong-project", body)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(AIChat, req)
+	assertStatus(t, w, http.StatusForbidden)
+}
+
 // ============================================================================
 // buildChatRequest external session ID tests
 // ============================================================================

@@ -133,12 +133,20 @@ async function handleSend(): Promise<void> {
     if (!item || !text || sending.value) return
     sending.value = true
     try {
-        const url = `/api/ai/chat?session_id=${encodeURIComponent(item.sessionId)}`
-        await fetch(url, {
+        // 外部项目会话：携带其所属项目路径，后端据此通过归属校验
+        const params = new URLSearchParams({ session_id: item.sessionId })
+        if (item.projectPath) params.set('project_path', item.projectPath)
+        const url = `/api/ai/chat?${params.toString()}`
+        const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: text }),
         })
+        if (!res.ok) {
+            // 发送失败：保持弹窗打开并复位，让用户可重试
+            sending.value = false
+            return
+        }
         dismiss()
     } catch {
         sending.value = false

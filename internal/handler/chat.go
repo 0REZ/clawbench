@@ -282,7 +282,18 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	// Verify the session belongs to the requesting project (ISS-180)
 	// For POST, sessionID is always from a DB-backed session (auto-created above or from cookie),
 	// so an empty sessionProject means the session doesn't exist — will fail at backendName check.
-	if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != "" && sessionProject != projectPath {
+	// Support sending to an external project's session: the frontend passes ?project_path=
+	// (the session's owning project), which overrides the cookie project for ownership
+	// verification. Only an exact match with the session's own project is accepted, so
+	// this cannot be used to bypass access control.
+	if qp := r.URL.Query().Get("project_path"); qp != "" {
+		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
+			projectPath = qp
+		} else {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return
+		}
+	} else if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != "" && sessionProject != projectPath {
 		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 		return
 	}
