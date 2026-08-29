@@ -584,7 +584,15 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
   // completion order. When a pending navigation exists, restore must NOT
   // re-activate the file-view tab at all, otherwise it would clobber the
   // navigation target.
-  await restoreProjectWorkspace({ activateView: !pendingTaskNav && !pendingSessionId })
+  //
+  // activateView stays false even without pending navigation: switching
+  // projects must land on the chat tab just like cold start — the restored
+  // file loads into state (header badge shows it) but the user stays in chat.
+  // Previously the file-view tab was re-activated on project switch, which
+  // made the landing tab differ from cold start (regression: switching
+  // projects jumped away from chat whenever the project had a last-opened
+  // file). The user can still open the file by clicking the header badge.
+  await restoreProjectWorkspace({ activateView: false })
   if (isAppMode.value) syncToNative().catch(() => {})
 
   // ── Phase 7: Handle cross-project pending navigation ──
@@ -839,10 +847,12 @@ function closeOverlayAndSync() {
  * is cleared so it isn't retried and re-reported on every launch/switch.
  */
 async function restoreProjectWorkspace(opts) {
-  // activateView: on cold start (initializeApp) the app must land on the chat
-  // tab — restoring the last opened file loads it into state but does NOT switch
-  // the user away from chat. On project switch (hotSwitchProject) the user
-  // explicitly chose that project, so the file-view tab is re-activated.
+  // activateView: on cold start (initializeApp) AND project switch
+  // (hotSwitchProject) the app must land on the chat tab — restoring the last
+  // opened file loads it into state but does NOT switch the user away from
+  // chat. Both paths stay consistent: no project switch re-activates the
+  // file-view tab anymore (regression: switching projects jumped to the file
+  // viewer whenever the project had a last-opened file).
   return restoreProjectWorkspaceImpl({ switchTab, ...opts })
 }
 

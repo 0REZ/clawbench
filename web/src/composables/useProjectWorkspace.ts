@@ -6,13 +6,14 @@
 // keeping the two paths from diverging.
 //
 // When a saved file is restored and the caller passes activateView: true,
-// switchTab('view') re-activates the file-view tab. This is required on project
-// switch: resetProjectState() nulls currentFile, and the currentFile watcher
-// falls back to the browse tab, so without this the restored file stays in
-// state (the header badge shows it) but the viewer is never brought back to
-// view. Mirroring handleSelectFile, which calls switchTab('view') after opening.
-// On cold start (activateView omitted/false) the file is restored to state but
-// the app stays on the chat tab.
+// switchTab('view') re-activates the file-view tab. This was originally used on
+// project switch to bring the restored file's viewer back into view.
+//
+// Both cold start AND project switch now pass activateView: false (or omit it):
+// the file is restored to state (the header badge shows it) but the app stays
+// on the chat tab, keeping the landing tab consistent across both paths. The
+// user opens the restored file explicitly (header badge / file manager), just
+// like on cold start.
 import { useFileNavStack } from '@/composables/useFileNavStack'
 import { useToast } from '@/composables/useToast'
 import { gt } from '@/composables/useLocale'
@@ -26,9 +27,9 @@ export interface RestoreWorkspaceOptions {
   switchTab: (tab: string) => void
   /**
    * Whether restoring the last opened file should also activate the file-view
-   * tab. True on project switch (the user explicitly chose that project and
-   * expects its file context), false on cold app start — where the app should
-   * land on the chat tab by default even if a file was previously open.
+   * tab. Defaults to false. Both cold start and project switch keep this false
+   * so the app always lands on the chat tab — the file is restored to state
+   * (header badge) but the view tab is not auto-activated.
    */
   activateView?: boolean
 }

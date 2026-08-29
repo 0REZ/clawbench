@@ -38,7 +38,7 @@ describe('restoreProjectWorkspace', () => {
     vi.restoreAllMocks()
   })
 
-  it('restores the saved file and re-activates the view tab (switchTab("view"))', async () => {
+  it('restores the saved file and re-activates the view tab when activateView: true is passed', async () => {
     localStorage.setItem(OPEN_FILE_PREFIX + PROJECT, 'web/src/App.vue')
     vi.spyOn(store, 'loadFiles').mockResolvedValue(undefined)
     vi.spyOn(store, 'selectFile').mockResolvedValue(true)
@@ -64,6 +64,23 @@ describe('restoreProjectWorkspace', () => {
     // chat tab even though a file was previously open (regression: startup
     // jumped to the file-view tab).
     await restoreProjectWorkspace({ switchTab })
+
+    expect(store.selectFile).toHaveBeenCalledWith('web/src/App.vue')
+    expect(openFileMock).toHaveBeenCalledWith('web/src/App.vue')
+    expect(switchTab).not.toHaveBeenCalled()
+  })
+
+  it('project switch also stays on chat — file restored to state but view tab not activated', async () => {
+    localStorage.setItem(OPEN_FILE_PREFIX + PROJECT, 'web/src/App.vue')
+    vi.spyOn(store, 'loadFiles').mockResolvedValue(undefined)
+    vi.spyOn(store, 'selectFile').mockResolvedValue(true)
+    const switchTab = vi.fn()
+
+    // Project switch: hotSwitchProject passes activateView: false so the
+    // landing tab matches cold start — always chat (regression: switching
+    // projects jumped to the file-view tab whenever the project had a
+    // last-opened file).
+    await restoreProjectWorkspace({ switchTab, activateView: false })
 
     expect(store.selectFile).toHaveBeenCalledWith('web/src/App.vue')
     expect(openFileMock).toHaveBeenCalledWith('web/src/App.vue')
