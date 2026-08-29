@@ -145,7 +145,7 @@
             :title="t('chat.quickSend.injectToInput')"
             @click.stop="handleQuickSendInject(item)"
           >
-            <CornerDownLeft :size="14" />
+            <TextCursorInput :size="14" />
           </span>
         </button>
         <div class="quick-send-divider" />
@@ -268,7 +268,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, CornerDownLeft } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
@@ -2256,7 +2256,7 @@ defineExpose({
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 4px 14px;
   border: none;
   background: none;
   color: var(--text-primary);
