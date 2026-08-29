@@ -22,7 +22,10 @@
             </span>
           </div>
           <div v-if="active.userMessage" class="completion-popover-meta completion-popover-meta-user">
-            <span class="completion-popover-user-msg" :title="active.userMessage">{{ active.userMessage }}</span>
+            <span class="completion-popover-user-msg" :title="active.userMessage">
+              <MessageSquare :size="12" />
+              <span class="completion-popover-user-msg-text">{{ active.userMessage }}</span>
+            </span>
           </div>
           <div class="completion-popover-summary markdown-body" v-html="summaryHtml" @click="handleSummaryClick"></div>
           <div class="completion-popover-input">
@@ -47,7 +50,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search, Folder, Send } from 'lucide-vue-next'
+import { Search, Folder, Send, MessageSquare } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { useCompletionPopover } from '@/composables/useCompletionPopover'
 import { useAgents } from '@/composables/useAgents'
@@ -252,23 +255,37 @@ function handleSummaryClick(event: MouseEvent): void {
     gap: 5px;
 }
 
-/* 用户消息：袖珍版聊天用户气泡 — 靠右、实底主题色、右下直角圆角、单行省略 */
+/* 用户消息：袖珍版聊天用户气泡 — 靠左、胶囊半圆、左侧消息图标、单行省略。
+   省略号逻辑放在内层文本 span（flex 容器内 text-overflow 不生效），
+   外层气泡 inline-flex 布局图标 + 文本 */
 .completion-popover-meta-user {
-    justify-content: flex-end;
+    justify-content: flex-start;
     padding-left: 0;
 }
 
 .completion-popover-user-msg {
     display: inline-flex;
     align-items: center;
+    gap: 4px;
     min-width: 0;
     max-width: 100%;
-    padding: 3px 8px;
+    padding: 3px 10px;
     font-size: 12px;
     line-height: 1.4;
     color: #fff;
     background: var(--user-msg-color);
-    border-radius: 20px 20px 0 20px;
+    border-radius: 999px;
+}
+
+.completion-popover-user-msg svg {
+    flex-shrink: 0;
+}
+
+.completion-popover-user-msg-text {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .completion-popover-project-name {
@@ -290,8 +307,9 @@ function handleSummaryClick(event: MouseEvent): void {
     padding-top: 2px;
 }
 
-/* 有元信息行时，正文用分隔线+更大间距分层 */
-.completion-popover-meta + .completion-popover-summary {
+/* 有元信息行时，正文用分隔线+更大间距分层；
+   用户消息气泡与助手消息之间除外（气泡已有实底底色，分隔线多余） */
+.completion-popover-meta:not(.completion-popover-meta-user) + .completion-popover-summary {
     border-top: 1px solid color-mix(in srgb, var(--text-primary) 16%, transparent);
     padding-top: 10px;
     margin-top: 6px;
@@ -311,7 +329,7 @@ function handleSummaryClick(event: MouseEvent): void {
     margin-bottom: 0;
 }
 
-/* 快捷输入框 — 左右半圆胶囊 */
+/* 快捷输入框 — 固定小圆角（不用胶囊：多行增高时胶囊圆角会被拉伸变大） */
 .completion-popover-input {
     display: flex;
     align-items: flex-end;
@@ -320,7 +338,7 @@ function handleSummaryClick(event: MouseEvent): void {
     padding: 4px 6px 4px 8px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    border-radius: 999px;
+    border-radius: 12px;
 }
 
 .completion-popover-input:focus-within {

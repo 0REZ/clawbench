@@ -33,9 +33,6 @@
         <!-- Input -->
         <div class="qq-input-container">
           <div class="qq-input-row">
-            <button v-if="inputText" class="qq-clear-btn" @click="inputText = ''" :title="t('quoteBar.clear')">
-              <XCircle :size="16" />
-            </button>
             <textarea
               ref="inputRef"
               v-model="inputText"
@@ -60,7 +57,7 @@
 </template>
 
 <script setup>
-import { XCircle, Plus, Send, Copy } from 'lucide-vue-next'
+import { Plus, Send, Copy } from 'lucide-vue-next'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { truncateQuoteText, canSendInput } from '@/utils/quoteQuestionUtils'
@@ -346,13 +343,14 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
   max-height: 120px;
 }
 
-/* Input container — capsule style */
+/* Input container — fixed small radius (no capsule: capsule radius stretches
+   when the textarea grows to multiple lines) */
 .qq-input-container {
   display: flex;
   flex-direction: column;
   background: var(--bg-tertiary);
   border: none;
-  border-radius: 999px;
+  border-radius: 12px;
   overflow: hidden;
   transition: background 0.2s, box-shadow 0.2s;
 }
@@ -387,28 +385,6 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
 
 .qq-textarea::placeholder {
   color: var(--text-muted);
-}
-
-.qq-clear-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-muted);
-  padding: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  transition: color 0.15s, background 0.15s;
-  flex-shrink: 0;
-  align-self: flex-end;
-}
-
-@media (hover: hover) {
-  .qq-clear-btn:hover {
-    color: var(--danger-color);
-    background: color-mix(in srgb, var(--danger-color) 8%, transparent);
-  }
 }
 
 .qq-add-btn,

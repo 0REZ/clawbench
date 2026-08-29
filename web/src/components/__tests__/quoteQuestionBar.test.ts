@@ -24,7 +24,6 @@ const i18n = createI18n({
       },
       quoteBar: {
         chat: 'Chat',
-        clear: 'Clear',
         placeholder: 'Ask...',
         expandQuote: 'Expand quote',
         addToChat: 'Add to chat',
@@ -141,7 +140,6 @@ describe('QuoteQuestionBar component', () => {
         plugins: [i18n],
         stubs: {
           MessageSquare: true,
-          XCircle: true,
           Plus: true,
           Send: true,
           Copy: true,
@@ -164,6 +162,25 @@ describe('QuoteQuestionBar component', () => {
     const wrapper = mountBar()
     expect(wrapper.find('.quote-question-bar').exists()).toBe(true)
     expect(wrapper.find('.quote-bar-row').exists()).toBe(true)
+  })
+
+  it('uses a fixed small radius on the input container (no capsule: capsule stretches when multiline)', async () => {
+    const wrapper = mountBar()
+    // 输入容器只在 expanded 状态渲染，点击折叠行展开
+    await wrapper.find('.quote-bar-row').trigger('click')
+    const container = wrapper.find('.qq-input-container')
+    expect(container.exists()).toBe(true)
+    // jsdom 不解析 border-radius 简写计算值，改为断言 CSS 规则
+    const cssText = Array.from(document.styleSheets)
+      .map((s) => {
+        try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n') }
+        catch { return '' }
+      })
+      .join('\n')
+    const containerRule = cssText.split('\n').filter((line) => line.includes('.qq-input-container')).join('\n')
+    expect(containerRule).toContain('border-radius: 12px')
+    // 不再使用胶囊圆角 999px
+    expect(containerRule).not.toContain('999px')
   })
 
   it('does not render when visible is false', () => {
@@ -309,6 +326,14 @@ describe('QuoteQuestionBar component', () => {
     vm.inputText = ''
     await nextTick()
     expect(vm.canSend).toBe(false)
+  })
+
+  it('does not render a clear-input (X) button', async () => {
+    const wrapper = mountBar()
+    await wrapper.find('.quote-bar-row').trigger('click')
+    await nextTick()
+    expect(wrapper.find('.qq-clear-btn').exists()).toBe(false)
+    expect(wrapper.find('.qq-input-row').exists()).toBe(true)
   })
 
   it('emits close when Escape is pressed', async () => {
