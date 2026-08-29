@@ -12,6 +12,7 @@ import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage, type ChatMessageAction } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
+import { hasChatScrollPosition, clearChatScrollPosition } from '@/utils/chatScrollMemory'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -170,8 +171,17 @@ export function useChatSession(options: UseChatSessionOptions) {
     // bubbles and adopted _remote rows — so every loadHistory converges to what
     // an app restart would show (the ActionBar refresh behaves like a restart).
     dispatch({ type: 'db_load', dbMessages: parsed as ChatMessage[] })
+    const prevTotal = totalMessages.value
     totalMessages.value = (sessionData.total as number) || messages.value.length
     queuedCount.value = (sessionData.queuedCount as number) || 0
+    // Re-evaluate history existence only when the session actually grew new
+    // messages (total increased) or this is a different session. A routine
+    // refresh of an already-exhausted history must NOT clear noMoreHistory —
+    // otherwise the top scroll would re-fire an empty loadMore after every
+    // polling/refresh loadHistory.
+    if (totalMessages.value > prevTotal) {
+      noMoreHistory.value = false
+    }
 
     // ── Identity sync ──
     currentSessionId.value = returnedId
@@ -330,12 +340,19 @@ export function useChatSession(options: UseChatSessionOptions) {
   // exclude them — a pending bubble is not "loaded history" (plan C).
   const queuedCount = ref(0)
   const loadingMore = ref(false)
+  // Server confirmed there are no older messages (a loadMore returned empty).
+  // Once set, hasMore is forced to false so scrolling to the top never fires
+  // another loadMore for this session. Reset on switchSession (new session)
+  // or when a loadHistory reports the session grew (total increased) — a
+  // routine refresh of an already-exhausted history keeps the flag set.
+  const noMoreHistory = ref(false)
   // Plan C: compare non-queued loaded messages against non-queued total.
   // The queued messages in the messages array are pending bubbles, not loaded
   // history. Using filter(!m.queueId) instead of `length - queuedCount` keeps
   // the loaded count accurate even when queuedCount (a server snapshot) drifts
   // from the rows actually present in the messages array.
   const hasMore = computed(() => {
+    if (noMoreHistory.value) return false
     const loaded = messages.value.filter((m) => !(m as ChatMessage).queueId).length
     return loaded < totalMessages.value - queuedCount.value
   })
@@ -605,6 +622,19 @@ export function useChatSession(options: UseChatSessionOptions) {
         }
         onExtractScheduledTasks(olderMsgs)
         onRenderUpdate(true)
+      } else {
+        // No older messages returned — the server has confirmed we reached the
+        // beginning of history. Record it so hasMore flips to false and future
+        // scrolls to the top stop firing empty loadMore requests (previously
+        // hasMore stayed true and every top scroll re-triggered the fetch).
+        noMoreHistory.value = true
+        // Sync the snapshot anyway so queuedCount stays fresh for plan C.
+        if (typeof data.total === 'number' && data.total >= 0) {
+          totalMessages.value = data.total
+        }
+        if (typeof data.queuedCount === 'number') {
+          queuedCount.value = data.queuedCount
+        }
       }
     } catch (err: unknown) {
       appLog.e(TAG, 'Failed to load more messages:', err)
@@ -619,6 +649,13 @@ export function useChatSession(options: UseChatSessionOptions) {
     // loadHistory's own mySeq check handles the actual guard.
     ++loadHistorySeq
 
+    // Session scroll memory: if the target session was left scrolled away from
+    // the bottom, do NOT force-scroll to the bottom — ChatMessageList restores
+    // the remembered position after the new messages render. Sessions left at
+    // the bottom (or never visited) have no memory → force-scroll to bottom.
+    const hasSavedPos = hasChatScrollPosition(sessionId)
+    appLog.d(TAG, `switchSession: target ${sessionId.slice(0, 12)} hasSavedPos=${hasSavedPos}`)
+
     // Disconnect stream and invalidate snapshot before switching identity.
     onDisconnectStream()
     lastMessageSnapshot = ''  // Invalidate snapshot — new session may have different data
@@ -627,6 +664,8 @@ export function useChatSession(options: UseChatSessionOptions) {
     // messages belong to the PREVIOUS session and must not be carried over by
     // syncSessionState's in-flight merge into the new session.
     dispatch({ type: 'clear' })
+    // New session — history existence must be re-evaluated on load.
+    noMoreHistory.value = false
     // Clear stale blockAskQuestions from previous session
     Object.keys(blockTasks).forEach(k => delete blockTasks[k])
     Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
@@ -648,7 +687,7 @@ export function useChatSession(options: UseChatSessionOptions) {
     // - Placeholder restoration for running sessions (rebuildFromDb)
     // immediate=true skips the loadHistoryInProgress queue and
     // handles switching/inputDisabled in its finally block.
-    await loadHistory(true, true, false, true)
+    await loadHistory(!hasSavedPos, true, false, true)
 
     // Recalculate global chatUnread after switching — the backend has already
     // marked this session as read (UpdateLastRead), so the session list will
@@ -769,6 +808,9 @@ export function useChatSession(options: UseChatSessionOptions) {
       if (data.ok) {
         // Evict usage cache for the deleted session
         clearUsageStateById(sessionId)
+        // Evict scroll-position memory so archived/destroyed sessions don't
+        // leak entries in chatScrollMemory
+        clearChatScrollPosition(sessionId)
         // If deleted current session, switch to another
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')
@@ -813,6 +855,8 @@ export function useChatSession(options: UseChatSessionOptions) {
       const data = await resp.json()
       if (data.ok) {
         clearUsageStateById(sessionId)
+        // Evict scroll-position memory for the destroyed session
+        clearChatScrollPosition(sessionId)
         // After destroying current session, switch to another or create new
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')

@@ -52,8 +52,6 @@ public class FloatingStatusContentView extends LinearLayout {
     private static final float BREATH_ALPHA_MIN = 0.3f;
     private static final float BREATH_ALPHA_MAX = 1.0f;
     private static final long BREATH_MS = 800;
-    /** Duration of the logo-only collapse (stat groups fade out). */
-    static final long COLLAPSE_MS = 200;
 
     private final View runningDot;
     private final LinearLayout runningItem;
@@ -61,8 +59,8 @@ public class FloatingStatusContentView extends LinearLayout {
     private final LinearLayout unreadItem;
     private final ObjectAnimator breathAnim;
     private final float density;
-    /** True while a collapse-to-logo fade is in flight (set by collapseStats). */
-    private boolean statsCollapsed;
+    /** The app logo (row index 0); its trailing margin is dropped when the row collapses to a logo-only circle. */
+    private final ImageView logoView;
 
     public FloatingStatusContentView(Context context) {
         super(context);
@@ -78,6 +76,7 @@ public class FloatingStatusContentView extends LinearLayout {
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(LOGO_SIZE_DP), dp(LOGO_SIZE_DP));
         logoLp.setMargins(0, 0, dp(LOGO_MARGIN_END_DP), 0);
         addView(logo, logoLp);
+        logoView = logo;
 
         runningDot = new View(context);
         GradientDrawable runningDotDrawable = new GradientDrawable();
@@ -185,50 +184,44 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /**
-     * Collapse the row to a logo-only circle: the running / pending / unread
-     * groups fade out (the logo keeps full opacity) and {@code onDone} fires
-     * when the fade finishes. This is the first stage of the capsule hide
-     * animation — the host (FloatingStatusView / controller) shrinks the
-     * window width to the logo diameter in parallel. UI thread only.
+     * Collapse the row to a logo-only layout: every stat group (dot + label) is
+     * set GONE and the logo's trailing margin is removed, so the row's natural
+     * width becomes exactly the logo size. The host (FloatingStatusView /
+     * controller) shrinks the window to the logo diameter in parallel; this
+     * keeps the logo centered inside the resulting circle. The logo itself is
+     * left untouched (still VISIBLE, full alpha). UI thread only.
      */
-    public void collapseStats(Runnable onDone) {
+    public void collapseStats() {
         AppLog.d("FloatingStatusContent", "collapseStats");
-        statsCollapsed = true;
         if (breathAnim.isRunning()) {
             breathAnim.cancel();
             runningDot.setAlpha(BREATH_ALPHA_MAX);
         }
         for (LinearLayout item : new LinearLayout[]{runningItem, pendingItem, unreadItem}) {
-            if (item.getVisibility() == View.VISIBLE) {
-                item.animate().alpha(0f).setDuration(COLLAPSE_MS).start();
-            }
+            item.setVisibility(GONE);
         }
-        if (onDone != null) {
-            // Delayed on the main looper, not via view.postDelayed: the row may
-            // be detached from a window (which would queue the runnable in the
-            // view's HandlerActionQueue until re-attach) and the callback must
-            // fire even when every group is already GONE (no animation runs).
-            new android.os.Handler(android.os.Looper.getMainLooper())
-                    .postDelayed(onDone, COLLAPSE_MS);
-        }
-    }
-
-    /** True while a collapse-to-logo fade is in flight. */
-    public boolean isStatsCollapsed() {
-        return statsCollapsed;
+        android.widget.LinearLayout.LayoutParams lp =
+                (android.widget.LinearLayout.LayoutParams) logoView.getLayoutParams();
+        lp.setMargins(0, 0, 0, 0);
+        logoView.setLayoutParams(lp);
     }
 
     /**
-     * Restore all stat groups to full opacity. Called when the host is
-     * re-attached or the collapse animation is superseded, so a re-shown
-     * capsule never keeps the faded groups. UI thread only.
+     * Restore the row from a previous collapseStats: all stat groups become
+     * VISIBLE again (GONE groups from a zero count stay hidden — renderStats
+     * re-applies the correct visibility on the next render) and the logo's
+     * trailing margin comes back. Called when the host is re-attached so a
+     * re-shown capsule never keeps the collapsed layout. UI thread only.
      */
     public void restoreStats() {
+        AppLog.d("FloatingStatusContent", "restoreStats");
         for (LinearLayout item : new LinearLayout[]{runningItem, pendingItem, unreadItem}) {
-            item.animate().cancel();
-            item.setAlpha(1f);
+            item.setVisibility(VISIBLE);
         }
-        statsCollapsed = false;
+        android.widget.LinearLayout.LayoutParams lp =
+                (android.widget.LinearLayout.LayoutParams) logoView.getLayoutParams();
+        lp.setMargins(0, 0, dp(LOGO_MARGIN_END_DP), 0);
+        logoView.setLayoutParams(lp);
     }
 
     /**

@@ -79,6 +79,10 @@ const (
 	// dropping events. Persisting at most once per 500ms keeps the DB fresh
 	// for reload-on-refresh without stalling the event loop.
 	flushInterval = 500 * time.Millisecond
+	// waitStreamsPollInterval is the polling period for WaitStreamsDrained.
+	// Far below the 500ms flush window and the shutdown deadline, so it adds
+	// no meaningful latency to a graceful stop.
+	waitStreamsPollInterval = 25 * time.Millisecond
 )
 
 // RunConfig configures a single SessionExecutor execution.
@@ -222,6 +226,61 @@ func FlushStreamingNow() {
 		}
 		return true
 	})
+}
+
+// WaitStreamsDrained blocks until every active SessionExecutor has finished
+// (i.e. Finalize has persisted the streaming=0 completion marker to the DB),
+// or ctx is done. It is called by the graceful-shutdown path AFTER
+// FlushStreamingNow so the AI goroutines get a chance to drain their event
+// channels and finalize the final few hundred ms of output instead of having
+// the process exit mid-Finalize (which leaves streaming=1 rows behind).
+//
+// The activeStreams registry has exactly the right semantics for this wait:
+// entries are registered in NewSessionExecutor (after the streaming placeholder
+// row exists) and removed by Finalize AFTER FinalizeStreamingMessage has set
+// streaming=0. So an empty registry means every known stream has been fully
+// persisted.
+//
+// One caveat: RunWithChannel's deferred unregister runs between the event loop
+// exiting and Finalize running, so an executor can be briefly absent from the
+// registry before its streaming=0 is written. If this wait lands in that tiny
+// window it may return "drained" early. That is safe in the shutdown sequence
+// because FlushStreamingNow has already snapshotted the streaming row (with
+// thinking) and Finalize does not depend on the AI process staying alive —
+// the stream still finalizes while the process shuts down.
+//
+// Polling is used instead of a condition variable because the registry is a
+// sync.Map with no add/remove hooks; 25ms is far below the 500ms flush window
+// and a 5s shutdown deadline, so it adds no meaningful latency.
+func WaitStreamsDrained(ctx context.Context) {
+	for {
+		empty := true
+		activeStreams.Range(func(_, _ any) bool {
+			empty = false
+			return false // stop iteration at first entry
+		})
+		if empty {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			slog.Warn("WaitStreamsDrained: deadline reached with streams still active",
+				slog.Int("active", activeStreamCount()))
+			return
+		case <-time.After(waitStreamsPollInterval):
+		}
+	}
+}
+
+// activeStreamCount returns the number of entries in the active-streams
+// registry, used for shutdown diagnostics.
+func activeStreamCount() int {
+	n := 0
+	activeStreams.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
 }
 
 // handleNonTerminalEvent processes a single non-terminal stream event.
@@ -447,6 +506,9 @@ func (e *SessionExecutor) buildResult(receivedTerminal bool, wallStart time.Time
 		e.responseMetadata = &ai.Metadata{}
 	}
 	e.responseMetadata.WallMs = wallMs
+	if extID := GetExternalSessionID(e.cfg.SessionID); extID != "" {
+		e.responseMetadata.SessionID = extID
+	}
 
 	// Determine cancel reason (interactive mode only)
 	cancelReason := ""
@@ -642,6 +704,10 @@ func (e *SessionExecutor) injectSessionMetadata(meta *ai.Metadata) {
 
 	if sessionModel := GetSessionModel(e.cfg.SessionID); sessionModel != "" {
 		meta.Model = sessionModel
+	}
+
+	if extID := GetExternalSessionID(e.cfg.SessionID); extID != "" {
+		meta.SessionID = extID
 	}
 }
 

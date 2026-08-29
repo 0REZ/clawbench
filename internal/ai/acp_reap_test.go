@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"clawbench/internal/model"
@@ -198,4 +199,123 @@ func TestRefactor_ReapProcess_DoesNotCloseRespawnedFilter(t *testing.T) {
 	still := conn.stdoutFilter
 	conn.mu.Unlock()
 	require.Same(t, newFilter, still, "connection must still own the new filter")
+}
+
+// ---------------------------------------------------------------------------
+// GracefulStopAll — cancels prompts, waits for clean exit, then SIGKILLs stragglers
+// ---------------------------------------------------------------------------
+
+// TestGracefulStopAll_CancelsPromptAndReaps verifies the happy path: an
+// in-flight prompt is cancelled, and after the agent process exits cleanly the
+// connection is reaped and removed from the registry. Uses a short-lived sleep
+// that exits on its own (prompt cancellation is simulated by setting a cancel
+// func that runs immediately; a cancelled sleep keeps running to full duration,
+// so this exercises the wait-then-SIGKILL fallback for a non-cooperating
+// process).
+func TestGracefulStopAll_CancelsPromptAndReaps(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: process semantics differ on Windows")
+	}
+	orig := crashDiagWaitTimeout
+	crashDiagWaitTimeout = 2 * time.Second
+	defer func() { crashDiagWaitTimeout = orig }()
+
+	mgr := &ACPConnManager{
+		conns:     make(map[string]*ACPConn),
+		stopSweep: make(chan struct{}),
+	}
+	agent := &model.Agent{ID: "test-graceful", Backend: "acp-stdio", AcpCommand: "sleep"}
+	conn := newACPConn(agent, "sid-graceful")
+
+	// Simulate an in-flight prompt with a cancel func.
+	cancelled := make(chan struct{})
+	conn.mu.Lock()
+	conn.promptCancel = func() { close(cancelled) }
+	conn.cmd = newTestSleep(t)
+	conn.alive = true
+	conn.mu.Unlock()
+	mgr.conns["sid-graceful"] = conn
+
+	mgr.GracefulStopAll(200 * time.Millisecond)
+
+	// Prompt cancel must have been invoked.
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("GracefulStopAll did not cancel the in-flight prompt")
+	}
+
+	// Connection must be removed from the registry and marked dead.
+	mgr.mu.Lock()
+	_, stillRegistered := mgr.conns["sid-graceful"]
+	mgr.mu.Unlock()
+	require.False(t, stillRegistered, "connection must be removed after graceful stop")
+
+	conn.mu.Lock()
+	alive := conn.alive
+	cmd := conn.cmd
+	conn.mu.Unlock()
+	require.False(t, alive, "connection must be marked dead")
+	require.Nil(t, cmd, "process must be reaped")
+}
+
+// TestGracefulStopAll_NoConnections verifies GracefulStopAll is a safe no-op
+// with an empty registry and unclosed stopSweep.
+func TestGracefulStopAll_NoConnections(t *testing.T) {
+	mgr := &ACPConnManager{
+		conns:     make(map[string]*ACPConn),
+		stopSweep: make(chan struct{}),
+	}
+	assert.NotPanics(t, func() { mgr.GracefulStopAll(50 * time.Millisecond) })
+}
+
+// TestGracefulStopAll_ThenStopAll verifies the shutdown sequence does not
+// panic on the second sweep stop: the graceful path runs first, then the
+// deferred StopAll backstop runs against the same manager.
+func TestGracefulStopAll_ThenStopAll(t *testing.T) {
+	mgr := &ACPConnManager{
+		conns:     make(map[string]*ACPConn),
+		stopSweep: make(chan struct{}),
+	}
+	assert.NotPanics(t, func() { mgr.GracefulStopAll(10 * time.Millisecond) })
+	assert.NotPanics(t, mgr.StopAll, "second sweep stop must be idempotent")
+}
+
+// TestWaitProcessExitTimeout_ReturnsTrueWhenExited verifies that a process that
+// exits quickly reports true via the connection's once-guarded wait.
+func TestWaitProcessExitTimeout_ReturnsTrueWhenExited(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: process semantics differ on Windows")
+	}
+	agent := &model.Agent{ID: "test-wait-exit", Backend: "acp-stdio", AcpCommand: "sleep"}
+	conn := newACPConn(agent, "sid-wait-exit")
+	cmd := exec.Command("sleep", "0.05") // exits on its own quickly
+	require.NoError(t, cmd.Start())
+	defer func() { killProcessGroup(cmd.Process) }()
+	conn.mu.Lock()
+	conn.cmd = cmd
+	conn.mu.Unlock()
+
+	exited := conn.waitProcessExit(2 * time.Second)
+	require.True(t, exited, "quick-exiting process should report exited")
+}
+
+// TestWaitProcessExitTimeout_ReturnsFalseWhenStillRunning verifies that a
+// long-running process reports false when the deadline expires before exit.
+func TestWaitProcessExitTimeout_ReturnsFalseWhenStillRunning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping: process semantics differ on Windows")
+	}
+	agent := &model.Agent{ID: "test-wait-running", Backend: "acp-stdio", AcpCommand: "sleep"}
+	conn := newACPConn(agent, "sid-wait-running")
+	cmd := newTestSleep(t) // sleeps 60s; cleanup kills it
+	conn.mu.Lock()
+	conn.cmd = cmd
+	conn.mu.Unlock()
+
+	exited := conn.waitProcessExit(100 * time.Millisecond)
+	require.False(t, exited, "long-running process must report not-exited at deadline")
+
+	// Reap the process now (once-guarded Wait is safe after the timeout).
+	conn.reapProcess(cmd, nil)
 }

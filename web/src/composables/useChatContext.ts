@@ -26,6 +26,19 @@ const quoteData = ref<QuoteData | null>(null)
 const stagedQuotes = ref<StagedQuote[]>([])
 let quoteId = 0
 
+// ── Per-session attachment draft ──
+// Mirrors ChatInputBar's draftCache for text: when switching sessions, the
+// current session's attached files + staged quotes are snapshotted here and
+// restored when the user switches back. Without this, attachments vanish on
+// session switch while the typed text survives (see ChatInputBar draftCache).
+interface AttachmentSnapshot {
+  files: FileEntry[]
+  quotes: StagedQuote[]
+  quote: QuoteData | null
+}
+
+const attachmentDrafts = new Map<string, AttachmentSnapshot>()
+
 function addAttachedFile(path: string, isDir: boolean = false, startLine?: number, endLine?: number) {
   if (!path) return
   const existing = attachedFiles.value.find(f => f.path === path)
@@ -106,6 +119,38 @@ function clearAll() {
   clearQuotes()
 }
 
+/**
+ * Snapshot the current input attachments + staged quotes under a session id.
+ * Called before switching away — the snapshot is restored when the user
+ * switches back to that session.
+ */
+function snapshotAttachments(sessionId: string) {
+  if (!sessionId) return
+  attachmentDrafts.set(sessionId, {
+    files: attachedFiles.value.map(f => ({ ...f })),
+    quotes: stagedQuotes.value.map(q => ({ ...q })),
+    quote: quoteData.value ? { ...quoteData.value } : null,
+  })
+}
+
+/**
+ * Restore a previously snapshotted attachment draft for the given session.
+ * Overwrites the current input state (call right after switching in).
+ */
+function restoreAttachments(sessionId: string) {
+  if (!sessionId) return
+  const snap = attachmentDrafts.get(sessionId)
+  if (!snap) return
+  attachedFiles.value = snap.files.map(f => ({ ...f }))
+  stagedQuotes.value = snap.quotes.map(q => ({ ...q }))
+  quoteData.value = snap.quote ? { ...snap.quote } : null
+}
+
+/** Drop the attachment draft for a session (e.g. when the session is destroyed). */
+function discardAttachmentDraft(sessionId: string) {
+  if (sessionId) attachmentDrafts.delete(sessionId)
+}
+
 export function useChatContext() {
   return {
     attachedFiles,
@@ -121,5 +166,8 @@ export function useChatContext() {
     removeStagedQuote,
     clearQuotes,
     clearAll,
+    snapshotAttachments,
+    restoreAttachments,
+    discardAttachmentDraft,
   }
 }

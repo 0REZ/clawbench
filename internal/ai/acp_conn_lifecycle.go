@@ -367,6 +367,12 @@ func (c *ACPConn) reapplyConfigOption(ctx context.Context, acpSID, configID, val
 	if value == "" || !c.alive || !c.isAliveLocked() {
 		return
 	}
+	// Never re-send a config the agent already rejected as unknown
+	// (e.g. thinkingEffort) — it would only produce a failing RPC on every resume.
+	if c.IsConfigUnsupported(configID) {
+		slog.Debug("acp conn: skipping reapply of unsupported config", "config_id", configID, "value", value, "clawbench_sid", c.clawbenchSID)
+		return
+	}
 	reapplyStart := time.Now()
 	slog.Info("acp conn: reapplyConfigOption starting", "config_id", configID, "value", value, "clawbench_sid", c.clawbenchSID)
 	c.mu.Unlock()
@@ -374,6 +380,9 @@ func (c *ACPConn) reapplyConfigOption(ctx context.Context, acpSID, configID, val
 	c.mu.Lock()
 	slog.Info("acp conn: reapplyConfigOption done", "config_id", configID, "value", value, "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(reapplyStart))
 	if c.alive {
+		// Record the value even when the agent rejected it: the cached value is
+		// the one the agent is known to hold, so shouldSetConfig dedups until it
+		// actually changes.
 		c.markConfigSet(configID, value)
 		slog.Info("acp conn: re-applied config after resume", "config_id", configID, "value", value, "clawbench_sid", c.clawbenchSID)
 	}

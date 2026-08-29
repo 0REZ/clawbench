@@ -276,6 +276,48 @@ func GetMessagesBySessionID(sessionID string) ([]model.ChatMessage, error) {
 	return scanMessages(rows, sessionID)
 }
 
+// GetMessagesBySessionIDRaw fetches all finalized messages for a session by
+// session_id alone, with the same query as GetMessagesBySessionID but WITHOUT
+// the summary-based content stripping (no scanMessages / enrichMessagesWithSummaries).
+// It preserves the real content blocks of assistant messages that have a reading
+// summary. Callers that need the full history — e.g. fork context injection —
+// must use this function.
+func GetMessagesBySessionIDRaw(sessionID string) ([]model.ChatMessage, error) {
+	rows, err := dbRead.Query(
+		"SELECT id, role, content, files, backend, streaming, created_at, indexed, queue_id, queued FROM chat_history WHERE session_id = ? AND streaming = 0 AND queued = 0 ORDER BY id ASC",
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	messages := []model.ChatMessage{}
+	for rows.Next() {
+		var msg model.ChatMessage
+		var filesJSON sql.NullString
+		var streaming int
+		var indexed int
+		var queueID string
+		var queued int
+		if err := rows.Scan(&msg.ID, &msg.Role, &msg.Content, &filesJSON, &msg.Backend, &streaming, &msg.CreatedAt, &indexed, &queueID, &queued); err != nil {
+			return nil, err
+		}
+		msg.Streaming = streaming != 0
+		msg.Indexed = indexed != 0
+		msg.QueueID = queueID
+		msg.Queued = queued != 0
+		if filesJSON.Valid && filesJSON.String != "" {
+			msg.Files = unmarshalFilesJSON(filesJSON.String)
+		}
+		msg.SessionID = sessionID
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
 // GetAssistantRawContents returns the raw (unmodified) content JSON of the
 // most recent finalized assistant messages in a session, newest first
 // (ORDER BY id DESC LIMIT previewAssistantContentLimit). Unlike
@@ -1939,6 +1981,9 @@ func ClearExternalSessionID(sessionID string) {
 
 // GetExternalSessionID returns the external session ID for a ClawBench session.
 func GetExternalSessionID(sessionID string) string {
+	if dbRead == nil {
+		return ""
+	}
 	var externalID string
 	err := dbRead.QueryRow("SELECT external_session_id FROM chat_sessions WHERE id = ?", sessionID).Scan(&externalID)
 	if err != nil {

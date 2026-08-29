@@ -155,39 +155,40 @@ public class FloatingStatusView extends android.widget.FrameLayout {
     }
 
     /**
-     * Collapse the capsule to a logo-only circle: stat groups fade out while
-     * the window width animates down to the logo diameter (equal horizontal
-     * padding on both sides so the logo stays centered and the pill becomes a
-     * true circle). The host animates the WindowManager width in parallel;
-     * {@code onDone} fires when both finish. UI thread only.
+     * Prepare the capsule for the collapse-to-circle stage of the hide
+     * animation: the stat groups are removed and the horizontal padding is
+     * made symmetric so a window of height {@code h} that shrinks its width to
+     * {@code h} renders as a true circle with the logo centered. The logo
+     * keeps full opacity. UI thread only.
      */
-    public void collapseToCircle(int targetWidthPx, Runnable onDone) {
-        contentView.collapseStats(() -> {
-            if (onDone != null) {
-                onDone.run();
-            }
-        });
-        animate().scaleX(1f).scaleY(1f).setDuration(1).start();
-        // The content row is a WRAP_CONTENT FrameLayout child; since it never
-        // relayouts during the width animation, re-measure it against the
-        // target width so the frame actually contracts to the new window size.
+    public void prepareCircleCollapse(int targetWidthPx) {
+        contentView.collapseStats();
+        // The collapsed row holds only the 24dp logo, so symmetric horizontal
+        // padding of 7dp (same as the vertical padding) makes the frame exactly
+        // 7 + 24 + 7 = 38dp wide — a square, which reads as a centered logo
+        // inside the capsule's circular background.
+        int symmetricPadPx = dp(PADDING_V_DP);
+        setPadding(symmetricPadPx, dp(PADDING_V_DP), symmetricPadPx, dp(PADDING_V_DP));
+        // Re-measure the content row against the content area (target width
+        // minus the symmetric padding) so the frame actually contracts to the
+        // new window size even if the window is not re-laid-out during the
+        // width animation. The row holds only the logo, so its width equals the
+        // logo size and the logo stays centered.
+        int contentWidth = Math.max(0, targetWidthPx - 2 * symmetricPadPx);
         contentView.measure(
-                View.MeasureSpec.makeMeasureSpec(targetWidthPx, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(contentWidth, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
     }
 
     /**
-     * Undo a previous collapseToCircle: restore all stat groups to full
-     * opacity (visibility never changed, only alpha). Called by the controller
-     * when the collapse is superseded by a fresh show. UI thread only.
+     * Undo a previous prepareCircleCollapse: restore the stat groups and the
+     * original asymmetric padding. Called by the controller when the hide is
+     * superseded by a fresh show so a re-shown capsule looks normal. UI
+     * thread only.
      */
     public void expandFromCircle() {
         contentView.restoreStats();
-    }
-
-    /** True after collapseToCircle started, i.e. while the hide is in flight. */
-    public boolean isStatsCollapsed() {
-        return contentView.isStatsCollapsed();
+        setPadding(dp(PADDING_H_START_DP), dp(PADDING_V_DP), dp(PADDING_H_DP), dp(PADDING_V_DP));
     }
 
     private int dp(int value) {

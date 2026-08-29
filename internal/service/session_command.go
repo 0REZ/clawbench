@@ -547,7 +547,7 @@ func appendMediaPrompt(systemPrompt string) string {
 // Includes text blocks as-is and tool_use blocks as structured JSON wrapped in
 // <tool_use> tags. Thinking blocks are excluded.
 func BuildForkContext(sessionID string) string {
-	messages, err := GetMessagesBySessionID(sessionID)
+	messages, err := GetMessagesBySessionIDRaw(sessionID)
 	if err != nil || len(messages) == 0 {
 		return ""
 	}

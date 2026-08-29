@@ -80,6 +80,11 @@ type ACPConnManager struct {
 	conns     map[string]*ACPConn // keyed by clawbenchSID
 	stopSweep chan struct{}       // closed to stop the idle sweep goroutine
 
+	// stopSweepOnce makes stopSweep closure idempotent: both GracefulStopAll
+	// (shutdown path) and StopAll (deferred teardown) run on a graceful stop,
+	// and a plain double close would panic on the second call.
+	stopSweepOnce sync.Once
+
 	// isSessionRunning is a callback that checks whether a session is
 	// actively running. Set by the service layer to avoid circular imports.
 	// If nil, idle sweep skips the running-check and closes all idle connections.
@@ -121,10 +126,15 @@ func GetACPConnManager() *ACPConnManager {
 }
 
 // StopAll closes all connections and stops the idle sweep goroutine.
-// Called on server shutdown.
+// Called on server shutdown (deferred teardown; safe to call after
+// GracefulStopAll — the sweep stop is idempotent).
 func (m *ACPConnManager) StopAll() {
 	// Stop the idle sweep goroutine
-	close(m.stopSweep)
+	m.stopSweepOnce.Do(func() {
+		if m.stopSweep != nil {
+			close(m.stopSweep)
+		}
+	})
 
 	m.mu.Lock()
 	for sid, conn := range m.conns {
@@ -134,6 +144,79 @@ func (m *ACPConnManager) StopAll() {
 	m.mu.Unlock()
 }
 
+// GracefulStopAll gives each running ACP prompt a chance to finish normally
+// before the agent process is killed. It is called by the graceful-shutdown
+// path AFTER WaitStreamsDrained, so most prompts have already completed and
+// this is a backstop for prompts that outlived the wait deadline.
+//
+// Procedure:
+//  1. Cancel every in-flight prompt's LOCAL context (promptCancel). This does
+//     NOT send an ACP session/cancel notification to the agent — it unblocks
+//     conn.Prompt locally with ctx.Err(), so ACPBackend's ExecuteStream emits
+//     a "done" event and closes the event channel, letting the SessionExecutor
+//     run Finalize (streaming=0). The agent process itself keeps running.
+//  2. Wait up to grace for each agent process to exit on its own (a prompt
+//     that completes right after the local cancel makes the agent exit).
+//  3. SIGKILL whatever is still alive (the existing close() path) — most
+//     agents will still be running here, since the local cancel does not tell
+//     them to exit.
+//
+// The goal of this path is data durability (Finalize completed before the DB
+// closes), NOT clean agent-process shutdown; agents are always reaped either
+// here or by the deferred StopAll backstop.
+//
+// stopSweep is closed unconditionally (idempotently via stopSweepOnce) so the
+// idle sweep cannot race the teardown by killing a connection while we are
+// waiting on it.
+func (m *ACPConnManager) GracefulStopAll(grace time.Duration) {
+	m.stopSweepOnce.Do(func() {
+		if m.stopSweep != nil {
+			close(m.stopSweep)
+		}
+	})
+
+	// Snapshot the connections under the lock, then cancel prompts outside it:
+	// cancelPrompt takes c.mu which close() also takes — do not hold m.mu.
+	m.mu.Lock()
+	conns := make([]*ACPConn, 0, len(m.conns))
+	for _, conn := range m.conns {
+		conns = append(conns, conn)
+	}
+	m.mu.Unlock()
+
+	for _, conn := range conns {
+		conn.cancelPrompt()
+	}
+
+	deadline := time.Now().Add(grace)
+	var stragglers []*ACPConn
+	for _, conn := range conns {
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			stragglers = append(stragglers, conn)
+			continue
+		}
+		if !conn.waitProcessExit(remain) {
+			stragglers = append(stragglers, conn)
+		}
+	}
+
+	// Close whatever is still alive (SIGKILL the process group).
+	m.mu.Lock()
+	for _, conn := range stragglers {
+		conn.close()
+		delete(m.conns, conn.clawbenchSID)
+	}
+	for sid, conn := range m.conns {
+		// Normal-exit connections are still registered; reap them.
+		conn.close()
+		delete(m.conns, sid)
+	}
+	m.mu.Unlock()
+}
+
+// cancelPrompt cancels the in-flight prompt (if any) via the ACP protocol,
+// giving the agent a chance to emit a terminal notification before we kill
 // idleSweep periodically closes connections that have been idle for longer
 // than idleConnTimeout. This prevents stale agent processes from consuming
 // resources indefinitely after sessions complete without explicit deletion.
@@ -811,6 +894,53 @@ type ACPConn struct {
 	// Protected by rawOutputMu. Cleared at the start of each Prompt call.
 	rawOutputMu  sync.Mutex
 	rawOutputBuf strings.Builder
+}
+
+// cancelPrompt cancels the in-flight prompt (if any) via the ACP protocol,
+// giving the agent a chance to emit a terminal notification before we kill
+// the process. Safe to call when no prompt is running.
+func (c *ACPConn) cancelPrompt() {
+	c.mu.Lock()
+	promptCancel := c.promptCancel
+	c.mu.Unlock()
+	if promptCancel != nil {
+		slog.Info("acp: graceful shutdown: cancelling in-flight prompt",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", c.acpSID)
+		promptCancel()
+	}
+}
+
+// waitProcessExit waits up to timeout for the agent process to exit on its own.
+// Returns true if the process exited (or no process was running).
+//
+// The Wait goes through the connection's cmdWaitOnce (shared with
+// reapProcess / waitProcessExitOnce) so it can never race a concurrent Wait on
+// the same process — concurrent Process.Wait calls are unsafe and can deadlock
+// (see reapProcess). If the deadline expires the goroutine stays blocked on
+// Wait until the subsequent SIGKILL (via close) makes the process exit, then
+// releases — it does not leak beyond the process lifetime.
+func (c *ACPConn) waitProcessExit(timeout time.Duration) bool {
+	c.mu.Lock()
+	cmd := c.cmd
+	c.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return true
+	}
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		c.cmdWaitOnce.Do(func() {
+			if state, err := cmd.Process.Wait(); err == nil {
+				c.cmdWaitState = state
+			}
+		})
+	}()
+	select {
+	case <-waitDone:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // AppendRawOutput appends a raw ACP notification payload to the connection's

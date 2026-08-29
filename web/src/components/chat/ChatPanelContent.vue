@@ -178,7 +178,7 @@ import { useChatRender } from '@/composables/useChatRender.ts'
 import { formatToolOutput } from '@/utils/renderToolDetail.ts'
 import { useChatStream } from '@/composables/useChatStream.ts'
 import { useChatSession, loadSessionsOnce } from '@/composables/useChatSession.ts'
-import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
+import { useSessionIdentity, getSessionId } from '@/composables/useSessionIdentity.ts'
 import { useSessionManager } from '@/composables/useSessionManager.ts'
 import { createChatMessageStore } from '@/composables/useChatMessageStore.ts'
 import { useAcpSession } from '@/composables/useAcpSession'
@@ -498,7 +498,7 @@ const stream = useChatStream({
 })
 
 const { pendingFiles, attachedFiles, addAttachedFile, removeAttachedFile, cleanupPreviewUrls, clearPendingFiles } = useFileUpload()
-const { stagedQuotes, removeStagedQuote, clearAll, removeAttachedFileByPath } = useChatContext()
+const { stagedQuotes, removeStagedQuote, clearAll, removeAttachedFileByPath, snapshotAttachments, restoreAttachments, discardAttachmentDraft } = useChatContext()
 
 const manager = useSessionManager({
   messages,
@@ -514,11 +514,31 @@ const manager = useSessionManager({
   disconnectStream: stream.disconnectStream,
   updateRenderedContents: (forceFull) => render.updateRenderedContents(forceFull),
   clearInputState: () => {
+    // Save the typed text (per-session draftCache) before clearing.
     inputBarRef.value?.saveDraft()
+    // Snapshot attachments + staged quotes under the session we're leaving so
+    // they can be restored when the user switches back. Also fold in pending
+    // uploads that finished uploading (they hold a server path) — their
+    // blob preview URLs are dropped with clearPendingFiles, but the attached
+    // file ref (path) must survive the round-trip.
+    const leavingSessionId = getSessionId()
+    if (leavingSessionId) {
+      const pendingPaths = pendingFiles.value.filter(f => f.path && !f.uploading).map(f => f.path)
+      for (const p of pendingPaths) addAttachedFile(p)
+    }
+    snapshotAttachments(leavingSessionId)
     clearAll()
     inputBarRef.value?.clearInputPreserveDraft()
     clearPendingFiles()
   },
+  // Restore attachments/quotes after the switch completes (currentSessionId
+  // now points at the target session). Also carries cleanupDraft so
+  // archived/destroyed sessions drop their attachment snapshot.
+  restoreInputState: Object.assign(() => {
+    restoreAttachments(getSessionId())
+  }, {
+    cleanupDraft: (sessionId) => discardAttachmentDraft(sessionId),
+  }),
   scrollBottom: (force) => scrollBottom(force),
 })
 
@@ -573,11 +593,22 @@ provide('layoutRefreshKey', layoutRefreshKey)
 // 手动清 openRef，否则切回 chat tab 后抽屉不会恢复。
 // 面板打开时刷新渲染（修复 display:none 期间的过时布局状态）
 // immediate: true 确保首次挂载时（active 已为 true）也会加载历史记录
+//
+// 首次打开（应用启动 / 首次进入 chat tab）: forceScrollBottom=true ——
+// 此时没有既有滚动位置（DOM 是新建的，scrollTop=0），若用 false 会停在
+// 消息列表顶部。历史版本首次加载强制滚到底部，tab 重构时被统一改成 false
+// （为 tab 重开保留位置），漏掉了首次打开路径。
+// tab 重开（active false→true，已加载过）: forceScrollBottom=false ——
+// 保留用户上次的滚动位置（DOM 用 v-show 保留），仅在用户本来就靠近底部时
+// 跟随新内容滚到底部。
+let hasLoadedOnce = false
 watch(() => props.active, async (val) => {
   if (val) {
+    const isFirstOpen = !hasLoadedOnce
     // Open/Re-open: load history (with overlay, skip if unchanged) and fix stale layout state from v-show display:none
     // skipIfUnchanged=true preserves scroll position when no new messages arrived while tab was hidden
-    await session.loadHistory(false, true, true)
+    await session.loadHistory(isFirstOpen, true, true)
+    hasLoadedOnce = true
     // Bump layoutRefreshKey AFTER loadHistory so ChatMessageItem re-checks
     // collapse state with the fresh messages and valid scrollHeight.
     nextTick(() => {
@@ -752,6 +783,8 @@ async function sendMessage(text) {
            onPendingRendered: () => { render.updateRenderedContents(); scrollBottom(true) },
            enqueue: (sid, text, attached, pending, qid) => manager.enqueueMessage(sid, text, attached, pending, qid),
          })
+         // The attachments were queued with the message — drop the snapshot.
+         discardAttachmentDraft(identity.currentSessionId.value)
        } catch {
          // Enqueue failed (network down / 5xx) — the message was not delivered.
          // Restore the input so the user's text isn't lost.
@@ -774,6 +807,10 @@ async function sendMessage(text) {
 
     try {
       await sendMessageNow(inputText, filePaths, allFiles)
+      // The attachment/quotes were consumed by this message — drop the
+      // snapshot so switching away and back doesn't resurrect them
+      // (mirrors clearInput() deleting the text draft on send).
+      discardAttachmentDraft(getSessionId())
     } catch {
       // Send failed (network down / 5xx) — the message was not delivered.
       // Restore the input so the user's text isn't lost.
@@ -1103,11 +1140,8 @@ async function handleRefreshSession() {
 async function handleResetSession() {
     const sid = identity.currentSessionId.value
     if (!sid) return
-    const confirmed = await dialog.confirm(t('chat.contentBlocks.resetSessionConfirm'))
-    if (!confirmed) return
     try {
         await apiPost('/api/ai/session/reset', { sessionId: sid })
-        toast.show(t('chat.contentBlocks.resetSessionDone'), { icon: '🔄', type: 'success' })
         // Re-send the last persisted user message so the conversation continues
         // in the freshly-reset agent session.
         const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user' && !m.pending)

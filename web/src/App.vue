@@ -569,7 +569,6 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
   // ── Phase 6: Background data loading — all independent, fully parallel, non-blocking ──
   await sessionIdentity.initSessionFromAPI()
   Promise.allSettled([
-    restoreProjectWorkspace(),
     loadSessionsOnce(),
     store.loadGitBranch(),
     loadTasks(),
@@ -577,6 +576,15 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
     loadSSHInfo(),
     loadTerminalStatus(),
   ])
+  // Workspace restore is awaited (separately from the fire-and-forget batch)
+  // because it may switch the active tab (activateView). Awaiting it here —
+  // BEFORE the Phase 7 pending-navigation switch — makes the final tab
+  // deterministic: without this, a deep-link navigation below could race with
+  // restore's switchTab('view') and the landing tab would depend on async
+  // completion order. When a pending navigation exists, restore must NOT
+  // re-activate the file-view tab at all, otherwise it would clobber the
+  // navigation target.
+  await restoreProjectWorkspace({ activateView: !pendingTaskNav && !pendingSessionId })
   if (isAppMode.value) syncToNative().catch(() => {})
 
   // ── Phase 7: Handle cross-project pending navigation ──
@@ -830,8 +838,12 @@ function closeOverlayAndSync() {
  * If the saved file can no longer be opened (deleted/moved), its stale record
  * is cleared so it isn't retried and re-reported on every launch/switch.
  */
-async function restoreProjectWorkspace() {
-  return restoreProjectWorkspaceImpl({ switchTab })
+async function restoreProjectWorkspace(opts) {
+  // activateView: on cold start (initializeApp) the app must land on the chat
+  // tab — restoring the last opened file loads it into state but does NOT switch
+  // the user away from chat. On project switch (hotSwitchProject) the user
+  // explicitly chose that project, so the file-view tab is re-activated.
+  return restoreProjectWorkspaceImpl({ switchTab, ...opts })
 }
 
 const { isAppMode } = useAppMode()
@@ -876,13 +888,6 @@ function projectBaseName(path) {
     return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
-// 取路径父目录（去掉末尾项目名，用于弹窗路径展示）
-function projectParentDir(path) {
-    const trimmed = (path || '').replace(/[\\/]+$/, '')
-    const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-    return idx > 0 ? trimmed.slice(0, idx) : ''
-}
-
 // AI 完成弹窗：任何会话/定时任务完成时，若用户当前未在查看该会话，入队弹出。
 // 后端 session_update/task_update 的 completed 事件已携带 session_title 与
 // response_preview（Markdown 原文）；useGlobalEvents 已按事件 ID 全局去重。
@@ -901,7 +906,6 @@ const removeCompletionHandler = onEvent((event, data) => {
     // 跨项目才展示项目名/路径（本项目不加）——判断弹窗会话项目与当前项目是否相同
     const isSameProject = !data.project_path || data.project_path === store.state.projectRoot
     const projectName = isSameProject ? '' : projectBaseName(data.project_path || '')
-    const projectParent = isSameProject ? '' : projectParentDir(data.project_path || '')
     if (event === 'task_update') {
         completionPopover.push({
             sessionId,
@@ -910,7 +914,7 @@ const removeCompletionHandler = onEvent((event, data) => {
             summary: data.response_preview || '',
             userMessage: data.last_user_message || '',
             agentId: data.agent_id || '',
-            projectPath: projectParent,
+            projectPath: data.project_path || '',
             projectName,
             taskId: data.task_id,
             executionId: data.execution_id,
@@ -923,7 +927,7 @@ const removeCompletionHandler = onEvent((event, data) => {
             summary: data.response_preview || '',
             userMessage: data.last_user_message || '',
             agentId: data.agent_id || '',
-            projectPath: projectParent,
+            projectPath: data.project_path || '',
             projectName,
         })
     }

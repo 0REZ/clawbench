@@ -1029,6 +1029,64 @@ func TestSessionExecutor_CaptureExternalSessionID(t *testing.T) {
 	}
 }
 
+func TestSessionExecutor_Finalize_ExternalSessionIDInjected(t *testing.T) {
+	// The external session ID (native ACP/CLI session ID persisted on
+	// chat_sessions.external_session_id) must be injected into the response
+	// metadata so it lands both in chat_history.content JSON and in the WS
+	// metadata event the frontend shows in the message detail modal.
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	if err := UpdateExternalSessionID(sid, "ext-native-session-123"); err != nil {
+		t.Fatalf("UpdateExternalSessionID failed: %v", err)
+	}
+
+	streamMsgID := GetStreamingMessageID(sid)
+	ctx := context.Background()
+	cfg := RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		ChatRequest:        ai.ChatRequest{Prompt: "hello"},
+		StreamingMessageID: streamMsgID,
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+	executor.blocks = []model.ContentBlock{{Type: "text", Text: "ok"}}
+
+	result := RunResult{
+		ReceivedTerminal: true,
+		Blocks:           executor.blocks,
+		Metadata:         &ai.Metadata{},
+	}
+	finalized := executor.Finalize(result, nil)
+
+	if finalized.Metadata.SessionID != "ext-native-session-123" {
+		t.Fatalf("expected metadata.SessionID='ext-native-session-123', got %q", finalized.Metadata.SessionID)
+	}
+
+	// The persisted content JSON must also carry the external session ID.
+	var content string
+	err := dbRead.QueryRow("SELECT content FROM chat_history WHERE id = ?", finalized.MsgID).Scan(&content)
+	if err != nil {
+		t.Fatalf("failed to read finalized content: %v", err)
+	}
+	var parsed struct {
+		Metadata ai.Metadata `json:"metadata"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		t.Fatalf("failed to unmarshal content JSON: %v", err)
+	}
+	if parsed.Metadata.SessionID != "ext-native-session-123" {
+		t.Fatalf("expected persisted content metadata.SessionID='ext-native-session-123', got %q", parsed.Metadata.SessionID)
+	}
+}
+
 func TestSessionExecutor_CaptureExternalSessionID_Empty(t *testing.T) {
 	setupExecutorDB(t)
 

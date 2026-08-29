@@ -1,23 +1,24 @@
 <template>
   <div class="chat-messages-wrapper">
-  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
-    <!-- Lazy load feedback -->
-    <div class="chat-load-area">
-      <Transition name="load-hint-fade">
-        <div v-if="loadingMore" class="chat-load-more">
-          <LoadingIndicator size="sm" inline />
-          <span>{{ t('chat.messageList.loadingMore') }}</span>
-        </div>
-        <div v-else-if="hasMore && remainingCount > 0" class="chat-load-hint" @click="emit('load-more')">
-          <ChevronUp :size="14" />
-          <span>{{ t('chat.messageList.moreOlderMessages', { count: remainingCount }) }}</span>
-        </div>
-        <div v-else-if="showAllLoaded" class="chat-load-done">
-          <span>{{ t('chat.messageList.allMessagesLoaded') }}</span>
-        </div>
-      </Transition>
-    </div>
+  <!-- Lazy load feedback — floating overlay pinned to top of the message area,
+       outside the scroll container so it never scrolls with the message flow. -->
+  <div class="chat-load-area">
+    <Transition name="load-hint-fade">
+      <div v-if="loadingMore" class="chat-load-more">
+        <LoadingIndicator size="sm" inline />
+        <span>{{ t('chat.messageList.loadingMore') }}</span>
+      </div>
+      <div v-else-if="showMoreHint" class="chat-load-hint" @click="emit('load-more')">
+        <ChevronUp :size="14" />
+        <span>{{ t('chat.messageList.moreOlderMessages', { count: remainingCount }) }}</span>
+      </div>
+      <div v-else-if="showAllLoaded" class="chat-load-done">
+        <span>{{ t('chat.messageList.allMessagesLoaded') }}</span>
+      </div>
+    </Transition>
+  </div>
 
+  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
     <div class="chat-messages-list" :key="listKey">
       <div v-if="messages.length === 0" class="chat-empty">
       <template v-if="agents && agents.length === 0">
@@ -150,6 +151,7 @@ import { store } from '@/stores/app.ts'
 import { computeRemainingCount } from '@/utils/messageListUtils.ts'
 import { StreamFrameScheduler } from '@/utils/streamFrameScheduler'
 import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS } from '@/utils/scrollState'
+import { saveChatScrollPosition, clearChatScrollPosition, getChatScrollPosition } from '@/utils/chatScrollMemory'
 
 const { t } = useI18n()
 
@@ -212,6 +214,24 @@ const listKey = computed(() => {
   const last = msgs[msgs.length - 1]?.id ?? ''
   return `${props.currentSessionId || 'no-session'}|${msgs.length}|${first}|${last}`
 })
+
+// "More older messages" transient hint: whenever older messages remain, the
+// pill briefly appears then auto-hides. `immediate: true` announces remaining
+// history on first render (session opened with more to load) without keeping
+// it resident; subsequent loads re-arm it via remainingCount change.
+const showMoreHint = ref(false)
+let moreHintTimer = null
+
+watch(() => props.hasMore && remainingCount.value > 0, (hasRemaining) => {
+  clearTimeout(moreHintTimer)
+  if (hasRemaining) {
+    showMoreHint.value = true
+    moreHintTimer = setTimeout(() => { showMoreHint.value = false }, 2500)
+  } else {
+    // All history loaded — hide immediately so the "all loaded" hint can show.
+    showMoreHint.value = false
+  }
+}, { immediate: true })
 
 // "All loaded" brief hint: shown for 2s after a user-initiated load-more completes with no more.
 // Only triggers when loadingMore was recently true (i.e. user explicitly loaded more),
@@ -328,6 +348,23 @@ async function handleChatClick(event) {
 }
 
 let loadMorePending = false
+// Re-arm guard for load-more: once fired at the top, stays armed until the
+// async loadMore completes (loadingMore flips false). Prevents a scroll at the
+// top from firing multiple overlapping load-more requests — previously the
+// pending flag was cleared on the next tick, so several small scrolls in the
+// top zone each fired a fresh request.
+watch(() => props.loadingMore, (loading) => {
+  if (!loading) {
+    // Load finished (success or failure) — allow the next top scroll to fire.
+    loadMorePending = false
+  }
+})
+// Safety net: if hasMore re-appears without a loadingMore cycle (e.g. a
+// loadHistory picked up new messages after a load-more was skipped by the
+// hasMore guard), re-arm so the top scroll can trigger again.
+watch(() => props.hasMore, (hasMore) => {
+  if (hasMore) loadMorePending = false
+})
 // Track whether the user is at the bottom of the chat.
 // When the user scrolls back to the bottom during streaming, auto-scroll resumes.
 // Kept as a ref for external consumers (useUserMsgIndex.setAtBottom,
@@ -471,7 +508,6 @@ function handleScroll() {
   if (el.scrollTop < 50) {
     loadMorePending = true
     emit('load-more')
-    nextTick(() => { loadMorePending = false })
   }
 }
 
@@ -815,7 +851,40 @@ const nearestMessageId = computed(() => {
 })
 
 // Watch session switch to reset scroll state and user msg index
-watch(() => props.currentSessionId, () => {
+//
+// Session scroll memory: when the user leaves a session while scrolled away
+// from the bottom, remember its scrollTop so switching back restores the
+// reading position. A session left at the bottom is NOT remembered — switching
+// back falls back to the default scroll-to-bottom behavior (new content view).
+// The old session's DOM is still present at this watcher's pre-flush trigger,
+// so we can read its live scrollTop here.
+//
+// The target session's restore is flagged here (pendingRestoreSessionId) and
+// executed by the messages watcher once the history fetch lands — NOT by a
+// listKey watcher comparing oldKey segments. Vue's watcher oldValue is "the
+// value at the previous flush", so during a session switch the listKey's
+// session segment is already the target by the time db_load lands; comparing
+// it against currentSessionId would silently suppress the restore. An explicit
+// flag sidesteps that entirely.
+let pendingRestoreSessionId = null
+
+watch(() => props.currentSessionId, (newSid, oldSid) => {
+  // 1. Save the old session's position before its DOM is torn down (if the
+  //    user had scrolled away from the bottom). At the bottom → forget.
+  if (oldSid && messagesRef.value) {
+    const el = messagesRef.value
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist > NEAR_EDGE_THRESHOLD) {
+      saveChatScrollPosition(oldSid, el.scrollTop)
+    } else {
+      clearChatScrollPosition(oldSid)
+    }
+  }
+  // 2. Flag the target session for scroll restore if it has a remembered
+  //    position. The actual restore waits for the messages watcher (history
+  //    fetch landed, messages non-empty). A session with no memory → default
+  //    scroll-to-bottom applies instead.
+  pendingRestoreSessionId = newSid && getChatScrollPosition(newSid) != null ? newSid : null
   isAtBottom.value = true
   scrolledUp.value = false
   scrolledDown.value = false
@@ -885,7 +954,53 @@ function restoreAnchor(el, anchor) {
 
 watch(() => props.messages, (newMsgs, oldMsgs) => {
   const el = messagesRef.value
-  if (!el || !oldMsgs || oldMsgs.length === 0 || !newMsgs || newMsgs.length === 0) return
+  if (!el || !newMsgs || newMsgs.length === 0) return
+
+  // Session scroll memory restore: switching back to a session that was left
+  // scrolled away from the bottom restores its remembered position. The flag
+  // is set by the currentSessionId watcher (pendingRestoreSessionId) and only
+  // for a real session switch — same-session message growth (send, stream,
+  // queue drain) never sets it, so force-scroll-to-bottom after send is never
+  // overridden. The restore runs after the listKey DOM rebuild plus one rAF
+  // so scrollHeight is settled (lazy blocks: Mermaid, original text).
+  if (pendingRestoreSessionId === props.currentSessionId) {
+    pendingRestoreSessionId = null
+    const restoredSid = props.currentSessionId
+    const savedPos = getChatScrollPosition(restoredSid)
+    if (savedPos != null) {
+      nextTick(() => {
+        requestAnimationFrame(() => {
+          const el2 = messagesRef.value
+          // Guard against an ultra-fast B→C switch where C's db_load lands
+          // before B's restore rAF fires: never apply B's saved position to
+          // C's freshly built DOM. The restore is skipped and C's own
+          // restore / force-scroll-to-bottom takes over.
+          if (!el2 || props.currentSessionId !== restoredSid) return
+          const maxTop = el2.scrollHeight - el2.clientHeight
+          el2.scrollTop = Math.min(savedPos, maxTop)
+          const dist = el2.scrollHeight - el2.scrollTop - el2.clientHeight
+          isAtBottom.value = dist <= NEAR_EDGE_THRESHOLD
+          setProgrammatic(false)
+          // A restored position away from the bottom means the user is reading
+          // earlier content — keep the follow latch on so streaming never yanks
+          // them back to the bottom. Only a restore that lands at the bottom
+          // clears the latch (stream may then follow as usual).
+          userLeftBottom = dist > NEAR_EDGE_THRESHOLD
+          lastScrollAt = 0
+          // Show the scroll-up FAB so the user can jump back to the top of a
+          // long session they resumed mid-way (matches manual scroll behavior).
+          if (dist > NEAR_EDGE_THRESHOLD) {
+            scrolledUp.value = true
+            clearTimeout(scrollUpTimer)
+            scrollUpTimer = setTimeout(() => { scrolledUp.value = false }, SCROLL_BUTTON_HIDE_DELAY)
+          }
+        })
+      })
+      return
+    }
+  }
+
+  if (!oldMsgs || oldMsgs.length === 0) return
   if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD) return // at bottom → let scrollToBottom pin
   el.__prevScrollHeight = el.scrollHeight
   el.__prevScrollTop = el.scrollTop
@@ -1080,10 +1195,18 @@ defineExpose({
   }
 }
 
-/* Lazy load feedback area */
+/* Lazy load feedback area — floating pill pinned to the top of the message
+   area. Sits above the scroll container (absolute, no layout footprint) so
+   it never scrolls with the message flow and never pushes messages down. */
 .chat-load-area {
-  position: relative;
-  min-height: 0;
+  position: absolute;
+  top: 8px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .chat-load-more,
@@ -1093,14 +1216,21 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 0;
+  padding: 5px 12px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: auto;
 }
 
 .chat-load-hint {
   cursor: pointer;
-  transition: color 0.15s, opacity 0.15s;
+  transition: color 0.15s, opacity 0.15s, background 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -1110,16 +1240,12 @@ defineExpose({
 
 @media (hover: hover) {
   .chat-load-hint:hover {
-    color: var(--text-secondary);
+    color: var(--text-primary);
   }
 }
 
-.chat-load-done {
-  color: var(--text-muted);
-  opacity: 0.7;
-  font-size: 11px;
-}
-
+/* "All messages loaded" shares the exact same visual style as the
+ * "N older messages" hint — only the content differs. */
 
 /* Transition for load hint switching */
 .load-hint-fade-enter-active {

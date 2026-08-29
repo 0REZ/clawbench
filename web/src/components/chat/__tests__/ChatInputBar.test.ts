@@ -8,7 +8,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 // default 5s testTimeout, causing flaky `Test timed out in 5000ms` failures
 // that drag down src/components coverage. Bump this file's timeout only.
 vi.setConfig({ testTimeout: 30_000 })
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ChatInputBar from '../ChatInputBar.vue'
 import { apiGet } from '@/utils/api'
@@ -600,26 +600,10 @@ describe('ChatInputBar', () => {
     expect(archiveBtn.classes()).not.toContain('disabled')
   })
 
-  it('exposes quick send touch handlers', () => {
+  it('exposes quick send handlers', () => {
     const wrapper = mountBar()
     expect(typeof wrapper.vm.handleQuickSendClick).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendTouchStart).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendTouchMove).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendTouchEnd).toBe('function')
-    expect(typeof wrapper.vm.cancelQuickSendPress).toBe('function')
-  })
-
-  it('exposes quick send mouse long-press handlers', () => {
-    const wrapper = mountBar()
-    expect(typeof wrapper.vm.onQuickSendMouseDown).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendMouseUp).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendMouseMove).toBe('function')
-    expect(typeof wrapper.vm.onQuickSendMouseLeave).toBe('function')
-  })
-
-  it('exposes quickSendPressingId ref', () => {
-    const wrapper = mountBar()
-    expect(wrapper.vm.quickSendPressingId).toBeDefined()
+    expect(typeof wrapper.vm.handleQuickSendInject).toBe('function')
   })
 
   it('handleSendClick emits send with trimmed input text', async () => {
@@ -647,130 +631,43 @@ describe('ChatInputBar', () => {
     expect(wrapper.emitted('send')![0]).toEqual(['/test'])
   })
 
-  it('handleQuickSendClick skips when quickSendJustTriggered', async () => {
+  it('quick-send menu items disable text selection', async () => {
+    // The quick-send row and its trailing "add to input" icon are UI controls,
+    // not selectable text — user-select:none keeps clicks/long-presses from
+    // being hijacked by native selection.
+    mockQuickSendItems.value = [
+      { id: '1', label: 'Git Status', command: 'git status' },
+      { id: '2', label: 'Build', command: 'npm run build' },
+    ]
     const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    // Simulate touchend just triggered by setting quickSendJustTriggered
-    // We do this by calling touchEnd first which sets the flag, then click
-    // Alternatively, we can directly test the exposed method behavior
-    // by calling onQuickSendTouchEnd which sets the flag
-    const touchStartEvent = { touches: [{ clientX: 0, clientY: 0 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchStartEvent)
-    wrapper.vm.onQuickSendTouchEnd()
-    // The click after touchend should be skipped
-    wrapper.vm.handleQuickSendClick(item)
-    // No duplicate send emission from the click
-    const sendEvents = wrapper.emitted('send')
-    // Should only have one send (from touchEnd), not two
-    expect(sendEvents).toBeTruthy()
-    expect(sendEvents!.length).toBe(1)
+    await nextTick()
+    const itemEl = wrapper.find('.quick-send-item').element as HTMLElement
+    expect(itemEl).toBeTruthy()
+    const styles = window.getComputedStyle(itemEl)
+    expect(styles.userSelect).toBe('none')
+    expect(styles.webkitUserSelect).toBe('none')
+    wrapper.unmount()
   })
 
-  it('onQuickSendTouchStart sets pressingId', async () => {
+  it('handleQuickSendInject fills the input box and closes the menu', async () => {
     const wrapper = mountBar()
     const item = { id: '1', label: 'Test', command: '/test' }
-    const touchStartEvent = { touches: [{ clientX: 10, clientY: 20 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchStartEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-  })
-
-  it('onQuickSendTouchMove cancels on significant movement', async () => {
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    const touchStartEvent = { touches: [{ clientX: 0, clientY: 0 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchStartEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-    // Move more than 10px
-    const touchMoveEvent = { touches: [{ clientX: 20, clientY: 0 }] }
-    wrapper.vm.onQuickSendTouchMove(touchMoveEvent)
-    // Should have cancelled the press
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-  })
-
-  it('onQuickSendTouchEnd short tap sends command', async () => {
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/run' }
-    const touchStartEvent = { touches: [{ clientX: 0, clientY: 0 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchStartEvent)
-    wrapper.vm.onQuickSendTouchEnd()
-    expect(wrapper.emitted('send')).toBeTruthy()
-    expect(wrapper.emitted('send')![0]).toEqual(['/run'])
-  })
-
-  it('cancelQuickSendPress clears state', async () => {
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    const touchStartEvent = { touches: [{ clientX: 0, clientY: 0 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchStartEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-    wrapper.vm.cancelQuickSendPress()
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-  })
-
-  it('mouse long-press on quick send item injects command into input', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    const mouseDownEvent = { clientX: 10, clientY: 20 }
-    wrapper.vm.onQuickSendMouseDown(item, mouseDownEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-    vi.advanceTimersByTime(600)
-    await wrapper.vm.$nextTick()
+    wrapper.vm.handleQuickSendInject(item)
+    await nextTick()
+    // Command is injected into input, not sent
     expect(wrapper.vm.inputText).toBe('/test')
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    wrapper.vm.onQuickSendMouseUp()
-    // The synthetic click after release must not send (long-press already injected)
-    wrapper.vm.handleQuickSendClick(item)
     expect(wrapper.emitted('send')).toBeFalsy()
-    vi.useRealTimers()
+    expect(wrapper.vm.showQuickMenu).toBe(false)
   })
 
-  it('mouse short press (mousedown + mouseup) still sends via click', async () => {
-    vi.useFakeTimers()
+  it('handleQuickSendInject appends with newline when input has content', async () => {
     const wrapper = mountBar()
+    wrapper.vm.inputText = 'hello'
     const item = { id: '1', label: 'Test', command: '/test' }
-    wrapper.vm.onQuickSendMouseDown(item, { clientX: 10, clientY: 20 })
-    vi.advanceTimersByTime(200)
-    wrapper.vm.onQuickSendMouseUp()
-    await wrapper.vm.$nextTick()
-    // Short press must not inject into the input
-    expect(wrapper.vm.inputText).toBe('')
+    wrapper.vm.handleQuickSendInject(item)
+    await nextTick()
+    expect(wrapper.vm.inputText).toBe('hello\n/test')
     expect(wrapper.emitted('send')).toBeFalsy()
-    // Release → the normal click sends the command
-    wrapper.vm.handleQuickSendClick(item)
-    expect(wrapper.emitted('send')).toBeTruthy()
-    expect(wrapper.emitted('send')![0]).toEqual(['/test'])
-    vi.useRealTimers()
-  })
-
-  it('mouse long-press is cancelled when pointer moves beyond threshold', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    wrapper.vm.onQuickSendMouseDown(item, { clientX: 0, clientY: 0 })
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-    // Move beyond 10px threshold
-    wrapper.vm.onQuickSendMouseMove({ clientX: 30, clientY: 0 })
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    vi.advanceTimersByTime(600)
-    await wrapper.vm.$nextTick()
-    expect(wrapper.vm.inputText).toBe('')
-    expect(wrapper.emitted('send')).toBeFalsy()
-    vi.useRealTimers()
-  })
-
-  it('mouse long-press is cancelled on mouseleave', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountBar()
-    const item = { id: '1', label: 'Test', command: '/test' }
-    wrapper.vm.onQuickSendMouseDown(item, { clientX: 0, clientY: 0 })
-    expect(wrapper.vm.quickSendPressingId).toBe('1')
-    wrapper.vm.onQuickSendMouseLeave()
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    vi.advanceTimersByTime(600)
-    await wrapper.vm.$nextTick()
-    expect(wrapper.vm.inputText).toBe('')
-    vi.useRealTimers()
   })
 
   it('session button emits open-session-tab', async () => {

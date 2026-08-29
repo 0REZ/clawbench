@@ -1075,6 +1075,36 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
       return state
     }
     case 'stream_placeholder': {
+      // Dedup by id: a placeholder whose id already exists in the array must
+      // NOT be pushed again. This is the root-cause fix for the transient
+      // duplicate reported after session switches:
+      //
+      //   switchSession(A) → clear → fetch A → db_load puts the DB rows into
+      //   the array (including the finalized assistant row 39789). A late
+      //   stream_start WS event (resubscription resync racing the fetch) then
+      //   finds `findStreamingMsg` empty — the row is finalized, not streaming
+      //   — and dispatches a fresh placeholder with the SAME id 39789. Without
+      //   the dedup below the same reply would render twice; the duplicate only
+      //   vanished on the next forced db_load (refresh / switching again), which
+      //   is exactly the reported "switch again → back to normal" behavior.
+      //
+      //   Id (numeric DB id or drain-*) is the stable identity; two messages
+      //   with the same id are always the same message. When the existing copy
+      //   is a finalized DB row, we merely re-mark it streaming so subsequent
+      //   content/tool_use/done events find it and append onto the authoritative
+      //   object — no second row is ever created.
+      const existing = state.find(
+        (m) =>
+          m.role === 'assistant' &&
+          action.msg.id != null &&
+          String(m.id) === String(action.msg.id),
+      )
+      if (existing) {
+        // Re-activate the existing copy (a finalized DB row) as the live
+        // streaming message so the incoming stream events have a target.
+        if (!existing.streaming) existing.streaming = true
+        return state
+      }
       state.push(action.msg)
       sortMessages(state)
       return state

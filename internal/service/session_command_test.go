@@ -936,6 +936,42 @@ func TestBuildForkContext_MultipleTextBlocks(t *testing.T) {
 	assert.NotContains(t, result, "thinking part")
 }
 
+// TestBuildForkContext_PreservesSummarizedAssistant ensures fork context keeps
+// assistant replies even when the message has a reading summary. Before the fix,
+// GetMessagesBySessionID stripped summarized assistant content to an empty
+// {"blocks":[]}, silently dropping all AI replies from the fork context.
+func TestBuildForkContext_PreservesSummarizedAssistant(t *testing.T) {
+	db := setupTestDBForSessionCommand(t)
+	defer func() { _ = db.Close() }()
+
+	sessionID := "fork-sess-summarized"
+	_, err := WriteExec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'user', ?, ?, 'claude', 0)",
+		"/proj", `{"blocks":[{"type":"text","text":"user question"}]}`, sessionID,
+	)
+	require.NoError(t, err)
+	// Insert assistant message, then give it a reading summary — this used to
+	// trigger content stripping in GetMessagesBySessionID.
+	res, err := WriteExec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', ?, ?, 'claude', 0)",
+		"/proj", `{"blocks":[{"type":"text","text":"assistant answer"},{"type":"tool_use","id":"t1","name":"Read","input":{},"output":"file contents"}]}`, sessionID,
+	)
+	require.NoError(t, err)
+	msgID, err := res.LastInsertId()
+	require.NoError(t, err)
+	_, err = WriteExec(
+		"INSERT INTO summaries (target_type, target_id, summary) VALUES ('chat_message', ?, 'reading summary')",
+		msgID,
+	)
+	require.NoError(t, err)
+
+	result := BuildForkContext(sessionID)
+	assert.Contains(t, result, "user: user question")
+	assert.Contains(t, result, "assistant: assistant answer", "summarized assistant reply must survive fork context")
+	assert.Contains(t, result, "file contents", "tool_use output must survive fork context")
+	assert.NotContains(t, result, "reading summary")
+}
+
 func TestGetToolCallsBySession_ClosedDB(t *testing.T) {
 	dbDir := t.TempDir()
 	if err := initTestDB(dbDir); err != nil {

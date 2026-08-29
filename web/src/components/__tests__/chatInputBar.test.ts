@@ -98,7 +98,7 @@ const i18n = createI18n({
           uploadFile: '上传文件',
           openFile: '打开文件',
         },
-        quickSend: { title: '快捷发送', tapToFill: '长按发送', edit: '管理' },
+        quickSend: { title: '快捷发送', injectToInput: '加入输入框', edit: '管理' },
         modelSwitcher: { title: '切换模型' },
         thinkingEffortSwitcher: { title: '思考强度', auto: '自动' },
       },
@@ -381,141 +381,42 @@ describe('ChatInputBar — quick-send click sends directly', () => {
     expect(wrapper.emitted('send')[0]).toEqual(['git status'])
   })
 
-  it('suppresses click when long-press was just triggered', async () => {
-    vi.useFakeTimers()
+  it('closes the menu when handleQuickSendClick is called', async () => {
     const wrapper = mountInputBar()
+    wrapper.vm.showQuickMenu = true
     const item = { id: 1, label: 'Git Status', command: 'git status' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    // Start touch and let long-press fire
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    vi.advanceTimersByTime(500)
-    await nextTick()
-
-    // Long-press injects into input, not send
-    expect(getInputText(wrapper)).toBe('git status')
-
-    // Now the click after long-press should be suppressed
     wrapper.vm.handleQuickSendClick(item)
     await nextTick()
 
-    // Should still only have the injected input, no new send emission
-    expect(wrapper.emitted('send')).toBeFalsy()
-    vi.useRealTimers()
+    expect(wrapper.vm.showQuickMenu).toBe(false)
   })
 })
 
-describe('ChatInputBar — quick-send touch events', () => {
-  it('onQuickSendTouchStart sets pressing state', async () => {
+describe('ChatInputBar — quick-send inject to input', () => {
+  it('handleQuickSendInject fills the input box and closes the menu', async () => {
     const wrapper = mountInputBar()
+    wrapper.vm.showQuickMenu = true
     const item = { id: 1, label: 'Git Status', command: 'git status' }
-    const touchEvent = { touches: [{ clientX: 100, clientY: 200 }] }
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
+    wrapper.vm.handleQuickSendInject(item)
     await nextTick()
 
-    expect(wrapper.vm.quickSendPressingId).toBe(1)
+    // Command is injected into input, not sent
+    expect(getInputText(wrapper)).toBe('git status')
+    expect(wrapper.emitted('send')).toBeFalsy()
+    expect(wrapper.vm.showQuickMenu).toBe(false)
   })
 
-  it('onQuickSendTouchEnd short tap emits send', async () => {
-    vi.useFakeTimers()
+  it('handleQuickSendInject appends with newline when input already has content', async () => {
     const wrapper = mountInputBar()
+    setInputText(wrapper, 'hello')
+    await nextTick()
+
     const item = { id: 2, label: 'Build', command: 'npm run build' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    // Start touch
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    // Immediately end (short tap, no long-press timer fires)
-    wrapper.vm.onQuickSendTouchEnd()
+    wrapper.vm.handleQuickSendInject(item)
     await nextTick()
 
-    expect(wrapper.emitted('send')).toBeTruthy()
-    expect(wrapper.emitted('send')[0]).toEqual(['npm run build'])
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    vi.useRealTimers()
-  })
-
-  it('onQuickSendTouchEnd long-press triggers injectToInput', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountInputBar()
-    const item = { id: 3, label: 'Test', command: 'npm test' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    // Start touch
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    // Advance timer past long-press threshold
-    vi.advanceTimersByTime(500)
-    await nextTick()
-
-    // Long-press should have injected into input (not sent)
-    expect(getInputText(wrapper)).toBe('npm test')
+    expect(getInputText(wrapper)).toBe('hello\nnpm run build')
     expect(wrapper.emitted('send')).toBeFalsy()
-
-    // End touch after long-press
-    wrapper.vm.onQuickSendTouchEnd()
-    await nextTick()
-
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    vi.useRealTimers()
-  })
-
-  it('onQuickSendTouchMove cancels press when finger moves beyond threshold', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountInputBar()
-    const item = { id: 4, label: 'Lint', command: 'npm run lint' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe(4)
-
-    // Move finger beyond 10px
-    const moveEvent = { touches: [{ clientX: 70, clientY: 50 }] }
-    wrapper.vm.onQuickSendTouchMove(moveEvent)
-
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-    // Advance timer — should NOT trigger long-press since cancelled
-    vi.advanceTimersByTime(500)
-    await nextTick()
-
-    // No send or inject should have happened
-    expect(wrapper.emitted('send')).toBeFalsy()
-    expect(getInputText(wrapper)).toBe('')
-    vi.useRealTimers()
-  })
-
-  it('onQuickSendTouchMove does not cancel when finger moves within threshold', async () => {
-    vi.useFakeTimers()
-    const wrapper = mountInputBar()
-    const item = { id: 5, label: 'Deploy', command: 'npm run deploy' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe(5)
-
-    // Small move within 10px threshold
-    const moveEvent = { touches: [{ clientX: 55, clientY: 53 }] }
-    wrapper.vm.onQuickSendTouchMove(moveEvent)
-
-    expect(wrapper.vm.quickSendPressingId).toBe(5)
-    vi.useRealTimers()
-  })
-
-  it('cancelQuickSendPress clears all press state', async () => {
-    const wrapper = mountInputBar()
-    const item = { id: 6, label: 'Clean', command: 'npm run clean' }
-    const touchEvent = { touches: [{ clientX: 50, clientY: 50 }] }
-
-    wrapper.vm.onQuickSendTouchStart(item, touchEvent)
-    expect(wrapper.vm.quickSendPressingId).toBe(6)
-
-    wrapper.vm.cancelQuickSendPress()
-    expect(wrapper.vm.quickSendPressingId).toBeNull()
-  })
-
-  it('onQuickSendTouchMove returns early when no press active', () => {
-    const wrapper = mountInputBar()
-    // No press active — should not throw
-    const moveEvent = { touches: [{ clientX: 100, clientY: 100 }] }
-    expect(() => wrapper.vm.onQuickSendTouchMove(moveEvent)).not.toThrow()
   })
 })
 

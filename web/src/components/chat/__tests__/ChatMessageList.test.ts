@@ -217,3 +217,140 @@ describe('ChatMessageList — stream-follow persistence', () => {
     expect(source).toContain('userLeftBottom = false')
   })
 })
+
+/**
+ * Tests for the per-session scroll position memory.
+ *
+ * Root cause: switching sessions always force-scrolled to the bottom
+ * (loadHistory(true)), discarding the user's reading position in the previous
+ * session. The message list DOM is rebuilt on session switch (listKey contains
+ * the session id), so the browser's scrollTop is lost.
+ *
+ * Fix:
+ * - The currentSessionId watcher remembers the old session's scrollTop when
+ *   the user left it scrolled away from the bottom; a session left at the
+ *   bottom is forgotten so switching back uses the default scroll-to-bottom.
+ * - The listKey watcher restores the remembered position (nextTick + rAF, so
+ *   scrollHeight is settled) when switching back to a remembered session.
+ */
+describe('ChatMessageList — per-session scroll position memory', () => {
+  it('saves the old session position when the user left it away from the bottom', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The session-switch watcher reads the old DOM's live distance before teardown
+    expect(source).toContain('saveChatScrollPosition(oldSid, el.scrollTop)')
+    expect(source).toContain('dist > NEAR_EDGE_THRESHOLD')
+  })
+
+  it('forgets a session left at the bottom (default scroll-to-bottom on return)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toContain('clearChatScrollPosition(oldSid)')
+  })
+
+  it('flags the target session for restore on switch, executed by the messages watcher', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The session-switch watcher flags the target when it has a remembered
+    // position (explicit state, not oldKey segment comparison — Vue's watcher
+    // oldValue is "previous flush value", so a listKey-segment check silently
+    // suppresses the restore).
+    expect(source).toContain('pendingRestoreSessionId')
+    expect(source).toContain('getChatScrollPosition(newSid) != null')
+    // The restore executes in the messages watcher once history landed and
+    // only for the flagged session (same-session growth never flags it).
+    expect(source).toContain('pendingRestoreSessionId === props.currentSessionId')
+    expect(source).toContain('requestAnimationFrame')
+    expect(source).toContain('Math.min(savedPos, maxTop)')
+    // Ultra-fast B→C switch: the rAF restore must not apply B's position to
+    // C's DOM — it bails when the session changed before the rAF fired.
+    expect(source).toContain('props.currentSessionId !== restoredSid')
+  })
+
+  it('does NOT restore on same-session message growth (send/stream must scroll to bottom)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Sending a message grows the array but currentSessionId never changes, so
+    // the restore flag is not set — the restore bails and the intended
+    // force-scroll-to-bottom after send is never overridden.
+    expect(source).toMatch(/pendingRestoreSessionId = newSid && getChatScrollPosition\(newSid\) != null \? newSid : null/)
+  })
+})
+
+/**
+ * Lazy-load hint floating overlay.
+ *
+ * The "还有 N 条更早消息 / 加载中 / 已加载全部" pill must float above the top of
+ * the message area, not live inside the scrolling message flow. It was moved
+ * out of .chat-messages (the scroll container) into .chat-messages-wrapper and
+ * positioned absolutely, so it:
+ *   - never scrolls with the message flow,
+ *   - takes no layout space (does not push messages down),
+ *   - renders with a backdrop background so it reads as a floating pill.
+ */
+describe('ChatMessageList — floating lazy-load hint overlay', () => {
+  it('chat-load-area lives outside the scroll container (absolute overlay)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // .chat-load-area must be a sibling of .chat-messages, not its child.
+    expect(source).toContain('class="chat-messages-wrapper">')
+    expect(source).toContain('class="chat-load-area"')
+    // The scroll container must open after the load area closes.
+    const loadAreaIdx = source.indexOf('class="chat-load-area"')
+    const messagesIdx = source.indexOf('class="chat-messages"')
+    expect(loadAreaIdx).toBeGreaterThan(-1)
+    expect(messagesIdx).toBeGreaterThan(loadAreaIdx)
+    // The load area must be absolutely positioned (no layout footprint).
+    expect(source).toMatch(/\.chat-load-area \{[^}]*position: absolute/s)
+  })
+
+  it('the pill states carry a backdrop background so they read as floating', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toMatch(/\.chat-load-more,\s*\.chat-load-hint,\s*\.chat-load-done \{/)
+    expect(source).toContain('border-radius: 999px')
+    // backdrop background: the pill is not transparent text in the flow anymore
+    expect(source).toContain('background: color-mix')
+  })
+})
+
+/**
+ * Transient "more older messages" hint.
+ *
+ * The "还有 N 条更早消息" pill must NOT be a persistent resident of the message
+ * area. Whenever older messages remain it briefly appears (including on first
+ * render of a session that still has history to load) then auto-hides after a
+ * timeout. Once all history is loaded it hides immediately so the "all loaded"
+ * hint can take over.
+ */
+describe('ChatMessageList — transient more-messages hint', () => {
+  it('the more-messages hint is gated by a showMoreHint state, not hasMore alone', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The hint branch must be driven by the transient showMoreHint flag —
+    // hasMore must no longer be the standalone gate that keeps it resident.
+    expect(source).toMatch(/v-else-if="showMoreHint"/)
+    expect(source).not.toMatch(/v-else-if="hasMore && remainingCount > 0"/)
+  })
+
+  it('showMoreHint is armed whenever older messages remain and auto-hides on a timer', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Armed from a watch over (hasMore && remainingCount > 0), so it announces
+    // remaining history on first render too — not just after an explicit load.
+    expect(source).toMatch(/watch\(\(\) => props\.hasMore && remainingCount\.value > 0/)
+    expect(source).toContain("{ immediate: true }")
+    // Auto-hide via a timeout (2.5s); re-arming clears the in-flight timer.
+    expect(source).toContain('moreHintTimer = setTimeout')
+    expect(source).toMatch(/clearTimeout\(moreHintTimer\)/)
+    expect(source).toMatch(/showMoreHint\.value = false/)
+  })
+
+  it('hides immediately when all history is loaded (lets the all-loaded hint show)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The watch else-branch hides the hint once remaining count drops to zero.
+    expect(source).toMatch(/if \(hasRemaining\) \{[\s\S]*?showMoreHint\.value = true/)
+    expect(source).toMatch(/else \{[\s\S]*?showMoreHint\.value = false/)
+  })
+})

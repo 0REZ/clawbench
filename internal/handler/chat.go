@@ -282,7 +282,18 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	// Verify the session belongs to the requesting project (ISS-180)
 	// For POST, sessionID is always from a DB-backed session (auto-created above or from cookie),
 	// so an empty sessionProject means the session doesn't exist — will fail at backendName check.
-	if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != "" && sessionProject != projectPath {
+	// Support sending to an external project's session: the frontend passes ?project_path=
+	// (the session's owning project), which overrides the cookie project for ownership
+	// verification. Only an exact match with the session's own project is accepted, so
+	// this cannot be used to bypass access control.
+	if qp := r.URL.Query().Get("project_path"); qp != "" {
+		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
+			// Session belongs to the requested project; allow marking read.
+		} else {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return
+		}
+	} else if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != "" && sessionProject != projectPath {
 		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 		return
 	}
@@ -935,7 +946,10 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 // Tool output fields are truncated to 500 runes (see
 // service.forkToolOutputMaxLen) to avoid token explosion.
 func buildForkContext(sessionID string) string {
-	msgs, err := service.GetMessagesBySessionID(sessionID)
+	// Use GetMessagesBySessionIDRaw: GetMessagesBySessionID strips the content
+	// blocks of assistant messages that have a reading summary (empty
+	// {"blocks":[]}), which would drop all AI replies from the fork context.
+	msgs, err := service.GetMessagesBySessionIDRaw(sessionID)
 	if err != nil || len(msgs) == 0 {
 		return ""
 	}
@@ -1113,6 +1127,46 @@ func CancelChat(w http.ResponseWriter, r *http.Request) {
 		writeLocalizedErrorf(w, r, http.StatusNotFound, "SessionNotRunning")
 		return
 	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// MarkChatRead handles POST to mark a session as read (updates last_read_at
+// and broadcasts status="read"). Used by the completion popover's "mark as
+// read" button when the user replies without typing anything.
+func MarkChatRead(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		sessionID = getSessionID(r)
+	}
+	if sessionID == "" {
+		writeLocalizedErrorf(w, r, http.StatusBadRequest, "SessionIdRequired")
+		return
+	}
+
+	// Verify the session belongs to the requesting project. Support marking an
+	// external project's session read: ?project_path= (the session's owning
+	// project) overrides the cookie project; only an exact match is accepted.
+	if qp := r.URL.Query().Get("project_path"); qp != "" {
+		if sp := service.GetSessionProjectPath(sessionID); sp == "" || sp != qp {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return
+		}
+	} else if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != projectPath {
+		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+		return
+	}
+
+	service.UpdateLastRead(sessionID)
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
