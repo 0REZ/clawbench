@@ -719,7 +719,9 @@ jobs:
         run: |
           cd desktop/release
           zip -r clawbench-desktop-darwin-arm64.zip mac-arm64
-          zip -r clawbench-desktop-darwin-x64.zip mac-x64
+          # electron-builder outputs the x64 (default-arch) build to `mac/`,
+          # not `mac-x64/` — only non-default archs get an arch suffix.
+          zip -r clawbench-desktop-darwin-x64.zip mac
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -782,9 +784,10 @@ jobs:
       - name: Assemble desktop npm packages
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          # Split macOS artifact (mac-arm64 / mac-x64) into per-arch packages
+          # Split macOS artifact (mac-arm64 / mac) into per-arch packages.
+          # electron-builder names the x64 (default-arch) dir `mac`, arm64 is `mac-arm64`.
           cp -r pkg-desktop/macos-all/mac-arm64 pkg-desktop/darwin-arm64/app
-          cp -r pkg-desktop/macos-all/mac-x64 pkg-desktop/darwin-x64/app
+          cp -r pkg-desktop/macos-all/mac pkg-desktop/darwin-x64/app
           for PLATFORM in linux-x64 linux-arm64 win32-x64 darwin-arm64 darwin-x64; do
             PKG="npm/platforms-desktop/$PLATFORM"
             mkdir -p "$PKG"
