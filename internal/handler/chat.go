@@ -935,7 +935,10 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 // Tool output fields are truncated to 500 runes (see
 // service.forkToolOutputMaxLen) to avoid token explosion.
 func buildForkContext(sessionID string) string {
-	msgs, err := service.GetMessagesBySessionID(sessionID)
+	// Use GetMessagesBySessionIDRaw: GetMessagesBySessionID strips the content
+	// blocks of assistant messages that have a reading summary (empty
+	// {"blocks":[]}), which would drop all AI replies from the fork context.
+	msgs, err := service.GetMessagesBySessionIDRaw(sessionID)
 	if err != nil || len(msgs) == 0 {
 		return ""
 	}

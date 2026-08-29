@@ -726,6 +726,35 @@ func TestArchiveSession_BadMethod(t *testing.T) {
 
 // --- ServeForkSession ---
 
+// TestBuildForkContextHandler_PreservesSummarizedAssistant is a regression test
+// for fork "amnesia": buildForkContext must keep assistant replies even when the
+// messages carry a reading summary (GetMessagesBySessionID would strip them).
+func TestBuildForkContextHandler_PreservesSummarizedAssistant(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "Original", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "first user question", nil, false, "")
+	require.NoError(t, err)
+	assistantMsg, err := service.AddChatMessage(env.ProjectDir, "claude", sessionID, "assistant", `{"blocks":[{"type":"text","text":"ai reply"}]}`, nil, false, "")
+	require.NoError(t, err)
+
+	// Give the assistant message a reading summary — this used to trigger
+	// content stripping when building the fork context.
+	_, err = service.WriteExec(
+		"INSERT INTO summaries (target_type, target_id, summary) VALUES ('chat_message', ?, 'reading summary')",
+		assistantMsg,
+	)
+	require.NoError(t, err)
+
+	ctx := buildForkContext(sessionID)
+	assert.Contains(t, ctx, "first user question")
+	assert.Contains(t, ctx, "ai reply", "summarized assistant reply must survive fork context")
+	assert.NotContains(t, ctx, "reading summary")
+}
+
 func TestServeForkSession_OK(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
