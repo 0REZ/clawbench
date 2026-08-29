@@ -5,12 +5,14 @@
 // both initializeApp (cold start) and hotSwitchProject (SPA project switch),
 // keeping the two paths from diverging.
 //
-// When a saved file is restored, the caller's switchTab('view') re-activates
-// the file-view tab. This is required on project switch: resetProjectState()
-// nulls currentFile, and the currentFile watcher falls back to the browse tab,
-// so without this the restored file stays in state (the header badge shows it)
-// but the viewer is never brought back to view. Mirroring handleSelectFile,
-// which calls switchTab('view') after opening.
+// When a saved file is restored and the caller passes activateView: true,
+// switchTab('view') re-activates the file-view tab. This is required on project
+// switch: resetProjectState() nulls currentFile, and the currentFile watcher
+// falls back to the browse tab, so without this the restored file stays in
+// state (the header badge shows it) but the viewer is never brought back to
+// view. Mirroring handleSelectFile, which calls switchTab('view') after opening.
+// On cold start (activateView omitted/false) the file is restored to state but
+// the app stays on the chat tab.
 import { useFileNavStack } from '@/composables/useFileNavStack'
 import { useToast } from '@/composables/useToast'
 import { gt } from '@/composables/useLocale'

@@ -93,6 +93,20 @@ describe('restoreProjectWorkspace', () => {
     expect(localStorage.getItem(OPEN_FILE_PREFIX + PROJECT)).toBeNull()
   })
 
+  it('does not switch to view when the saved file is stale even with activateView', async () => {
+    localStorage.setItem(OPEN_FILE_PREFIX + PROJECT, 'web/src/App.vue')
+    vi.spyOn(store, 'loadFiles').mockResolvedValue(undefined)
+    vi.spyOn(store, 'selectFile').mockResolvedValue(false)
+    const switchTab = vi.fn()
+
+    // Project switch with activateView: the stale-file branch must still not
+    // call switchTab — only a successfully restored file may re-activate view.
+    await restoreProjectWorkspace({ switchTab, activateView: true })
+
+    expect(switchTab).not.toHaveBeenCalled()
+    expect(localStorage.getItem(OPEN_FILE_PREFIX + PROJECT)).toBeNull()
+  })
+
   it('loads the saved browse directory, falling back to the project root', async () => {
     localStorage.setItem(BROWSE_DIR_PREFIX + PROJECT, 'web/src')
     const loadFiles = vi.spyOn(store, 'loadFiles').mockResolvedValue(undefined)
