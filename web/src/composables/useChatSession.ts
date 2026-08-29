@@ -12,6 +12,7 @@ import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage, type ChatMessageAction } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
+import { hasChatScrollPosition } from '@/utils/chatScrollMemory'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -619,6 +620,13 @@ export function useChatSession(options: UseChatSessionOptions) {
     // loadHistory's own mySeq check handles the actual guard.
     ++loadHistorySeq
 
+    // Session scroll memory: if the target session was left scrolled away from
+    // the bottom, do NOT force-scroll to the bottom — ChatMessageList restores
+    // the remembered position after the new messages render. Sessions left at
+    // the bottom (or never visited) have no memory → force-scroll to bottom.
+    const hasSavedPos = hasChatScrollPosition(sessionId)
+    appLog.d(TAG, `switchSession: target ${sessionId.slice(0, 12)} hasSavedPos=${hasSavedPos}`)
+
     // Disconnect stream and invalidate snapshot before switching identity.
     onDisconnectStream()
     lastMessageSnapshot = ''  // Invalidate snapshot — new session may have different data
@@ -648,7 +656,7 @@ export function useChatSession(options: UseChatSessionOptions) {
     // - Placeholder restoration for running sessions (rebuildFromDb)
     // immediate=true skips the loadHistoryInProgress queue and
     // handles switching/inputDisabled in its finally block.
-    await loadHistory(true, true, false, true)
+    await loadHistory(!hasSavedPos, true, false, true)
 
     // Recalculate global chatUnread after switching — the backend has already
     // marked this session as read (UpdateLastRead), so the session list will

@@ -150,6 +150,7 @@ import { store } from '@/stores/app.ts'
 import { computeRemainingCount } from '@/utils/messageListUtils.ts'
 import { StreamFrameScheduler } from '@/utils/streamFrameScheduler'
 import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS } from '@/utils/scrollState'
+import { saveChatScrollPosition, clearChatScrollPosition, getChatScrollPosition } from '@/utils/chatScrollMemory'
 
 const { t } = useI18n()
 
@@ -815,7 +816,25 @@ const nearestMessageId = computed(() => {
 })
 
 // Watch session switch to reset scroll state and user msg index
-watch(() => props.currentSessionId, () => {
+//
+// Session scroll memory: when the user leaves a session while scrolled away
+// from the bottom, remember its scrollTop so switching back restores the
+// reading position. A session left at the bottom is NOT remembered — switching
+// back falls back to the default scroll-to-bottom behavior (new content view).
+// The old session's DOM is still present at this watcher's pre-flush trigger,
+// so we can read its live scrollTop here.
+watch(() => props.currentSessionId, (newSid, oldSid) => {
+  // 1. Save the old session's position before its DOM is torn down (if the
+  //    user had scrolled away from the bottom). At the bottom → forget.
+  if (oldSid && messagesRef.value) {
+    const el = messagesRef.value
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist > NEAR_EDGE_THRESHOLD) {
+      saveChatScrollPosition(oldSid, el.scrollTop)
+    } else {
+      clearChatScrollPosition(oldSid)
+    }
+  }
   isAtBottom.value = true
   scrolledUp.value = false
   scrolledDown.value = false
@@ -894,6 +913,36 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
     if (!scrollAnchor || !messagesRef.value) return
     restoreAnchor(messagesRef.value, scrollAnchor)
     scrollAnchor = null
+  })
+})
+
+// ── Session scroll memory restore ──
+// Switching back to a session that was left scrolled away from the bottom
+// restores its remembered position. The restore runs after the listKey DOM
+// rebuild (session + message structure final) plus one rAF so scrollHeight is
+// settled — a raw nextTick can fire before lazy blocks (Mermaid, original
+// text) inflate, clamping the restored scrollTop.
+// Sessions left at the bottom have no memory → default scroll-to-bottom.
+watch(listKey, (key, oldKey) => {
+  if (key === oldKey) return
+  // Only restore once the target session's messages are actually rendered.
+  // During switchSession the messages array is first cleared (empty), and only
+  // after the history fetch lands is it replaced with the target session's
+  // rows — restoring against an empty list would clamp the scrollTop to 0.
+  if (!props.currentSessionId || !props.messages || props.messages.length === 0) return
+  const savedPos = getChatScrollPosition(props.currentSessionId)
+  if (savedPos == null) return
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const el = messagesRef.value
+      if (!el) return
+      const maxTop = el.scrollHeight - el.clientHeight
+      el.scrollTop = Math.min(savedPos, maxTop)
+      isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD
+      setProgrammatic(false)
+      userLeftBottom = false
+      lastScrollAt = 0
+    })
   })
 })
 

@@ -217,3 +217,45 @@ describe('ChatMessageList — stream-follow persistence', () => {
     expect(source).toContain('userLeftBottom = false')
   })
 })
+
+/**
+ * Tests for the per-session scroll position memory.
+ *
+ * Root cause: switching sessions always force-scrolled to the bottom
+ * (loadHistory(true)), discarding the user's reading position in the previous
+ * session. The message list DOM is rebuilt on session switch (listKey contains
+ * the session id), so the browser's scrollTop is lost.
+ *
+ * Fix:
+ * - The currentSessionId watcher remembers the old session's scrollTop when
+ *   the user left it scrolled away from the bottom; a session left at the
+ *   bottom is forgotten so switching back uses the default scroll-to-bottom.
+ * - The listKey watcher restores the remembered position (nextTick + rAF, so
+ *   scrollHeight is settled) when switching back to a remembered session.
+ */
+describe('ChatMessageList — per-session scroll position memory', () => {
+  it('saves the old session position when the user left it away from the bottom', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The session-switch watcher reads the old DOM's live distance before teardown
+    expect(source).toContain('saveChatScrollPosition(oldSid, el.scrollTop)')
+    expect(source).toContain('dist > NEAR_EDGE_THRESHOLD')
+  })
+
+  it('forgets a session left at the bottom (default scroll-to-bottom on return)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toContain('clearChatScrollPosition(oldSid)')
+  })
+
+  it('restores the remembered position when switching back, after the DOM settles', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Restore is driven by listKey change (session + structure final) …
+    expect(source).toContain("watch(listKey, (key, oldKey)")
+    // … and only after messages are rendered + scrollHeight is settled
+    expect(source).toContain('props.messages.length === 0')
+    expect(source).toContain('requestAnimationFrame')
+    expect(source).toContain('el.scrollTop = Math.min(savedPos, maxTop)')
+  })
+})
