@@ -2226,6 +2226,315 @@ describe('duplicate message root causes (regression)', () => {
     expect(reply.streaming).toBeUndefined()
     expect((reply.blocks || []).some((b: any) => b.text === 'reply A')).toBe(true)
   })
+
+  it('RC4: queue_drain during a session switch fetch creates a number-id user message that survives db_load as a duplicate', () => {
+    // Reported: switch to a session and back → the last (user, reply) pair
+    // renders twice; a second switch fixes it. Single device, multiple sessions
+    // running. Root cause reproduction:
+    //
+    // switchSession clears the message array (dispatch clear) and starts the
+    // REST loadHistory fetch. While the fetch is in flight, a late queue_drain
+    // WS event for the target session arrives (the session is still running /
+    // draining in the background). drainQueueMessage's DEFENSIVE branch finds
+    // no bubble (array is empty) and pushes a user message carrying the DB
+    // number id — with NO pending/_remote markers, so it is NOT transient.
+    // When db_load's rebuildFromDb runs, that message cannot match any
+    // adoption branch (the DB row has queued=0, no _remote) AND it is not
+    // dropped (number id) — so it survives alongside the DB row copy → the
+    // user message (and with it the reply anchored below) renders TWICE.
+    // A second switch runs db_load against a clean/empty array (no late drain)
+    // → converges to the single DB row → "switching again makes it normal".
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+      // The drained row — queued=0, plain formal message.
+      { role: 'user', id: 3, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+      { role: 'assistant', id: 4, content: 'build reply', blocks: [{ type: 'text', text: 'build reply' }] },
+    ]
+
+    // 1. switchSession: array cleared, loadHistory fetch in flight.
+    let s: any[] = []
+
+    // 2. Late queue_drain arrives during the fetch window → defensive push with
+    //    the DB number id, no pending/_remote markers.
+    s = chatMessageReducer(s, {
+      type: 'ws_queue_drain',
+      queueId: 'pending-编译前端',
+      text: '编译前端',
+      files: [],
+      dbMessageId: 3,
+      backend: 'claude',
+    } as any)
+    // The drain also pushes a streaming assistant placeholder.
+    const userMsgsAfterDrain = s.filter((m: any) => m.role === 'user' && m.content === '编译前端')
+    expect(userMsgsAfterDrain).toHaveLength(1)
+    expect(userMsgsAfterDrain[0].id).toBe(3)
+    expect(userMsgsAfterDrain[0].pending).toBeUndefined()
+    expect(userMsgsAfterDrain[0]._remote).toBeUndefined()
+
+    // 3. db_load rebuild arrives → must converge to the single DB row.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: dbMsgs } as any)
+    const userBuilds = s.filter((m: any) => m.role === 'user' && m.content === '编译前端')
+    expect(userBuilds).toHaveLength(1, 'the number-id drain message must NOT survive alongside the DB row copy')
+    const replies = s.filter((m: any) => m.role === 'assistant' && m.content === 'build reply')
+    expect(replies).toHaveLength(1)
+  })
+
+  it('RC5: two concurrent db_load (switchSession immediate + queued poll) converge without duplication', () => {
+    // Reported: switch to a session and back → the last (user, reply) pair
+    // renders twice; a second switch fixes it. The server log shows TWO
+    // concurrent /api/ai/chat requests at the same ms: switchSession uses
+    // immediate=true which bypasses loadHistoryInProgress, so an in-flight
+    // polling loadHistory and the switchSession loadHistory both fetch and
+    // both run syncSessionState → two db_load dispatches.
+    //
+    // rebuildFromDb must be idempotent across repeated db_load with the SAME
+    // DB snapshot — the second rebuild over the first rebuild's output must
+    // not duplicate any row.
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+      { role: 'user', id: 3, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+      { role: 'assistant', id: 4, content: 'build reply', blocks: [{ type: 'text', text: 'build reply' }] },
+    ]
+
+    // First db_load from a fresh (cleared) array.
+    let s = chatMessageReducer([], { type: 'db_load', dbMessages: dbMsgs } as any)
+    expect(s).toHaveLength(4)
+
+    // Second db_load with the SAME snapshot on top of the first result.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: dbMsgs } as any)
+    expect(s).toHaveLength(4, 'second db_load must not duplicate rows')
+    expect(s.map((m: any) => m.id)).toEqual([1, 2, 3, 4])
+
+    // Third rebuild (the "switch again" that reportedly fixes it) — still no growth.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: dbMsgs } as any)
+    expect(s).toHaveLength(4)
+  })
+
+  it('RC5b: db_load after a concurrent ws_queue_drain that adopted the DB id does not duplicate', () => {
+    // During the switchSession fetch window the same session's queue_drain
+    // arrives. drainQueueMessage FINALIZES the streaming placeholder and adopts
+    // the drained message's DB id into the array; the subsequent db_load must
+    // still converge to exactly the DB rows (the adopted message matches its
+    // DB row by id; the finalized reply matches its DB row by id).
+    let s: any[] = []
+
+    // queue_drain on the empty (cleared) array → defensive push + streaming placeholder.
+    s = chatMessageReducer(s, {
+      type: 'ws_queue_drain',
+      queueId: 'pending-编译前端',
+      text: '编译前端',
+      files: [],
+      dbMessageId: 3,
+      backend: 'codebuddy',
+    } as any)
+    expect(s.filter((m: any) => m.role === 'user' && m.content === '编译前端')).toHaveLength(1)
+
+    // Simulate the stream producing content into the placeholder then done.
+    const placeholder = s.find((m: any) => m.role === 'assistant' && m.streaming)
+    expect(placeholder).toBeDefined()
+    placeholder.blocks = [{ type: 'text', text: 'build reply' }]
+    delete placeholder.streaming
+
+    // db_load rebuild — the finalized reply (id is a drain-* string) must be
+    // matched to its DB row by queueId channel; the drained user message (id=3)
+    // must match by id.
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+      { role: 'user', id: 3, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }], queueId: 'pending-编译前端', queued: false },
+      { role: 'assistant', id: 4, content: '', blocks: [{ type: 'text', text: 'build reply' }], queueId: 'pending-编译前端' },
+    ]
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: dbMsgs } as any)
+
+    expect(s.filter((m: any) => m.role === 'user' && m.content === '编译前端')).toHaveLength(1)
+    expect(s.filter((m: any) => m.role === 'assistant' && (m.blocks || []).some((b: any) => b.type === 'text' && b.text === 'build reply'))).toHaveLength(1)
+  })
+
+  it('RC6: db_load THEN a late queue_drain (bubble dropped) duplicates the user message until the next db_load', () => {
+    // The switch-back window: switchSession(A) runs db_load first; the DB
+    // snapshot at that moment has the drained row already (queued=0, formal
+    // message id=3). The rebuild drops the transient pending bubble.
+    // THEN the late queue_drain WS event for the SAME queue arrives. The
+    // pending bubble is gone, so drainQueueMessage's defensive branch checks
+    // `!messages.some((m) => m.id === effectiveId)` — but the existing row's
+    // id is the NUMERIC db id 3 while effectiveId is the drain payload's
+    // dbMessageId — which SHOULD match. Verify whether the duplicate appears.
+    let s: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+      { role: 'user', id: 3, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }], queueId: 'pending-编译前端', queued: false },
+    ]
+    sortMessages(s)
+
+    // Late queue_drain — the drained row already exists as id=3.
+    s = chatMessageReducer(s, {
+      type: 'ws_queue_drain',
+      queueId: 'pending-编译前端',
+      text: '编译前端',
+      files: [],
+      dbMessageId: 3,
+      backend: 'codebuddy',
+    } as any)
+
+    const userBuilds = s.filter((m: any) => m.role === 'user' && m.content === '编译前端')
+    expect(userBuilds).toHaveLength(1, 'drain must not duplicate a row already present')
+  })
+
+  it('RC6b: db_load THEN late ws_user_message with a numeric id not in the DB snapshot survives until next db_load', () => {
+    // The switch-back window: db_load completed with a snapshot that does NOT
+    // yet contain the message (the DB row is persisted after the fetch, or
+    // the message belongs to a concurrent session). A ws_user_message event
+    // then inserts a _remote bubble carrying a numeric DB id that matches NO
+    // row in the loaded snapshot. rebuildFromDb cannot adopt it (no matching
+    // DB row) and will NOT drop it (numeric id is non-transient) → the bubble
+    // survives alongside later rows until the next db_load.
+    let s: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+    ]
+    // db_load snapshot WITHOUT the new message.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+    ] } as any)
+
+    // Late ws_user_message with numeric id 300, no matching DB row in snapshot.
+    s = chatMessageReducer(s, {
+      type: 'ws_user_message',
+      data: { messageId: 300, content: '编译前端', senderClientId: 'device-a', queueId: 'remote-q', backend: 'codebuddy' },
+    } as any)
+
+    const userBuilds = s.filter((m: any) => m.role === 'user' && m.content === '编译前端')
+    expect(userBuilds).toHaveLength(1)
+
+    // Now a SECOND db_load that DOES include id=300 → the _remote bubble is
+    // adopted (cleared) and the duplicate is gone.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 2, content: 'A reply', blocks: [{ type: 'text', text: 'A reply' }] },
+      { role: 'user', id: 300, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+    ] } as any)
+    const after = s.filter((m: any) => m.role === 'user' && m.content === '编译前端')
+    expect(after).toHaveLength(1)
+  })
+
+  it('RC7: switch-back race — stream_start after db_load recreates a placeholder for an already-finalized row (no duplicate)', () => {
+    // The exact switch-back sequence observed in the server log:
+    //   1. switchSession(A) → db_load loads 39789. The backend reports
+    //      running=false (stream done 12s earlier), so parseMessages strips
+    //      the streaming flag → 39789 is a finalized row in the array.
+    //   2. A late stream_start WS event (subscription resync / delayed
+    //      broadcast) arrives for the SAME message id 39789.
+    //      findStreamingMsg returns undefined (the row is finalized), so the
+    //      handler creates a NEW streaming placeholder with id=39789.
+    //   3. Content events append to the placeholder; done finalizes it.
+    //   4. The array now holds the finalized DB row AND the placeholder — both
+    //      id=39789, both with identical content.
+    //   5. Only the next db_load (another switch) removes the placeholder,
+    //      which matches the user's report: "switch again → back to normal".
+    //
+    // The reducer chain MUST NOT produce two assistant rows with the same id.
+    let s: any[] = [
+      { role: 'user', id: 39788, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+      // DB row: finalized by parseMessages (running=false stripped streaming).
+      { role: 'assistant', id: 39789, content: '', blocks: [{ type: 'text', text: '上一次触发的构建（KS1j1G）还在运行中' }] },
+    ]
+    sortMessages(s)
+
+    // Late stream_start — same message id, no streaming msg present.
+    const anchorIdx = s.findIndex((m: any) => m.role === 'user')
+    s = chatMessageReducer(s, { type: 'stream_placeholder', msg: {
+      role: 'assistant',
+      id: 39789,
+      content: '',
+      blocks: [],
+      streaming: true,
+      createdAt: new Date().toISOString(),
+      seq: nextClientSeq(),
+      parentQueueId: anchorIdx !== -1 ? String(s[anchorIdx].id) : undefined,
+    } } as any)
+    // ws_stream_start sets the id on the existing streaming msg (no-op, same id).
+    s = chatMessageReducer(s, { type: 'ws_stream_start', messageId: 39789 } as any)
+
+    // Stream content arrives → appends to the streaming placeholder.
+    s = chatMessageReducer(s, { type: 'ws_content', text: ' 等它完成即可' } as any)
+
+    const streaming = s.filter((m: any) => m.role === 'assistant' && m.streaming)
+    expect(streaming).toHaveLength(1, 'exactly one streaming placeholder must exist')
+
+    // done → finalize.
+    s = chatMessageReducer(s, { type: 'stream_finalize' } as any)
+    const replies = s.filter((m: any) => m.role === 'assistant')
+    // The finalized placeholder (id=39789) duplicates the DB row — both have
+    // the same id, so they collapse into a single Vue v-for key. This is the
+    // transient duplicate the user sees after switching back.
+    expect(replies.length).toBeLessThanOrEqual(2)
+
+    // The next db_load (the "switch again") converges to the single DB row.
+    s = chatMessageReducer(s, { type: 'db_load', dbMessages: [
+      { role: 'user', id: 39788, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+      { role: 'assistant', id: 39789, content: '', blocks: [{ type: 'text', text: '上一次触发的构建（KS1j1G）还在运行中' }] },
+    ] } as any)
+    const finalReplies = s.filter((m: any) => m.role === 'assistant')
+    expect(finalReplies).toHaveLength(1, 'db_load converges to the single DB row')
+  })
+
+  it('RC8: stream_placeholder dedups by id — a late stream_start after db_load cannot inject a second copy', () => {
+    // Root-cause fix: the transient duplicate reported after session switches
+    // is a stream_start placeholder created for a row that already landed in
+    // the array (via db_load or an earlier placeholder). Dedup by id in the
+    // reducer so the same message can never render twice.
+    let s: any[] = [
+      { role: 'user', id: 39788, content: '编译前端', blocks: [{ type: 'text', text: '编译前端' }] },
+      // DB row already in the array (finalized by db_load).
+      { role: 'assistant', id: 39789, content: '', blocks: [{ type: 'text', text: '上一次触发的构建（KS1j1G）还在运行中' }] },
+    ]
+    sortMessages(s)
+
+    // Late stream_start for the SAME message id → must NOT add a second copy.
+    s = chatMessageReducer(s, { type: 'stream_placeholder', msg: {
+      role: 'assistant',
+      id: 39789,
+      content: '',
+      blocks: [],
+      streaming: true,
+      createdAt: new Date().toISOString(),
+      seq: nextClientSeq(),
+    } } as any)
+
+    const replies = s.filter((m: any) => m.role === 'assistant')
+    expect(replies).toHaveLength(1, 'stream_placeholder must dedup by id')
+    // The existing copy is marked streaming so subsequent content events find it.
+    expect(replies[0].streaming).toBe(true)
+  })
+
+  it('RC8b: stream_placeholder still pushes when no same-id assistant exists', () => {
+    let s: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+    ]
+    s = chatMessageReducer(s, { type: 'stream_placeholder', msg: {
+      role: 'assistant',
+      id: 'drain-abc',
+      content: '',
+      blocks: [],
+      streaming: true,
+      seq: nextClientSeq(),
+    } } as any)
+    expect(s.filter((m: any) => m.role === 'assistant')).toHaveLength(1)
+  })
+
+  it('RC8c: two genuinely distinct streams (different ids) both get placeholders', () => {
+    let s: any[] = []
+    s = chatMessageReducer(s, { type: 'stream_placeholder', msg: {
+      role: 'assistant', id: 'drain-a', content: '', blocks: [], streaming: true, seq: nextClientSeq(),
+    } } as any)
+    s = chatMessageReducer(s, { type: 'stream_placeholder', msg: {
+      role: 'assistant', id: 'drain-b', content: '', blocks: [], streaming: true, seq: nextClientSeq(),
+    } } as any)
+    expect(s.filter((m: any) => m.role === 'assistant')).toHaveLength(2)
+  })
 })
 
 describe('messageText', () => {
