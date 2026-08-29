@@ -1140,8 +1140,6 @@ async function handleRefreshSession() {
 async function handleResetSession() {
     const sid = identity.currentSessionId.value
     if (!sid) return
-    const confirmed = await dialog.confirm(t('chat.contentBlocks.resetSessionConfirm'))
-    if (!confirmed) return
     try {
         await apiPost('/api/ai/session/reset', { sessionId: sid })
         toast.show(t('chat.contentBlocks.resetSessionDone'), { icon: '🔄', type: 'success' })
