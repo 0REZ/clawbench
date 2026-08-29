@@ -784,12 +784,11 @@ jobs:
       - name: Assemble desktop npm packages
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          # Split macOS artifact (mac-arm64 / mac) into per-arch packages.
-          # electron-builder names the x64 (default-arch) dir `mac`, arm64 is `mac-arm64`.
-          mkdir -p pkg-desktop/darwin-arm64 pkg-desktop/darwin-x64
-          cp -r pkg-desktop/macos-all/mac-arm64 pkg-desktop/darwin-arm64/app
-          cp -r pkg-desktop/macos-all/mac pkg-desktop/darwin-x64/app
-          for PLATFORM in linux-x64 linux-arm64 win32-x64 darwin-arm64 darwin-x64; do
+          # macOS darwin packages are NOT published to npm: the Electron .app
+          # tarball exceeds npm's ~100MB size limit (E413). They ship via the
+          # GitHub Release assets instead. Keep the split so linux/win assembly
+          # stays uniform.
+          for PLATFORM in linux-x64 linux-arm64 win32-x64; do
             PKG="npm/platforms-desktop/$PLATFORM"
             mkdir -p "$PKG"
             cp -r "pkg-desktop/$PLATFORM/app/." "$PKG/"
@@ -808,27 +807,35 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-desktop-linux-x64
-        run: npm publish ./npm/platforms-desktop/linux-x64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-desktop-linux-x64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms-desktop/linux-x64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-desktop-linux-arm64
-        run: npm publish ./npm/platforms-desktop/linux-arm64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-desktop-linux-arm64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms-desktop/linux-arm64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-desktop-win32-x64
-        run: npm publish ./npm/platforms-desktop/win32-x64 --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish @xulongzhe/clawbench-desktop-darwin-arm64
-        run: npm publish ./npm/platforms-desktop/darwin-arm64 --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish @xulongzhe/clawbench-desktop-darwin-x64
-        run: npm publish ./npm/platforms-desktop/darwin-x64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-desktop-win32-x64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms-desktop/win32-x64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -836,10 +843,16 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           MAIN_DIR="npm/desktop-main"
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('$MAIN_DIR/package.json','utf8'));p.version='$VERSION';for(const d in p.optionalDependencies)p.optionalDependencies[d]='$VERSION';fs.writeFileSync('$MAIN_DIR/package.json',JSON.stringify(p,null,2)+'\n')"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('$MAIN_DIR/package.json','utf8'));p.version='$VERSION';for(const d in p.optionalDependencies){if(d.includes('-darwin-')){delete p.optionalDependencies[d]}}for(const d in p.optionalDependencies)p.optionalDependencies[d]='$VERSION';fs.writeFileSync('$MAIN_DIR/package.json',JSON.stringify(p,null,2)+'\n')"
 
       - name: Publish main desktop package (@xulongzhe/clawbench-desktop)
-        run: npm publish ./npm/desktop-main --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-desktop@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/desktop-main --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -974,37 +987,79 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-linux-x64
-        run: npm publish ./npm/platforms/linux-x64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-linux-x64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/linux-x64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-linux-arm64
-        run: npm publish ./npm/platforms/linux-arm64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-linux-arm64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/linux-arm64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-android-arm64
-        run: npm publish ./npm/platforms/android-arm64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-android-arm64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/android-arm64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-darwin-x64
-        run: npm publish ./npm/platforms/darwin-x64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-darwin-x64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/darwin-x64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-darwin-arm64
-        run: npm publish ./npm/platforms/darwin-arm64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-darwin-arm64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/darwin-arm64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @xulongzhe/clawbench-win32-x64
-        run: npm publish ./npm/platforms/win32-x64 --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench-win32-x64@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/platforms/win32-x64 --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish main package (@xulongzhe/clawbench)
-        run: npm publish ./npm/main --access public
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if npm view "@xulongzhe/clawbench@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION already published, skipping"
+            exit 0
+          fi
+          npm publish ./npm/main --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

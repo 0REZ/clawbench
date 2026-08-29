@@ -16,8 +16,6 @@
   "optionalDependencies": {
     "@xulongzhe/clawbench-desktop-linux-x64": "0.1.0",
     "@xulongzhe/clawbench-desktop-linux-arm64": "0.1.0",
-    "@xulongzhe/clawbench-desktop-darwin-x64": "0.1.0",
-    "@xulongzhe/clawbench-desktop-darwin-arm64": "0.1.0",
     "@xulongzhe/clawbench-desktop-win32-x64": "0.1.0"
   },
   "engines": {
