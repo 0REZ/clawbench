@@ -4518,6 +4518,281 @@ describe('loadMoreMessages', () => {
     expect(session.queuedCount.value).toBe(2)
   })
 
+  it('converges hasMore to false when loadMore returns no older messages', async () => {
+    // Initial load: 2 messages, total=2 → hasMore=false already, so loadMore
+    // would be skipped. Use a history that still has unloaded messages so the
+    // first loadMore fires, then the server reports total == loaded count.
+    mockUtilsFns.parseMessages
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+      ])
+      .mockReturnValueOnce([]) // second loadMore: no older messages
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }],
+          total: 50, // server says more exists → hasMore=true after first load
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          messages: [],
+          total: 2, // now server says everything is loaded
+          queuedCount: 0,
+        }),
+      })
+
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    await session.loadHistory(true, false, false)
+    // total=50, loaded=2 → hasMore=true
+    expect(session.hasMore.value).toBe(true)
+
+    await session.loadMoreMessages()
+    // Server returned empty + total=2 → hasMore must converge to false.
+    expect(session.hasMore.value).toBe(false)
+
+    // A subsequent loadMore must be skipped (no additional fetch).
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await session.loadMoreMessages()
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsBefore)
+  })
+
+  it('does not reset noMoreHistory when a refresh loadHistory reports the same total', async () => {
+    // User scenario: history fully loaded (loadMore returned empty), user stays
+    // at the top. A routine refresh loadHistory (e.g. session_update event with
+    // skipIfUnchanged) with an unchanged total must NOT clear noMoreHistory —
+    // otherwise the next top scroll re-fires an empty loadMore.
+    mockUtilsFns.parseMessages
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+      ])
+      .mockReturnValueOnce([]) // loadMore: empty → noMoreHistory=true
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+      ]) // refresh loadHistory: same messages, same total
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }],
+          total: 50,
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          messages: [],
+          total: 2,
+          queuedCount: 0,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }],
+          total: 2, // same total as after exhaustion
+          running: false,
+        }),
+      })
+
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    await session.loadHistory(true, false, false)
+    await session.loadMoreMessages()
+    expect(session.hasMore.value).toBe(false)
+
+    // Refresh with the same total — must NOT re-arm history loading.
+    await session.loadHistory(true, false, false)
+    expect(session.hasMore.value).toBe(false)
+
+    // A further loadMore must be skipped (no fetch).
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await session.loadMoreMessages()
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsBefore)
+  })
+
+  it('keeps hasMore true when loadMore returns empty but total still exceeds loaded', async () => {
+    // Defensive: if the server returns no messages yet claims more exist
+    // (cursor/edge case), hasMore must NOT flip to false — otherwise history
+    // would be permanently unreachable.
+    mockUtilsFns.parseMessages
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+      ])
+      .mockReturnValueOnce([])
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }],
+          total: 50,
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          messages: [],
+          total: 50, // server still claims more than loaded
+          queuedCount: 0,
+        }),
+      })
+
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    await session.loadHistory(true, false, false)
+    expect(session.hasMore.value).toBe(true)
+
+    await session.loadMoreMessages()
+    // An empty loadMore response means the server confirmed there are no
+    // older messages — history is fully loaded regardless of the stale
+    // total field, so hasMore must flip to false.
+    expect(session.hasMore.value).toBe(false)
+  })
+
+  it('resets noMoreHistory on loadHistory so a fresh session re-evaluates history', async () => {
+    // First loadMore exhausts history (hasMore → false). A subsequent
+    // loadHistory (new messages / session switch) must clear the flag so
+    // history loading can fire again.
+    mockUtilsFns.parseMessages
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+      ])
+      .mockReturnValueOnce([]) // loadMore: empty
+      .mockReturnValueOnce([
+        { id: 50, role: 'user', content: 'hello' },
+        { id: 51, role: 'assistant', content: 'hi' },
+        { id: 52, role: 'user', content: 'new' },
+      ]) // reload history: 3 messages
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }],
+          total: 50,
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          messages: [],
+          total: 2,
+          queuedCount: 0,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'current-s1',
+          messages: [{ id: 50 }, { id: 51 }, { id: 52 }],
+          total: 60,
+          running: false,
+        }),
+      })
+
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    await session.loadHistory(true, false, false)
+    await session.loadMoreMessages()
+    expect(session.hasMore.value).toBe(false)
+
+    // Reload history — flag must reset and hasMore re-evaluate to true.
+    await session.loadHistory(true, false, false)
+    expect(session.hasMore.value).toBe(true)
+  })
+
   it('hasMore stays true while only queued messages are unloaded (plan C)', () => {
     // All 40 normal messages are loaded, but 15 queued messages are still
     // pending (they ARE in the messages array). total=55, queuedCount=15.

@@ -348,6 +348,23 @@ async function handleChatClick(event) {
 }
 
 let loadMorePending = false
+// Re-arm guard for load-more: once fired at the top, stays armed until the
+// async loadMore completes (loadingMore flips false). Prevents a scroll at the
+// top from firing multiple overlapping load-more requests — previously the
+// pending flag was cleared on the next tick, so several small scrolls in the
+// top zone each fired a fresh request.
+watch(() => props.loadingMore, (loading) => {
+  if (!loading) {
+    // Load finished (success or failure) — allow the next top scroll to fire.
+    loadMorePending = false
+  }
+})
+// Safety net: if hasMore re-appears without a loadingMore cycle (e.g. a
+// loadHistory picked up new messages after a load-more was skipped by the
+// hasMore guard), re-arm so the top scroll can trigger again.
+watch(() => props.hasMore, (hasMore) => {
+  if (hasMore) loadMorePending = false
+})
 // Track whether the user is at the bottom of the chat.
 // When the user scrolls back to the bottom during streaming, auto-scroll resumes.
 // Kept as a ref for external consumers (useUserMsgIndex.setAtBottom,
@@ -491,7 +508,6 @@ function handleScroll() {
   if (el.scrollTop < 50) {
     loadMorePending = true
     emit('load-more')
-    nextTick(() => { loadMorePending = false })
   }
 }
 
@@ -1228,12 +1244,8 @@ defineExpose({
   }
 }
 
-.chat-load-done {
-  color: var(--text-muted);
-  opacity: 0.85;
-  font-size: 11px;
-}
-
+/* "All messages loaded" shares the exact same visual style as the
+ * "N older messages" hint — only the content differs. */
 
 /* Transition for load hint switching */
 .load-hint-fade-enter-active {
