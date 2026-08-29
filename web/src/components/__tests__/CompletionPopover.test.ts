@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import CompletionPopover from '@/components/common/CompletionPopover.vue'
 
 // Mock the singleton composable so each test controls state directly.
@@ -384,12 +384,38 @@ describe('CompletionPopover', () => {
         mountPopover()
 
         expect(document.querySelector('.completion-popover-textarea')).toBeTruthy()
-        expect(document.querySelector('.completion-popover-send')).toBeTruthy()
+        // 空输入时：发送按钮存在但 disabled，显示"标记已读"按钮
+        const sendBtn = document.querySelector('.completion-popover-send')!
+        expect(sendBtn.classList.contains('disabled')).toBe(true)
+        expect(document.querySelector('.completion-popover-mark-read')).toBeTruthy()
     })
 
-    it('aligns the input box with the chat input bar (radius 20px, 16px textarea, 28px send button)', () => {
+    it('shows the mark-as-read button when input is empty and hides it once typed', async () => {
         mockState.active = ref(makeItem())
         mountPopover()
+
+        // 空输入：mark-read 可见
+        expect(document.querySelector('.completion-popover-mark-read')).toBeTruthy()
+
+        // 输入内容后：mark-read 隐藏，发送按钮可点
+        const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
+        textarea.value = '回复内容'
+        textarea.dispatchEvent(new Event('input'))
+        await nextTick()
+
+        expect(document.querySelector('.completion-popover-mark-read')).toBeFalsy()
+        expect(document.querySelector('.completion-popover-send')!.classList.contains('disabled')).toBe(false)
+    })
+
+    it('aligns the input box with the chat input bar (radius 20px, 16px textarea, 28px send button)', async () => {
+        mockState.active = ref(makeItem())
+        mountPopover()
+
+        // 输入文本使发送按钮出现（空输入时显示标记已读按钮）
+        const textareaEl = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
+        textareaEl.value = '测试'
+        textareaEl.dispatchEvent(new Event('input'))
+        await nextTick()
 
         expect(document.querySelector('.completion-popover-input')).toBeTruthy()
         // textarea 与聊天输入框对齐：16px 字号、行高 20px、上下 padding 4px
@@ -430,6 +456,8 @@ describe('CompletionPopover', () => {
         const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
         textarea.value = '继续说说'
         textarea.dispatchEvent(new Event('input'))
+        // 等待 v-model 更新，canSend 变为 true 后发送按钮出现
+        await nextTick()
 
         const sendBtn = document.querySelector('.completion-popover-send')!
         sendBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -453,10 +481,33 @@ describe('CompletionPopover', () => {
         const fetchMock = vi.fn()
         globalThis.fetch = fetchMock
 
+        // 空输入时发送按钮是 disabled 态，点击不发送
         const sendBtn = document.querySelector('.completion-popover-send')!
+        expect(sendBtn.classList.contains('disabled')).toBe(true)
         sendBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
-        expect(fetchMock).not.toHaveBeenCalled()
-        expect(mockState.dismiss).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalledWith(
+            expect.stringContaining('/api/ai/chat?'),
+            expect.objectContaining({ method: 'POST' })
+        )
+    })
+
+    it('marks the session as read via the mark-read button and dismisses', async () => {
+        mockState.active = ref(makeItem({ sessionId: 's99' }))
+        mountPopover()
+
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+        globalThis.fetch = fetchMock
+
+        const markReadBtn = document.querySelector('.completion-popover-mark-read')!
+        markReadBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        await vi.waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/api/ai/chat/read?session_id=s99',
+                expect.objectContaining({ method: 'POST' })
+            )
+            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        })
     })
 })

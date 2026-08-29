@@ -1468,6 +1468,92 @@ func TestAIChat_Post_MarksSessionRead(t *testing.T) {
 	assert.NotNil(t, after.LastReadAt, "last_read_at must be set after posting")
 }
 
+// TestMarkChatRead verifies POST /api/ai/chat/read marks a session as read
+// (updates last_read_at and clears the unread badge) without sending a message.
+// This backs the completion popover's "mark as read" button.
+func TestMarkChatRead(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	db := service.UnsafeDBForTest()
+
+	// Session with an unread assistant message (no last_read_at yet).
+	sessionID := "mark-read-endpoint"
+	_, err := db.Exec(`INSERT INTO chat_sessions (id, project_path, backend, title, agent_id, agent_source, model, session_type, archived) VALUES (?, ?, 'codebuddy', 'mark-read', 'codebuddy', 'default', '', 'chat', 0)`, sessionID, env.ProjectDir)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', 'unread reply', ?, 'codebuddy', 0)`, env.ProjectDir, sessionID)
+	require.NoError(t, err)
+
+	// Before: session shows 1 unread and last_read_at is nil.
+	sessions, err := service.GetSessions(env.ProjectDir, "codebuddy")
+	require.NoError(t, err)
+	var before *model.ChatSession
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			before = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, before, "session should exist in list")
+	assert.Equal(t, 1, before.UnreadCount, "session should start unread")
+	assert.Nil(t, before.LastReadAt, "last_read_at should be NULL before marking read")
+
+	// POST /api/ai/chat/read marks it read.
+	req := newRequest(t, http.MethodPost, "/api/ai/chat/read?session_id="+sessionID, nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(MarkChatRead, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+
+	// After: last_read_at is set and the session no longer shows unread.
+	sessions, err = service.GetSessions(env.ProjectDir, "codebuddy")
+	require.NoError(t, err)
+	var after *model.ChatSession
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			after = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, after, "session should still exist in list")
+	assert.Equal(t, 0, after.UnreadCount, "mark-read must clear the unread badge")
+	assert.NotNil(t, after.LastReadAt, "last_read_at must be set after mark-read")
+}
+
+// TestMarkChatRead_RejectsForeignSession verifies the endpoint enforces
+// project ownership (ISS-180) — a session from another project is rejected.
+func TestMarkChatRead_RejectsForeignSession(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	db := service.UnsafeDBForTest()
+	foreignProject := env.WatchDir + "/foreign"
+
+	sessionID := "mark-read-foreign"
+	_, err := db.Exec(`INSERT INTO chat_sessions (id, project_path, backend, title, agent_id, agent_source, model, session_type, archived) VALUES (?, ?, 'codebuddy', 'foreign', 'codebuddy', 'default', '', 'chat', 0)`, sessionID, foreignProject)
+	require.NoError(t, err)
+
+	// Request comes from env.ProjectDir but session belongs to foreignProject.
+	req := newRequest(t, http.MethodPost, "/api/ai/chat/read?session_id="+sessionID, nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(MarkChatRead, req)
+	assertStatus(t, w, http.StatusForbidden)
+}
+
+// TestMarkChatRead_MissingSessionID verifies a missing session_id returns 400.
+func TestMarkChatRead_MissingSessionID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodPost, "/api/ai/chat/read", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(MarkChatRead, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
 func TestAccumulateBlock_InterleavedToolUse(t *testing.T) {
 	// Regression test: when parallel sub-agents interleave tool calls at
 	// different content block indices, the StreamParser now correctly routes

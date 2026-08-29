@@ -1124,3 +1124,36 @@ func CancelChat(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+// MarkChatRead handles POST to mark a session as read (updates last_read_at
+// and broadcasts status="read"). Used by the completion popover's "mark as
+// read" button when the user replies without typing anything.
+func MarkChatRead(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		sessionID = getSessionID(r)
+	}
+	if sessionID == "" {
+		writeLocalizedErrorf(w, r, http.StatusBadRequest, "SessionIdRequired")
+		return
+	}
+
+	// Verify the session belongs to the requesting project
+	if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != projectPath {
+		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+		return
+	}
+
+	service.UpdateLastRead(sessionID)
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}

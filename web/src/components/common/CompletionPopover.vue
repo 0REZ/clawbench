@@ -28,18 +28,23 @@
             </span>
           </div>
           <div class="completion-popover-summary markdown-body" v-html="summaryHtml" @click="handleSummaryClick"></div>
-          <div class="completion-popover-input">
-            <textarea
-              ref="inputRef"
-              v-model="inputText"
-              class="completion-popover-textarea"
-              rows="1"
-              :placeholder="inputPlaceholder"
-              @keydown.enter.exact.prevent="handleSend"
-              @input="autoResizeTextarea"
-            />
-            <button class="completion-popover-send" :class="{ disabled: !canSend }" @click="handleSend" :title="gt('chat.popover.send')" :aria-label="gt('chat.popover.send')">
-              <Send :size="14" />
+          <div class="completion-popover-input-row">
+            <div class="completion-popover-input">
+              <textarea
+                ref="inputRef"
+                v-model="inputText"
+                class="completion-popover-textarea"
+                rows="1"
+                :placeholder="inputPlaceholder"
+                @keydown.enter.exact.prevent="handleSend"
+                @input="autoResizeTextarea"
+              />
+              <button class="completion-popover-send" :class="{ disabled: !canSend }" @click="handleSend" :title="gt('chat.popover.send')" :aria-label="gt('chat.popover.send')">
+                <Send :size="14" />
+              </button>
+            </div>
+            <button v-if="!canSend" class="completion-popover-mark-read" @click="handleMarkRead" :title="gt('chat.popover.markRead')" :aria-label="gt('chat.popover.markRead')">
+              <Check :size="14" />
             </button>
           </div>
         </div>
@@ -50,7 +55,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search, Folder, Send, MessageSquare } from 'lucide-vue-next'
+import { Search, Folder, Send, MessageSquare, Check } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { useCompletionPopover } from '@/composables/useCompletionPopover'
 import { useAgents } from '@/composables/useAgents'
@@ -121,6 +126,20 @@ async function handleSend(): Promise<void> {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: text }),
         })
+        dismiss()
+    } catch {
+        sending.value = false
+    }
+}
+
+// 标记会话已读：不发送消息，仅清除未读状态，成功后关闭弹窗
+async function handleMarkRead(): Promise<void> {
+    const item = active.value
+    if (!item || sending.value) return
+    sending.value = true
+    try {
+        const url = `/api/ai/chat/read?session_id=${encodeURIComponent(item.sessionId)}`
+        await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
         dismiss()
     } catch {
         sending.value = false
@@ -329,13 +348,22 @@ function handleSummaryClick(event: MouseEvent): void {
     margin-bottom: 0;
 }
 
+/* 输入行容器：输入框 + 右侧"标记已读"按钮（输入为空时）同行 */
+.completion-popover-input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+}
+
 /* 快捷输入框 — 与聊天界面 ChatInputBar 输入框样式对齐（圆角 20px、固定不随高度变化）。
    背景用 --bg-primary（白/更亮）与卡片的 --bg-tertiary 底色区分，避免融合 */
 .completion-popover-input {
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: flex-end;
     gap: 2px;
-    margin-top: 6px;
     padding: 4px 6px 6px;
     background: var(--bg-primary, #fff);
     border: none;
@@ -389,6 +417,29 @@ function handleSummaryClick(event: MouseEvent): void {
 .completion-popover-send.disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+/* 标记已读按钮 — 与发送按钮同尺寸圆形，但用描边弱化，区别于主操作 */
+.completion-popover-mark-read {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    color: var(--accent-color);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 45%, var(--border-color));
+    border-radius: 50%;
+    cursor: pointer;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+@media (hover: hover) {
+    .completion-popover-mark-read:hover {
+        background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+    }
 }
 
 /* Android 通知风格：卡片从顶部滑下 + 淡入（标准缓动曲线），离开反向滑回 */

@@ -477,6 +477,7 @@ export default {
       replySession: 'Reply to this conversation…',
       replyTask: 'Reply to this task…',
       send: 'Send',
+      markRead: 'Mark as read',
     },
     session: {
       aiDialog: 'AI Chat',
