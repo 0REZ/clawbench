@@ -1187,6 +1187,22 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// shutdown waits for in-flight AI streams to finalize before force-killing
+	// the AI processes. Total worst-case shutdown latency before HTTP drain is
+	// streamFinalizeGrace + acpGracefulExitGrace (8s).
+	const (
+		// Wait for the active SessionExecutors to finish Finalize (write the
+		// streaming=0 completion marker + the last few hundred ms of output).
+		// 5s covers the common case (a stream's finalize is near-instant once
+		// its done event arrives; the drain loop of queued messages is the
+		// slowest part, but it is bounded by channel closure after the AI
+		// process exits).
+		streamFinalizeGrace = 5 * time.Second
+		// After the finalize wait, give ACP agents a grace period to exit
+		// cleanly after their prompts are cancelled before SIGKILL.
+		acpGracefulExitGrace = 3 * time.Second
+	)
+
 	go func() {
 		<-ctx.Done()
 		slog.Info("received shutdown signal, draining connections...")
@@ -1194,6 +1210,17 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		// HTTP connections: a restart mid-stream then keeps all but the last few
 		// hundred ms of AI output (including thinking) instead of losing the tail.
 		service.FlushStreamingNow()
+
+		// Wait for active streams to finish finalizing. FlushStreamingNow only
+		// snapshots the streaming row; the streaming=0 completion marker and the
+		// last rate-limit-window of output are written by Finalize. Give the AI
+		// goroutines time to run Finalize before we kill the AI processes and
+		// close the DB, otherwise the process exits mid-Finalize and the row is
+		// left as streaming=1 (data loss).
+		streamCtx, streamCancel := context.WithTimeout(context.Background(), streamFinalizeGrace)
+		service.WaitStreamsDrained(streamCtx)
+		streamCancel()
+
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -1204,6 +1231,12 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 				slog.Error("dev listener shutdown error", slog.String("err", err.Error()))
 			}
 		}
+
+		// Stop accepting new work BEFORE reaping the AI processes. Shutdown
+		// HTTP first so no new request can create a connection/stream after the
+		// snapshot taken below; otherwise those would escape both the drain
+		// wait and the graceful stop.
+		ai.GetACPConnManager().GracefulStopAll(acpGracefulExitGrace)
 	}()
 
 	// Start HTTP server using the pre-bound listener (blocking)

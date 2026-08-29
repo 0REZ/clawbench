@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"clawbench/internal/ai"
 	"clawbench/internal/model"
@@ -210,4 +211,99 @@ func TestFlushStreamingNow_NoRegisteredStreams(t *testing.T) {
 
 	// Registry starts empty — must be a safe no-op.
 	assert.NotPanics(t, FlushStreamingNow)
+}
+
+// --- WaitStreamsDrained (graceful shutdown wait for finalize) ---
+
+// TestWaitStreamsDrained_ReturnsImmediatelyWhenEmpty verifies that with no
+// active streams the wait does not block.
+func TestWaitStreamsDrained_ReturnsImmediatelyWhenEmpty(t *testing.T) {
+	// activeStreams is a package-global registry; earlier tests may have left
+	// registered executors behind. Snapshot and clear so this test measures
+	// the empty-registry path deterministically.
+	var leftovers []*SessionExecutor
+	activeStreams.Range(func(_, value any) bool {
+		if e, ok := value.(*SessionExecutor); ok {
+			leftovers = append(leftovers, e)
+		}
+		return true
+	})
+	for _, e := range leftovers {
+		e.unregisterActiveStream()
+	}
+	t.Cleanup(func() {
+		for _, e := range leftovers {
+			activeStreams.Store(e.cfg.SessionID, e)
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	WaitStreamsDrained(ctx)
+	assert.Less(t, time.Since(start), 500*time.Millisecond,
+		"empty registry must not block")
+}
+
+// TestWaitStreamsDrained_ReturnsAfterUnregister verifies that the wait returns
+// once the last active executor is unregistered (the semantics used by the
+// graceful-shutdown path: an executor unregisters AFTER Finalize has persisted
+// streaming=0).
+func TestWaitStreamsDrained_ReturnsAfterUnregister(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	executor, _ := newFlushableExecutor(t)
+	defer executor.unregisterActiveStream() // no-op if already unregistered
+
+	// Simulate the graceful-shutdown path: flush first, then a goroutine
+	// completes Finalize (here: unregister) shortly after.
+	FlushStreamingNow()
+
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		executor.unregisterActiveStream()
+		close(done)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	WaitStreamsDrained(ctx)
+
+	select {
+	case <-done:
+	default:
+		t.Fatal("WaitStreamsDrained returned before the stream unregistered")
+	}
+}
+
+// TestWaitStreamsDrained_DeadlineWithStuckStream verifies that when a stream
+// never finalizes (e.g. a hung backend), the wait returns at the deadline
+// instead of blocking forever — the graceful shutdown must not hang.
+func TestWaitStreamsDrained_DeadlineWithStuckStream(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	executor, _ := newFlushableExecutor(t)
+	// Intentionally leave the executor registered (simulating a stream stuck
+	// in the event loop waiting for a backend that never returns).
+	defer executor.unregisterActiveStream()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	WaitStreamsDrained(ctx)
+
+	elapsed := time.Since(start)
+	assert.GreaterOrEqual(t, elapsed, 150*time.Millisecond,
+		"must wait until the deadline with a stuck stream")
+	assert.Less(t, elapsed, time.Second,
+		"must not block past the deadline")
 }
