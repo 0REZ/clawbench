@@ -53,9 +53,13 @@ public class FloatingStatusController {
     /** How long the "done" terminal state stays visible before fading out. */
     private static final long TERMINAL_SHOW_MS = 3000;
     private static final long FADE_MS = 300;
+    /** Duration of the collapse-to-circle stage of the hide animation. */
+    private static final long COLLAPSE_MS = 200;
     private static final int EDGE_MARGIN_DP = 8;
     /** Fallback capsule width estimate (dp) used before the view is measured. */
     private static final int DEFAULT_CAPSULE_WIDTH_DP = 120;
+    /** Capsule height = logo diameter + 2 * 7dp vertical padding (38dp). */
+    private static final int CAPSULE_HEIGHT_DP = 38;
     /** Drag opacity while moving. */
     private static final float DRAG_ALPHA = 0.85f;
 
@@ -83,6 +87,7 @@ public class FloatingStatusController {
     private volatile boolean userDismissed;
     private volatile boolean expanded;
     private Runnable fadeHideRunnable;
+    private android.animation.ValueAnimator collapseAnimator;
     private BiConsumer<String, String> onSessionClick;
     private OverviewRequestListener overviewRequestListener;
     /** Last time an event-triggered overview refresh was requested (throttle). */
@@ -315,6 +320,13 @@ public class FloatingStatusController {
                 // The overview changed the panel's content (group/session
                 // count), so re-fit the window height to the new content.
                 resizePanelIfNeeded();
+                // A session list that emptied out (the last running session
+                // finished and nothing is left worth showing) must not leave a
+                // hollow panel behind: collapse it, which hides the window
+                // because shouldShow is false.
+                if (!shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed)) {
+                    setExpanded(false);
+                }
             } else if (shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed) && !windowShowing) {
                 // WS-connect fallback: a running session discovered via the
                 // overview (whose start event was missed while the WS was down)
@@ -584,6 +596,7 @@ public class FloatingStatusController {
         // window is never removed from the WindowManager.
         Runnable cleanup = () -> {
             cancelPendingHide();
+            cancelCollapse();
             if (view != null) {
                 view.animate().cancel();
                 view.stopBreathing();
@@ -659,15 +672,21 @@ public class FloatingStatusController {
 
     private void ensureWindow() {
         if (windowShowing) {
-            // A hide may be in flight (alpha/scale < 1); cancel it and restore
-            // full opacity + scale so a fresh active event makes the window
-            // reappear. cancel() does not run the hide's end action, so both
-            // must be restored here.
+            // A hide may be in flight (alpha < 1 or a collapse-to-circle width
+            // animation); cancel it and restore the full view state so a fresh
+            // active event makes the window reappear. cancel() does not run the
+            // hide's end action, so everything is restored here.
             if (attachedView != null) {
                 attachedView.animate().cancel();
                 attachedView.setAlpha(1f);
-                attachedView.setScaleX(1f);
-                attachedView.setScaleY(1f);
+                cancelCollapse();
+                if (attachedView instanceof FloatingStatusView) {
+                    ((FloatingStatusView) attachedView).expandFromCircle();
+                }
+                // Re-apply role sizing: an expanded panel must keep its fixed
+                // 280dp width, a capsule its wrap-content — never a leftover
+                // collapse animation width.
+                applyViewSizing();
             }
             return;
         }
@@ -791,13 +810,18 @@ public class FloatingStatusController {
             return;
         }
         try {
-            int contentHeight = panelView.measureContentHeight(params.width);
+            // The panel's window width is fixed (280dp); never measure it
+            // against a WRAP_CONTENT (or animated) width — that would let the
+            // panel stretch to the full screen width.
+            int measureWidth = Math.round(PANEL_WIDTH_DP * context.getResources().getDisplayMetrics().density);
+            int contentHeight = panelView.measureContentHeight(measureWidth);
             int panelHeight = panelHeightForContent(contentHeight, screenHeight());
             if (panelHeight <= 0) {
                 return;
             }
             panelView.constrainListHeight(panelHeight);
             params.height = panelHeight;
+            params.width = measureWidth;
             if (windowShowing) {
                 try {
                     windowManager.updateViewLayout(panelView, params);
@@ -832,32 +856,117 @@ public class FloatingStatusController {
         if (!windowShowing || attachedView == null) {
             return;
         }
-        // Single continuous hide animation for every view: shrink to a point
-        // (scaleX/scaleY around the view's pivot) while fading out. No
-        // intermediate "collapse to circle" stage — the two-stage version left
-        // an elliptical window (width shrunk to the logo diameter while the
-        // WRAP_CONTENT height stayed at the pill height) and re-illuminated the
-        // faded stat groups right as the window was removed, which read as a
-        // flicker before the bubble vanished.
         final View fadeView = attachedView;
-        fadeView.animate()
-                .alpha(0f)
-                .scaleX(0f)
-                .scaleY(0f)
-                .setDuration(FADE_MS)
-                .setInterpolator(new android.view.animation.DecelerateInterpolator())
-                .withEndAction(() -> {
-                    if (destroyed) {
-                        return;
-                    }
-                    hideWindow();
-                    // Restore for the next attach: the view object is reused
-                    // by later ensureWindow() calls.
-                    fadeView.setAlpha(1f);
-                    fadeView.setScaleX(1f);
-                    fadeView.setScaleY(1f);
-                })
-                .start();
+        if (fadeView instanceof FloatingStatusView && params != null) {
+            // Two-stage hide for the capsule:
+            //   1. collapse — stat groups are removed and the window width
+            //      animates down to the capsule height (38dp). With symmetric
+            //      padding the frame becomes a true circle holding only the
+            //      centered logo.
+            //   2. fade — the whole window fades out, then is removed.
+            final FloatingStatusView capsule = (FloatingStatusView) fadeView;
+            collapseToCircle(capsule, () -> {
+                if (destroyed) {
+                    return;
+                }
+                fadeView.animate()
+                        .alpha(0f)
+                        .setDuration(FADE_MS)
+                        .withEndAction(() -> {
+                            if (destroyed) {
+                                return;
+                            }
+                            hideWindow();
+                            fadeView.setAlpha(1f);
+                            if (attachedView instanceof FloatingStatusView) {
+                                ((FloatingStatusView) attachedView).expandFromCircle();
+                            }
+                        })
+                        .start();
+            });
+        } else {
+            fadeView.animate()
+                    .alpha(0f)
+                    .setDuration(FADE_MS)
+                    .withEndAction(() -> {
+                        if (destroyed) {
+                            return;
+                        }
+                        hideWindow();
+                        fadeView.setAlpha(1f);
+                    })
+                    .start();
+        }
+    }
+
+    /**
+     * Collapse a FloatingStatusView capsule to a logo-only circle: the stat
+     * groups are removed and the window width animates from its current width
+     * down to the capsule height, so the pill becomes a true circle holding
+     * only the centered logo (the capsule's horizontal padding is made
+     * symmetric by prepareCircleCollapse first). Width is a WindowManager
+     * layout property, so each animation frame re-issues updateViewLayout.
+     * UI thread only.
+     */
+    private void collapseToCircle(final FloatingStatusView capsule, final Runnable onDone) {
+        int startWidth = capsule.getMeasuredWidth();
+        if (startWidth <= 0) {
+            startWidth = capsuleWidthPx;
+        }
+        int targetWidth = Math.round(CAPSULE_HEIGHT_DP * context.getResources().getDisplayMetrics().density);
+        capsule.prepareCircleCollapse(targetWidth);
+        android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofInt(startWidth, targetWidth);
+        anim.setDuration(COLLAPSE_MS);
+        anim.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        anim.addUpdateListener(a -> {
+            params.width = (Integer) a.getAnimatedValue();
+            try {
+                windowManager.updateViewLayout(capsule, params);
+            } catch (IllegalArgumentException e) {
+                AppLog.w(TAG, "collapseToCircle updateViewLayout failed", e);
+            }
+        });
+        anim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                // cancel() (from cancelCollapse / ensureWindow) also fires
+                // onAnimationEnd; only a natural completion may start the fade.
+                if (collapseAnimator != animation) {
+                    return;
+                }
+                collapseAnimator = null;
+                if (onDone != null && !destroyed) {
+                    onDone.run();
+                }
+            }
+        });
+        collapseAnimator = anim;
+        anim.start();
+    }
+
+    /**
+     * Cancel the collapse-to-circle width animation and restore the window to
+     * its normal layout, so a re-shown capsule sizes itself normally. The
+     * capsule's width goes back to wrap-content; an expanded panel keeps its
+     * fixed 280dp width (never the capsule's wrap-content — that would let the
+     * panel measure at full screen width and stretch across the whole screen).
+     * UI thread only.
+     */
+    private void cancelCollapse() {
+        if (collapseAnimator != null) {
+            // Null first so the animator's onAnimationEnd (fired by cancel)
+            // does not chain into the fade-out stage.
+            android.animation.ValueAnimator anim = collapseAnimator;
+            collapseAnimator = null;
+            anim.cancel();
+        }
+        if (params != null) {
+            if (expanded) {
+                params.width = Math.round(PANEL_WIDTH_DP * context.getResources().getDisplayMetrics().density);
+            } else {
+                params.width = WindowManager.LayoutParams.WRAP_CONTENT;
+            }
+        }
     }
 
     private void cancelPendingHide() {
@@ -1024,18 +1133,22 @@ public class FloatingStatusController {
     }
 
     /**
-     * Clamp the panel's left edge so the whole panel stays on-screen. The
-     * capsule default sits at the right edge (x = width - capsuleWidth -
-     * margin), which would push the wider panel off-screen; re-clamping with
-     * the real panel width keeps it fully visible. UI thread only.
+     * Position the expanded panel so it stays on-screen while keeping the
+     * capsule's side. The panel is much wider than the capsule, so a capsule
+     * parked at the left edge keeps the panel left-aligned (x = margin) and a
+     * right-parked capsule keeps the panel right-aligned — never jumping the
+     * panel to the opposite side. The capsule's side is read from the current
+     * params.x (same rule as snapToEdge: left half of the screen = left). UI
+     * thread only.
      */
     private void clampPanelX() {
         if (attachedView == null || params == null || !windowShowing) {
             return;
         }
         int panelWidthPx = Math.round(PANEL_WIDTH_DP * context.getResources().getDisplayMetrics().density);
-        int clamped = clamp(snapX(screenWidth(), panelWidthPx, edgeMarginPx, true),
-                edgeMarginPx, screenWidth());
+        boolean toLeft = params.x < screenWidth() / 2;
+        int snapped = snapX(screenWidth(), panelWidthPx, edgeMarginPx, !toLeft);
+        int clamped = clamp(snapped, edgeMarginPx, screenWidth());
         if (clamped != params.x) {
             params.x = clamped;
             try {

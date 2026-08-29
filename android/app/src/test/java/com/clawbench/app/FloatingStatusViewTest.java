@@ -277,51 +277,72 @@ public class FloatingStatusViewTest {
     }
 
     // =====================================================
-    // Hide animation: the capsule is the same view type as any other attach
-    // (the controller runs a single alpha+scale fade on the whole view), so
-    // the content row keeps no collapse-specific state. The one guarantee the
-    // capsule must hold is that renderStats never leaves a stale hidden item.
+    // Collapse-to-circle: the hide animation's first stage shrinks the window
+    // width to the capsule height (38dp). prepareCircleCollapse removes the
+    // stat groups and makes the horizontal padding symmetric, so the pill
+    // becomes a true circle holding only the centered logo.
     // =====================================================
 
     @Test
-    public void renderStats_afterHideAnimationRestoresVisibilityOfStatGroups() throws Exception {
-        // A capsule that was animated to alpha 0 still holds its groups; a
-        // re-render after a re-show must bring every visible group back to
-        // full opacity and keep GONE groups hidden.
+    public void prepareCircleCollapse_hidesStatGroupsAndKeepsLogoVisible() throws Exception {
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 1, 1);
 
-        // Emulate what the controller's hide animation does to the view:
-        // the whole capsule (not the inner groups) is faded and scaled.
-        capsule.setAlpha(0f);
-        capsule.setScaleX(0f);
-        capsule.setScaleY(0f);
-        capsule.renderStats(0, 0, 0);
+        capsule.prepareCircleCollapse(38);
 
+        // Logo (child 0) must remain visible.
+        assertEquals("the logo must stay visible during the collapse",
+                View.VISIBLE, content(capsule).getChildAt(0).getVisibility());
+        // Every stat group must be removed from the row.
         for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("groups are toggled by visibility, never by alpha",
+            assertEquals("stat groups must be GONE during the collapse",
                     View.GONE, content(capsule).getChildAt(i).getVisibility());
         }
         capsule.stopBreathing();
     }
 
     @Test
-    public void renderStats_afterReShow_restoresStatGroupAlphas() throws Exception {
-        // The hide animation scales the whole capsule view; the inner stat
-        // groups are never faded individually, so a re-show must not have to
-        // restore anything on the content row (no stale translucent groups).
+    public void prepareCircleCollapse_symmetricPaddingCentersLogo() throws Exception {
+        // The collapsed row holds only the 24dp logo; symmetric 7dp horizontal
+        // padding (same as vertical) makes the frame exactly 38dp wide — a
+        // square, which reads as a centered logo inside the circular capsule.
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 1, 1);
 
-        capsule.setScaleX(0f);
-        capsule.setScaleY(0f);
-        // A re-show re-renders stats (controller renderCapsuleStats); groups
-        // must stay fully opaque — the fade was on the whole view only.
-        capsule.renderStats(1, 1, 1);
+        capsule.prepareCircleCollapse(38);
 
+        int l = capsule.getPaddingLeft();
+        int r = capsule.getPaddingRight();
+        int t = capsule.getPaddingTop();
+        int b = capsule.getPaddingBottom();
+        assertEquals("left and right padding must be equal", l, r);
+        assertEquals("horizontal padding must equal the vertical padding (7dp)",
+                t, l);
+        assertEquals("bottom padding must match the top", b, t);
+        // Content row width = 24dp logo; 7 + 24 + 7 = 38dp window width.
+        assertEquals("symmetry + logo must fill the 38dp target",
+                38, l + dp(24) + r);
+        capsule.stopBreathing();
+    }
+
+    @Test
+    public void expandFromCircle_restoresGroupsAndAsymmetricPadding() throws Exception {
+        FloatingStatusView capsule = newCapsule();
+        capsule.renderStats(1, 1, 1);
+        capsule.prepareCircleCollapse(38);
+
+        capsule.expandFromCircle();
+
+        // The original asymmetric padding must come back (start 8dp, end 14dp).
+        assertEquals("start padding must be restored to 8dp",
+                dp(8), capsule.getPaddingLeft());
+        assertEquals("end padding must be restored to 14dp",
+                dp(14), capsule.getPaddingRight());
+        // restoreStats marks every group VISIBLE; renderStats will re-hide the
+        // zero-count ones on the next render.
         for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("stat groups must remain fully opaque after re-render",
-                    1f, content(capsule).getChildAt(i).getAlpha(), 0.001f);
+            assertEquals("stat groups must be VISIBLE after expandFromCircle",
+                    View.VISIBLE, content(capsule).getChildAt(i).getVisibility());
         }
         capsule.stopBreathing();
     }
@@ -367,6 +388,12 @@ public class FloatingStatusViewTest {
                 38, 2 * constantInt("PADDING_V_DP") + contentConstantInt("LOGO_SIZE_DP"));
         assertEquals("corner radius must be half the 38dp height",
                 38 / 2, constantInt("CORNER_RADIUS_DP"));
+    }
+
+    /** Convert dp to px at the test density (Robolectric runs at density 1). */
+    private int dp(int value) {
+        return Math.round(value * RuntimeEnvironment.getApplication()
+                .getResources().getDisplayMetrics().density);
     }
 
     @Test

@@ -528,6 +528,48 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
+    public void setExpanded_true_activeEvent_keepsPanelWidthFixed() throws Exception {
+        // Regression: another client starting a session while the panel is
+        // expanded fired ensureWindow's cancel branch, which reset params.width
+        // to WRAP_CONTENT; the next panel resize then measured at full screen
+        // width and the panel stretched across the whole screen. The expanded
+        // panel width must stay fixed at 280dp.
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        ShadowSettings.setCanDrawOverlays(true);
+        controller.setAppForeground(false);
+        controller.handleEvent("session_update", sessionEvent("running", "s1"));
+        controller.setExpanded(true);
+        ShadowLooper.runUiThreadTasks();
+        assertTrue(controller.isExpanded());
+
+        int panelWidthPx = Math.round(280 * density());
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams)
+                getPrivateField(controller, "params");
+        assertEquals("panel must start at the fixed 280dp width",
+                panelWidthPx, lp.width);
+
+        // Another client starts a second session while the panel is open.
+        controller.handleEvent("session_update", sessionEvent("running", "s2"));
+        ShadowLooper.runUiThreadTasks();
+
+        // A fresh overview with two sessions re-renders the panel.
+        org.json.JSONObject overview = new org.json.JSONObject(
+                "{\"projects\":[{\"name\":\"/projA\",\"sessions\":["
+                        + "{\"id\":\"s1\",\"title\":\"t1\",\"running\":true,\"pendingApproval\":false,\"unreadCount\":0},"
+                        + "{\"id\":\"s2\",\"title\":\"t2\",\"running\":true,\"pendingApproval\":false,\"unreadCount\":0}"
+                        + "]}],\"total\":2}");
+        controller.onOverviewLoaded(overview);
+        ShadowLooper.runUiThreadTasks();
+
+        lp = (WindowManager.LayoutParams) getPrivateField(controller, "params");
+        assertEquals("the panel width must stay fixed after a new session arrives",
+                panelWidthPx, lp.width);
+        assertEquals("the panel must stay expanded", true, controller.isExpanded());
+        controller.destroy();
+    }
+
+    @Test
     public void collapse_restoresCapsuleView() throws Exception {
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
@@ -657,6 +699,69 @@ public class FloatingStatusControllerTest {
         assertTrue("panel right edge must be within the screen",
                 lp.x + panelWidthPx <= screenWidth);
         controller.destroy();
+    }
+
+    @Test
+    public void setExpanded_true_leftAnchoredCapsule_keepsPanelOnLeft() throws Exception {
+        // Regression: the capsule dragged to the left edge expanded to a panel
+        // that jumped to the right edge. The panel must stay on the capsule's
+        // side (left-aligned at the margin).
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        ShadowSettings.setCanDrawOverlays(true);
+        controller.setAppForeground(false);
+        controller.handleEvent("session_update", sessionEvent("running", "s1"));
+        ShadowLooper.runUiThreadTasks();
+
+        // Park the capsule at the left edge (x = margin).
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams)
+                getPrivateField(controller, "params");
+        int marginPx = Math.round(8 * density());
+        lp.x = marginPx;
+        windowManagerFor(controller).updateViewLayout(
+                (View) getPrivateField(controller, "attachedView"), lp);
+
+        controller.setExpanded(true);
+        ShadowLooper.runUiThreadTasks();
+
+        lp = (WindowManager.LayoutParams) getPrivateField(controller, "params");
+        assertEquals("left-anchored capsule must keep the panel on the left",
+                marginPx, lp.x);
+        controller.destroy();
+    }
+
+    @Test
+    public void setExpanded_true_rightAnchoredCapsule_keepsPanelOnRight() throws Exception {
+        // A capsule at the right edge expands to a panel that stays right-
+        // aligned (panel right edge = screen - margin), not jumping left.
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        ShadowSettings.setCanDrawOverlays(true);
+        controller.setAppForeground(false);
+        controller.handleEvent("session_update", sessionEvent("running", "s1"));
+        ShadowLooper.runUiThreadTasks();
+
+        WindowManager.LayoutParams lp = (WindowManager.LayoutParams)
+                getPrivateField(controller, "params");
+        int screenWidth = contextWidthPx();
+        int marginPx = Math.round(8 * density());
+        lp.x = screenWidth / 2 + 50; // right half
+        windowManagerFor(controller).updateViewLayout(
+                (View) getPrivateField(controller, "attachedView"), lp);
+
+        controller.setExpanded(true);
+        ShadowLooper.runUiThreadTasks();
+
+        lp = (WindowManager.LayoutParams) getPrivateField(controller, "params");
+        int panelWidthPx = Math.round(280 * density());
+        assertEquals("right-anchored capsule must keep the panel right-aligned",
+                screenWidth - panelWidthPx - marginPx, lp.x);
+        controller.destroy();
+    }
+
+    private WindowManager windowManagerFor(FloatingStatusController controller) {
+        return (WindowManager) RuntimeEnvironment.getApplication()
+                .getSystemService(Context.WINDOW_SERVICE);
     }
 
     private int contextWidthPx() {
@@ -819,6 +924,64 @@ public class FloatingStatusControllerTest {
 
         assertTrue("unread sessions must keep the window visible",
                 controller.isWindowShowing());
+        controller.destroy();
+    }
+
+    @Test
+    public void onOverviewLoaded_panelEmptied_autoCollapsesAndHides() throws Exception {
+        // Regression: when the last running session finished while the panel
+        // was expanded, the overview came back empty — the panel went blank
+        // and stayed on screen until the user tapped the × button. A panel
+        // with nothing left worth showing must collapse (and, with no active
+        // or unread content, hide the window entirely).
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        ShadowSettings.setCanDrawOverlays(true);
+        controller.setAppForeground(false);
+        controller.handleEvent("session_update", sessionEvent("running", "s1"));
+        ShadowLooper.runUiThreadTasks();
+        controller.setExpanded(true);
+        ShadowLooper.runUiThreadTasks();
+        assertTrue("panel must be expanded before the session ends",
+                controller.isExpanded());
+        assertTrue(controller.isWindowShowing());
+
+        org.json.JSONObject emptyOverview = new org.json.JSONObject(
+                "{\"projects\":[],\"total\":0}");
+        controller.onOverviewLoaded(emptyOverview);
+        ShadowLooper.runUiThreadTasks();
+
+        assertFalse("an emptied panel must auto-collapse", controller.isExpanded());
+        assertFalse("an emptied panel must hide the window", controller.isWindowShowing());
+        assertNull("the panel view must be dropped after auto-collapse",
+                getPrivateField(controller, "panelView"));
+        controller.destroy();
+    }
+
+    @Test
+    public void onOverviewLoaded_panelStillHasUnread_keepsPanelOpen() throws Exception {
+        // The auto-collapse must only fire when nothing is left worth showing.
+        // Unread sessions remaining must keep the panel expanded.
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        ShadowSettings.setCanDrawOverlays(true);
+        controller.setAppForeground(false);
+        controller.handleEvent("session_update", sessionEvent("running", "s1"));
+        ShadowLooper.runUiThreadTasks();
+        controller.setExpanded(true);
+        ShadowLooper.runUiThreadTasks();
+        assertTrue(controller.isExpanded());
+
+        org.json.JSONObject unreadOverview = new org.json.JSONObject(
+                "{\"projects\":[{\"name\":\"/projA\",\"sessions\":["
+                        + "{\"id\":\"u\",\"title\":\"t\",\"running\":false,\"pendingApproval\":false,\"unreadCount\":2}"
+                        + "]}],\"total\":1}");
+        controller.onOverviewLoaded(unreadOverview);
+        ShadowLooper.runUiThreadTasks();
+
+        assertTrue("unread sessions must keep the panel expanded",
+                controller.isExpanded());
+        assertTrue(controller.isWindowShowing());
         controller.destroy();
     }
 
@@ -1096,9 +1259,10 @@ public class FloatingStatusControllerTest {
 
     @Test
     public void terminalEvent_hideWithFade_doesNotCrashUnderRobolectric() throws Exception {
-        // The single-stage hide (whole-view alpha + scale fade) runs real
-        // View.animate(); Robolectric cannot verify frame timing, so this
-        // guards that the path completes to hideWindow() without crashing.
+        // The two-stage hide (collapse-to-circle then fade) runs real
+        // View.animate() / ValueAnimator; Robolectric cannot verify frame
+        // timing, so this guards that the path completes to hideWindow()
+        // without crashing.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1114,7 +1278,7 @@ public class FloatingStatusControllerTest {
         assertNotNull(getPrivateField(controller, "fadeHideRunnable"));
 
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertFalse("the single-stage hide must still remove the window",
+        assertFalse("the two-stage hide must still remove the window",
                 controller.isWindowShowing());
         controller.destroy();
     }
