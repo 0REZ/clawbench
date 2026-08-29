@@ -343,14 +343,14 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
   max-height: 120px;
 }
 
-/* Input container — fixed small radius (no capsule: capsule radius stretches
-   when the textarea grows to multiple lines) */
+/* Input container — 与聊天界面 ChatInputBar 输入框样式对齐（圆角 20px、固定不随高度变化）。
+   背景用 --bg-primary（白/更亮）与栏的 --bg-tertiary 底色区分，避免融合 */
 .qq-input-container {
   display: flex;
   flex-direction: column;
-  background: var(--bg-tertiary);
+  background: var(--bg-primary, #fff);
   border: none;
-  border-radius: 12px;
+  border-radius: 20px;
   overflow: hidden;
   transition: background 0.2s, box-shadow 0.2s;
 }
@@ -373,7 +373,7 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 20px;
   outline: none;
   resize: none;

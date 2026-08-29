@@ -387,11 +387,24 @@ describe('CompletionPopover', () => {
         expect(document.querySelector('.completion-popover-send')).toBeTruthy()
     })
 
-    it('uses a fixed small radius on the input box (no capsule: capsule stretches when multiline)', () => {
+    it('aligns the input box with the chat input bar (radius 20px, 16px textarea, 28px send button)', () => {
         mockState.active = ref(makeItem())
         mountPopover()
 
         expect(document.querySelector('.completion-popover-input')).toBeTruthy()
+        // textarea 与聊天输入框对齐：16px 字号、行高 20px、上下 padding 4px
+        const ta = document.querySelector('.completion-popover-textarea')!
+        const taStyles = window.getComputedStyle(ta)
+        expect(taStyles.fontSize).toBe('16px')
+        expect(taStyles.lineHeight).toBe('20px')
+        expect(taStyles.paddingTop).toBe('4px')
+        expect(taStyles.paddingBottom).toBe('4px')
+        expect(taStyles.minHeight).toBe('28px')
+        // 发送按钮与聊天输入框对齐：28px 圆形
+        const btn = document.querySelector('.completion-popover-send')!
+        const btnStyles = window.getComputedStyle(btn)
+        expect(btnStyles.width).toBe('28px')
+        expect(btnStyles.height).toBe('28px')
         // jsdom 不解析 border-radius 简写计算值，改为断言 CSS 规则
         const cssText = Array.from(document.styleSheets)
             .map((s) => {
@@ -400,7 +413,9 @@ describe('CompletionPopover', () => {
             })
             .join('\n')
         const inputRule = cssText.split('\n').filter((line) => line.includes('.completion-popover-input')).join('\n')
-        expect(inputRule).toContain('border-radius: 12px')
+        expect(inputRule).toContain('border-radius: 20px')
+        // 背景用 --bg-primary，与卡片 tertiary 底色区分（避免融合）
+        expect(inputRule).toContain('background: var(--bg-primary')
         // 不再使用胶囊圆角 999px
         expect(inputRule).not.toContain('999px')
     })

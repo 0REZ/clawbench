@@ -329,35 +329,40 @@ function handleSummaryClick(event: MouseEvent): void {
     margin-bottom: 0;
 }
 
-/* 快捷输入框 — 固定小圆角（不用胶囊：多行增高时胶囊圆角会被拉伸变大） */
+/* 快捷输入框 — 与聊天界面 ChatInputBar 输入框样式对齐（圆角 20px、固定不随高度变化）。
+   背景用 --bg-primary（白/更亮）与卡片的 --bg-tertiary 底色区分，避免融合 */
 .completion-popover-input {
     display: flex;
     align-items: flex-end;
-    gap: 4px;
+    gap: 2px;
     margin-top: 6px;
-    padding: 4px 6px 4px 8px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
+    padding: 4px 6px 6px;
+    background: var(--bg-primary, #fff);
+    border: none;
+    border-radius: 20px;
+    overflow: hidden;
+    transition: background 0.2s, box-shadow 0.2s;
 }
 
 .completion-popover-input:focus-within {
-    border-color: var(--accent-color);
+    background: var(--bg-primary, #fff);
+    box-shadow: 0 0 0 1px var(--accent-color, #0066cc);
 }
 
 .completion-popover-textarea {
     flex: 1;
     min-width: 0;
-    padding: 3px 0;
+    padding: 4px 8px;
     border: none;
     background: transparent;
     color: var(--text-primary);
-    font-size: 13px;
-    line-height: 18px;
+    font-size: 16px;
+    line-height: 20px;
     outline: none;
     resize: none;
     overflow-y: auto;
-    max-height: calc(18px * 3);
+    min-height: 28px;
+    max-height: calc(20px * 3 + 4px + 4px); /* 3 行 + 上下 padding */
     font-family: inherit;
 }
 
@@ -370,8 +375,8 @@ function handleSummaryClick(event: MouseEvent): void {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     background: var(--accent-color);
     color: #fff;

@@ -287,6 +287,11 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sending a message to a session counts as reading it (e.g. quick-reply from
+	// the completion popover): update last_read_at so the session no longer shows
+	// as unread. Mirrors the GET path which marks read on history load.
+	service.UpdateLastRead(sessionID)
+
 	// Decode request body BEFORE the running check so we can enqueue when busy
 	var req struct {
 		Message        string            `json:"message"`

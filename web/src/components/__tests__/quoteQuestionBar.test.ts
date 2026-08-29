@@ -164,12 +164,25 @@ describe('QuoteQuestionBar component', () => {
     expect(wrapper.find('.quote-bar-row').exists()).toBe(true)
   })
 
-  it('uses a fixed small radius on the input container (no capsule: capsule stretches when multiline)', async () => {
+  it('aligns the input container with the chat input bar (radius 20px, 16px textarea, 28px buttons)', async () => {
     const wrapper = mountBar()
     // 输入容器只在 expanded 状态渲染，点击折叠行展开
     await wrapper.find('.quote-bar-row').trigger('click')
     const container = wrapper.find('.qq-input-container')
     expect(container.exists()).toBe(true)
+    // textarea 与聊天输入框对齐：16px 字号、行高 20px、上下 padding 4px
+    const ta = wrapper.find('.qq-textarea')
+    const taStyles = window.getComputedStyle(ta.element)
+    expect(taStyles.fontSize).toBe('16px')
+    expect(taStyles.lineHeight).toBe('20px')
+    expect(taStyles.paddingTop).toBe('4px')
+    expect(taStyles.paddingBottom).toBe('4px')
+    expect(taStyles.minHeight).toBe('28px')
+    // 发送/添加按钮与聊天输入框对齐：28px 圆形
+    const sendBtn = wrapper.find('.qq-send-btn')
+    const sendStyles = window.getComputedStyle(sendBtn.element)
+    expect(sendStyles.width).toBe('28px')
+    expect(sendStyles.height).toBe('28px')
     // jsdom 不解析 border-radius 简写计算值，改为断言 CSS 规则
     const cssText = Array.from(document.styleSheets)
       .map((s) => {
@@ -178,7 +191,9 @@ describe('QuoteQuestionBar component', () => {
       })
       .join('\n')
     const containerRule = cssText.split('\n').filter((line) => line.includes('.qq-input-container')).join('\n')
-    expect(containerRule).toContain('border-radius: 12px')
+    expect(containerRule).toContain('border-radius: 20px')
+    // 背景用 --bg-primary，与栏的 tertiary 底色区分（避免融合）
+    expect(containerRule).toContain('background: var(--bg-primary')
     // 不再使用胶囊圆角 999px
     expect(containerRule).not.toContain('999px')
   })
