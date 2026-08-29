@@ -217,51 +217,6 @@ func (m *ACPConnManager) GracefulStopAll(grace time.Duration) {
 
 // cancelPrompt cancels the in-flight prompt (if any) via the ACP protocol,
 // giving the agent a chance to emit a terminal notification before we kill
-// the process. Safe to call when no prompt is running.
-func (c *ACPConn) cancelPrompt() {
-	c.mu.Lock()
-	promptCancel := c.promptCancel
-	c.mu.Unlock()
-	if promptCancel != nil {
-		slog.Info("acp: graceful shutdown: cancelling in-flight prompt",
-			"clawbench_sid", c.clawbenchSID, "acp_sid", c.acpSID)
-		promptCancel()
-	}
-}
-
-// waitProcessExit waits up to timeout for the agent process to exit on its own.
-// Returns true if the process exited (or no process was running).
-//
-// The Wait goes through the connection's cmdWaitOnce (shared with
-// reapProcess / waitProcessExitOnce) so it can never race a concurrent Wait on
-// the same process — concurrent Process.Wait calls are unsafe and can deadlock
-// (see reapProcess). If the deadline expires the goroutine stays blocked on
-// Wait until the subsequent SIGKILL (via close) makes the process exit, then
-// releases — it does not leak beyond the process lifetime.
-func (c *ACPConn) waitProcessExit(timeout time.Duration) bool {
-	c.mu.Lock()
-	cmd := c.cmd
-	c.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
-		return true
-	}
-	waitDone := make(chan struct{})
-	go func() {
-		defer close(waitDone)
-		c.cmdWaitOnce.Do(func() {
-			if state, err := cmd.Process.Wait(); err == nil {
-				c.cmdWaitState = state
-			}
-		})
-	}()
-	select {
-	case <-waitDone:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
-}
-
 // idleSweep periodically closes connections that have been idle for longer
 // than idleConnTimeout. This prevents stale agent processes from consuming
 // resources indefinitely after sessions complete without explicit deletion.
@@ -939,6 +894,53 @@ type ACPConn struct {
 	// Protected by rawOutputMu. Cleared at the start of each Prompt call.
 	rawOutputMu  sync.Mutex
 	rawOutputBuf strings.Builder
+}
+
+// cancelPrompt cancels the in-flight prompt (if any) via the ACP protocol,
+// giving the agent a chance to emit a terminal notification before we kill
+// the process. Safe to call when no prompt is running.
+func (c *ACPConn) cancelPrompt() {
+	c.mu.Lock()
+	promptCancel := c.promptCancel
+	c.mu.Unlock()
+	if promptCancel != nil {
+		slog.Info("acp: graceful shutdown: cancelling in-flight prompt",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", c.acpSID)
+		promptCancel()
+	}
+}
+
+// waitProcessExit waits up to timeout for the agent process to exit on its own.
+// Returns true if the process exited (or no process was running).
+//
+// The Wait goes through the connection's cmdWaitOnce (shared with
+// reapProcess / waitProcessExitOnce) so it can never race a concurrent Wait on
+// the same process — concurrent Process.Wait calls are unsafe and can deadlock
+// (see reapProcess). If the deadline expires the goroutine stays blocked on
+// Wait until the subsequent SIGKILL (via close) makes the process exit, then
+// releases — it does not leak beyond the process lifetime.
+func (c *ACPConn) waitProcessExit(timeout time.Duration) bool {
+	c.mu.Lock()
+	cmd := c.cmd
+	c.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return true
+	}
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		c.cmdWaitOnce.Do(func() {
+			if state, err := cmd.Process.Wait(); err == nil {
+				c.cmdWaitState = state
+			}
+		})
+	}()
+	select {
+	case <-waitDone:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // AppendRawOutput appends a raw ACP notification payload to the connection's

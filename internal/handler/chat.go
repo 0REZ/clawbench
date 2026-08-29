@@ -288,7 +288,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	// this cannot be used to bypass access control.
 	if qp := r.URL.Query().Get("project_path"); qp != "" {
 		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
-			projectPath = qp
+			// Session belongs to the requested project; allow marking read.
 		} else {
 			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 			return
@@ -1157,9 +1157,7 @@ func MarkChatRead(w http.ResponseWriter, r *http.Request) {
 	// external project's session read: ?project_path= (the session's owning
 	// project) overrides the cookie project; only an exact match is accepted.
 	if qp := r.URL.Query().Get("project_path"); qp != "" {
-		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
-			projectPath = qp
-		} else {
+		if sp := service.GetSessionProjectPath(sessionID); sp == "" || sp != qp {
 			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 			return
 		}

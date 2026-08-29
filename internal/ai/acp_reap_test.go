@@ -319,4 +319,3 @@ func TestWaitProcessExitTimeout_ReturnsFalseWhenStillRunning(t *testing.T) {
 	// Reap the process now (once-guarded Wait is safe after the timeout).
 	conn.reapProcess(cmd, nil)
 }
-
