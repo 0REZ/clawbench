@@ -12,7 +12,7 @@ import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage, type ChatMessageAction } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
-import { hasChatScrollPosition } from '@/utils/chatScrollMemory'
+import { hasChatScrollPosition, clearChatScrollPosition } from '@/utils/chatScrollMemory'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -777,6 +777,9 @@ export function useChatSession(options: UseChatSessionOptions) {
       if (data.ok) {
         // Evict usage cache for the deleted session
         clearUsageStateById(sessionId)
+        // Evict scroll-position memory so archived/destroyed sessions don't
+        // leak entries in chatScrollMemory
+        clearChatScrollPosition(sessionId)
         // If deleted current session, switch to another
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')
@@ -821,6 +824,8 @@ export function useChatSession(options: UseChatSessionOptions) {
       const data = await resp.json()
       if (data.ok) {
         clearUsageStateById(sessionId)
+        // Evict scroll-position memory for the destroyed session
+        clearChatScrollPosition(sessionId)
         // After destroying current session, switch to another or create new
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')

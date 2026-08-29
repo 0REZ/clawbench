@@ -248,24 +248,31 @@ describe('ChatMessageList — per-session scroll position memory', () => {
     expect(source).toContain('clearChatScrollPosition(oldSid)')
   })
 
-  it('restores the remembered position when switching back, after the DOM settles', async () => {
+  it('flags the target session for restore on switch, executed by the messages watcher', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // Restore is driven by listKey change (session + structure final) …
-    expect(source).toContain("watch(listKey, (key, oldKey)")
-    // … and only after messages are rendered + scrollHeight is settled
-    expect(source).toContain('props.messages.length === 0')
+    // The session-switch watcher flags the target when it has a remembered
+    // position (explicit state, not oldKey segment comparison — Vue's watcher
+    // oldValue is "previous flush value", so a listKey-segment check silently
+    // suppresses the restore).
+    expect(source).toContain('pendingRestoreSessionId')
+    expect(source).toContain('getChatScrollPosition(newSid) != null')
+    // The restore executes in the messages watcher once history landed and
+    // only for the flagged session (same-session growth never flags it).
+    expect(source).toContain('pendingRestoreSessionId === props.currentSessionId')
     expect(source).toContain('requestAnimationFrame')
-    expect(source).toContain('el.scrollTop = Math.min(savedPos, maxTop)')
+    expect(source).toContain('Math.min(savedPos, maxTop)')
+    // Ultra-fast B→C switch: the rAF restore must not apply B's position to
+    // C's DOM — it bails when the session changed before the rAF fired.
+    expect(source).toContain('props.currentSessionId !== restoredSid')
   })
 
   it('does NOT restore on same-session message growth (send/stream must scroll to bottom)', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // Sending a message grows the array → listKey changes, but the session-id
-    // segment stays identical. The restore must bail, otherwise it fights the
-    // intended force-scroll-to-bottom after send and yanks the view back to a
-    // stale position.
-    expect(source).toContain("oldKey.split('|')[0] === props.currentSessionId")
+    // Sending a message grows the array but currentSessionId never changes, so
+    // the restore flag is not set — the restore bails and the intended
+    // force-scroll-to-bottom after send is never overridden.
+    expect(source).toMatch(/pendingRestoreSessionId = newSid && getChatScrollPosition\(newSid\) != null \? newSid : null/)
   })
 })

@@ -823,6 +823,16 @@ const nearestMessageId = computed(() => {
 // back falls back to the default scroll-to-bottom behavior (new content view).
 // The old session's DOM is still present at this watcher's pre-flush trigger,
 // so we can read its live scrollTop here.
+//
+// The target session's restore is flagged here (pendingRestoreSessionId) and
+// executed by the messages watcher once the history fetch lands — NOT by a
+// listKey watcher comparing oldKey segments. Vue's watcher oldValue is "the
+// value at the previous flush", so during a session switch the listKey's
+// session segment is already the target by the time db_load lands; comparing
+// it against currentSessionId would silently suppress the restore. An explicit
+// flag sidesteps that entirely.
+let pendingRestoreSessionId = null
+
 watch(() => props.currentSessionId, (newSid, oldSid) => {
   // 1. Save the old session's position before its DOM is torn down (if the
   //    user had scrolled away from the bottom). At the bottom → forget.
@@ -835,6 +845,11 @@ watch(() => props.currentSessionId, (newSid, oldSid) => {
       clearChatScrollPosition(oldSid)
     }
   }
+  // 2. Flag the target session for scroll restore if it has a remembered
+  //    position. The actual restore waits for the messages watcher (history
+  //    fetch landed, messages non-empty). A session with no memory → default
+  //    scroll-to-bottom applies instead.
+  pendingRestoreSessionId = newSid && getChatScrollPosition(newSid) != null ? newSid : null
   isAtBottom.value = true
   scrolledUp.value = false
   scrolledDown.value = false
@@ -904,7 +919,53 @@ function restoreAnchor(el, anchor) {
 
 watch(() => props.messages, (newMsgs, oldMsgs) => {
   const el = messagesRef.value
-  if (!el || !oldMsgs || oldMsgs.length === 0 || !newMsgs || newMsgs.length === 0) return
+  if (!el || !newMsgs || newMsgs.length === 0) return
+
+  // Session scroll memory restore: switching back to a session that was left
+  // scrolled away from the bottom restores its remembered position. The flag
+  // is set by the currentSessionId watcher (pendingRestoreSessionId) and only
+  // for a real session switch — same-session message growth (send, stream,
+  // queue drain) never sets it, so force-scroll-to-bottom after send is never
+  // overridden. The restore runs after the listKey DOM rebuild plus one rAF
+  // so scrollHeight is settled (lazy blocks: Mermaid, original text).
+  if (pendingRestoreSessionId === props.currentSessionId) {
+    pendingRestoreSessionId = null
+    const restoredSid = props.currentSessionId
+    const savedPos = getChatScrollPosition(restoredSid)
+    if (savedPos != null) {
+      nextTick(() => {
+        requestAnimationFrame(() => {
+          const el2 = messagesRef.value
+          // Guard against an ultra-fast B→C switch where C's db_load lands
+          // before B's restore rAF fires: never apply B's saved position to
+          // C's freshly built DOM. The restore is skipped and C's own
+          // restore / force-scroll-to-bottom takes over.
+          if (!el2 || props.currentSessionId !== restoredSid) return
+          const maxTop = el2.scrollHeight - el2.clientHeight
+          el2.scrollTop = Math.min(savedPos, maxTop)
+          const dist = el2.scrollHeight - el2.scrollTop - el2.clientHeight
+          isAtBottom.value = dist <= NEAR_EDGE_THRESHOLD
+          setProgrammatic(false)
+          // A restored position away from the bottom means the user is reading
+          // earlier content — keep the follow latch on so streaming never yanks
+          // them back to the bottom. Only a restore that lands at the bottom
+          // clears the latch (stream may then follow as usual).
+          userLeftBottom = dist > NEAR_EDGE_THRESHOLD
+          lastScrollAt = 0
+          // Show the scroll-up FAB so the user can jump back to the top of a
+          // long session they resumed mid-way (matches manual scroll behavior).
+          if (dist > NEAR_EDGE_THRESHOLD) {
+            scrolledUp.value = true
+            clearTimeout(scrollUpTimer)
+            scrollUpTimer = setTimeout(() => { scrolledUp.value = false }, SCROLL_BUTTON_HIDE_DELAY)
+          }
+        })
+      })
+      return
+    }
+  }
+
+  if (!oldMsgs || oldMsgs.length === 0) return
   if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD) return // at bottom → let scrollToBottom pin
   el.__prevScrollHeight = el.scrollHeight
   el.__prevScrollTop = el.scrollTop
@@ -913,45 +974,6 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
     if (!scrollAnchor || !messagesRef.value) return
     restoreAnchor(messagesRef.value, scrollAnchor)
     scrollAnchor = null
-  })
-})
-
-// ── Session scroll memory restore ──
-// Switching back to a session that was left scrolled away from the bottom
-// restores its remembered position. The restore runs after the listKey DOM
-// rebuild (session + message structure final) plus one rAF so scrollHeight is
-// settled — a raw nextTick can fire before lazy blocks (Mermaid, original
-// text) inflate, clamping the restored scrollTop.
-// Sessions left at the bottom have no memory → default scroll-to-bottom.
-//
-// CRITICAL guard: the restore must ONLY run when the session actually changed.
-// listKey also changes on in-session message growth (sending a message,
-// streaming merges, queue drain) — restoring there would fight the intended
-// scroll-to-bottom after send and yank the view back to a stale position. We
-// compare the session-id segment of the old key against the current one.
-watch(listKey, (key, oldKey) => {
-  if (key === oldKey) return
-  // Only a real session switch (session-id segment changed) restores the
-  // remembered position. Same-session message growth must NOT restore.
-  if (!oldKey || oldKey.split('|')[0] === props.currentSessionId) return
-  // Only restore once the target session's messages are actually rendered.
-  // During switchSession the messages array is first cleared (empty), and only
-  // after the history fetch lands is it replaced with the target session's
-  // rows — restoring against an empty list would clamp the scrollTop to 0.
-  if (!props.currentSessionId || !props.messages || props.messages.length === 0) return
-  const savedPos = getChatScrollPosition(props.currentSessionId)
-  if (savedPos == null) return
-  nextTick(() => {
-    requestAnimationFrame(() => {
-      const el = messagesRef.value
-      if (!el) return
-      const maxTop = el.scrollHeight - el.clientHeight
-      el.scrollTop = Math.min(savedPos, maxTop)
-      isAtBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD
-      setProgrammatic(false)
-      userLeftBottom = false
-      lastScrollAt = 0
-    })
   })
 })
 
