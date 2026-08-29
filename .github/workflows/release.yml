@@ -786,6 +786,7 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           # Split macOS artifact (mac-arm64 / mac) into per-arch packages.
           # electron-builder names the x64 (default-arch) dir `mac`, arm64 is `mac-arm64`.
+          mkdir -p pkg-desktop/darwin-arm64 pkg-desktop/darwin-x64
           cp -r pkg-desktop/macos-all/mac-arm64 pkg-desktop/darwin-arm64/app
           cp -r pkg-desktop/macos-all/mac pkg-desktop/darwin-x64/app
           for PLATFORM in linux-x64 linux-arm64 win32-x64 darwin-arm64 darwin-x64; do
