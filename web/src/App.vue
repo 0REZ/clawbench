@@ -569,7 +569,6 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
   // ── Phase 6: Background data loading — all independent, fully parallel, non-blocking ──
   await sessionIdentity.initSessionFromAPI()
   Promise.allSettled([
-    restoreProjectWorkspace({ activateView: true }),
     loadSessionsOnce(),
     store.loadGitBranch(),
     loadTasks(),
@@ -577,6 +576,15 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
     loadSSHInfo(),
     loadTerminalStatus(),
   ])
+  // Workspace restore is awaited (separately from the fire-and-forget batch)
+  // because it may switch the active tab (activateView). Awaiting it here —
+  // BEFORE the Phase 7 pending-navigation switch — makes the final tab
+  // deterministic: without this, a deep-link navigation below could race with
+  // restore's switchTab('view') and the landing tab would depend on async
+  // completion order. When a pending navigation exists, restore must NOT
+  // re-activate the file-view tab at all, otherwise it would clobber the
+  // navigation target.
+  await restoreProjectWorkspace({ activateView: !pendingTaskNav && !pendingSessionId })
   if (isAppMode.value) syncToNative().catch(() => {})
 
   // ── Phase 7: Handle cross-project pending navigation ──
