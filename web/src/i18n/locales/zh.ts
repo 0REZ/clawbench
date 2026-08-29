@@ -607,6 +607,7 @@ export default {
       wallDuration: '实际耗时:',
       cost: '成本:',
       sessionId: '会话ID:',
+      externalSessionId: '原生会话ID:',
       ragIndexed: 'RAG索引:',
       ftsIndexed: '全文检索索引:',
       vecIndexed: '向量嵌入索引:',

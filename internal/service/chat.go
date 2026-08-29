@@ -1981,6 +1981,9 @@ func ClearExternalSessionID(sessionID string) {
 
 // GetExternalSessionID returns the external session ID for a ClawBench session.
 func GetExternalSessionID(sessionID string) string {
+	if dbRead == nil {
+		return ""
+	}
 	var externalID string
 	err := dbRead.QueryRow("SELECT external_session_id FROM chat_sessions WHERE id = ?", sessionID).Scan(&externalID)
 	if err != nil {

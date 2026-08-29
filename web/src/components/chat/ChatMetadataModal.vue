@@ -71,6 +71,15 @@
           </button>
         </div>
       </div>
+      <div v-if="data.sessionId && data.sessionId !== sessionId" class="metadata-item metadata-copyable" @click="copyValue(data.sessionId, $event)">
+        <span class="metadata-label">{{ t('chat.metadata.externalSessionId') }}</span>
+        <div class="metadata-value-wrap">
+          <span class="metadata-value metadata-session-id metadata-value-copyable">{{ data.sessionId }}</span>
+          <button class="metadata-copy-btn" @click.stop="copyValue(data.sessionId, $event)" :title="t('chat.metadata.copy')">
+            <Copy :size="13" />
+          </button>
+        </div>
+      </div>
       <div class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.ftsIndexed') }}</span>
         <span class="metadata-value" :class="ftsIndexed ? 'metadata-indexed-yes' : 'metadata-indexed-no'">{{ ftsIndexed ? t('chat.metadata.indexedYes') : t('chat.metadata.indexedNo') }}</span>

@@ -607,6 +607,7 @@ export default {
       wallDuration: 'Wall duration:',
       cost: 'Cost:',
       sessionId: 'Session ID:',
+      externalSessionId: 'Native Session ID:',
       ragIndexed: 'RAG Indexed:',
       ftsIndexed: 'FTS Index:',
       vecIndexed: 'Vector Index:',

@@ -447,6 +447,9 @@ func (e *SessionExecutor) buildResult(receivedTerminal bool, wallStart time.Time
 		e.responseMetadata = &ai.Metadata{}
 	}
 	e.responseMetadata.WallMs = wallMs
+	if extID := GetExternalSessionID(e.cfg.SessionID); extID != "" {
+		e.responseMetadata.SessionID = extID
+	}
 
 	// Determine cancel reason (interactive mode only)
 	cancelReason := ""
@@ -642,6 +645,10 @@ func (e *SessionExecutor) injectSessionMetadata(meta *ai.Metadata) {
 
 	if sessionModel := GetSessionModel(e.cfg.SessionID); sessionModel != "" {
 		meta.Model = sessionModel
+	}
+
+	if extID := GetExternalSessionID(e.cfg.SessionID); extID != "" {
+		meta.SessionID = extID
 	}
 }
 
