@@ -502,3 +502,38 @@ describe('ChatPanelContent — failed send keeps input text', () => {
     expect(region).toMatch(/enqueueMessage/)
   })
 })
+
+// ── First-open scroll-to-bottom ──
+// Root cause: the active watch passed forceScrollBottom=false on EVERY open.
+// On first app launch there is no prior scroll position (fresh DOM, scrollTop=0),
+// so the list was left pinned to the TOP instead of the bottom — the old
+// "first open scrolls to bottom" behavior was lost when the tab system refactor
+// unified all opens to the position-preserving (false) path. Re-open (tab switch
+// back) must keep forceScrollBottom=false so the user's reading position is
+// preserved. The hasLoadedOnce latch distinguishes the two.
+
+describe('ChatPanelContent — first open scrolls to bottom', () => {
+  async function activeWatchRegion() {
+    const mod = await import('@/components/chat/ChatPanelContent.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    return source.slice(source.indexOf('let hasLoadedOnce'), source.indexOf('async function handleShowAgentSelector'))
+  }
+
+  it('first open passes forceScrollBottom=true, re-open passes false', async () => {
+    const region = await activeWatchRegion()
+    // A latch distinguishes the first activation (fresh DOM, no prior scroll
+    // position) from later tab re-opens.
+    expect(region).toMatch(/let hasLoadedOnce = false/)
+    // First open: forceScrollBottom=true → pinned to the bottom.
+    expect(region).toMatch(/loadHistory\(isFirstOpen, true, true\)/)
+    // The latch is set after the first load completes.
+    expect(region).toMatch(/hasLoadedOnce = true/)
+  })
+
+  it('forceScrollBottom is derived from the latch (true only on first open)', async () => {
+    const region = await activeWatchRegion()
+    expect(region).toMatch(/const isFirstOpen = !hasLoadedOnce/)
+    // Re-open must NOT force scroll — it preserves the user's position.
+    expect(region).not.toMatch(/loadHistory\(false, true, true\)/)
+  })
+})

@@ -573,11 +573,22 @@ provide('layoutRefreshKey', layoutRefreshKey)
 // 手动清 openRef，否则切回 chat tab 后抽屉不会恢复。
 // 面板打开时刷新渲染（修复 display:none 期间的过时布局状态）
 // immediate: true 确保首次挂载时（active 已为 true）也会加载历史记录
+//
+// 首次打开（应用启动 / 首次进入 chat tab）: forceScrollBottom=true ——
+// 此时没有既有滚动位置（DOM 是新建的，scrollTop=0），若用 false 会停在
+// 消息列表顶部。历史版本首次加载强制滚到底部，tab 重构时被统一改成 false
+// （为 tab 重开保留位置），漏掉了首次打开路径。
+// tab 重开（active false→true，已加载过）: forceScrollBottom=false ——
+// 保留用户上次的滚动位置（DOM 用 v-show 保留），仅在用户本来就靠近底部时
+// 跟随新内容滚到底部。
+let hasLoadedOnce = false
 watch(() => props.active, async (val) => {
   if (val) {
+    const isFirstOpen = !hasLoadedOnce
     // Open/Re-open: load history (with overlay, skip if unchanged) and fix stale layout state from v-show display:none
     // skipIfUnchanged=true preserves scroll position when no new messages arrived while tab was hidden
-    await session.loadHistory(false, true, true)
+    await session.loadHistory(isFirstOpen, true, true)
+    hasLoadedOnce = true
     // Bump layoutRefreshKey AFTER loadHistory so ChatMessageItem re-checks
     // collapse state with the fresh messages and valid scrollHeight.
     nextTick(() => {
