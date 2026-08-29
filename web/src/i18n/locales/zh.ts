@@ -392,7 +392,7 @@ export default {
     },
     quickSend: {
       title: '快捷发送消息',
-      tapToFill: '长按发送',
+      injectToInput: '加入输入框',
       edit: '编辑',
       addItem: '添加项目',
       editItem: '编辑项目',

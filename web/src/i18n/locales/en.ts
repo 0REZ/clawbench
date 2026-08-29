@@ -392,7 +392,7 @@ export default {
     },
     quickSend: {
       title: 'Quick Send Message',
-      tapToFill: 'Hold to send',
+      injectToInput: 'Add to input',
       edit: 'Edit',
       addItem: 'Add item',
       editItem: 'Edit item',
