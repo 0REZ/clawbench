@@ -44,13 +44,30 @@ describe('restoreProjectWorkspace', () => {
     vi.spyOn(store, 'selectFile').mockResolvedValue(true)
     const switchTab = vi.fn()
 
+    await restoreProjectWorkspace({ switchTab, activateView: true })
+
+    expect(store.selectFile).toHaveBeenCalledWith('web/src/App.vue')
+    expect(openFileMock).toHaveBeenCalledWith('web/src/App.vue')
+    // Project switch: the restored file must bring the file-view tab back
+    // (regression: after a project switch the file was restored to state but
+    // the viewer was not shown).
+    expect(switchTab).toHaveBeenCalledWith('view')
+  })
+
+  it('restores the saved file but stays on chat on cold start (no switchTab)', async () => {
+    localStorage.setItem(OPEN_FILE_PREFIX + PROJECT, 'web/src/App.vue')
+    vi.spyOn(store, 'loadFiles').mockResolvedValue(undefined)
+    vi.spyOn(store, 'selectFile').mockResolvedValue(true)
+    const switchTab = vi.fn()
+
+    // Cold start: activateView defaults to false — the app must land on the
+    // chat tab even though a file was previously open (regression: startup
+    // jumped to the file-view tab).
     await restoreProjectWorkspace({ switchTab })
 
     expect(store.selectFile).toHaveBeenCalledWith('web/src/App.vue')
     expect(openFileMock).toHaveBeenCalledWith('web/src/App.vue')
-    // The restored file must bring the file-view tab back (regression: after a
-    // project switch the file was restored to state but the viewer was not shown).
-    expect(switchTab).toHaveBeenCalledWith('view')
+    expect(switchTab).not.toHaveBeenCalled()
   })
 
   it('does not activate the view tab when no saved file exists', async () => {

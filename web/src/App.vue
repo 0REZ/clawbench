@@ -569,7 +569,7 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
   // ── Phase 6: Background data loading — all independent, fully parallel, non-blocking ──
   await sessionIdentity.initSessionFromAPI()
   Promise.allSettled([
-    restoreProjectWorkspace(),
+    restoreProjectWorkspace({ activateView: true }),
     loadSessionsOnce(),
     store.loadGitBranch(),
     loadTasks(),
@@ -830,8 +830,12 @@ function closeOverlayAndSync() {
  * If the saved file can no longer be opened (deleted/moved), its stale record
  * is cleared so it isn't retried and re-reported on every launch/switch.
  */
-async function restoreProjectWorkspace() {
-  return restoreProjectWorkspaceImpl({ switchTab })
+async function restoreProjectWorkspace(opts) {
+  // activateView: on cold start (initializeApp) the app must land on the chat
+  // tab — restoring the last opened file loads it into state but does NOT switch
+  // the user away from chat. On project switch (hotSwitchProject) the user
+  // explicitly chose that project, so the file-view tab is re-activated.
+  return restoreProjectWorkspaceImpl({ switchTab, ...opts })
 }
 
 const { isAppMode } = useAppMode()
