@@ -98,7 +98,7 @@ const canSend = computed(() => canSendInput(inputText.value) && !sending.value)
 
 // 弹窗出现时刻：点击空白处关闭时须已展示至少 MIN_DISMISS_MS，
 // 避免刚弹出时误触 backdrop 把通知关掉
-const MIN_DISMISS_MS = 1000
+const MIN_DISMISS_MS = 3000
 let shownAt = 0
 
 // 弹窗切换时重置输入框并记录展示时刻（immediate：mount 时也记录初始展示时间）
@@ -147,20 +147,35 @@ async function handleSend(): Promise<void> {
             sending.value = false
             return
         }
+        // 发送成功后清空该会话未读（独立 /read 端点，不影响其他会话未读）
+        await markRead(item)
         dismiss()
     } catch {
         sending.value = false
     }
 }
 
-// 标记会话已读：不发送消息，仅清除未读状态，成功后关闭弹窗
+// 标记会话已读：调用 /api/ai/chat/read 清空未读状态
+async function markRead(item: NonNullable<typeof active.value>): Promise<void> {
+    const params = new URLSearchParams({ session_id: item.sessionId })
+    if (item.projectPath) params.set('project_path', item.projectPath)
+    try {
+        await fetch(`/api/ai/chat/read?${params.toString()}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        })
+    } catch {
+        // 标记已读失败不阻塞发送流程——消息已发出
+    }
+}
+
+// 标记会话已读按钮：不发送消息，仅清除未读状态，成功后关闭弹窗
 async function handleMarkRead(): Promise<void> {
     const item = active.value
     if (!item || sending.value) return
     sending.value = true
     try {
-        const url = `/api/ai/chat/read?session_id=${encodeURIComponent(item.sessionId)}`
-        await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+        await markRead(item)
         dismiss()
     } catch {
         sending.value = false

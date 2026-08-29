@@ -1483,6 +1483,36 @@ func TestMarkChatRead_RejectsForeignSession(t *testing.T) {
 	assertStatus(t, w, http.StatusForbidden)
 }
 
+// TestMarkChatRead_ExternalProjectPath verifies POST /api/ai/chat/read with
+// ?project_path= (the session's owning project) succeeds for an external
+// project's session — backing the popover's inline reply that clears unread.
+func TestMarkChatRead_ExternalProjectPath(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	db := service.UnsafeDBForTest()
+	foreignProject := env.WatchDir + "/foreign-ext"
+
+	sessionID := "mark-read-ext"
+	_, err := db.Exec(`INSERT INTO chat_sessions (id, project_path, backend, title, agent_id, agent_source, model, session_type, archived) VALUES (?, ?, 'codebuddy', 'foreign-ext', 'codebuddy', 'default', '', 'chat', 0)`, sessionID, foreignProject)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', 'unread', ?, 'codebuddy', 0)`, foreignProject, sessionID)
+	require.NoError(t, err)
+
+	// Request from env.ProjectDir context with the external session's project path.
+	req := newRequest(t, http.MethodPost, "/api/ai/chat/read?session_id="+sessionID+"&project_path="+foreignProject, nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(MarkChatRead, req)
+	assertOK(t, w)
+
+	// Session's unread must be cleared.
+	sessions, err := service.GetSessions(foreignProject, "codebuddy")
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, 0, sessions[0].UnreadCount, "mark-read via project_path must clear unread")
+	assert.NotNil(t, sessions[0].LastReadAt, "last_read_at must be set")
+}
+
 // TestMarkChatRead_MissingSessionID verifies a missing session_id returns 400.
 func TestMarkChatRead_MissingSessionID(t *testing.T) {
 	env, teardown := setupTestEnv(t)

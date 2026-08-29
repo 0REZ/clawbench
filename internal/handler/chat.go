@@ -1153,8 +1153,17 @@ func MarkChatRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the session belongs to the requesting project
-	if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != projectPath {
+	// Verify the session belongs to the requesting project. Support marking an
+	// external project's session read: ?project_path= (the session's owning
+	// project) overrides the cookie project; only an exact match is accepted.
+	if qp := r.URL.Query().Get("project_path"); qp != "" {
+		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
+			projectPath = qp
+		} else {
+			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
+			return
+		}
+	} else if sessionProject := service.GetSessionProjectPath(sessionID); sessionProject != projectPath {
 		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 		return
 	}

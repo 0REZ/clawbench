@@ -383,8 +383,8 @@ describe('CompletionPopover', () => {
 
             const backdrop = document.querySelector('.completion-popover-backdrop')!
 
-            // 弹窗已展示满 1 秒后点击 backdrop：关闭且不导航
-            vi.advanceTimersByTime(1000)
+            // 弹窗已展示满 3 秒后点击 backdrop：关闭且不导航
+            vi.advanceTimersByTime(3000)
             backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
             expect(dispatchSpy).not.toHaveBeenCalled()
@@ -394,7 +394,7 @@ describe('CompletionPopover', () => {
         }
     })
 
-    it('does not dismiss on backdrop click within the first second (guard against accidental close)', () => {
+    it('does not dismiss on backdrop click within the first 3 seconds (guard against accidental close)', () => {
         vi.useFakeTimers()
         try {
             mockState.active = ref(makeItem())
@@ -402,12 +402,12 @@ describe('CompletionPopover', () => {
 
             const backdrop = document.querySelector('.completion-popover-backdrop')!
 
-            // 弹窗刚出现（<1s）点击空白处：不应关闭
+            // 弹窗刚出现（<3s）点击空白处：不应关闭
             backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
             expect(mockState.dismiss).not.toHaveBeenCalled()
 
-            // 推进 1 秒后再点击：正常关闭
-            vi.advanceTimersByTime(1000)
+            // 推进 3 秒后再点击：正常关闭
+            vi.advanceTimersByTime(3000)
             backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
             expect(mockState.dismiss).toHaveBeenCalledTimes(1)
         } finally {
@@ -541,6 +541,11 @@ describe('CompletionPopover', () => {
             )
             expect(mockState.dismiss).toHaveBeenCalledTimes(1)
         })
+        // 发送成功后清空该会话未读（独立 /read 调用）
+        expect(fetchMock).toHaveBeenCalledWith(
+            expect.stringContaining('/api/ai/chat/read?session_id=s42'),
+            expect.objectContaining({ method: 'POST' })
+        )
     })
 
     it('does not send when input is empty', () => {
