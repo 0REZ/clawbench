@@ -76,10 +76,9 @@ const EVENT_STALE_MS = 60000                // no message (ping or event) for 60
 let lastPingAt = 0
 let lastEventAt = 0
 
-// Persistent client ID — identifies this browser/device across sessions.
+// Client ID — identifies this browser/device across sessions.
 // Stored in localStorage so the server can track multiple tabs/devices independently.
 const CLIENT_ID_KEY = 'clawbench_client_id'
-const LAST_SEEN_KEY = 'clawbench_last_seen_event_id'
 let clientId = localStorage.getItem(CLIENT_ID_KEY)
 if (!clientId) {
     // crypto.randomUUID() requires a secure context (HTTPS or localhost);
@@ -92,6 +91,26 @@ if (!clientId) {
         return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`
     })()
     localStorage.setItem(CLIENT_ID_KEY, clientId)
+}
+
+// Last-seen event cursor — tracks the newest terminal event already seen.
+// Session-only (in-memory, deliberately NOT persisted): when the page/app is
+// reloaded the cursor starts empty, so fetchPendingEvents() skips to the newest
+// event and never replays stale completion notifications from a previous run.
+// Within a live session the cursor advances on every terminal event, so an
+// in-page WS reconnect still recovers events missed while disconnected.
+let lastSeenEventId = ''
+
+// Mirror the in-memory cursor to the host app (Android native background
+// service). The Android cursor is persisted separately in SharedPreferences and
+// survives process kills, so keeping it in sync prevents the background service
+// from re-delivering terminal events the user already saw in the foreground.
+function syncNativeCursor(eventId: string) {
+    try {
+        getNative()?.updateLastSeenEventId(eventId)
+    } catch {
+        // Non-critical
+    }
 }
 
 const { isAppMode } = useAppMode()
@@ -147,7 +166,7 @@ function plainPreview(data: ServerEvent['data']): string {
 
 async function fetchPendingEvents() {
     try {
-        const lastSeenId = localStorage.getItem(LAST_SEEN_KEY) || ''
+        const lastSeenId = lastSeenEventId
         const url = lastSeenId
             ? `/api/ai/events/pending?after=${encodeURIComponent(lastSeenId)}`
             : '/api/ai/events/pending'
@@ -159,22 +178,20 @@ async function fetchPendingEvents() {
         const events: Array<{ event_id: string; event_type: string; payload: string }> = data.events || []
         if (events.length === 0) return
 
-        // No cursor (fresh install — localStorage was cleared, e.g. by
-        // uninstall/reinstall): the client has never seen any event, so there
-        // is nothing to replay. The server's pending_events table keeps up to
-        // 24h of terminal events (completed/cancelled/failed); replaying them
-        // all would flood a fresh client with dozens of stale completion
+        // No cursor (fresh page load / app restart — the in-memory cursor is
+        // empty): the client has never seen any event in this run, so there is
+        // nothing to replay. The server's pending_events table keeps up to 24h
+        // of terminal events (completed/cancelled/failed); replaying them all
+        // would flood a fresh client with dozens of stale completion
         // popups/notifications. Instead, advance the cursor to the newest
         // event so future reconnects start from here.
         if (!lastSeenId) {
             const latest = events[events.length - 1]
             if (latest.event_id) {
-                localStorage.setItem(LAST_SEEN_KEY, latest.event_id)
-                // Sync cursor to Android SharedPreferences so native
-                // fetchPendingEvents() won't re-deliver these events either.
-                try {
-                    getNative()?.updateLastSeenEventId(latest.event_id)
-                } catch {}
+                lastSeenEventId = latest.event_id
+                // Also advance the native cursor so the Android background
+                // service won't replay the 24h backlog after a restart.
+                syncNativeCursor(latest.event_id)
             }
             return
         }
@@ -201,11 +218,8 @@ async function fetchPendingEvents() {
 
         // Update cursor
         if (latestId !== lastSeenId) {
-            localStorage.setItem(LAST_SEEN_KEY, latestId)
-            // Sync cursor to Android SharedPreferences
-            try {
-                getNative()?.updateLastSeenEventId(latestId)
-            } catch {}
+            lastSeenEventId = latestId
+            syncNativeCursor(latestId)
         }
     } catch {
         // Non-critical
@@ -294,13 +308,10 @@ function connect() {
                     const isTerminal = (msg.event === 'session_update' && (status === 'completed' || status === 'cancelled' || status === 'permission_pending'))
                         || (msg.event === 'task_update' && (status === 'completed' || status === 'failed' || status === 'cancelled'))
                     if (isTerminal) {
-                        localStorage.setItem(LAST_SEEN_KEY, msg.id)
-                        // Sync cursor to Android SharedPreferences so that the native
-                        // fetchPendingEvents() won't re-deliver these events when
-                        // the app switches to background.
-                        try {
-                            getNative()?.updateLastSeenEventId(msg.id)
-                        } catch {}
+                        lastSeenEventId = msg.id
+                        // Keep the Android native cursor in sync so background
+                        // push won't re-deliver an event already seen here.
+                        syncNativeCursor(msg.id)
                     }
                 }
             }
@@ -570,6 +581,7 @@ export function useGlobalEvents() {
         // from firing after SPA hot project switch.
         handlers.length = 0
         processedEventIds.clear()
+        lastSeenEventId = ''
         lastPingAt = 0
         lastEventAt = 0
         hasConnectedOnce.value = false
@@ -588,3 +600,17 @@ export function useGlobalEvents() {
         destroy,
     }
 }
+
+// ── Test-only helpers ────────────────────────────────────────────────────────
+// The last-seen cursor is intentionally session-only (in-memory). These hooks
+// let tests seed/read it since localStorage is no longer the backing store.
+/** Seed the in-memory last-seen cursor (simulates an established session). */
+export function _seedLastSeenEventIdForTesting(id: string) {
+    lastSeenEventId = id
+}
+
+/** Read the current in-memory last-seen cursor. */
+export function _getLastSeenEventIdForTesting(): string {
+    return lastSeenEventId
+}
+

@@ -15,6 +15,16 @@ vi.mock('@/composables/useLocale', () => ({
     gt: (key: string) => key, // Return key itself for test assertions
 }))
 
+// Mock the native bridge — the Web frontend must keep the Android device cursor
+// in sync with the in-memory cursor so background push doesn't re-deliver
+// terminal events the user already saw in the foreground.
+const mockUpdateLastSeenEventId = vi.fn()
+vi.mock('@/utils/clawbenchNative', () => ({
+    getNative: () => ({
+        updateLastSeenEventId: (...args: unknown[]) => mockUpdateLastSeenEventId(...args),
+    }),
+}))
+
 // Mutable flag for app mode — use plain object since vi.mock is hoisted
 const appModeState = { value: false }
 vi.mock('@/composables/useAppMode', () => ({
@@ -23,7 +33,11 @@ vi.mock('@/composables/useAppMode', () => ({
     }),
 }))
 
-import { useGlobalEvents } from '@/composables/useGlobalEvents'
+import {
+    useGlobalEvents,
+    _seedLastSeenEventIdForTesting,
+    _getLastSeenEventIdForTesting,
+} from '@/composables/useGlobalEvents'
 
 // Mock WebSocket that captures constructor calls
 let mockWsInstances: MockWebSocket[] = []
@@ -87,6 +101,7 @@ describe('useGlobalEvents', () => {
         mockWsInstances = []
         mockShowBrowserNotification.mockReset()
         mockPlayNotificationSound.mockReset()
+        mockUpdateLastSeenEventId.mockReset()
         appModeState.value = false  // Default to browser mode
         originalWebSocket = globalThis.WebSocket
         globalThis.WebSocket = MockWebSocket as any
@@ -249,6 +264,29 @@ describe('useGlobalEvents', () => {
                 try { return JSON.parse(m).type === 'ack' } catch { return false }
             })
             expect(ackMessages).toHaveLength(0)
+        })
+
+        it('收到终态事件时同步安卓设备游标，非终态不同步', () => {
+            const ws = connectAndGetWs()
+
+            // Terminal event (session completed) → native cursor must advance.
+            const terminalId = nextId()
+            ws.receive({ type: 'event', id: terminalId, event: 'session_update', data: { status: 'completed' } })
+            expect(mockUpdateLastSeenEventId).toHaveBeenLastCalledWith(terminalId)
+
+            // Non-terminal event → no native sync.
+            mockUpdateLastSeenEventId.mockClear()
+            const runningId = nextId()
+            ws.receive({ type: 'event', id: runningId, event: 'session_update', data: { status: 'running' } })
+            expect(mockUpdateLastSeenEventId).not.toHaveBeenCalled()
+        })
+
+        it('task 终态事件同样同步安卓设备游标', () => {
+            const ws = connectAndGetWs()
+
+            const taskId = nextId()
+            ws.receive({ type: 'event', id: taskId, event: 'task_update', data: { status: 'failed' } })
+            expect(mockUpdateLastSeenEventId).toHaveBeenLastCalledWith(taskId)
         })
     })
 
@@ -963,23 +1001,23 @@ describe('useGlobalEvents', () => {
     // ── fetchPendingEvents (断线补偿：pending 拉取的 user_message) ──
     // Phase 4: fetchPendingEvents must dispatch chat_stream user_message events
     // through the shared handlers (so useChatStream inserts the _remote bubble),
-    // update the LAST_SEEN_KEY cursor, dedup by event id across the WS + pending
-    // dual channels, and never trigger browser notifications for chat_stream.
+    // advance the in-memory last-seen cursor, dedup by event id across the WS +
+    // pending dual channels, and never trigger browser notifications for
+    // chat_stream. The cursor is session-only: it must NOT be read from or
+    // written to localStorage.
     describe('fetchPendingEvents', () => {
-        const LAST_SEEN_KEY = 'clawbench_last_seen_event_id'
-
         let originalFetch: typeof globalThis.fetch
 
         beforeEach(() => {
             originalFetch = globalThis.fetch
-            // 默认模拟"老客户端断线重连"：已有游标，拉取游标之后的事件做补偿。
-            // 游标存在性由服务端校验，前端 mock 不涉及。
-            localStorage.setItem(LAST_SEEN_KEY, 'evt_seen_old')
+            // 默认模拟"同一运行周期内断线重连"：游标已在内存中，拉取游标之后
+            // 的事件做补偿。游标存在性由服务端校验，前端 mock 不涉及。
+            _seedLastSeenEventIdForTesting('evt_seen_old')
         })
 
         afterEach(() => {
             globalThis.fetch = originalFetch
-            localStorage.removeItem(LAST_SEEN_KEY)
+            _seedLastSeenEventIdForTesting('')
         })
 
         /**
@@ -1036,13 +1074,46 @@ describe('useGlobalEvents', () => {
             })
         })
 
-        it('updates LAST_SEEN_KEY cursor after dispatching user_message', async () => {
+        it('advances the in-memory cursor after dispatching user_message', async () => {
             const handler = vi.fn()
             events.onEvent(handler)
             mockPendingFetch([userMessageRow('evt_user_2', 43)])
             connectAndGetWs()
 
-            await vi.waitFor(() => expect(localStorage.getItem(LAST_SEEN_KEY)).toBe('evt_user_2'))
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe('evt_user_2'))
+        })
+
+        it('同步安卓设备游标到最新事件位置（防止后台重复推送前台已看过的完成事件）', async () => {
+            // The native bridge must be told where the in-memory cursor ended up
+            // so the Android background service won't re-deliver terminal events
+            // the user already saw while the app was in the foreground.
+            const handler = vi.fn()
+            events.onEvent(handler)
+            mockPendingFetch([userMessageRow('evt_user_native', 46)])
+            connectAndGetWs()
+
+            await vi.waitFor(() => expect(mockUpdateLastSeenEventId).toHaveBeenCalledWith('evt_user_native'))
+        })
+
+        it('游标为空时（页面重开/APP 重启）同步安卓设备游标到最新，不重放历史事件', async () => {
+            // Fresh page load: in-memory cursor is empty, so nothing is
+            // dispatched and the cursor jumps to the newest event. The native
+            // cursor must follow, otherwise the Android background service would
+            // re-deliver the whole 24h backlog next time the app goes to
+            // background.
+            _seedLastSeenEventIdForTesting('')
+            const handler = vi.fn()
+            events.onEvent(handler)
+
+            mockPendingFetch([
+                userMessageRow('evt_old_1', 1, { content: 'old' }),
+                userMessageRow('evt_old_2', 2, { content: 'older' }),
+                userMessageRow('evt_latest_native', 3, { content: 'newest' }),
+            ])
+            connectAndGetWs()
+
+            await vi.waitFor(() => expect(mockUpdateLastSeenEventId).toHaveBeenCalledWith('evt_latest_native'))
+            expect(handler).not.toHaveBeenCalled()
         })
 
         it('dedups pending events by event id (already processed via WS)', async () => {
@@ -1072,7 +1143,7 @@ describe('useGlobalEvents', () => {
                 event_type: 'user_message',
                 payload: { messageId: 45, content: 'fresh' },
             })
-            await vi.waitFor(() => expect(localStorage.getItem(LAST_SEEN_KEY)).toBe('evt_user_new'))
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe('evt_user_new'))
         })
 
         it('does not show browser notification for chat_stream events', async () => {
@@ -1084,7 +1155,7 @@ describe('useGlobalEvents', () => {
 
             // The event is processed (cursor advances), but chat_stream never
             // triggers a browser notification.
-            await vi.waitFor(() => expect(localStorage.getItem(LAST_SEEN_KEY)).toBe('evt_user_3'))
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe('evt_user_3'))
             expect(mockShowBrowserNotification).not.toHaveBeenCalled()
         })
 
@@ -1141,16 +1212,16 @@ describe('useGlobalEvents', () => {
 
             // Cursor advanced past the pending user_message so it won't be
             // re-delivered on the next reconnect.
-            expect(localStorage.getItem(LAST_SEEN_KEY)).toBe('evt_pending_user')
+            expect(_getLastSeenEventIdForTesting()).toBe('evt_pending_user')
         })
 
-        it('无游标时（重装/清缓存）不派发历史事件，仅推进游标到最新', async () => {
-            // Fresh install: localStorage cursor is gone. The server's
-            // pending_events table holds up to 24h of terminal events; replaying
-            // them all would flood the client with dozens of stale completion
-            // popups/notifications. Instead the cursor must advance to the
-            // newest event and nothing must be dispatched.
-            localStorage.removeItem(LAST_SEEN_KEY)
+        it('游标为空时（页面重开/APP 重启）不派发历史事件，仅推进游标到最新', async () => {
+            // Fresh page load / app restart: the in-memory cursor is empty. The
+            // server's pending_events table holds up to 24h of terminal events;
+            // replaying them all would flood the client with dozens of stale
+            // completion popups/notifications. Instead the cursor must advance
+            // to the newest event and nothing must be dispatched.
+            _seedLastSeenEventIdForTesting('')
             const handler = vi.fn()
             events.onEvent(handler)
 
@@ -1162,7 +1233,7 @@ describe('useGlobalEvents', () => {
             connectAndGetWs()
 
             // History must NOT be dispatched...
-            await vi.waitFor(() => expect(localStorage.getItem(LAST_SEEN_KEY)).toBe('evt_latest'))
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe('evt_latest'))
             expect(handler).not.toHaveBeenCalled()
 
             // ...and the cursor is now at the newest event so future reconnects
