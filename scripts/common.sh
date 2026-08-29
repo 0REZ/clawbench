@@ -53,7 +53,7 @@ _stop_servers() {
         if kill -0 "$pid" 2>/dev/null; then
             echo "Stopping $name (PID $pid)..."
             kill "$pid"
-            sleep 1
+            sleep 5
             # Force kill if still alive
             if kill -0 "$pid" 2>/dev/null; then
                 kill -9 "$pid" 2>/dev/null
@@ -74,7 +74,7 @@ _stop_servers() {
         if [[ -n "$pids" ]]; then
             echo "Killing orphan process on port $port (PIDs: $pids)..."
             echo "$pids" | xargs kill 2>/dev/null || true
-            sleep 1
+            sleep 5
             # Force kill if still alive
             if command -v ss >/dev/null 2>&1; then
                 local remaining
