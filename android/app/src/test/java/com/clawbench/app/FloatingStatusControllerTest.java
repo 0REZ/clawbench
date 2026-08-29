@@ -1096,10 +1096,9 @@ public class FloatingStatusControllerTest {
 
     @Test
     public void terminalEvent_hideWithFade_doesNotCrashUnderRobolectric() throws Exception {
-        // The two-stage hide (collapse-to-circle then fade) runs real
-        // View.animate() / ValueAnimator; Robolectric cannot verify frame
-        // timing, so this guards that the path completes to hideWindow()
-        // without crashing.
+        // The single-stage hide (whole-view alpha + scale fade) runs real
+        // View.animate(); Robolectric cannot verify frame timing, so this
+        // guards that the path completes to hideWindow() without crashing.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1115,7 +1114,7 @@ public class FloatingStatusControllerTest {
         assertNotNull(getPrivateField(controller, "fadeHideRunnable"));
 
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertFalse("the two-stage hide must still remove the window",
+        assertFalse("the single-stage hide must still remove the window",
                 controller.isWindowShowing());
         controller.destroy();
     }

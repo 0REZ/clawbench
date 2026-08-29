@@ -53,13 +53,9 @@ public class FloatingStatusController {
     /** How long the "done" terminal state stays visible before fading out. */
     private static final long TERMINAL_SHOW_MS = 3000;
     private static final long FADE_MS = 300;
-    /** Duration of the collapse-to-logo stage of the hide animation. */
-    private static final long COLLAPSE_MS = 200;
     private static final int EDGE_MARGIN_DP = 8;
     /** Fallback capsule width estimate (dp) used before the view is measured. */
     private static final int DEFAULT_CAPSULE_WIDTH_DP = 120;
-    /** Capsule height = logo diameter + 2 * 7dp vertical padding (38dp). */
-    private static final int CAPSULE_HEIGHT_DP = 38;
     /** Drag opacity while moving. */
     private static final float DRAG_ALPHA = 0.85f;
 
@@ -87,7 +83,6 @@ public class FloatingStatusController {
     private volatile boolean userDismissed;
     private volatile boolean expanded;
     private Runnable fadeHideRunnable;
-    private android.animation.ValueAnimator collapseAnimator;
     private BiConsumer<String, String> onSessionClick;
     private OverviewRequestListener overviewRequestListener;
     /** Last time an event-triggered overview refresh was requested (throttle). */
@@ -589,7 +584,6 @@ public class FloatingStatusController {
         // window is never removed from the WindowManager.
         Runnable cleanup = () -> {
             cancelPendingHide();
-            cancelCollapse();
             if (view != null) {
                 view.animate().cancel();
                 view.stopBreathing();
@@ -665,17 +659,15 @@ public class FloatingStatusController {
 
     private void ensureWindow() {
         if (windowShowing) {
-            // A fade may be in flight (alpha < 1); cancel it and restore full
-            // opacity so a fresh active event makes the window reappear.
+            // A hide may be in flight (alpha/scale < 1); cancel it and restore
+            // full opacity + scale so a fresh active event makes the window
+            // reappear. cancel() does not run the hide's end action, so both
+            // must be restored here.
             if (attachedView != null) {
                 attachedView.animate().cancel();
                 attachedView.setAlpha(1f);
-                // A collapse-to-logo hide may also be in flight: restore the
-                // window width and the faded stat groups.
-                cancelCollapse();
-                if (attachedView instanceof FloatingStatusView) {
-                    ((FloatingStatusView) attachedView).expandFromCircle();
-                }
+                attachedView.setScaleX(1f);
+                attachedView.setScaleY(1f);
             }
             return;
         }
@@ -840,100 +832,38 @@ public class FloatingStatusController {
         if (!windowShowing || attachedView == null) {
             return;
         }
+        // Single continuous hide animation for every view: shrink to a point
+        // (scaleX/scaleY around the view's pivot) while fading out. No
+        // intermediate "collapse to circle" stage — the two-stage version left
+        // an elliptical window (width shrunk to the logo diameter while the
+        // WRAP_CONTENT height stayed at the pill height) and re-illuminated the
+        // faded stat groups right as the window was removed, which read as a
+        // flicker before the bubble vanished.
         final View fadeView = attachedView;
-        if (fadeView instanceof FloatingStatusView && params != null) {
-            // Two-stage hide for the capsule: first collapse to a logo-only
-            // circle (stat groups fade out while the window width shrinks to
-            // the logo diameter), then fade the whole window out.
-            collapseToCircle((FloatingStatusView) fadeView, () -> {
-                if (destroyed) {
-                    return;
-                }
-                fadeView.animate()
-                        .alpha(0f)
-                        .setDuration(FADE_MS)
-                        .withEndAction(() -> {
-                            if (destroyed) {
-                                return;
-                            }
-                            hideWindow();
-                            fadeView.setAlpha(1f);
-                            if (attachedView instanceof FloatingStatusView) {
-                                ((FloatingStatusView) attachedView).expandFromCircle();
-                            }
-                        })
-                        .start();
-            });
-        } else {
-            fadeView.animate()
-                    .alpha(0f)
-                    .setDuration(FADE_MS)
-                    .withEndAction(() -> {
-                        if (destroyed) {
-                            return;
-                        }
-                        hideWindow();
-                        fadeView.setAlpha(1f);
-                    })
-                    .start();
-        }
-    }
-
-    /**
-     * Collapse a FloatingStatusView capsule to a logo-only circle: the stat
-     * groups fade out in the content row while the window width animates from
-     * its current width down to the logo diameter. Width is a WindowManager
-     * layout property, so each animation frame re-issues updateViewLayout.
-     * UI thread only.
-     */
-    private void collapseToCircle(final FloatingStatusView capsule, final Runnable onDone) {
-        int startWidth = capsule.getMeasuredWidth();
-        if (startWidth <= 0) {
-            startWidth = capsuleWidthPx;
-        }
-        int targetWidth = Math.round(CAPSULE_HEIGHT_DP * context.getResources().getDisplayMetrics().density);
-        // Re-center the circle: keep the capsule's left edge (which anchors at
-        // the drag/restored x) and let the extra width disappear on the right.
-        params.width = startWidth;
-        try {
-            windowManager.updateViewLayout(capsule, params);
-        } catch (IllegalArgumentException e) {
-            AppLog.w(TAG, "collapseToCircle updateViewLayout failed", e);
-        }
-        capsule.collapseToCircle(targetWidth, onDone);
-        android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofInt(startWidth, targetWidth);
-        anim.setDuration(COLLAPSE_MS);
-        anim.setInterpolator(new android.view.animation.DecelerateInterpolator());
-        anim.addUpdateListener(a -> {
-            params.width = (Integer) a.getAnimatedValue();
-            try {
-                windowManager.updateViewLayout(capsule, params);
-            } catch (IllegalArgumentException e) {
-                AppLog.w(TAG, "collapseToCircle updateViewLayout failed", e);
-            }
-        });
-        collapseAnimator = anim;
-        anim.start();
+        fadeView.animate()
+                .alpha(0f)
+                .scaleX(0f)
+                .scaleY(0f)
+                .setDuration(FADE_MS)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (destroyed) {
+                        return;
+                    }
+                    hideWindow();
+                    // Restore for the next attach: the view object is reused
+                    // by later ensureWindow() calls.
+                    fadeView.setAlpha(1f);
+                    fadeView.setScaleX(1f);
+                    fadeView.setScaleY(1f);
+                })
+                .start();
     }
 
     private void cancelPendingHide() {
         if (fadeHideRunnable != null) {
             handler.removeCallbacks(fadeHideRunnable);
             fadeHideRunnable = null;
-        }
-    }
-
-    /**
-     * Cancel the collapse-to-logo width animation and restore the window to
-     * wrap-content so a re-shown capsule sizes itself normally. UI thread only.
-     */
-    private void cancelCollapse() {
-        if (collapseAnimator != null) {
-            collapseAnimator.cancel();
-            collapseAnimator = null;
-        }
-        if (params != null) {
-            params.width = WindowManager.LayoutParams.WRAP_CONTENT;
         }
     }
 

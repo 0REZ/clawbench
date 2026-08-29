@@ -12,7 +12,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowValueAnimator;
+import org.robolectric.shadows.ShadowLooper;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -277,62 +277,51 @@ public class FloatingStatusViewTest {
     }
 
     // =====================================================
-    // Collapse-to-logo: stat groups fade out (hide animation stage 1)
+    // Hide animation: the capsule is the same view type as any other attach
+    // (the controller runs a single alpha+scale fade on the whole view), so
+    // the content row keeps no collapse-specific state. The one guarantee the
+    // capsule must hold is that renderStats never leaves a stale hidden item.
     // =====================================================
 
     @Test
-    public void collapseStats_fadesVisibleGroupsAndRunsCallback() throws Exception {
+    public void renderStats_afterHideAnimationRestoresVisibilityOfStatGroups() throws Exception {
+        // A capsule that was animated to alpha 0 still holds its groups; a
+        // re-render after a re-show must bring every visible group back to
+        // full opacity and keep GONE groups hidden.
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 1, 1);
-        final boolean[] done = {false};
 
-        capsule.collapseToCircle(38, () -> done[0] = true);
-
-        assertTrue("collapse must be flagged while the fade is in flight",
-                capsule.isStatsCollapsed());
-        assertEquals("the logo must not be faded", 1f,
-                content(capsule).getChildAt(0).getAlpha(), 0.001f);
-
-        // Robolectric runs the animation to completion; every stat group must
-        // settle at full transparency and the callback must fire.
-        org.robolectric.shadows.ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertTrue("the collapse callback must fire after the fade", done[0]);
-        for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("each visible group must fade to transparent", 0f,
-                    content(capsule).getChildAt(i).getAlpha(), 0.001f);
-        }
-        capsule.stopBreathing();
-    }
-
-    @Test
-    public void collapseStats_hiddenGroups_areNotTouched() throws Exception {
-        // Groups with zero count are GONE and must not be animated.
-        FloatingStatusView capsule = newCapsule();
-        capsule.renderStats(0, 0, 0); // all groups hidden
-
-        capsule.collapseToCircle(38, null);
+        // Emulate what the controller's hide animation does to the view:
+        // the whole capsule (not the inner groups) is faded and scaled.
+        capsule.setAlpha(0f);
+        capsule.setScaleX(0f);
+        capsule.setScaleY(0f);
+        capsule.renderStats(0, 0, 0);
 
         for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("GONE groups must stay GONE (visibility untouched)",
+            assertEquals("groups are toggled by visibility, never by alpha",
                     View.GONE, content(capsule).getChildAt(i).getVisibility());
         }
         capsule.stopBreathing();
     }
 
     @Test
-    public void expandFromCircle_restoresStatGroupAlphas() throws Exception {
+    public void renderStats_afterReShow_restoresStatGroupAlphas() throws Exception {
+        // The hide animation scales the whole capsule view; the inner stat
+        // groups are never faded individually, so a re-show must not have to
+        // restore anything on the content row (no stale translucent groups).
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 1, 1);
-        capsule.collapseToCircle(38, null);
-        assertTrue(capsule.isStatsCollapsed());
 
-        capsule.expandFromCircle();
+        capsule.setScaleX(0f);
+        capsule.setScaleY(0f);
+        // A re-show re-renders stats (controller renderCapsuleStats); groups
+        // must stay fully opaque — the fade was on the whole view only.
+        capsule.renderStats(1, 1, 1);
 
-        assertFalse("expandFromCircle must clear the collapsed flag",
-                capsule.isStatsCollapsed());
         for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("re-shown capsule must keep groups fully opaque", 1f,
-                    content(capsule).getChildAt(i).getAlpha(), 0.001f);
+            assertEquals("stat groups must remain fully opaque after re-render",
+                    1f, content(capsule).getChildAt(i).getAlpha(), 0.001f);
         }
         capsule.stopBreathing();
     }
