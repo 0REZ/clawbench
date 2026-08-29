@@ -570,7 +570,6 @@ export default {
       retry: 'Retry',
       continue: 'Continue',
       resetSession: 'Retry',
-      resetSessionDone: 'Session reset, re-sending message',
       resetSessionFailed: 'Failed to reset session',
       detailsUnavailable: 'Details unavailable',
       detailsLoadFailed: 'Failed to load details',

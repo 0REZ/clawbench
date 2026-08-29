@@ -570,7 +570,6 @@ export default {
       retry: '重试',
       continue: '继续',
       resetSession: '重试',
-      resetSessionDone: '会话已重置，正在重新发送消息',
       resetSessionFailed: '重置会话失败',
       detailsUnavailable: '详情暂不可用',
       detailsLoadFailed: '加载失败',

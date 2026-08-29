@@ -1142,7 +1142,6 @@ async function handleResetSession() {
     if (!sid) return
     try {
         await apiPost('/api/ai/session/reset', { sessionId: sid })
-        toast.show(t('chat.contentBlocks.resetSessionDone'), { icon: '🔄', type: 'success' })
         // Re-send the last persisted user message so the conversation continues
         // in the freshly-reset agent session.
         const lastUserMsg = [...messages.value].reverse().find(m => m.role === 'user' && !m.pending)
