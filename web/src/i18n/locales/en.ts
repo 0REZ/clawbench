@@ -568,7 +568,7 @@ export default {
       close: 'Close',
       retry: 'Retry',
       continue: 'Continue',
-      resetSession: 'Reset session',
+      resetSession: 'Retry',
       resetSessionConfirm: 'This restarts the AI session connection to restore responses. Chat history and context are kept. Continue?',
       resetSessionDone: 'Session reset, re-sending message',
       resetSessionFailed: 'Failed to reset session',
