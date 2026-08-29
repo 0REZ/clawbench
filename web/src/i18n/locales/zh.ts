@@ -478,6 +478,7 @@ export default {
       replyTask: '回复该任务…',
       send: '发送',
       markRead: '标记已读',
+      external: '外部',
     },
     session: {
       aiDialog: 'AI 对话',

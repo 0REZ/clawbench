@@ -188,6 +188,39 @@ describe('CompletionPopover', () => {
         expect(nameEl.textContent).toBe('my-app')
         const pathEl = document.querySelector('.completion-popover-project-path')!
         expect(pathEl.textContent).toBe('/home/user')
+        // 项目行位于底部 footer：无外边距、横向铺满卡片的独立区隔带
+        const footer = document.querySelector('.completion-popover-footer')!
+        expect(footer).toBeTruthy()
+        expect(footer.querySelector('.completion-popover-project')).toBeTruthy()
+        // jsdom 不解析 color-mix()，改断言 CSS 规则文本
+        const cssText = Array.from(document.styleSheets)
+            .map((s) => {
+                try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n') }
+                catch { return '' }
+            })
+            .join('\n')
+        const footerRule = cssText.split('\n').filter((line) => line.includes('.completion-popover-footer')).join('\n')
+        expect(footerRule).toContain('background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-primary')
+        // 贴边区隔：负 margin 铺满卡片宽度、顶部描边、无圆角
+        expect(footerRule).toContain('margin: 8px -10px -8px')
+        expect(footerRule).toContain('border-top: 1px solid color-mix(in srgb, var(--accent-color) 30%, transparent)')
+        expect(footerRule).not.toContain('border-radius')
+        // "外部"徽章：图标 + 文字，提示这是其他项目的会话
+        const badge = document.querySelector('.completion-popover-project-badge')!
+        expect(badge).toBeTruthy()
+        expect(badge.querySelector('svg')).toBeTruthy()
+        expect(badge.textContent!.trim().length).toBeGreaterThan(0)
+        // 路径 span 承担单行省略（flex 容器内 text-overflow 不生效，
+        // 省略逻辑须落在路径上，保证图标/项目名不被截断）
+        const pathStyles = window.getComputedStyle(pathEl)
+        expect(pathStyles.whiteSpace).toBe('nowrap')
+        expect(pathStyles.overflow).toBe('hidden')
+        expect(pathStyles.textOverflow).toBe('ellipsis')
+        // 徽章与项目名不收缩，保持完整
+        const nameStyles = window.getComputedStyle(nameEl)
+        expect(nameStyles.flexShrink).toBe('0')
+        const badgeStyles = window.getComputedStyle(badge)
+        expect(badgeStyles.flexShrink).toBe('0')
     })
 
     it('hides the project path span when projectPath is empty', () => {
@@ -341,16 +374,45 @@ describe('CompletionPopover', () => {
     })
 
     it('clicking outside the card (on the backdrop) hides without navigating', () => {
-        mockState.active = ref(makeItem())
-        mountPopover()
+        vi.useFakeTimers()
+        try {
+            mockState.active = ref(makeItem())
+            mountPopover()
 
-        const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+            const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
 
-        const backdrop = document.querySelector('.completion-popover-backdrop')!
-        backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            const backdrop = document.querySelector('.completion-popover-backdrop')!
 
-        expect(dispatchSpy).not.toHaveBeenCalled()
-        expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+            // 弹窗已展示满 1 秒后点击 backdrop：关闭且不导航
+            vi.advanceTimersByTime(1000)
+            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+            expect(dispatchSpy).not.toHaveBeenCalled()
+            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('does not dismiss on backdrop click within the first second (guard against accidental close)', () => {
+        vi.useFakeTimers()
+        try {
+            mockState.active = ref(makeItem())
+            mountPopover()
+
+            const backdrop = document.querySelector('.completion-popover-backdrop')!
+
+            // 弹窗刚出现（<1s）点击空白处：不应关闭
+            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            expect(mockState.dismiss).not.toHaveBeenCalled()
+
+            // 推进 1 秒后再点击：正常关闭
+            vi.advanceTimersByTime(1000)
+            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        } finally {
+            vi.useRealTimers()
+        }
     })
 
     it('clicking a code-block copy button inside the summary does not navigate', () => {
@@ -384,26 +446,33 @@ describe('CompletionPopover', () => {
         mountPopover()
 
         expect(document.querySelector('.completion-popover-textarea')).toBeTruthy()
-        // 空输入时：发送按钮存在但 disabled，显示"标记已读"按钮
+        // 空输入时：发送按钮存在但 disabled；标记已读按钮在 header 中始终存在
         const sendBtn = document.querySelector('.completion-popover-send')!
         expect(sendBtn.classList.contains('disabled')).toBe(true)
         expect(document.querySelector('.completion-popover-mark-read')).toBeTruthy()
     })
 
-    it('shows the mark-as-read button when input is empty and hides it once typed', async () => {
+    it('keeps the mark-as-read button in the header (left of open) independent of input', async () => {
         mockState.active = ref(makeItem())
         mountPopover()
 
-        // 空输入：mark-read 可见
-        expect(document.querySelector('.completion-popover-mark-read')).toBeTruthy()
+        const header = document.querySelector('.completion-popover-header')!
+        // mark-read 和 open 都在 header 中
+        const markRead = document.querySelector('.completion-popover-mark-read')!
+        const open = document.querySelector('.completion-popover-open')!
+        expect(markRead).toBeTruthy()
+        expect(open).toBeTruthy()
+        // mark-read 位于 open 左边
+        expect(header.compareDocumentPosition(markRead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+        expect(markRead.compareDocumentPosition(open) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
-        // 输入内容后：mark-read 隐藏，发送按钮可点
+        // 输入内容后 mark-read 依然存在（不随输入联动）
         const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
         textarea.value = '回复内容'
         textarea.dispatchEvent(new Event('input'))
         await nextTick()
 
-        expect(document.querySelector('.completion-popover-mark-read')).toBeFalsy()
+        expect(document.querySelector('.completion-popover-mark-read')).toBeTruthy()
         expect(document.querySelector('.completion-popover-send')!.classList.contains('disabled')).toBe(false)
     })
 
@@ -411,7 +480,7 @@ describe('CompletionPopover', () => {
         mockState.active = ref(makeItem())
         mountPopover()
 
-        // 输入文本使发送按钮出现（空输入时显示标记已读按钮）
+        // 输入文本使发送按钮变为可点状态
         const textareaEl = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
         textareaEl.value = '测试'
         textareaEl.dispatchEvent(new Event('input'))

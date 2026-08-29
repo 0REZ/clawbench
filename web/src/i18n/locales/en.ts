@@ -478,6 +478,7 @@ export default {
       replyTask: 'Reply to this task…',
       send: 'Send',
       markRead: 'Mark as read',
+      external: 'External',
     },
     session: {
       aiDialog: 'AI Chat',

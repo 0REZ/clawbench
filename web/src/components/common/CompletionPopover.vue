@@ -3,22 +3,18 @@
     <div
       v-if="active"
       class="completion-popover-backdrop"
-      @click.self="dismiss"
+      @click.self="safeDismiss"
     >
       <Transition name="completion-popover-card" mode="out-in" appear>
         <div :key="active.sessionId + active.kind" class="completion-popover">
           <div class="completion-popover-header">
             <AgentIcon v-if="agentBackend" :backend="agentBackend" :size="16" class="completion-popover-icon" />
             <span class="completion-popover-title" :title="active.title">{{ active.title || '未命名会话' }}</span>
+            <span class="completion-popover-mark-read" role="button" :aria-label="gt('chat.popover.markRead')" :title="gt('chat.popover.markRead')" @click="handleMarkRead">
+              <Check :size="14" />
+            </span>
             <span class="completion-popover-open" role="button" :aria-label="openLabel" :title="openLabel" @click="openSession">
               <Search :size="15" />
-            </span>
-          </div>
-          <div v-if="active.projectName" class="completion-popover-meta">
-            <span class="completion-popover-project" :title="active.projectPath || active.projectName">
-              <Folder :size="11" />
-              <span class="completion-popover-project-name">{{ active.projectName }}</span>
-              <span v-if="active.projectPath" class="completion-popover-project-path">{{ active.projectPath }}</span>
             </span>
           </div>
           <div v-if="active.userMessage" class="completion-popover-meta completion-popover-meta-user">
@@ -28,24 +24,29 @@
             </span>
           </div>
           <div class="completion-popover-summary markdown-body" v-html="summaryHtml" @click="handleSummaryClick"></div>
-          <div class="completion-popover-input-row">
-            <div class="completion-popover-input">
-              <textarea
-                ref="inputRef"
-                v-model="inputText"
-                class="completion-popover-textarea"
-                rows="1"
-                :placeholder="inputPlaceholder"
-                @keydown.enter.exact.prevent="handleSend"
-                @input="autoResizeTextarea"
-              />
-              <button class="completion-popover-send" :class="{ disabled: !canSend }" @click="handleSend" :title="gt('chat.popover.send')" :aria-label="gt('chat.popover.send')">
-                <Send :size="14" />
-              </button>
-            </div>
-            <button v-if="!canSend" class="completion-popover-mark-read" @click="handleMarkRead" :title="gt('chat.popover.markRead')" :aria-label="gt('chat.popover.markRead')">
-              <Check :size="14" />
+          <div class="completion-popover-input">
+            <textarea
+              ref="inputRef"
+              v-model="inputText"
+              class="completion-popover-textarea"
+              rows="1"
+              :placeholder="inputPlaceholder"
+              @keydown.enter.exact.prevent="handleSend"
+              @input="autoResizeTextarea"
+            />
+            <button class="completion-popover-send" :class="{ disabled: !canSend }" @click="handleSend" :title="gt('chat.popover.send')" :aria-label="gt('chat.popover.send')">
+              <Send :size="14" />
             </button>
+          </div>
+          <div v-if="active.projectName" class="completion-popover-footer">
+            <span class="completion-popover-project" :title="active.projectPath || active.projectName">
+              <span class="completion-popover-project-badge">
+                <ExternalLink :size="10" />
+                <span>{{ gt('chat.popover.external') }}</span>
+              </span>
+              <span class="completion-popover-project-name">{{ active.projectName }}</span>
+              <span v-if="active.projectPath" class="completion-popover-project-path">{{ active.projectPath }}</span>
+            </span>
           </div>
         </div>
       </Transition>
@@ -55,7 +56,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search, Folder, Send, MessageSquare, Check } from 'lucide-vue-next'
+import { Search, Send, MessageSquare, Check, ExternalLink } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { useCompletionPopover } from '@/composables/useCompletionPopover'
 import { useAgents } from '@/composables/useAgents'
@@ -95,11 +96,23 @@ const sending = ref(false)
 
 const canSend = computed(() => canSendInput(inputText.value) && !sending.value)
 
-// 弹窗切换时重置输入框
+// 弹窗出现时刻：点击空白处关闭时须已展示至少 MIN_DISMISS_MS，
+// 避免刚弹出时误触 backdrop 把通知关掉
+const MIN_DISMISS_MS = 1000
+let shownAt = 0
+
+// 弹窗切换时重置输入框并记录展示时刻（immediate：mount 时也记录初始展示时间）
 watch(active, () => {
     inputText.value = ''
     sending.value = false
-})
+    shownAt = Date.now()
+}, { immediate: true })
+
+// 点击 backdrop 空白处关闭：未展示满 MIN_DISMISS_MS 则忽略
+function safeDismiss(): void {
+    if (Date.now() - shownAt < MIN_DISMISS_MS) return
+    dismiss()
+}
 
 function autoResizeTextarea(): void {
     const el = inputRef.value
@@ -256,6 +269,25 @@ function handleSummaryClick(event: MouseEvent): void {
     padding-left: 2px;
 }
 
+/* 底部 Footer（外部项目行）：贴满卡片宽度、无外边距的独立区隔带，
+   accent 淡底与上方内容区完全分开（用负 margin 抵消卡片内边距横向铺满） */
+.completion-popover-footer {
+    display: flex;
+    align-items: center;
+    margin: 8px -10px -8px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-primary, #fff));
+    border-top: 1px solid color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+
+.completion-popover-footer .completion-popover-project {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary, var(--text-primary));
+}
+
 .completion-popover-project,
 .completion-popover-user-msg {
     display: flex;
@@ -272,6 +304,37 @@ function handleSummaryClick(event: MouseEvent): void {
 
 .completion-popover-project {
     gap: 5px;
+}
+
+/* "外部"徽章：accent 色描边小标签，图标+文字，提示这是其他项目的会话 */
+.completion-popover-project-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 5px;
+    font-size: 10px;
+    line-height: 1.4;
+    font-weight: 500;
+    color: var(--accent-color);
+    background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-color) 35%, transparent);
+    border-radius: 999px;
+}
+
+.completion-popover-project-badge svg {
+    flex-shrink: 0;
+}
+
+/* 项目行（图标+名称+路径）整行单行展示：
+   flex 容器内 text-overflow 不生效，省略逻辑放在路径 span；
+   图标与项目名 flex-shrink:0 保持完整，路径尾部溢出省略 */
+.completion-popover-project > svg {
+    flex-shrink: 0;
+}
+
+.completion-popover-project-name {
+    flex-shrink: 0;
 }
 
 /* 用户消息：袖珍版聊天用户气泡 — 靠左、胶囊半圆、左侧消息图标、单行省略。
@@ -313,6 +376,10 @@ function handleSummaryClick(event: MouseEvent): void {
 }
 
 .completion-popover-project-path {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     opacity: 0.7;
 }
 
@@ -348,14 +415,6 @@ function handleSummaryClick(event: MouseEvent): void {
     margin-bottom: 0;
 }
 
-/* 输入行容器：输入框 + 右侧"标记已读"按钮（输入为空时）同行 */
-.completion-popover-input-row {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    margin-top: 6px;
-}
-
 /* 快捷输入框 — 与聊天界面 ChatInputBar 输入框样式对齐（圆角 20px、固定不随高度变化）。
    背景用 --bg-primary（白/更亮）与卡片的 --bg-tertiary 底色区分，避免融合 */
 .completion-popover-input {
@@ -364,6 +423,7 @@ function handleSummaryClick(event: MouseEvent): void {
     display: flex;
     align-items: flex-end;
     gap: 2px;
+    margin-top: 6px;
     padding: 4px 6px 6px;
     background: var(--bg-primary, #fff);
     border: none;

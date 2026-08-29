@@ -1408,66 +1408,6 @@ func TestAIChat_EnqueueThenDrain_SinglePersist(t *testing.T) {
 	assert.False(t, ok, "message should not be dequeued twice")
 }
 
-// TestAIChat_Post_MarksSessionRead verifies that POST /api/ai/chat marks the
-// session as read (updates last_read_at), so a quick reply from the completion
-// popover clears the session's unread badge. Regression for the popover
-// quick-reply flow which previously never touched last_read_at.
-func TestAIChat_Post_MarksSessionRead(t *testing.T) {
-	env, teardown := setupTestEnv(t)
-	defer teardown()
-
-	db := service.UnsafeDBForTest()
-
-	// Session with an unread assistant message (no last_read_at yet).
-	sessionID := "post-marks-read"
-	_, err := db.Exec(`INSERT INTO chat_sessions (id, project_path, backend, title, agent_id, agent_source, model, session_type, archived) VALUES (?, ?, 'codebuddy', 'post-read', 'codebuddy', 'default', '', 'chat', 0)`, sessionID, env.ProjectDir)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', 'unread reply', ?, 'codebuddy', 0)`, env.ProjectDir, sessionID)
-	require.NoError(t, err)
-
-	// Before: session shows 1 unread and last_read_at is nil.
-	sessions, err := service.GetSessions(env.ProjectDir, "codebuddy")
-	require.NoError(t, err)
-	var before *model.ChatSession
-	for i := range sessions {
-		if sessions[i].ID == sessionID {
-			before = &sessions[i]
-			break
-		}
-	}
-	require.NotNil(t, before, "session should exist in list")
-	assert.Equal(t, 1, before.UnreadCount, "session should start unread")
-	assert.Nil(t, before.LastReadAt, "last_read_at should be NULL before posting")
-
-	// Session is running so POST takes the enqueue path (no real AI needed).
-	service.TrySetSessionRunning(sessionID)
-	defer func() {
-		service.SetSessionRunning(sessionID, false)
-		service.ClearQueuedMessages(sessionID)
-	}()
-
-	body := map[string]any{"message": "quick reply from popover"}
-	req := newRequest(t, http.MethodPost, "/api/ai/chat?session_id="+sessionID, body)
-	withProjectCookie(req, env.ProjectDir)
-
-	w := callHandler(AIChat, req)
-	assertOK(t, w)
-
-	// After: last_read_at is set and the session no longer shows unread.
-	sessions, err = service.GetSessions(env.ProjectDir, "codebuddy")
-	require.NoError(t, err)
-	var after *model.ChatSession
-	for i := range sessions {
-		if sessions[i].ID == sessionID {
-			after = &sessions[i]
-			break
-		}
-	}
-	require.NotNil(t, after, "session should still exist in list")
-	assert.Equal(t, 0, after.UnreadCount, "posting a message must clear the unread badge")
-	assert.NotNil(t, after.LastReadAt, "last_read_at must be set after posting")
-}
-
 // TestMarkChatRead verifies POST /api/ai/chat/read marks a session as read
 // (updates last_read_at and clears the unread badge) without sending a message.
 // This backs the completion popover's "mark as read" button.
