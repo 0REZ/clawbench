@@ -8,7 +8,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 // default 5s testTimeout, causing flaky `Test timed out in 5000ms` failures
 // that drag down src/components coverage. Bump this file's timeout only.
 vi.setConfig({ testTimeout: 30_000 })
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import ChatInputBar from '../ChatInputBar.vue'
 import { apiGet } from '@/utils/api'
@@ -645,6 +645,45 @@ describe('ChatInputBar', () => {
     wrapper.vm.handleQuickSendClick(item)
     expect(wrapper.emitted('send')).toBeTruthy()
     expect(wrapper.emitted('send')![0]).toEqual(['/test'])
+  })
+
+  it('quick-send menu items disable text selection so long-press does not trigger copy/selection', async () => {
+    // Regression: long-pressing a quick-send item (which injects the command
+    // into the input box) must not fire the WebView's native text-selection /
+    // copy callout. Every long-press-capable element sets user-select:none;
+    // the quick-send item was missing it, so Android WebView popped the copy
+    // UI instead of the custom 500ms long-press.
+    mockQuickSendItems.value = [
+      { id: '1', label: 'Git Status', command: 'git status' },
+      { id: '2', label: 'Build', command: 'npm run build' },
+    ]
+    const wrapper = mountBar()
+    await nextTick()
+    const itemEl = wrapper.find('.quick-send-item').element as HTMLElement
+    expect(itemEl).toBeTruthy()
+    const styles = window.getComputedStyle(itemEl)
+    expect(styles.userSelect).toBe('none')
+    expect(styles.webkitUserSelect).toBe('none')
+    wrapper.unmount()
+  })
+
+  it('quick-send item touchstart calls preventDefault so the WebView does not hijack the long-press', async () => {
+    // Regression: the touchstart handler must be bound with the .prevent
+    // modifier. Without it, Android WebView recognizes the long-press gesture
+    // (even with user-select:none), hijacks the touch stream and fires
+    // touchcancel — which clears the 500ms long-press timer before it can
+    // inject the command into the input box.
+    mockQuickSendItems.value = [
+      { id: '1', label: 'Git Status', command: 'git status' },
+    ]
+    const wrapper = mountBar()
+    await nextTick()
+    const itemEl = wrapper.find('.quick-send-item').element as HTMLElement
+    const ev = new Event('touchstart', { cancelable: true }) as TouchEvent
+    Object.defineProperty(ev, 'touches', { value: [{ clientX: 0, clientY: 0 }] })
+    itemEl.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+    wrapper.unmount()
   })
 
   it('handleQuickSendClick skips when quickSendJustTriggered', async () => {

@@ -143,7 +143,7 @@
           @mouseup="onQuickSendMouseUp"
           @mousemove="onQuickSendMouseMove"
           @mouseleave="onQuickSendMouseLeave"
-          @touchstart="onQuickSendTouchStart(item, $event)"
+          @touchstart.prevent="onQuickSendTouchStart(item, $event)"
           @touchmove="onQuickSendTouchMove"
           @touchend="onQuickSendTouchEnd"
           @touchcancel="onQuickSendTouchEnd"
@@ -2395,6 +2395,11 @@ defineExpose({
   transition: background 0.12s, color 0.12s;
   position: relative;
   overflow: hidden;
+  /* Long-press injects the command into the input box — the WebView must not
+     fire its native text-selection/copy callout while the finger is held. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 @media (hover: hover) {
