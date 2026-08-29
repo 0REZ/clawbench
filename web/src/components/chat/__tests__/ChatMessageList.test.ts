@@ -276,3 +276,40 @@ describe('ChatMessageList — per-session scroll position memory', () => {
     expect(source).toMatch(/pendingRestoreSessionId = newSid && getChatScrollPosition\(newSid\) != null \? newSid : null/)
   })
 })
+
+/**
+ * Lazy-load hint floating overlay.
+ *
+ * The "还有 N 条更早消息 / 加载中 / 已加载全部" pill must float above the top of
+ * the message area, not live inside the scrolling message flow. It was moved
+ * out of .chat-messages (the scroll container) into .chat-messages-wrapper and
+ * positioned absolutely, so it:
+ *   - never scrolls with the message flow,
+ *   - takes no layout space (does not push messages down),
+ *   - renders with a backdrop background so it reads as a floating pill.
+ */
+describe('ChatMessageList — floating lazy-load hint overlay', () => {
+  it('chat-load-area lives outside the scroll container (absolute overlay)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // .chat-load-area must be a sibling of .chat-messages, not its child.
+    expect(source).toContain('class="chat-messages-wrapper">')
+    expect(source).toContain('class="chat-load-area"')
+    // The scroll container must open after the load area closes.
+    const loadAreaIdx = source.indexOf('class="chat-load-area"')
+    const messagesIdx = source.indexOf('class="chat-messages"')
+    expect(loadAreaIdx).toBeGreaterThan(-1)
+    expect(messagesIdx).toBeGreaterThan(loadAreaIdx)
+    // The load area must be absolutely positioned (no layout footprint).
+    expect(source).toMatch(/\.chat-load-area \{[^}]*position: absolute/s)
+  })
+
+  it('the pill states carry a backdrop background so they read as floating', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toMatch(/\.chat-load-more,\s*\.chat-load-hint,\s*\.chat-load-done \{/)
+    expect(source).toContain('border-radius: 999px')
+    // backdrop background: the pill is not transparent text in the flow anymore
+    expect(source).toContain('background: color-mix')
+  })
+})

@@ -1,23 +1,24 @@
 <template>
   <div class="chat-messages-wrapper">
-  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
-    <!-- Lazy load feedback -->
-    <div class="chat-load-area">
-      <Transition name="load-hint-fade">
-        <div v-if="loadingMore" class="chat-load-more">
-          <LoadingIndicator size="sm" inline />
-          <span>{{ t('chat.messageList.loadingMore') }}</span>
-        </div>
-        <div v-else-if="hasMore && remainingCount > 0" class="chat-load-hint" @click="emit('load-more')">
-          <ChevronUp :size="14" />
-          <span>{{ t('chat.messageList.moreOlderMessages', { count: remainingCount }) }}</span>
-        </div>
-        <div v-else-if="showAllLoaded" class="chat-load-done">
-          <span>{{ t('chat.messageList.allMessagesLoaded') }}</span>
-        </div>
-      </Transition>
-    </div>
+  <!-- Lazy load feedback — floating overlay pinned to top of the message area,
+       outside the scroll container so it never scrolls with the message flow. -->
+  <div class="chat-load-area">
+    <Transition name="load-hint-fade">
+      <div v-if="loadingMore" class="chat-load-more">
+        <LoadingIndicator size="sm" inline />
+        <span>{{ t('chat.messageList.loadingMore') }}</span>
+      </div>
+      <div v-else-if="hasMore && remainingCount > 0" class="chat-load-hint" @click="emit('load-more')">
+        <ChevronUp :size="14" />
+        <span>{{ t('chat.messageList.moreOlderMessages', { count: remainingCount }) }}</span>
+      </div>
+      <div v-else-if="showAllLoaded" class="chat-load-done">
+        <span>{{ t('chat.messageList.allMessagesLoaded') }}</span>
+      </div>
+    </Transition>
+  </div>
 
+  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
     <div class="chat-messages-list" :key="listKey">
       <div v-if="messages.length === 0" class="chat-empty">
       <template v-if="agents && agents.length === 0">
@@ -1160,10 +1161,18 @@ defineExpose({
   }
 }
 
-/* Lazy load feedback area */
+/* Lazy load feedback area — floating pill pinned to the top of the message
+   area. Sits above the scroll container (absolute, no layout footprint) so
+   it never scrolls with the message flow and never pushes messages down. */
 .chat-load-area {
-  position: relative;
-  min-height: 0;
+  position: absolute;
+  top: 8px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  z-index: 5;
+  pointer-events: none;
 }
 
 .chat-load-more,
@@ -1173,14 +1182,21 @@ defineExpose({
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 0;
+  padding: 5px 12px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  pointer-events: auto;
 }
 
 .chat-load-hint {
   cursor: pointer;
-  transition: color 0.15s, opacity 0.15s;
+  transition: color 0.15s, opacity 0.15s, background 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -1190,13 +1206,13 @@ defineExpose({
 
 @media (hover: hover) {
   .chat-load-hint:hover {
-    color: var(--text-secondary);
+    color: var(--text-primary);
   }
 }
 
 .chat-load-done {
   color: var(--text-muted);
-  opacity: 0.7;
+  opacity: 0.85;
   font-size: 11px;
 }
 
