@@ -374,45 +374,17 @@ describe('CompletionPopover', () => {
     })
 
     it('clicking outside the card (on the backdrop) hides without navigating', () => {
-        vi.useFakeTimers()
-        try {
-            mockState.active = ref(makeItem())
-            mountPopover()
+        mockState.active = ref(makeItem())
+        mountPopover()
 
-            const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+        const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
 
-            const backdrop = document.querySelector('.completion-popover-backdrop')!
+        const backdrop = document.querySelector('.completion-popover-backdrop')!
 
-            // 弹窗已展示满 3 秒后点击 backdrop：关闭且不导航
-            vi.advanceTimersByTime(3000)
-            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
-            expect(dispatchSpy).not.toHaveBeenCalled()
-            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
-        } finally {
-            vi.useRealTimers()
-        }
-    })
-
-    it('does not dismiss on backdrop click within the first 3 seconds (guard against accidental close)', () => {
-        vi.useFakeTimers()
-        try {
-            mockState.active = ref(makeItem())
-            mountPopover()
-
-            const backdrop = document.querySelector('.completion-popover-backdrop')!
-
-            // 弹窗刚出现（<3s）点击空白处：不应关闭
-            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-            expect(mockState.dismiss).not.toHaveBeenCalled()
-
-            // 推进 3 秒后再点击：正常关闭
-            vi.advanceTimersByTime(3000)
-            backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
-        } finally {
-            vi.useRealTimers()
-        }
+        expect(dispatchSpy).not.toHaveBeenCalled()
+        expect(mockState.dismiss).toHaveBeenCalledTimes(1)
     })
 
     it('clicking a code-block copy button inside the summary does not navigate', () => {

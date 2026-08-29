@@ -96,21 +96,14 @@ const sending = ref(false)
 
 const canSend = computed(() => canSendInput(inputText.value) && !sending.value)
 
-// 弹窗出现时刻：点击空白处关闭时须已展示至少 MIN_DISMISS_MS，
-// 避免刚弹出时误触 backdrop 把通知关掉
-const MIN_DISMISS_MS = 3000
-let shownAt = 0
-
-// 弹窗切换时重置输入框并记录展示时刻（immediate：mount 时也记录初始展示时间）
+// 弹窗切换时重置输入框（immediate：mount 时也重置一次）
 watch(active, () => {
     inputText.value = ''
     sending.value = false
-    shownAt = Date.now()
 }, { immediate: true })
 
-// 点击 backdrop 空白处关闭：未展示满 MIN_DISMISS_MS 则忽略
+// 点击 backdrop 空白处关闭
 function safeDismiss(): void {
-    if (Date.now() - shownAt < MIN_DISMISS_MS) return
     dismiss()
 }
 
