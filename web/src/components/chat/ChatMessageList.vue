@@ -923,8 +923,17 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
 // settled — a raw nextTick can fire before lazy blocks (Mermaid, original
 // text) inflate, clamping the restored scrollTop.
 // Sessions left at the bottom have no memory → default scroll-to-bottom.
+//
+// CRITICAL guard: the restore must ONLY run when the session actually changed.
+// listKey also changes on in-session message growth (sending a message,
+// streaming merges, queue drain) — restoring there would fight the intended
+// scroll-to-bottom after send and yank the view back to a stale position. We
+// compare the session-id segment of the old key against the current one.
 watch(listKey, (key, oldKey) => {
   if (key === oldKey) return
+  // Only a real session switch (session-id segment changed) restores the
+  // remembered position. Same-session message growth must NOT restore.
+  if (!oldKey || oldKey.split('|')[0] === props.currentSessionId) return
   // Only restore once the target session's messages are actually rendered.
   // During switchSession the messages array is first cleared (empty), and only
   // after the history fetch lands is it replaced with the target session's

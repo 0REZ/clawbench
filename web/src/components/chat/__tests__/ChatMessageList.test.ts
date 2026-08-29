@@ -258,4 +258,14 @@ describe('ChatMessageList — per-session scroll position memory', () => {
     expect(source).toContain('requestAnimationFrame')
     expect(source).toContain('el.scrollTop = Math.min(savedPos, maxTop)')
   })
+
+  it('does NOT restore on same-session message growth (send/stream must scroll to bottom)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Sending a message grows the array → listKey changes, but the session-id
+    // segment stays identical. The restore must bail, otherwise it fights the
+    // intended force-scroll-to-bottom after send and yanks the view back to a
+    // stale position.
+    expect(source).toContain("oldKey.split('|')[0] === props.currentSessionId")
+  })
 })
