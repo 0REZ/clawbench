@@ -270,7 +270,7 @@ import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsync
 import { useI18n } from 'vue-i18n'
 import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
-import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
+import { computeRecentReferencedFiles, isImeCompositionEvent } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
@@ -776,6 +776,10 @@ function handleSlashSelect(cmd) {
 
 // ── Menu keyboard navigation (PC: ArrowUp/Down + Enter/Tab + Escape) ──
 function handleMenuKeydown(e) {
+  // IME composition (e.g. Chinese pinyin candidate selection): let the IME own
+  // the keystroke — Enter commits the candidate, never selects a menu item.
+  if (isImeCompositionEvent(e)) return false
+
   // Determine which menu is active (slash takes priority if both open)
   const isSlash = showSlashMenu.value
   const isAt = showAtMenu.value
@@ -989,6 +993,10 @@ function onTextareaTouchCancel() {
 }
 
 function onTextareaKeydown(e) {
+  // IME composition (e.g. Chinese pinyin candidate selection): the browser/IME
+  // owns the keystroke — Enter commits the candidate to the input instead of
+  // submitting the message.
+  if (isImeCompositionEvent(e)) return
   // Menu keyboard navigation takes priority
   if (handleMenuKeydown(e)) return
   // Input history navigation (ArrowUp/ArrowDown), only when the input is active
