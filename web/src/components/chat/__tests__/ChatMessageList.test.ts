@@ -313,3 +313,44 @@ describe('ChatMessageList — floating lazy-load hint overlay', () => {
     expect(source).toContain('background: color-mix')
   })
 })
+
+/**
+ * Transient "more older messages" hint.
+ *
+ * The "还有 N 条更早消息" pill must NOT be a persistent resident of the message
+ * area. Whenever older messages remain it briefly appears (including on first
+ * render of a session that still has history to load) then auto-hides after a
+ * timeout. Once all history is loaded it hides immediately so the "all loaded"
+ * hint can take over.
+ */
+describe('ChatMessageList — transient more-messages hint', () => {
+  it('the more-messages hint is gated by a showMoreHint state, not hasMore alone', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The hint branch must be driven by the transient showMoreHint flag —
+    // hasMore must no longer be the standalone gate that keeps it resident.
+    expect(source).toMatch(/v-else-if="showMoreHint"/)
+    expect(source).not.toMatch(/v-else-if="hasMore && remainingCount > 0"/)
+  })
+
+  it('showMoreHint is armed whenever older messages remain and auto-hides on a timer', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Armed from a watch over (hasMore && remainingCount > 0), so it announces
+    // remaining history on first render too — not just after an explicit load.
+    expect(source).toMatch(/watch\(\(\) => props\.hasMore && remainingCount\.value > 0/)
+    expect(source).toContain("{ immediate: true }")
+    // Auto-hide via a timeout (2.5s); re-arming clears the in-flight timer.
+    expect(source).toContain('moreHintTimer = setTimeout')
+    expect(source).toMatch(/clearTimeout\(moreHintTimer\)/)
+    expect(source).toMatch(/showMoreHint\.value = false/)
+  })
+
+  it('hides immediately when all history is loaded (lets the all-loaded hint show)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The watch else-branch hides the hint once remaining count drops to zero.
+    expect(source).toMatch(/if \(hasRemaining\) \{[\s\S]*?showMoreHint\.value = true/)
+    expect(source).toMatch(/else \{[\s\S]*?showMoreHint\.value = false/)
+  })
+})

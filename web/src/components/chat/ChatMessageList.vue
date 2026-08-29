@@ -8,7 +8,7 @@
         <LoadingIndicator size="sm" inline />
         <span>{{ t('chat.messageList.loadingMore') }}</span>
       </div>
-      <div v-else-if="hasMore && remainingCount > 0" class="chat-load-hint" @click="emit('load-more')">
+      <div v-else-if="showMoreHint" class="chat-load-hint" @click="emit('load-more')">
         <ChevronUp :size="14" />
         <span>{{ t('chat.messageList.moreOlderMessages', { count: remainingCount }) }}</span>
       </div>
@@ -214,6 +214,24 @@ const listKey = computed(() => {
   const last = msgs[msgs.length - 1]?.id ?? ''
   return `${props.currentSessionId || 'no-session'}|${msgs.length}|${first}|${last}`
 })
+
+// "More older messages" transient hint: whenever older messages remain, the
+// pill briefly appears then auto-hides. `immediate: true` announces remaining
+// history on first render (session opened with more to load) without keeping
+// it resident; subsequent loads re-arm it via remainingCount change.
+const showMoreHint = ref(false)
+let moreHintTimer = null
+
+watch(() => props.hasMore && remainingCount.value > 0, (hasRemaining) => {
+  clearTimeout(moreHintTimer)
+  if (hasRemaining) {
+    showMoreHint.value = true
+    moreHintTimer = setTimeout(() => { showMoreHint.value = false }, 2500)
+  } else {
+    // All history loaded — hide immediately so the "all loaded" hint can show.
+    showMoreHint.value = false
+  }
+}, { immediate: true })
 
 // "All loaded" brief hint: shown for 2s after a user-initiated load-more completes with no more.
 // Only triggers when loadingMore was recently true (i.e. user explicitly loaded more),
