@@ -50,6 +50,7 @@ function createMockOptions() {
     const disconnectStream = vi.fn()
     const updateRenderedContents = vi.fn()
     const clearInputState = vi.fn()
+    const restoreInputState = vi.fn()
     const scrollBottom = vi.fn()
     return {
         messages, loading,
@@ -59,7 +60,7 @@ function createMockOptions() {
         forkSessionCore: vi.fn().mockResolvedValue(true),
         checkContinueSessionCore: vi.fn().mockResolvedValue({ exists: false, sessionId: '' }),
         disconnectStream,
-        updateRenderedContents, clearInputState, scrollBottom,
+        updateRenderedContents, clearInputState, restoreInputState, scrollBottom,
     }
 }
 
@@ -166,6 +167,9 @@ describe('useSessionManager', () => {
 
             expect(opts.disconnectStream).toHaveBeenCalled()
             expect(opts.switchSessionCore).toHaveBeenCalledWith('session-2')
+            // Input state (attachments/quotes) is restored after the switch completes.
+            expect(opts.clearInputState).toHaveBeenCalled()
+            expect(opts.restoreInputState).toHaveBeenCalled()
         })
 
         it('does not explicitly clear pending messages — loadHistory replaces entire messages array', async () => {

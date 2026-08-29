@@ -185,4 +185,76 @@ describe('useChatContext', () => {
       expect(ctx2.attachedFiles.value.some(f => f.path === '/shared.txt')).toBe(true)
     })
   })
+
+  describe('per-session attachment drafts', () => {
+    it('snapshotAttachments stores and restoreAttachments restores files + quotes', () => {
+      ctx.addAttachedFile('/a.txt', false, 1, 2)
+      ctx.addStagedQuote({ text: 'const x = 1', filePath: '/b.ts', language: 'ts', startLine: 3, endLine: 3 }, 'note')
+
+      ctx.snapshotAttachments('session-1')
+      ctx.clearAll()
+      expect(ctx.attachedFiles.value).toHaveLength(0)
+      expect(ctx.stagedQuotes.value).toHaveLength(0)
+
+      ctx.restoreAttachments('session-1')
+      expect(ctx.attachedFiles.value).toEqual([{ path: '/a.txt', isDir: false, startLine: 1, endLine: 2 }])
+      expect(ctx.stagedQuotes.value).toHaveLength(1)
+      expect(ctx.stagedQuotes.value[0].note).toBe('note')
+      expect(ctx.stagedQuotes.value[0].filePath).toBe('/b.ts')
+    })
+
+    it('snapshotAttachments stores single quoteData', () => {
+      ctx.setQuoteData({ text: 'hello', filePath: '/foo.ts', language: 'typescript', startLine: 1, endLine: 5 })
+      ctx.snapshotAttachments('session-q')
+      ctx.clearAll()
+      ctx.restoreAttachments('session-q')
+      expect(ctx.quoteData.value).toEqual({ text: 'hello', filePath: '/foo.ts', language: 'typescript', startLine: 1, endLine: 5 })
+    })
+
+    it('keeps snapshots isolated per session', () => {
+      ctx.addAttachedFile('/a.txt')
+      ctx.snapshotAttachments('session-1')
+      ctx.clearAll()
+      ctx.addAttachedFile('/b.txt')
+      ctx.snapshotAttachments('session-2')
+      ctx.clearAll()
+
+      ctx.restoreAttachments('session-1')
+      expect(ctx.attachedFiles.value.map(f => f.path)).toEqual(['/a.txt'])
+      ctx.restoreAttachments('session-2')
+      expect(ctx.attachedFiles.value.map(f => f.path)).toEqual(['/b.txt'])
+    })
+
+    it('restoreAttachments does not leak mutation back into the snapshot', () => {
+      ctx.addAttachedFile('/a.txt')
+      ctx.snapshotAttachments('session-1')
+      ctx.restoreAttachments('session-1')
+      ctx.removeAttachedFile(0)
+      ctx.restoreAttachments('session-1')
+      expect(ctx.attachedFiles.value.map(f => f.path)).toEqual(['/a.txt'])
+    })
+
+    it('discardAttachmentDraft removes the snapshot for a session', () => {
+      ctx.addAttachedFile('/a.txt')
+      ctx.snapshotAttachments('session-1')
+      ctx.discardAttachmentDraft('session-1')
+      ctx.clearAll()
+      ctx.restoreAttachments('session-1')
+      expect(ctx.attachedFiles.value).toHaveLength(0)
+    })
+
+    it('restoreAttachments with no snapshot is a no-op', () => {
+      ctx.addAttachedFile('/a.txt')
+      ctx.restoreAttachments('never-snapshotted')
+      expect(ctx.attachedFiles.value.map(f => f.path)).toEqual(['/a.txt'])
+    })
+
+    it('snapshot/restore ignore empty session ids', () => {
+      ctx.addAttachedFile('/a.txt')
+      ctx.snapshotAttachments('')
+      ctx.clearAll()
+      ctx.restoreAttachments('')
+      expect(ctx.attachedFiles.value).toHaveLength(0)
+    })
+  })
 })

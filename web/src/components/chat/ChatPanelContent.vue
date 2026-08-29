@@ -178,7 +178,7 @@ import { useChatRender } from '@/composables/useChatRender.ts'
 import { formatToolOutput } from '@/utils/renderToolDetail.ts'
 import { useChatStream } from '@/composables/useChatStream.ts'
 import { useChatSession, loadSessionsOnce } from '@/composables/useChatSession.ts'
-import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
+import { useSessionIdentity, getSessionId } from '@/composables/useSessionIdentity.ts'
 import { useSessionManager } from '@/composables/useSessionManager.ts'
 import { createChatMessageStore } from '@/composables/useChatMessageStore.ts'
 import { useAcpSession } from '@/composables/useAcpSession'
@@ -498,7 +498,7 @@ const stream = useChatStream({
 })
 
 const { pendingFiles, attachedFiles, addAttachedFile, removeAttachedFile, cleanupPreviewUrls, clearPendingFiles } = useFileUpload()
-const { stagedQuotes, removeStagedQuote, clearAll, removeAttachedFileByPath } = useChatContext()
+const { stagedQuotes, removeStagedQuote, clearAll, removeAttachedFileByPath, snapshotAttachments, restoreAttachments, discardAttachmentDraft } = useChatContext()
 
 const manager = useSessionManager({
   messages,
@@ -514,11 +514,31 @@ const manager = useSessionManager({
   disconnectStream: stream.disconnectStream,
   updateRenderedContents: (forceFull) => render.updateRenderedContents(forceFull),
   clearInputState: () => {
+    // Save the typed text (per-session draftCache) before clearing.
     inputBarRef.value?.saveDraft()
+    // Snapshot attachments + staged quotes under the session we're leaving so
+    // they can be restored when the user switches back. Also fold in pending
+    // uploads that finished uploading (they hold a server path) — their
+    // blob preview URLs are dropped with clearPendingFiles, but the attached
+    // file ref (path) must survive the round-trip.
+    const leavingSessionId = getSessionId()
+    if (leavingSessionId) {
+      const pendingPaths = pendingFiles.value.filter(f => f.path && !f.uploading).map(f => f.path)
+      for (const p of pendingPaths) addAttachedFile(p)
+    }
+    snapshotAttachments(leavingSessionId)
     clearAll()
     inputBarRef.value?.clearInputPreserveDraft()
     clearPendingFiles()
   },
+  // Restore attachments/quotes after the switch completes (currentSessionId
+  // now points at the target session). Also carries cleanupDraft so
+  // archived/destroyed sessions drop their attachment snapshot.
+  restoreInputState: Object.assign(() => {
+    restoreAttachments(getSessionId())
+  }, {
+    cleanupDraft: (sessionId) => discardAttachmentDraft(sessionId),
+  }),
   scrollBottom: (force) => scrollBottom(force),
 })
 
@@ -763,6 +783,8 @@ async function sendMessage(text) {
            onPendingRendered: () => { render.updateRenderedContents(); scrollBottom(true) },
            enqueue: (sid, text, attached, pending, qid) => manager.enqueueMessage(sid, text, attached, pending, qid),
          })
+         // The attachments were queued with the message — drop the snapshot.
+         discardAttachmentDraft(identity.currentSessionId.value)
        } catch {
          // Enqueue failed (network down / 5xx) — the message was not delivered.
          // Restore the input so the user's text isn't lost.
@@ -785,6 +807,10 @@ async function sendMessage(text) {
 
     try {
       await sendMessageNow(inputText, filePaths, allFiles)
+      // The attachment/quotes were consumed by this message — drop the
+      // snapshot so switching away and back doesn't resurrect them
+      // (mirrors clearInput() deleting the text draft on send).
+      discardAttachmentDraft(getSessionId())
     } catch {
       // Send failed (network down / 5xx) — the message was not delivered.
       // Restore the input so the user's text isn't lost.

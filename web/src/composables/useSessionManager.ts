@@ -43,6 +43,11 @@ export interface UseSessionManagerOptions {
   // Input cleanup after enqueue (ChatPanel-specific)
   clearInputState: () => void
 
+  // Input restore after session switch (ChatPanel-specific) — attachments
+  // and staged quotes for the now-active session. Optionally carries
+  // cleanupDraft so archived/destroyed sessions drop their snapshot.
+  restoreInputState: (() => void) & { cleanupDraft?: (sessionId: string) => void }
+
   // Scroll
   scrollBottom: (force?: boolean) => void
 }
@@ -62,6 +67,7 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     disconnectStream,
     updateRenderedContents,
     clearInputState: _clearInputState,
+    restoreInputState: _restoreInputState,
     scrollBottom,
   } = options
 
@@ -181,6 +187,7 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     // removed. Explicit clearPendingMessages would erase pending messages before
     // loadHistory can restore them from the backend queue field.
     await switchSessionCore(sessionId)
+    _restoreInputState()
   }
 
   async function createSession(agentId?: string) {
@@ -219,6 +226,9 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     clearPendingMessages()
     await archiveSessionCore(archivedId, identity.currentBackend.value)
     deleteDraft(archivedId)
+    // The session no longer exists — drop its attachment snapshot too so it
+    // can't be resurrected by a future switch back to the same id.
+    _restoreInputState.cleanupDraft?.(archivedId)
   }
 
   /** Hard-delete (physically destroy) a specific session — irreversible. */
@@ -248,6 +258,8 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     clearPendingMessages()
     await destroySessionCore(destroyedId)
     deleteDraft(destroyedId)
+    // Drop the attachment snapshot for the destroyed session.
+    _restoreInputState.cleanupDraft?.(destroyedId)
   }
 
   /** Continue a task execution as a new chat session. */
