@@ -3178,6 +3178,29 @@ func TestRefactor_ReapplyConfigOption_DeadConn(t *testing.T) {
 	conn.mu.Unlock()
 }
 
+func TestRefactor_ReapplyConfigOption_SkipsUnsupported(t *testing.T) {
+	agent := &model.Agent{ID: "test-reapply-unsupported", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-reapply-unsupported")
+	conn.SetAliveForTest()
+	conn.SetSessionMappingForTest("test-reapply-unsupported", "acp-sid-reapply-unsupported")
+	// Mark thinkingEffort as unsupported by the agent (e.g. it replied
+	// "Unknown config option: thinkingEffort" on a previous attempt).
+	conn.lastSetConfigMu.Lock()
+	conn.unsupportedConfigs = map[string]bool{"thinkingEffort": true}
+	conn.lastSetConfigMu.Unlock()
+
+	// reapplyConfigOption must NOT re-send an unsupported config — this is the
+	// regression that previously re-fired set_config_option on every resume.
+	conn.mu.Lock()
+	conn.reapplyConfigOption(context.Background(), "acp-sid-reapply-unsupported", "thinkingEffort", "high")
+	conn.mu.Unlock()
+
+	// The RPC must not have been attempted, so the last-set cache stays empty.
+	conn.lastSetConfigMu.Lock()
+	defer conn.lastSetConfigMu.Unlock()
+	assert.Equal(t, "", conn.lastSetEffort, "unsupported config must not be re-applied after resume")
+}
+
 func TestRefactor_ReapplyConfigOption_AliveConn(t *testing.T) {
 	agent := &model.Agent{ID: "test-reapply-alive", Backend: "acp-stdio", AcpCommand: "echo"}
 	conn := newACPConn(agent, "test-reapply-alive")
@@ -3203,6 +3226,33 @@ func TestRefactor_ReapplyConfigAfterResume(t *testing.T) {
 		effort: "high",
 	})
 	conn.mu.Unlock()
+}
+
+func TestRefactor_ReapplyConfigAfterResume_SkipsUnsupportedEffort(t *testing.T) {
+	agent := &model.Agent{ID: "test-reapply-after-resume-unsupported", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-reapply-after-resume-unsupported")
+	conn.SetAliveForTest()
+	conn.SetSessionMappingForTest("test-reapply-after-resume-unsupported", "acp-sid-resume-unsupported")
+	// Simulate an agent that previously rejected thinkingEffort as unknown.
+	conn.lastSetConfigMu.Lock()
+	conn.unsupportedConfigs = map[string]bool{"thinkingEffort": true}
+	conn.lastSetConfigMu.Unlock()
+
+	conn.mu.Lock()
+	conn.reapplyConfigAfterResume(context.Background(), "acp-sid-resume-unsupported", cachedConfigSnapshot{
+		mode:   "code",
+		model:  "gpt-4",
+		effort: "high",
+	})
+	conn.mu.Unlock()
+
+	// mode and model were re-applied (RPC attempted, so last-set cache recorded),
+	// but thinkingEffort must have been skipped entirely.
+	conn.lastSetConfigMu.Lock()
+	defer conn.lastSetConfigMu.Unlock()
+	assert.Equal(t, "code", conn.lastSetMode, "mode should be re-applied after resume")
+	assert.Equal(t, "gpt-4", conn.lastSetModel, "model should be re-applied after resume")
+	assert.Equal(t, "", conn.lastSetEffort, "unsupported thinkingEffort must not be re-applied after resume")
 }
 
 func TestRefactor_RecoverViaResumeSession_AliveConn(t *testing.T) {
