@@ -1715,7 +1715,7 @@ export default {
       floatingStatusWindow: 'Floating Status Window',
       floatingStatusWindowDesc: 'Show a floating status capsule on screen when the app is in background (requires overlay permission)',
       liveUpdate: 'Live Updates',
-      liveUpdateDesc: 'Show the session status as an ongoing chip on the lock screen and in the status bar (Android 16+)',
+      liveUpdateDesc: 'Show the session status as an ongoing chip on the lock screen and in the status bar (Android 16+). Requires the system "Live Updates" notification permission',
       pushMode: 'Push Mode',
       pushModeDesc: 'Choose how to receive notifications',
       pushModeNative: 'Native Push',
