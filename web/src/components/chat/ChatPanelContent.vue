@@ -12,6 +12,7 @@
       :currentSessionId="identity.currentSessionId.value"
       :hasMore="session.hasMore.value"
       :loadingMore="session.loadingMore.value"
+      :switching="session.switching.value"
       :totalMessages="session.totalMessages.value"
       :active="props.active"
       @touchstart="swipeSession.onTouchStart"
@@ -31,11 +32,6 @@
       @reset-session="handleResetSession"
       @fork-from-message="handleForkFromMessage"
     />
-
-    <!-- Session switching overlay — placed here to cover the entire message area -->
-    <Transition name="loading-fade">
-      <LoadingIndicator v-if="session.switching.value" overlay size="md" />
-    </Transition>
 
     <!-- Session swipe indicator — floats above the message area -->
     <Transition name="session-indicator">
@@ -208,7 +204,6 @@ import { store } from '@/stores/app.ts'
 import { useDialog } from '@/composables/useDialog'
 
 import AgentSelectorDrawer from '@/components/common/AgentSelectorDrawer.vue'
-import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 import { useToolDetailDrawer } from '@/composables/useToolDetailDrawer.ts'
 
@@ -1286,12 +1281,6 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-}
-
-/* Make panel content a positioning context so the switching overlay covers
-   the message+input area only (not the header above it). */
-:deep(.chat-panel-content) {
-  position: relative;
 }
 
 /* Session swipe indicator — floats at top of message area */

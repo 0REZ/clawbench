@@ -20,7 +20,15 @@
 
   <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
     <div class="chat-messages-list" :key="listKey">
-      <div v-if="messages.length === 0" class="chat-empty">
+      <!-- Session switching in progress: the old messages were cleared but the
+           new session's history is still loading — show a centered spinner in
+           place of the empty state instead of a full-area overlay mask. -->
+      <LoadingIndicator
+        v-if="props.switching && messages.length === 0"
+        class="chat-switching-indicator"
+        size="md"
+      />
+      <div v-else-if="messages.length === 0" class="chat-empty">
       <template v-if="agents && agents.length === 0">
         <Bot :size="40" class="no-agents-icon" />
         <span class="no-agents-title">{{ t('chat.messageList.noAgentsTitle') }}</span>
@@ -168,6 +176,8 @@ const props = defineProps({
   currentSessionId: String,
   hasMore: Boolean,
   loadingMore: Boolean,
+  /** True while a session switch is in flight (old messages cleared, new history loading). */
+  switching: { type: Boolean, default: false },
   totalMessages: { type: Number, default: 0 },
   staticBlockCache: Object,
   active: { type: Boolean, default: true },

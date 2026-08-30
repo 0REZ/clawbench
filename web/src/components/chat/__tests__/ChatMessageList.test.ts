@@ -16,6 +16,26 @@ describe('ChatMessageList — handleTableBlockClick integration', () => {
   })
 })
 
+describe('ChatMessageList — session switching indicator (replaces full-area overlay)', () => {
+  it('renders an in-list LoadingIndicator while switching and messages are empty', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The spinner is gated on switching + empty message list — no full-area mask.
+    expect(source).toContain('v-if="props.switching && messages.length === 0"')
+    expect(source).toContain('class="chat-switching-indicator"')
+  })
+
+  it('defines the switching prop and forwards it from the panel', async () => {
+    const listSource = await import('@/components/chat/ChatMessageList.vue?raw')
+    expect(String(listSource.default)).toContain('switching: { type: Boolean, default: false }')
+
+    const panelSource = await import('@/components/chat/ChatPanelContent.vue?raw')
+    expect(String(panelSource.default)).toContain(':switching="session.switching.value"')
+    // The old full-area overlay mask must be gone.
+    expect(String(panelSource.default)).not.toContain('Session switching overlay')
+  })
+})
+
 /**
  * Test for the scroll sticky抖动 (snap-back jitter) fix.
  *
