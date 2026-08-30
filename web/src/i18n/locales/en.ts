@@ -1561,6 +1561,7 @@ export default {
       uploadMaxFilesDesc: 'Maximum number of files allowed per upload',
       terminalTheme: 'Color Theme',
       terminalThemeDesc: 'Terminal color scheme. "Follow App" matches the current app theme automatically',
+      terminalThemeLoadFailed: 'Failed to load theme colors, please retry',
       terminalFontSize: 'Font Size',
       terminalFontSizeDesc: 'Font size for terminal display',
       terminalEnabled: 'Enable Terminal',

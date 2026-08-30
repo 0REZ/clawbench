@@ -46,6 +46,8 @@
         :model-value="getLocalValue(entry.field)"
         :options="resolveFieldOptions(entry.field)"
         :option-previews="entry.field.key === 'terminalTheme' ? terminalThemePreviews : undefined"
+        :terminal-theme-load-error="entry.field.key === 'terminalTheme' ? terminalThemeLoadState === 'error' : false"
+        :on-retry-terminal-themes="entry.field.key === 'terminalTheme' ? retryTerminalThemes : undefined"
         :min="entry.field.min"
         :max="entry.field.max"
         :step="entry.field.step"
@@ -212,15 +214,30 @@ const entryPicker = useTabDrawer('settings', { autoRestore: false })
 // ── Terminal theme lazy loading ──
 
 const loadedTerminalThemes = ref<Record<string, import('@xterm/xterm').ITheme> | null>(null)
+const terminalThemeLoadState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const terminalThemeLoadAttempts = ref(0)
 
-/** 懒加载终端主题配色（首次打开终端主题网格时触发）。失败时卡片保持占位骨架。 */
+/**
+ * 懒加载终端主题配色（首次打开终端主题网格时触发）。失败时记录 error 状态并
+ * 显示重试横幅——失败后再次打开/点重试会自动重试（error 状态不挡路），避免
+ * 一次性失败导致永远停留在灰色骨架。
+ */
 async function ensureTerminalThemesLoaded() {
-  if (loadedTerminalThemes.value) return
+  if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
+  terminalThemeLoadState.value = 'loading'
+  terminalThemeLoadAttempts.value++
   try {
     loadedTerminalThemes.value = await loadThemesModule()
+    terminalThemeLoadState.value = 'loaded'
   } catch {
-    // 加载失败：卡片保持占位骨架，不阻断网格交互
+    terminalThemeLoadState.value = 'error'
   }
+}
+
+/** 终端主题加载失败时的重试（幂等：加载中/已加载时直接返回）。 */
+function retryTerminalThemes() {
+  if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
+  void ensureTerminalThemesLoaded()
 }
 
 const isTerminalThemeField = computed(() =>

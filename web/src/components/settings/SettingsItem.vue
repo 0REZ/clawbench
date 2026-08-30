@@ -175,6 +175,15 @@
     </template>
     <div class="theme-picker-grid" :class="{ 'theme-picker-grid--wide': isTerminalThemeSelect }">
       <div
+        v-if="terminalThemeLoadError"
+        class="theme-picker-error"
+      >
+        <span class="theme-picker-error-text">{{ t('settings.items.terminalThemeLoadFailed') }}</span>
+        <button class="theme-picker-error-retry" @click.stop="onRetryTerminalThemes?.()">
+          {{ t('common.retry') }}
+        </button>
+      </div>
+      <div
         v-for="opt in options"
         :key="opt.value as PropertyKey"
         class="theme-picker-cell"
@@ -264,6 +273,10 @@ interface Props {
   rebuilding?: boolean
   /** Tooltip text for rebuild icon */
   rebuildTitle?: string
+  /** Terminal theme lazy-load failed — show a retry banner in the terminal grid. */
+  terminalThemeLoadError?: boolean
+  /** Retry handler for a failed terminal theme lazy-load. */
+  onRetryTerminalThemes?: () => void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -935,6 +948,43 @@ function confirmEdit() {
 
 .theme-picker-grid--wide {
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+/* Terminal theme lazy-load failure banner (spans full grid width) */
+.theme-picker-error {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, #ef4444 30%, transparent);
+}
+
+.theme-picker-error-text {
+  font-size: 12px;
+  color: #ef4444;
+  line-height: 1.4;
+}
+
+.theme-picker-error-retry {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .theme-picker-error-retry:hover {
+    background: var(--accent-hover);
+  }
 }
 
 .theme-picker-swatch--terminal {

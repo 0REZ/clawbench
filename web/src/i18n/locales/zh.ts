@@ -1561,6 +1561,7 @@ export default {
       uploadMaxFilesDesc: '单次上传允许的最大文件数量',
       terminalTheme: '配色主题',
       terminalThemeDesc: '终端配色方案，"跟随 App" 自动匹配当前应用主题',
+      terminalThemeLoadFailed: '主题配色加载失败，请重试',
       terminalFontSize: '字体大小',
       terminalFontSizeDesc: '终端显示的字体大小',
       terminalEnabled: '启用终端',
