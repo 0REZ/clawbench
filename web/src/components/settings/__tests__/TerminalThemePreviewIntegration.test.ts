@@ -211,49 +211,67 @@ describe('SettingsGroupPanel terminalTheme lazy-load', () => {
     expect(wrapper.findAll('.tpc-shell--placeholder').length).toBeLessThan(shells.length)
   })
 
-  it('shows a retry banner when lazy-load fails, and recovers after retry', async () => {
-    // First attempt fails
-    mockLoadThemes.mockRejectedValueOnce(new Error('chunk load failed'))
-      .mockResolvedValueOnce(makeThemes())
+  it('auto-retries after a transient failure and fills colors without manual action', async () => {
+    vi.useFakeTimers()
+    try {
+      // First attempt fails, the auto-retry succeeds
+      mockLoadThemes.mockRejectedValueOnce(new Error('chunk load failed'))
+        .mockResolvedValueOnce(makeThemes())
 
-    const wrapper = await openThemePicker()
-    await new Promise(r => setTimeout(r, 50))
-    await nextTick()
+      const wrapper = await openThemePicker()
+      await vi.advanceTimersByTimeAsync(100)
+      await nextTick()
 
-    // Error banner appears
-    const banner = wrapper.find('.theme-picker-error')
-    expect(banner.exists()).toBe(true)
-    expect(banner.text()).toContain('主题配色加载失败')
+      // Error banner may flash during the failed window, but after the
+      // auto-retry delay elapses it should have recovered.
+      await vi.advanceTimersByTimeAsync(1600)
+      await nextTick()
 
-    // Click retry
-    await wrapper.find('.theme-picker-error-retry').trigger('click')
-    await new Promise(r => setTimeout(r, 50))
-    await nextTick()
-
-    // Banner gone, shells have colors
-    expect(wrapper.find('.theme-picker-error').exists()).toBe(false)
-    const shells = wrapper.findAll('.tpc-shell')
-    expect(shells.length).toBeGreaterThan(0)
-    expect(wrapper.findAll('.tpc-shell--placeholder').length).toBeLessThan(shells.length)
+      expect(mockLoadThemes).toHaveBeenCalledTimes(2)
+      // Banner gone, colors filled
+      expect(wrapper.find('.theme-picker-error').exists()).toBe(false)
+      const shells = wrapper.findAll('.tpc-shell')
+      expect(shells.length).toBeGreaterThan(0)
+      expect(wrapper.findAll('.tpc-shell--placeholder').length).toBeLessThan(shells.length)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('auto-retries when the picker is reopened after a failure', async () => {
-    // First open fails, second open (reopen) succeeds
-    mockLoadThemes.mockRejectedValueOnce(new Error('chunk load failed'))
-      .mockResolvedValueOnce(makeThemes())
+  it('shows a retry banner after auto-retries are exhausted, and recovers on manual retry', async () => {
+    vi.useFakeTimers()
+    try {
+      // First attempt + 3 auto-retries all fail, then a manual retry succeeds
+      mockLoadThemes.mockRejectedValue(new Error('chunk load failed'))
+      const wrapper = await openThemePicker()
+      await vi.advanceTimersByTimeAsync(100)
+      await nextTick()
 
-    const wrapper = await openThemePicker()
-    await new Promise(r => setTimeout(r, 50))
-    await nextTick()
-    expect(wrapper.find('.theme-picker-error').exists()).toBe(true)
+      // Banner should NOT be visible while auto-retries remain
+      expect(wrapper.find('.theme-picker-error').exists()).toBe(false)
 
-    // Reopen the picker (simulate close then open again) → auto retry
-    const item = wrapper.findAll('.settings-item').find(i => i.text().includes('配色主题'))
-    await item!.trigger('click') // open again
-    await new Promise(r => setTimeout(r, 50))
-    await nextTick()
+      // Advance through the 3 auto-retry delays (1.5s each)
+      await vi.advanceTimersByTimeAsync(1600 * 3)
+      await nextTick()
 
-    expect(wrapper.find('.theme-picker-error').exists()).toBe(false)
-    expect(mockLoadThemes).toHaveBeenCalledTimes(2)
+      // Auto-retries exhausted → banner appears
+      const banner = wrapper.find('.theme-picker-error')
+      expect(banner.exists()).toBe(true)
+      expect(banner.text()).toContain('主题配色加载失败')
+      expect(mockLoadThemes).toHaveBeenCalledTimes(4)
+
+      // Now allow the next call to succeed and click manual retry
+      mockLoadThemes.mockResolvedValue(makeThemes())
+      await wrapper.find('.theme-picker-error-retry').trigger('click')
+      await vi.advanceTimersByTimeAsync(100)
+      await nextTick()
+
+      expect(wrapper.find('.theme-picker-error').exists()).toBe(false)
+      const shells = wrapper.findAll('.tpc-shell')
+      expect(shells.length).toBeGreaterThan(0)
+      expect(wrapper.findAll('.tpc-shell--placeholder').length).toBeLessThan(shells.length)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

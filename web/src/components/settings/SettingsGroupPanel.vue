@@ -46,7 +46,7 @@
         :model-value="getLocalValue(entry.field)"
         :options="resolveFieldOptions(entry.field)"
         :option-previews="entry.field.key === 'terminalTheme' ? terminalThemePreviews : undefined"
-        :terminal-theme-load-error="entry.field.key === 'terminalTheme' ? terminalThemeLoadState === 'error' : false"
+        :terminal-theme-load-error="entry.field.key === 'terminalTheme' ? (terminalThemeLoadState === 'error' && terminalThemeRetriesExhausted) : false"
         :on-retry-terminal-themes="entry.field.key === 'terminalTheme' ? retryTerminalThemes : undefined"
         :min="entry.field.min"
         :max="entry.field.max"
@@ -216,11 +216,18 @@ const entryPicker = useTabDrawer('settings', { autoRestore: false })
 const loadedTerminalThemes = ref<Record<string, import('@xterm/xterm').ITheme> | null>(null)
 const terminalThemeLoadState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const terminalThemeLoadAttempts = ref(0)
+/** 自动重试是否已耗尽（此后失败需要用户手动重试）。 */
+const terminalThemeRetriesExhausted = ref(false)
+
+/** 自动重试次数上限（首次加载 + 最多 3 次自动重试，之后才需要手动）。 */
+const TERMINAL_THEME_MAX_AUTO_RETRIES = 3
+const TERMINAL_THEME_RETRY_DELAY_MS = 1500
+let terminalThemeRetryTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
- * 懒加载终端主题配色（首次打开终端主题网格时触发）。失败时记录 error 状态并
- * 显示重试横幅——失败后再次打开/点重试会自动重试（error 状态不挡路），避免
- * 一次性失败导致永远停留在灰色骨架。
+ * 懒加载终端主题配色（首次打开终端主题网格时触发）。失败后自动延迟重试
+ * （最多 TERMINAL_THEME_MAX_AUTO_RETRIES 次），耗尽后才显示手动重试横幅。
+ * 偶发的 chunk 加载失败会在重试中自愈，无需重启页面。
  */
 async function ensureTerminalThemesLoaded() {
   if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
@@ -229,16 +236,40 @@ async function ensureTerminalThemesLoaded() {
   try {
     loadedTerminalThemes.value = await loadThemesModule()
     terminalThemeLoadState.value = 'loaded'
+    terminalThemeRetriesExhausted.value = false
   } catch {
     terminalThemeLoadState.value = 'error'
+    if (terminalThemeLoadAttempts.value <= TERMINAL_THEME_MAX_AUTO_RETRIES) {
+      scheduleTerminalThemeRetry()
+    } else {
+      terminalThemeRetriesExhausted.value = true
+    }
   }
 }
 
-/** 终端主题加载失败时的重试（幂等：加载中/已加载时直接返回）。 */
+/** 延迟后自动重试（幂等：已加载/加载中时跳过）。 */
+function scheduleTerminalThemeRetry() {
+  if (terminalThemeRetryTimer) return
+  terminalThemeRetryTimer = setTimeout(() => {
+    terminalThemeRetryTimer = null
+    void ensureTerminalThemesLoaded()
+  }, TERMINAL_THEME_RETRY_DELAY_MS)
+}
+
+/** 终端主题加载失败后的手动重试（自动重试耗尽后兜底）。重置计数开启新一轮自动重试。 */
 function retryTerminalThemes() {
   if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
+  terminalThemeRetriesExhausted.value = false
+  terminalThemeLoadAttempts.value = 0
   void ensureTerminalThemesLoaded()
 }
+
+onUnmounted(() => {
+  if (terminalThemeRetryTimer) {
+    clearTimeout(terminalThemeRetryTimer)
+    terminalThemeRetryTimer = null
+  }
+})
 
 const isTerminalThemeField = computed(() =>
   props.config.commonFields.some(f => f.key === 'terminalTheme')
