@@ -189,21 +189,23 @@ public class LiveUpdateManager {
     /**
      * The single summary line shown on the status-bar chip. Pending wins over
      * running, running wins over unread — only the most urgent group is shown,
-     * because the chip fits a few characters at most. The caller removes the
-     * chip before this when every count is 0, so "" here is never rendered.
-     * Labels are injected for i18n. Pure: only primitives.
+     * because the chip fits a few characters at most. Each group carries the
+     * same colored dot emoji as the expanded card (🟡 pending, 🟢 running,
+     * 🔵 unread), so the chip and the card read consistently. The caller
+     * removes the chip before this when every count is 0, so "" here is never
+     * rendered. Labels are injected for i18n. Pure: only primitives.
      */
     public static String chipText(int running, int pending, int unread,
                                   String runningLabel, String pendingLabel,
                                   String unreadLabel) {
         if (pending > 0) {
-            return pendingLabel + " " + pending;
+            return "🟡 " + pendingLabel + " " + pending;
         }
         if (running > 0) {
-            return runningLabel + " " + running;
+            return "🟢 " + runningLabel + " " + running;
         }
         if (unread > 0) {
-            return unreadLabel + " " + unread;
+            return "🔵 " + unreadLabel + " " + unread;
         }
         return "";
     }

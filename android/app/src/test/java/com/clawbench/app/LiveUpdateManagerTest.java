@@ -93,19 +93,19 @@ public class LiveUpdateManagerTest {
 
     @Test
     public void chipText_pendingFirst() {
-        assertEquals("待审批 1", LiveUpdateManager.chipText(2, 1, 3,
+        assertEquals("🟡 待审批 1", LiveUpdateManager.chipText(2, 1, 3,
                 L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
     public void chipText_runningSecond() {
-        assertEquals("执行中 2", LiveUpdateManager.chipText(2, 0, 3,
+        assertEquals("🟢 执行中 2", LiveUpdateManager.chipText(2, 0, 3,
                 L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
     public void chipText_unreadLast() {
-        assertEquals("未读 3", LiveUpdateManager.chipText(0, 0, 3,
+        assertEquals("🔵 未读 3", LiveUpdateManager.chipText(0, 0, 3,
                 L_RUNNING, L_PENDING, L_UNREAD));
     }
 
@@ -121,11 +121,11 @@ public class LiveUpdateManagerTest {
 
     @Test
     public void chipText_usesInjectedLabels() {
-        assertEquals("Running 2", LiveUpdateManager.chipText(2, 0, 0,
+        assertEquals("🟢 Running 2", LiveUpdateManager.chipText(2, 0, 0,
                 "Running", "Pending", "Unread"));
-        assertEquals("Pending 1", LiveUpdateManager.chipText(0, 1, 0,
+        assertEquals("🟡 Pending 1", LiveUpdateManager.chipText(0, 1, 0,
                 "Running", "Pending", "Unread"));
-        assertEquals("Unread 3", LiveUpdateManager.chipText(0, 0, 3,
+        assertEquals("🔵 Unread 3", LiveUpdateManager.chipText(0, 0, 3,
                 "Running", "Pending", "Unread"));
     }
 
