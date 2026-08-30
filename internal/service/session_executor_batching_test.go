@@ -201,8 +201,9 @@ func TestExecutor_FlushStreamingNow_IncludeThinkingAndBatched(t *testing.T) {
 
 // TestExecutor_ThinkingFlushedPeriodically verifies that a growing thinking
 // block is persisted to chat_thinking on every flush window with a stable
-// think_id (the upsert overwrites the row), while the content row keeps only
-// the slim think_id marker (no full text).
+// think_id (the upsert overwrites the row), while the content row EXCLUDES the
+// thinking block entirely (no slim marker, no text) — the completed message's
+// think_id markers are produced once at finalization by persistThinkingToDB.
 func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 	setupExecutorDB(t)
 	model.Agents = map[string]*model.Agent{
@@ -253,16 +254,14 @@ func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&count)
 	assert.Equal(t, 1, count, "periodic flush must upsert, not accumulate rows")
 
-	// Content row stays slim: think_id marker present, full text absent.
+	// Content row EXCLUDES the thinking block entirely — a slim think_id marker
+	// here would leak an "empty thinking block" into the frontend's live
+	// placeholder via mergeStreamBlocks (db_load after stream_start), rendering
+	// a perpetual loading spinner until the message finalizes.
 	content := readStreamingContent(t, msgID)
-	blocksRaw, ok := content["blocks"].([]any)
-	require.True(t, ok)
-	require.Len(t, blocksRaw, 1)
-	thinkingBlock, ok := blocksRaw[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "thinking", thinkingBlock["type"])
-	assert.Equal(t, firstID, thinkingBlock["think_id"], "content must carry the think_id marker for lazy-load")
+	assert.NotContains(t, content, "thinking", "streaming content must not carry any thinking block")
 	assert.NotContains(t, content, "part1part2", "content must NOT carry the full thinking text")
+	assert.NotContains(t, content, firstID, "content must NOT carry the think_id marker during streaming")
 }
 
 // TestExecutor_ThinkingFlush_FinalizeReusesID verifies that Finalize reuses the
