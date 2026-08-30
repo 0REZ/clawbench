@@ -130,33 +130,45 @@ public class LiveUpdateManagerTest {
     }
 
     // =====================================================
-    // cardSummary: expanded-card breakdown (always all three groups)
+    // cardSummary: expanded-card breakdown (omits the chip's group)
     // =====================================================
 
     @Test
-    public void cardSummary_allGroups() {
-        assertEquals("🟢 执行中 2 · 🟡 待审批 1 · 🔵 未读 3",
+    public void cardSummary_omitsChipGroup_allThreeNonZero() {
+        // Chip shows pending (most urgent) → card shows running + unread only.
+        assertEquals("🟢 执行中 2 · 🔵 未读 3",
                 LiveUpdateManager.cardSummary(2, 1, 3,
                         L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
     }
 
     @Test
-    public void cardSummary_includesZeroGroups() {
-        assertEquals("🟢 执行中 1 · 🟡 待审批 0 · 🔵 未读 0",
+    public void cardSummary_omitsChipGroup_runningChip() {
+        // Chip shows running → card shows pending + unread.
+        assertEquals("🟡 待审批 0 · 🔵 未读 0",
                 LiveUpdateManager.cardSummary(1, 0, 0,
                         L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
-        assertEquals("🟢 执行中 0 · 🟡 待审批 2 · 🔵 未读 0",
+    }
+
+    @Test
+    public void cardSummary_omitsChipGroup_pendingChip() {
+        // Chip shows pending → card shows running + unread.
+        assertEquals("🟢 执行中 0 · 🔵 未读 0",
                 LiveUpdateManager.cardSummary(0, 2, 0,
                         L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
-        assertEquals("🟢 执行中 0 · 🟡 待审批 0 · 🔵 未读 5",
+    }
+
+    @Test
+    public void cardSummary_omitsChipGroup_unreadChip() {
+        // Chip shows unread → card shows running + pending.
+        assertEquals("🟢 执行中 0 · 🟡 待审批 0",
                 LiveUpdateManager.cardSummary(0, 0, 5,
                         L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
     }
 
     @Test
     public void cardSummary_allZeroCounts() {
-        // Never rendered (the chip is removed first), but the function still
-        // produces a deterministic three-group line.
+        // Never rendered (the chip is removed first); with no chip group the
+        // function still produces a deterministic three-group line.
         assertEquals("🟢 执行中 0 · 🟡 待审批 0 · 🔵 未读 0",
                 LiveUpdateManager.cardSummary(0, 0, 0,
                         L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
@@ -164,9 +176,18 @@ public class LiveUpdateManagerTest {
 
     @Test
     public void cardSummary_usesInjectedLabelsAndJoiner() {
-        assertEquals("🟢 Running 2 | 🟡 Pending 0 | 🔵 Unread 3",
+        // Chip shows running → card shows pending + unread.
+        assertEquals("🟡 Pending 0 | 🔵 Unread 3",
                 LiveUpdateManager.cardSummary(2, 0, 3,
                         "Running", "Pending", "Unread", " | "));
+    }
+
+    @Test
+    public void chipGroup_priorityOrder() {
+        assertEquals("pending", LiveUpdateManager.chipGroup(2, 1, 3));
+        assertEquals("running", LiveUpdateManager.chipGroup(2, 0, 3));
+        assertEquals("unread", LiveUpdateManager.chipGroup(0, 0, 3));
+        assertEquals("", LiveUpdateManager.chipGroup(0, 0, 0));
     }
 
     // =====================================================

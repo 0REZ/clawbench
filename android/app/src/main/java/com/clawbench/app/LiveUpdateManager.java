@@ -187,10 +187,27 @@ public class LiveUpdateManager {
     }
 
     /**
-     * The single summary line shown on the status-bar chip. Pending wins over
-     * running, running wins over unread — only the most urgent group is shown,
-     * because the chip fits a few characters at most. Each group carries the
-     * same colored dot emoji as the expanded card (🟡 pending, 🟢 running,
+     * Which group the status-bar chip highlights: "pending" wins over
+     * "running", running wins over "unread" — only the most urgent group is
+     * shown on the chip. "" when every count is 0. Pure: only primitives.
+     */
+    public static String chipGroup(int running, int pending, int unread) {
+        if (pending > 0) {
+            return "pending";
+        }
+        if (running > 0) {
+            return "running";
+        }
+        if (unread > 0) {
+            return "unread";
+        }
+        return "";
+    }
+
+    /**
+     * The single summary line shown on the status-bar chip. Shows only the
+     * most urgent group (see {@link #chipGroup}), each group carrying the same
+     * colored dot emoji as the expanded card (🟡 pending, 🟢 running,
      * 🔵 unread), so the chip and the card read consistently. The caller
      * removes the chip before this when every count is 0, so "" here is never
      * rendered. Labels are injected for i18n. Pure: only primitives.
@@ -198,32 +215,46 @@ public class LiveUpdateManager {
     public static String chipText(int running, int pending, int unread,
                                   String runningLabel, String pendingLabel,
                                   String unreadLabel) {
-        if (pending > 0) {
+        String group = chipGroup(running, pending, unread);
+        if ("pending".equals(group)) {
             return "🟡 " + pendingLabel + " " + pending;
         }
-        if (running > 0) {
+        if ("running".equals(group)) {
             return "🟢 " + runningLabel + " " + running;
         }
-        if (unread > 0) {
+        if ("unread".equals(group)) {
             return "🔵 " + unreadLabel + " " + unread;
         }
         return "";
     }
 
     /**
-     * Expanded-card summary. It always shows all three counts (including
-     * zeros), each prefixed with a colored dot emoji mirroring the floating
-     * capsule's colored dots: 🟢 running, 🟡 pending approval, 🔵 unread —
-     * e.g. "🟢 执行中 2 · 🟡 待审批 0 · 🔵 未读 3". The caller removes the chip
-     * before this when every count is 0. Labels and the joiner are injected
-     * for i18n. Pure: only primitives.
+     * Expanded-card summary. It shows the groups that the status-bar chip does
+     * not already highlight — whatever the chip shows in its title is not
+     * repeated here. The remaining groups are always shown (including zeros),
+     * each prefixed with a colored dot emoji mirroring the floating capsule's
+     * colored dots: 🟢 running, 🟡 pending approval, 🔵 unread. E.g. with a
+     * chip of "🟢 执行中 2" the card reads "🟡 待审批 0 · 🔵 未读 3". The caller
+     * removes the chip before this when every count is 0. Labels and the
+     * joiner are injected for i18n. Pure: only primitives.
      */
     public static String cardSummary(int running, int pending, int unread,
                                      String runningLabel, String pendingLabel,
                                      String unreadLabel, String joiner) {
-        return "🟢 " + runningLabel + " " + running + joiner
-                + "🟡 " + pendingLabel + " " + pending + joiner
-                + "🔵 " + unreadLabel + " " + unread;
+        String chip = chipGroup(running, pending, unread);
+        StringBuilder sb = new StringBuilder();
+        if (!"running".equals(chip)) {
+            sb.append("🟢 ").append(runningLabel).append(" ").append(running);
+        }
+        if (!"pending".equals(chip)) {
+            if (sb.length() > 0) sb.append(joiner);
+            sb.append("🟡 ").append(pendingLabel).append(" ").append(pending);
+        }
+        if (!"unread".equals(chip)) {
+            if (sb.length() > 0) sb.append(joiner);
+            sb.append("🔵 ").append(unreadLabel).append(" ").append(unread);
+        }
+        return sb.toString();
     }
 
     /**
