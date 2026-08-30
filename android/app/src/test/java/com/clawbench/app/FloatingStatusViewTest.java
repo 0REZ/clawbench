@@ -184,8 +184,8 @@ public class FloatingStatusViewTest {
         return runningItem.getChildAt(0);
     }
 
-    private ObjectAnimator breathAnimator(FloatingStatusView capsule) throws Exception {
-        return (ObjectAnimator) getField(content(capsule), "breathAnim");
+    private ObjectAnimator spinAnimator(FloatingStatusView capsule) throws Exception {
+        return (ObjectAnimator) getField(content(capsule), "spinAnim");
     }
 
     private Object getField(Object target, String name) throws Exception {
@@ -201,33 +201,31 @@ public class FloatingStatusViewTest {
         // the loop.
         capsule.renderStats(1, 0, 0);
 
-        ObjectAnimator anim = breathAnimator(capsule);
-        assertTrue("breathing must be running while a session runs",
+        ObjectAnimator anim = spinAnimator(capsule);
+        assertTrue("spinning must be running while a session runs",
                 anim.isRunning());
         // Robolectric's ShadowValueAnimator maps INFINITE (-1) to 1 on the real
         // animator, so the infinite-ness must be read back from the shadow.
-        assertEquals("breathing must loop forever", ObjectAnimator.INFINITE,
+        assertEquals("spinning must loop forever", ObjectAnimator.INFINITE,
                 Shadows.shadowOf(anim).getActualRepeatCount());
-        assertEquals("breathing must oscillate", ObjectAnimator.REVERSE,
-                anim.getRepeatMode());
-        assertEquals("breathing must animate alpha", "alpha",
+        assertEquals("spinning must animate rotation", "rotation",
                 ((android.animation.PropertyValuesHolder)
                         anim.getValues()[0]).getPropertyName());
         capsule.stopBreathing();
     }
 
     @Test
-    public void renderStats_noRunning_stopsBreathingAndRestoresAlpha() throws Exception {
+    public void renderStats_noRunning_stopsBreathingAndRestoresRotation() throws Exception {
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 0, 0);
-        assertTrue(breathAnimator(capsule).isRunning());
+        assertTrue(spinAnimator(capsule).isRunning());
 
         capsule.renderStats(0, 0, 0);
 
-        assertFalse("breathing must stop when the running count drops to 0",
-                breathAnimator(capsule).isRunning());
-        assertEquals("the running dot must return to full opacity", 1.0f,
-                runningDot(capsule).getAlpha(), 0.001f);
+        assertFalse("spinning must stop when the running count drops to 0",
+                spinAnimator(capsule).isRunning());
+        assertEquals("the running arc must reset to rotation 0", 0f,
+                runningDot(capsule).getRotation(), 0.001f);
         capsule.stopBreathing();
     }
 
@@ -236,14 +234,14 @@ public class FloatingStatusViewTest {
         // A fresh start on an already-running animator must not restart it.
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 0, 0);
-        ObjectAnimator anim = breathAnimator(capsule);
+        ObjectAnimator anim = spinAnimator(capsule);
         anim.start();
         assertTrue(anim.isRunning());
 
         capsule.renderStats(2, 0, 0);
 
         assertEquals("re-render with running > 0 must not restart the animator",
-                anim, breathAnimator(capsule));
+                anim, spinAnimator(capsule));
         assertTrue("animator must still be running", anim.isRunning());
         capsule.stopBreathing();
     }
@@ -252,30 +250,30 @@ public class FloatingStatusViewTest {
     public void renderStats_pendingOrUnreadOnly_doesNotBreathe() throws Exception {
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(0, 1, 0);
-        assertFalse("a pending-only capsule must not breathe",
-                breathAnimator(capsule).isRunning());
+        assertFalse("a pending-only capsule must not spin",
+                spinAnimator(capsule).isRunning());
 
         capsule.renderStats(0, 0, 1);
-        assertFalse("an unread-only capsule must not breathe",
-                breathAnimator(capsule).isRunning());
+        assertFalse("an unread-only capsule must not spin",
+                spinAnimator(capsule).isRunning());
 
-        assertEquals("the running dot must stay fully opaque", 1.0f,
-                runningDot(capsule).getAlpha(), 0.001f);
+        assertEquals("the running arc must stay at rotation 0", 0f,
+                runningDot(capsule).getRotation(), 0.001f);
         capsule.stopBreathing();
     }
 
     @Test
-    public void stopBreathing_restoresAlpha() throws Exception {
+    public void stopBreathing_restoresRotation() throws Exception {
         FloatingStatusView capsule = newCapsule();
         capsule.renderStats(1, 0, 0);
-        assertTrue(breathAnimator(capsule).isRunning());
+        assertTrue(spinAnimator(capsule).isRunning());
 
         capsule.stopBreathing();
 
         assertFalse("stopBreathing must cancel the running animator",
-                breathAnimator(capsule).isRunning());
-        assertEquals("stopBreathing must restore full opacity", 1.0f,
-                runningDot(capsule).getAlpha(), 0.001f);
+                spinAnimator(capsule).isRunning());
+        assertEquals("stopBreathing must reset the rotation", 0f,
+                runningDot(capsule).getRotation(), 0.001f);
     }
 
     // =====================================================

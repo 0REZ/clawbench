@@ -55,16 +55,15 @@ public class FloatingStatusContentView extends LinearLayout {
     static final int LOGO_MARGIN_END_DP = 10;
     /** Idle-state label shown when every count is 0. */
     private static final int IDLE_LABEL_RES = R.string.floating_idle;
-    // Breathing animation: the running dot pulses between 30% and full opacity.
-    private static final float BREATH_ALPHA_MIN = 0.3f;
-    private static final float BREATH_ALPHA_MAX = 1.0f;
-    private static final long BREATH_MS = 800;
+    // Spin animation: the running arc rotates 0 → 360° forever while any
+    // session is running.
+    private static final long SPIN_MS = 900;
 
     private final View runningDot;
     private final LinearLayout runningItem;
     private final LinearLayout pendingItem;
     private final LinearLayout unreadItem;
-    private final ObjectAnimator breathAnim;
+    private final ObjectAnimator spinAnim;
     private final float density;
     /** Idle-state label ("空闲"), gray without a dot; VISIBLE only when every count is 0. */
     private final TextView idleLabel;
@@ -88,11 +87,11 @@ public class FloatingStatusContentView extends LinearLayout {
         logoLp.setMargins(0, 0, dp(LOGO_MARGIN_END_DP), 0);
         addView(logo, logoLp);
 
+        // Running indicator: a rotating ring-arc (spinner-like) instead of a
+        // static dot. The drawable renders a 270° arc; spinAnim rotates the
+        // view while any session is running.
         runningDot = new View(context);
-        GradientDrawable runningDotDrawable = new GradientDrawable();
-        runningDotDrawable.setShape(GradientDrawable.OVAL);
-        runningDotDrawable.setColor(COLOR_RUNNING);
-        runningDot.setBackground(runningDotDrawable);
+        runningDot.setBackground(new ArcProgressDrawable(COLOR_RUNNING, density));
         runningItem = buildStatItem(runningDot, R.string.floating_stat_running);
 
         pendingItem = buildStatItem(dot(COLOR_PERMISSION_PENDING), R.string.floating_stat_pending);
@@ -110,13 +109,11 @@ public class FloatingStatusContentView extends LinearLayout {
         addView(idleLabel, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // Breathing alpha animation on the running dot. Loops forever while any
-        // session is running; renderStats starts/stops it with the running count.
-        breathAnim = ObjectAnimator.ofFloat(runningDot, "alpha",
-                BREATH_ALPHA_MIN, BREATH_ALPHA_MAX);
-        breathAnim.setDuration(BREATH_MS);
-        breathAnim.setRepeatCount(ObjectAnimator.INFINITE);
-        breathAnim.setRepeatMode(ObjectAnimator.REVERSE);
+        // Spin animation on the running arc. Loops forever while any session
+        // is running; renderStats starts/stops it with the running count.
+        spinAnim = ObjectAnimator.ofFloat(runningDot, "rotation", 0f, 360f);
+        spinAnim.setDuration(SPIN_MS);
+        spinAnim.setRepeatCount(ObjectAnimator.INFINITE);
 
         // Initial state: all groups hidden until the first renderStats.
         renderStats(0, 0, 0);
@@ -127,9 +124,9 @@ public class FloatingStatusContentView extends LinearLayout {
      * hidden entirely (dot + label); when every count is 0 the idle "空闲"
      * label is shown instead. UI thread only.
      *
-     * The running dot breathes (alpha 0.3 ↔ 1.0 loop) while the running count
-     * is above 0; on zero it stops and the dot returns to full opacity. The
-     * pending and unread dots never breathe.
+     * The running arc spins (rotation 0 → 360° loop) while the running count
+     * is above 0; on zero it stops and the rotation resets. The pending and
+     * unread dots never spin.
      */
     public void renderStats(int running, int pending, int unread) {
         AppLog.d("FloatingStatusContent", "renderStats running=" + running
@@ -143,12 +140,12 @@ public class FloatingStatusContentView extends LinearLayout {
         idleLabel.setVisibility(running == 0 && pending == 0 && unread == 0
                 ? VISIBLE : GONE);
         if (running > 0) {
-            if (!breathAnim.isRunning()) {
-                breathAnim.start();
+            if (!spinAnim.isRunning()) {
+                spinAnim.start();
             }
-        } else if (breathAnim.isRunning()) {
-            breathAnim.cancel();
-            runningDot.setAlpha(BREATH_ALPHA_MAX);
+        } else if (spinAnim.isRunning()) {
+            spinAnim.cancel();
+            runningDot.setRotation(0f);
         }
     }
 
@@ -164,15 +161,15 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /**
-     * Stop the breathing animation and restore the running dot to full opacity.
+     * Stop the spin animation and reset the running arc's rotation.
      * Called on host teardown so an infinite animator cannot keep posting
      * frame callbacks after the window is removed. UI thread only.
      */
     public void stopBreathing() {
-        if (breathAnim.isRunning()) {
-            breathAnim.cancel();
+        if (spinAnim.isRunning()) {
+            spinAnim.cancel();
         }
-        runningDot.setAlpha(BREATH_ALPHA_MAX);
+        runningDot.setRotation(0f);
     }
 
     /** Build one dot+label item, added to the row with dot leading the label. */

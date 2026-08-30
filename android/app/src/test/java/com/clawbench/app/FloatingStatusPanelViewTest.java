@@ -342,8 +342,8 @@ public class FloatingStatusPanelViewTest {
         return runningItem.getChildAt(0);
     }
 
-    private ObjectAnimator headerBreathAnimator(FloatingStatusPanelView panel) throws Exception {
-        return (ObjectAnimator) getField(headerContent(panel), "breathAnim");
+    private ObjectAnimator headerSpinAnimator(FloatingStatusPanelView panel) throws Exception {
+        return (ObjectAnimator) getField(headerContent(panel), "spinAnim");
     }
 
     @Test
@@ -369,25 +369,25 @@ public class FloatingStatusPanelViewTest {
         FloatingStatusPanelView panel = newPanel();
         panel.renderHeaderStats(2, 0, 0);
 
-        ObjectAnimator anim = headerBreathAnimator(panel);
-        assertTrue("header running dot must breathe while sessions run", anim.isRunning());
-        assertEquals("header breathing must loop forever", ObjectAnimator.INFINITE,
+        ObjectAnimator anim = headerSpinAnimator(panel);
+        assertTrue("header running arc must spin while sessions run", anim.isRunning());
+        assertEquals("header spinning must loop forever", ObjectAnimator.INFINITE,
                 org.robolectric.Shadows.shadowOf(anim).getActualRepeatCount());
         panel.stopBreathing();
     }
 
     @Test
-    public void renderHeaderStats_zeroRunning_stopsBreathingAndRestoresAlpha() throws Exception {
+    public void renderHeaderStats_zeroRunning_stopsBreathingAndRestoresRotation() throws Exception {
         FloatingStatusPanelView panel = newPanel();
         panel.renderHeaderStats(1, 0, 0);
-        assertTrue(headerBreathAnimator(panel).isRunning());
+        assertTrue(headerSpinAnimator(panel).isRunning());
 
         panel.renderHeaderStats(0, 0, 0);
 
-        assertFalse("header breathing must stop when the running count drops to 0",
-                headerBreathAnimator(panel).isRunning());
-        assertEquals("the header running dot must return to full opacity", 1.0f,
-                headerRunningDot(panel).getAlpha(), 0.001f);
+        assertFalse("header spinning must stop when the running count drops to 0",
+                headerSpinAnimator(panel).isRunning());
+        assertEquals("the header running arc must reset to rotation 0", 0f,
+                headerRunningDot(panel).getRotation(), 0.001f);
         panel.stopBreathing();
     }
 
