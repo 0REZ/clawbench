@@ -75,12 +75,26 @@ public class LiveUpdateManager {
     private final Handler handler;
     private final NotificationManager notificationManager;
 
+    /**
+     * Fired when the manager needs a fresh overview to reconcile counts that
+     * events alone cannot carry (unread). Wired by BackgroundService to
+     * fetchOverviewSessions. Same contract as FloatingStatusController's
+     * listener of the same name.
+     */
+    public interface OverviewRequestListener {
+        void onRequestOverview();
+    }
+
+    private volatile OverviewRequestListener overviewRequestListener;
+
     /** Latest computed counts (pending > running > unread), for throttled coalescing. */
     private volatile int pendingCount;
     private volatile int runningCount;
     private volatile int unreadCount;
     /** Last time a notification was actually posted (throttle anchor). */
     private volatile long lastPostedMs;
+    /** Last time an overview was requested from an event (throttle anchor). */
+    private volatile long lastOverviewRequestMs;
     /** Whether a refresh is already scheduled within the throttle window. */
     private volatile boolean refreshScheduled;
     /** Whether a notification is currently visible. */
@@ -106,6 +120,15 @@ public class LiveUpdateManager {
     }
 
     /**
+     * Register the overview request callback. The service wires this to
+     * fetchOverviewSessions so unread counts (which events do not carry) can
+     * be reconciled while the app is backgrounded. Any thread.
+     */
+    public void setOverviewRequestListener(OverviewRequestListener listener) {
+        this.overviewRequestListener = listener;
+    }
+
+    /**
      * Feed a session_update / task_update event for count tracking. The event
      * alone does not carry unread counts, so only running/pending state is
      * adjusted here; the overview path reconciles all three. Any thread.
@@ -113,6 +136,11 @@ public class LiveUpdateManager {
      * Mirrors FloatingStatusController.trackSessionState semantics: active
      * states add the session, terminal states remove it. task_update is
      * ignored (its session_id is often empty and would desync the count).
+     *
+     * Because the event path cannot see unread, each event also requests a
+     * fresh overview via {@link OverviewRequestListener} — throttled on the
+     * service side — so the chip's unread count stays current in the
+     * background without waiting for a WS (re)connect.
      */
     public void onEvent(String eventType, String status, String sessionId) {
         if (!"session_update".equals(eventType)
@@ -135,9 +163,19 @@ public class LiveUpdateManager {
             pendingSessions.remove(sessionId);
         }
         // Event-driven path can only update running/pending; unread stays as
-        // the last overview reported it. The next overview reconciles.
+        // the last overview reported it. Ask for a fresh overview so the chip
+        // reconciles all three (unread included) while backgrounded — but only
+        // at most once per THROTTLE_MS, so an event burst cannot spam the API.
         updateCounts(runningSessions.size() - pendingSessions.size(),
                 pendingSessions.size(), unreadCount);
+        long now = System.currentTimeMillis();
+        if (now - lastOverviewRequestMs >= THROTTLE_MS) {
+            lastOverviewRequestMs = now;
+            OverviewRequestListener listener = overviewRequestListener;
+            if (listener != null) {
+                listener.onRequestOverview();
+            }
+        }
     }
 
     /**

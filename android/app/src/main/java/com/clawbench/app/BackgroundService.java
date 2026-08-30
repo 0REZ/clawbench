@@ -431,6 +431,15 @@ public class BackgroundService extends Service {
         boolean enabled = isLiveUpdateEnabled(this);
         if (enabled && liveUpdateManager == null) {
             liveUpdateManager = new LiveUpdateManager(this);
+            // Events alone cannot update unread; pull a fresh overview on each
+            // session event so the chip stays current while backgrounded.
+            liveUpdateManager.setOverviewRequestListener(() -> {
+                String serverUrl = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .getString(KEY_SERVER_URL, "");
+                if (!serverUrl.isEmpty()) {
+                    networkExecutor.execute(() -> fetchOverviewSessions(serverUrl));
+                }
+            });
             AppLog.i(TAG, "LiveUpdate: manager initialized");
         } else if (!enabled && liveUpdateManager != null) {
             liveUpdateManager.destroy();

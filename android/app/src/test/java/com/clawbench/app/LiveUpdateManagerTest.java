@@ -233,4 +233,34 @@ public class LiveUpdateManagerTest {
         assertFalse("null context must not throw and must report unavailable",
                 LiveUpdateManager.canPostPromoted(null));
     }
+
+    // =====================================================
+    // onEvent: overview reconciliation requests (unread source)
+    // =====================================================
+
+    @Test
+    public void onEvent_requestsOverview_whenThrottleWindowElapsed() throws Exception {
+        LiveUpdateManager manager = new LiveUpdateManager(RuntimeEnvironment.getApplication());
+        final int[] calls = {0};
+        manager.setOverviewRequestListener(() -> calls[0]++);
+
+        // First event → requests overview immediately.
+        manager.onEvent("session_update", "running", "s1");
+        assertEquals("first event must request a fresh overview", 1, calls[0]);
+
+        // Second event within THROTTLE_MS → throttled, no second request.
+        manager.onEvent("session_update", "completed", "s1");
+        assertEquals("events within the throttle window must not re-request", 1, calls[0]);
+    }
+
+    @Test
+    public void onEvent_ignoresNonSessionEvents_andNullSession() throws Exception {
+        LiveUpdateManager manager = new LiveUpdateManager(RuntimeEnvironment.getApplication());
+        final int[] calls = {0};
+        manager.setOverviewRequestListener(() -> calls[0]++);
+
+        manager.onEvent("task_update", "completed", "t1");
+        manager.onEvent("session_update", "completed", "");
+        assertEquals("non-session events and empty session ids must not request an overview", 0, calls[0]);
+    }
 }
