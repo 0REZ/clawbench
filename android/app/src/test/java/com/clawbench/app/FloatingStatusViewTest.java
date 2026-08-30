@@ -14,6 +14,8 @@ import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -277,74 +279,76 @@ public class FloatingStatusViewTest {
     }
 
     // =====================================================
-    // Collapse-to-circle: the hide animation's first stage shrinks the window
-    // width to the capsule height (38dp). prepareCircleCollapse removes the
-    // stat groups and makes the horizontal padding symmetric, so the pill
-    // becomes a true circle holding only the centered logo.
+    // Idle state: all-zero counts render the "空闲" label instead of stats.
     // =====================================================
 
     @Test
-    public void prepareCircleCollapse_hidesStatGroupsAndKeepsLogoVisible() throws Exception {
+    public void renderStats_zeroCounts_showsIdleLabel() throws Exception {
         FloatingStatusView capsule = newCapsule();
-        capsule.renderStats(1, 1, 1);
 
-        capsule.prepareCircleCollapse(38);
+        capsule.renderStats(0, 0, 0);
 
-        // Logo (child 0) must remain visible.
-        assertEquals("the logo must stay visible during the collapse",
-                View.VISIBLE, content(capsule).getChildAt(0).getVisibility());
-        // Every stat group must be removed from the row.
-        for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("stat groups must be GONE during the collapse",
-                    View.GONE, content(capsule).getChildAt(i).getVisibility());
-        }
+        List<String> texts = collectTexts(capsule);
+        assertTrue("zero counts must show the idle label, got: " + texts,
+                texts.contains("空闲"));
+        assertFalse("zero counts must hide every stat label, got: " + texts,
+                texts.contains("执行中") || texts.contains("待审批") || texts.contains("未读"));
         capsule.stopBreathing();
     }
 
     @Test
-    public void prepareCircleCollapse_symmetricPaddingCentersLogo() throws Exception {
-        // The collapsed row holds only the 24dp logo; symmetric 7dp horizontal
-        // padding (same as vertical) makes the frame exactly 38dp wide — a
-        // square, which reads as a centered logo inside the circular capsule.
+    public void renderStats_fromIdleToActive_hidesIdleLabel() throws Exception {
         FloatingStatusView capsule = newCapsule();
-        capsule.renderStats(1, 1, 1);
+        capsule.renderStats(0, 0, 0);
+        assertTrue("idle label must be visible before any content",
+                collectTexts(capsule).contains("空闲"));
 
-        capsule.prepareCircleCollapse(38);
+        capsule.renderStats(1, 0, 0);
 
-        int l = capsule.getPaddingLeft();
-        int r = capsule.getPaddingRight();
-        int t = capsule.getPaddingTop();
-        int b = capsule.getPaddingBottom();
-        assertEquals("left and right padding must be equal", l, r);
-        assertEquals("horizontal padding must equal the vertical padding (7dp)",
-                t, l);
-        assertEquals("bottom padding must match the top", b, t);
-        // Content row width = 24dp logo; 7 + 24 + 7 = 38dp window width.
-        assertEquals("symmetry + logo must fill the 38dp target",
-                38, l + dp(24) + r);
+        List<String> texts = collectTexts(capsule);
+        assertFalse("the idle label must disappear once a session is active, got: " + texts,
+                texts.contains("空闲"));
+        assertTrue("the running stat must appear, got: " + texts,
+                texts.contains("执行中 1"));
         capsule.stopBreathing();
     }
 
     @Test
-    public void expandFromCircle_restoresGroupsAndAsymmetricPadding() throws Exception {
+    public void renderStats_fromActiveToIdle_showsIdleLabel() throws Exception {
         FloatingStatusView capsule = newCapsule();
-        capsule.renderStats(1, 1, 1);
-        capsule.prepareCircleCollapse(38);
+        capsule.renderStats(1, 0, 0);
+        assertFalse("no idle label while a session is active",
+                collectTexts(capsule).contains("空闲"));
 
-        capsule.expandFromCircle();
+        capsule.renderStats(0, 0, 0);
 
-        // The original asymmetric padding must come back (start 8dp, end 14dp).
-        assertEquals("start padding must be restored to 8dp",
-                dp(8), capsule.getPaddingLeft());
-        assertEquals("end padding must be restored to 14dp",
-                dp(14), capsule.getPaddingRight());
-        // restoreStats marks every group VISIBLE; renderStats will re-hide the
-        // zero-count ones on the next render.
-        for (int i = 1; i < content(capsule).getChildCount(); i++) {
-            assertEquals("stat groups must be VISIBLE after expandFromCircle",
-                    View.VISIBLE, content(capsule).getChildAt(i).getVisibility());
-        }
+        assertTrue("the idle label must return when all counts drop to zero",
+                collectTexts(capsule).contains("空闲"));
         capsule.stopBreathing();
+    }
+
+    private java.util.List<String> collectTexts(FloatingStatusView capsule) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        collectTexts(content(capsule), out);
+        return out;
+    }
+
+    private static void collectTexts(android.view.View view, java.util.List<String> out) {
+        if (view.getVisibility() != android.view.View.VISIBLE) {
+            return;
+        }
+        if (view instanceof android.widget.TextView) {
+            String t = ((android.widget.TextView) view).getText().toString();
+            if (!t.isEmpty()) {
+                out.add(t);
+            }
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup vg = (android.view.ViewGroup) view;
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                collectTexts(vg.getChildAt(i), out);
+            }
+        }
     }
 
     // =====================================================

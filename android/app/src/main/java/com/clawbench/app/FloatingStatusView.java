@@ -2,7 +2,6 @@ package com.clawbench.app;
 
 import android.content.Context;
 import android.graphics.drawable.GradientDrawable;
-import android.view.View;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -152,43 +151,6 @@ public class FloatingStatusView extends android.widget.FrameLayout {
      */
     public void stopBreathing() {
         contentView.stopBreathing();
-    }
-
-    /**
-     * Prepare the capsule for the collapse-to-circle stage of the hide
-     * animation: the stat groups are removed and the horizontal padding is
-     * made symmetric so a window of height {@code h} that shrinks its width to
-     * {@code h} renders as a true circle with the logo centered. The logo
-     * keeps full opacity. UI thread only.
-     */
-    public void prepareCircleCollapse(int targetWidthPx) {
-        contentView.collapseStats();
-        // The collapsed row holds only the 24dp logo, so symmetric horizontal
-        // padding of 7dp (same as the vertical padding) makes the frame exactly
-        // 7 + 24 + 7 = 38dp wide — a square, which reads as a centered logo
-        // inside the capsule's circular background.
-        int symmetricPadPx = dp(PADDING_V_DP);
-        setPadding(symmetricPadPx, dp(PADDING_V_DP), symmetricPadPx, dp(PADDING_V_DP));
-        // Re-measure the content row against the content area (target width
-        // minus the symmetric padding) so the frame actually contracts to the
-        // new window size even if the window is not re-laid-out during the
-        // width animation. The row holds only the logo, so its width equals the
-        // logo size and the logo stays centered.
-        int contentWidth = Math.max(0, targetWidthPx - 2 * symmetricPadPx);
-        contentView.measure(
-                View.MeasureSpec.makeMeasureSpec(contentWidth, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-    }
-
-    /**
-     * Undo a previous prepareCircleCollapse: restore the stat groups and the
-     * original asymmetric padding. Called by the controller when the hide is
-     * superseded by a fresh show so a re-shown capsule looks normal. UI
-     * thread only.
-     */
-    public void expandFromCircle() {
-        contentView.restoreStats();
-        setPadding(dp(PADDING_H_START_DP), dp(PADDING_V_DP), dp(PADDING_H_DP), dp(PADDING_V_DP));
     }
 
     private int dp(int value) {

@@ -362,6 +362,10 @@ public class BackgroundService extends Service {
             // its project path (capsule taps always expand the panel).
             floatingController.setOnSessionClick((sid, projectPath) ->
                     MainActivity.launchFromFloatingWindow(sid, projectPath));
+            // An idle capsule tap (no active / unread content) brings the app
+            // back to the foreground; a bare launch without a session deep link.
+            floatingController.setOnIdleCapsuleTap(() ->
+                    MainActivity.launchFromFloatingWindow(null));
             // Every panel expand / event-while-expanded pulls a fresh overview.
             floatingController.setOverviewRequestListener(() -> {
                 String serverUrl = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)

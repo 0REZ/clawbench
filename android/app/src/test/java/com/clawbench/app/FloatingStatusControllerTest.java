@@ -87,11 +87,15 @@ public class FloatingStatusControllerTest {
         assertFalse(FloatingStatusController.isActiveStatus("", ""));
     }
 
-    // --- shouldShow ---
+    // --- shouldShow / hasContent ---
 
     @Test
-    public void shouldShow_backgroundActiveNotDismissed_true() {
+    public void shouldShow_backgroundNotDismissed_true() {
+        // While the app is in the background the window is always shown,
+        // regardless of whether any content (active / unread) remains.
         assertTrue(FloatingStatusController.shouldShow(false, true, false, false));
+        assertTrue("idle (no active, no unread) must still show the window",
+                FloatingStatusController.shouldShow(false, false, false, false));
     }
 
     @Test
@@ -103,11 +107,7 @@ public class FloatingStatusControllerTest {
     @Test
     public void shouldShow_foreground_false() {
         assertFalse(FloatingStatusController.shouldShow(true, true, false, false));
-    }
-
-    @Test
-    public void shouldShow_noActiveNoUnread_false() {
-        assertFalse(FloatingStatusController.shouldShow(false, false, false, false));
+        assertFalse(FloatingStatusController.shouldShow(true, false, false, false));
     }
 
     @Test
@@ -115,11 +115,25 @@ public class FloatingStatusControllerTest {
         assertFalse(FloatingStatusController.shouldShow(false, true, false, true));
         assertFalse("dismissal must win over unread too",
                 FloatingStatusController.shouldShow(false, false, true, true));
+        assertFalse("dismissal must hide the idle capsule too",
+                FloatingStatusController.shouldShow(false, false, false, true));
     }
 
     @Test
     public void shouldShow_foregroundNoActiveDismissed_false() {
         assertFalse(FloatingStatusController.shouldShow(true, false, true, true));
+    }
+
+    @Test
+    public void hasContent_anyActiveOrUnread_true() {
+        assertTrue(FloatingStatusController.hasContent(true, false));
+        assertTrue(FloatingStatusController.hasContent(false, true));
+        assertTrue(FloatingStatusController.hasContent(true, true));
+    }
+
+    @Test
+    public void hasContent_none_false() {
+        assertFalse(FloatingStatusController.hasContent(false, false));
     }
 
     // --- snapX ---
@@ -396,8 +410,7 @@ public class FloatingStatusControllerTest {
 
     @Test
     public void handleEvent_readStatus_doesNotHideWindow() throws Exception {
-        // "read" is not an active status, but it must not trigger the terminal
-        // hide path either (it is not completed/cancelled/failed).
+        // "read" is not an active status, but it must not hide the window.
         FloatingStatusController controller = newController();
         ShadowSettings.setCanDrawOverlays(true);
         controller.setAppForeground(false);
@@ -409,8 +422,6 @@ public class FloatingStatusControllerTest {
         ShadowLooper.runUiThreadTasks();
 
         assertTrue("read must not hide the window", controller.isWindowShowing());
-        assertNull("read must not schedule a terminal hide",
-                getPrivateField(controller, "fadeHideRunnable"));
         controller.destroy();
     }
 
@@ -447,13 +458,43 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void onCapsuleTap_zeroRunning_expandsPanel() throws Exception {
+    public void onCapsuleTap_idle_firesIdleCallbackNotExpand() throws Exception {
+        // An idle capsule (no active session, no unread) must fire the idle
+        // callback (which brings the app to the foreground) instead of
+        // expanding the panel, which would have no content.
+        final int[] idleTaps = {0};
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
+        controller.setOnIdleCapsuleTap(() -> idleTaps[0]++);
 
         controller.onCapsuleTap();
 
-        assertTrue(controller.isExpanded());
+        assertEquals("idle capsule tap must fire the idle callback", 1, idleTaps[0]);
+        assertFalse("idle capsule tap must not expand the panel",
+                controller.isExpanded());
+        controller.destroy();
+    }
+
+    @Test
+    public void onCapsuleTap_unreadOnly_expandsPanelNotIdle() throws Exception {
+        // An unread session (lastUnreadCount > 0 from an overview) is still
+        // content worth showing, so the tap must expand the panel, not fire
+        // the idle callback.
+        final int[] idleTaps = {0};
+        FloatingStatusController controller = new FloatingStatusController(
+                RuntimeEnvironment.getApplication());
+        controller.setOnIdleCapsuleTap(() -> idleTaps[0]++);
+        org.json.JSONObject overview = new org.json.JSONObject(
+                "{\"projects\":[{\"name\":\"/projA\",\"sessions\":["
+                        + "{\"id\":\"u\",\"title\":\"t\",\"running\":false,\"pendingApproval\":false,\"unreadCount\":2}"
+                        + "]}]}");
+        controller.onOverviewLoaded(overview);
+        ShadowLooper.runUiThreadTasks();
+
+        controller.onCapsuleTap();
+
+        assertEquals("unread content must not fire the idle callback", 0, idleTaps[0]);
+        assertTrue("unread content must expand the panel", controller.isExpanded());
         controller.destroy();
     }
 
@@ -598,9 +639,11 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void collapse_withNoActive_hidesWindow() throws Exception {
+    public void collapse_withNoActive_showsIdleCapsule() throws Exception {
         // No active session (e.g. panel showed only unread sessions): collapsing
-        // must hide the floating window entirely rather than restore the capsule.
+        // must switch back to the capsule. With nothing left worth showing the
+        // capsule renders the idle "空闲" state — the window stays up while the
+        // app is backgrounded.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -613,9 +656,13 @@ public class FloatingStatusControllerTest {
         controller.setExpanded(false);
         ShadowLooper.runUiThreadTasks();
 
-        assertFalse("collapse with no active session must hide the window",
-                controller.isWindowShowing());
         assertFalse(controller.isExpanded());
+        assertTrue("collapse with no active session must keep the idle capsule up",
+                controller.isWindowShowing());
+        Object capsuleView = getPrivateField(controller, "view");
+        assertNotNull("capsule view must be restored on collapse", capsuleView);
+        assertEquals("the attached view must be the capsule after collapse",
+                capsuleView, getPrivateField(controller, "attachedView"));
         controller.destroy();
     }
 
@@ -836,7 +883,9 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void onOverviewLoaded_noRunning_doesNotShowWindow() throws Exception {
+    public void onOverviewLoaded_noRunning_showsIdleCapsule() throws Exception {
+        // Backgrounded with no running session and no unread content: the
+        // window is not hidden — it shows the idle "空闲" capsule.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -847,8 +896,12 @@ public class FloatingStatusControllerTest {
         controller.onOverviewLoaded(overview);
         ShadowLooper.runUiThreadTasks();
 
-        assertFalse("no running session must not show the capsule", controller.isWindowShowing());
+        assertTrue("no running session must still show the idle capsule",
+                controller.isWindowShowing());
         assertEquals(0, controller.getRunningSessionCount());
+        List<String> texts = collectAllTexts(capsuleOf(controller));
+        assertTrue("the idle capsule must show the idle label, got: " + texts,
+                texts.contains("空闲"));
         controller.destroy();
     }
 
@@ -880,10 +933,11 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void onOverviewLoaded_noRunningAndTotalZero_hidesLingeringWindow() throws Exception {
+    public void onOverviewLoaded_noRunningAndTotalZero_keepsIdleWindow() throws Exception {
         // Regression: the overview had no running sessions but did not reset
         // hasActive, so a session that ended while the WS was down left the
-        // capsule stuck on screen. With total == 0 nothing is worth showing.
+        // capsule stuck on screen. With total == 0 nothing is worth showing —
+        // the window must NOT be hidden, only switch to the idle capsule.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -900,8 +954,11 @@ public class FloatingStatusControllerTest {
         controller.onOverviewLoaded(overview);
         ShadowLooper.runUiThreadTasks();
 
-        assertFalse("empty overview must reset hasActive and hide the window",
+        assertTrue("empty overview must reset hasActive but keep the window up",
                 controller.isWindowShowing());
+        List<String> texts = collectAllTexts(capsuleOf(controller));
+        assertTrue("the idle capsule must show the idle label, got: " + texts,
+                texts.contains("空闲"));
         controller.destroy();
     }
 
@@ -928,12 +985,12 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void onOverviewLoaded_panelEmptied_autoCollapsesAndHides() throws Exception {
+    public void onOverviewLoaded_panelEmptied_autoCollapsesToIdleCapsule() throws Exception {
         // Regression: when the last running session finished while the panel
         // was expanded, the overview came back empty — the panel went blank
         // and stayed on screen until the user tapped the × button. A panel
-        // with nothing left worth showing must collapse (and, with no active
-        // or unread content, hide the window entirely).
+        // with nothing left worth showing must collapse to the idle capsule
+        // (the window itself stays up).
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -952,7 +1009,8 @@ public class FloatingStatusControllerTest {
         ShadowLooper.runUiThreadTasks();
 
         assertFalse("an emptied panel must auto-collapse", controller.isExpanded());
-        assertFalse("an emptied panel must hide the window", controller.isWindowShowing());
+        assertTrue("an emptied panel must keep the idle capsule up",
+                controller.isWindowShowing());
         assertNull("the panel view must be dropped after auto-collapse",
                 getPrivateField(controller, "panelView"));
         controller.destroy();
@@ -1052,8 +1110,9 @@ public class FloatingStatusControllerTest {
     }
 
     @Test
-    public void onOverviewLoaded_zeroCounts_hideStatItems() throws Exception {
-        // Zero-count groups (dot + label) must be hidden: only the logo shows.
+    public void onOverviewLoaded_zeroCounts_showIdleLabel() throws Exception {
+        // Zero-count groups (dot + label) must be hidden; the idle "空闲"
+        // label takes their place.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1070,7 +1129,10 @@ public class FloatingStatusControllerTest {
         FloatingStatusView capsule = (FloatingStatusView) getPrivateField(controller, "view");
         assertNotNull(capsule);
         List<String> texts = collectAllTexts(capsule);
-        assertTrue("zero-count stats must be hidden, got: " + texts, texts.isEmpty());
+        assertTrue("zero-count stats must be replaced by the idle label, got: " + texts,
+                texts.contains("空闲"));
+        assertFalse("no stat labels may remain when all counts are zero, got: " + texts,
+                texts.contains("执行中") || texts.contains("待审批") || texts.contains("未读"));
         controller.destroy();
     }
 
@@ -1133,8 +1195,8 @@ public class FloatingStatusControllerTest {
 
     @Test
     public void terminalEvent_otherSessionsRunning_keepsWindow() throws Exception {
-        // Bug 2: a terminal event for one session set hasActive=false, so the
-        // 3s hide fired even though another session was still running.
+        // A terminal event for one session must not hide the window while
+        // another session is still running.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1149,15 +1211,13 @@ public class FloatingStatusControllerTest {
 
         assertTrue("another session still running must keep the window",
                 controller.isWindowShowing());
-        assertNull("no terminal hide may be scheduled while other sessions run",
-                getPrivateField(controller, "fadeHideRunnable"));
         controller.destroy();
     }
 
     @Test
-    public void terminalEvent_lastSession_endsWindow() throws Exception {
-        // Regression guard: when the last running session ends, the "done"
-        // capsule must still be shown briefly and then hidden.
+    public void terminalEvent_lastSession_keepsWindowAsIdle() throws Exception {
+        // When the last running session ends the window must NOT hide: it
+        // switches to the idle "空闲" capsule and stays visible.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1169,19 +1229,18 @@ public class FloatingStatusControllerTest {
         controller.handleEvent("session_update", sessionEvent("completed", "s1"));
         ShadowLooper.runUiThreadTasks();
 
-        assertNotNull("last session ending must schedule the terminal hide",
-                getPrivateField(controller, "fadeHideRunnable"));
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertFalse("the window must hide after the terminal delay",
+        assertTrue("the window must stay up after the last session ends",
                 controller.isWindowShowing());
+        List<String> texts = collectAllTexts(capsuleOf(controller));
+        assertTrue("the capsule must show the idle label, got: " + texts,
+                texts.contains("空闲"));
         controller.destroy();
     }
 
     @Test
     public void terminalEvent_withUnread_keepsWindow() throws Exception {
-        // Bug: ending the last running session while unread sessions remain
-        // must NOT auto-hide the capsule — it should keep reminding the user
-        // to read the unread session, showing the unread count.
+        // Ending the last running session while unread sessions remain keeps
+        // the capsule showing the unread count.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1200,30 +1259,25 @@ public class FloatingStatusControllerTest {
         assertTrue(collectAllTexts(capsuleOf(controller)).contains("未读 1"));
 
         // Last running session ends: the capsule must stay up and keep the
-        // unread count visible — no terminal hide may be scheduled.
+        // unread count visible.
         controller.handleEvent("session_update", sessionEvent("completed", "s1"));
         ShadowLooper.runUiThreadTasks();
 
         assertTrue("unread sessions must keep the capsule visible",
                 controller.isWindowShowing());
-        assertNull("no terminal hide may be scheduled while unread sessions remain",
-                getPrivateField(controller, "fadeHideRunnable"));
         List<String> texts = collectAllTexts(capsuleOf(controller));
         assertTrue("capsule must keep showing the unread count, got: " + texts,
                 texts.contains("未读 1"));
-
-        // Still up well past the terminal delay.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertTrue("the capsule must never auto-hide while unread sessions remain",
-                controller.isWindowShowing());
+        assertFalse("capsule must not show the idle label with unread content, got: " + texts,
+                texts.contains("空闲"));
         controller.destroy();
     }
 
     @Test
-    public void terminalEvent_withUnread_afterRead_hidesWindow() throws Exception {
+    public void terminalEvent_withUnread_afterRead_showsIdle() throws Exception {
         // The unread guard is not sticky: once the user reads the sessions
         // (overview reports zero unread), a later terminal event for the last
-        // session must auto-hide as before.
+        // session must switch the capsule to the idle state.
         FloatingStatusController controller = new FloatingStatusController(
                 RuntimeEnvironment.getApplication());
         ShadowSettings.setCanDrawOverlays(true);
@@ -1248,38 +1302,10 @@ public class FloatingStatusControllerTest {
 
         controller.handleEvent("session_update", sessionEvent("completed", "s1"));
         ShadowLooper.runUiThreadTasks();
-        assertNotNull("with unread cleared, the terminal hide must be scheduled",
-                getPrivateField(controller, "fadeHideRunnable"));
-
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertFalse("window must hide after the terminal delay once unread is cleared",
-                controller.isWindowShowing());
-        controller.destroy();
-    }
-
-    @Test
-    public void terminalEvent_hideWithFade_doesNotCrashUnderRobolectric() throws Exception {
-        // The two-stage hide (collapse-to-circle then fade) runs real
-        // View.animate() / ValueAnimator; Robolectric cannot verify frame
-        // timing, so this guards that the path completes to hideWindow()
-        // without crashing.
-        FloatingStatusController controller = new FloatingStatusController(
-                RuntimeEnvironment.getApplication());
-        ShadowSettings.setCanDrawOverlays(true);
-        controller.setAppForeground(false);
-        controller.handleEvent("session_update", sessionEvent("running", "s1"));
-        controller.handleEvent("session_update", sessionEvent("running", "s2"));
-        ShadowLooper.runUiThreadTasks();
-        assertTrue(controller.isWindowShowing());
-
-        controller.handleEvent("session_update", sessionEvent("completed", "s1"));
-        controller.handleEvent("session_update", sessionEvent("completed", "s2"));
-        ShadowLooper.runUiThreadTasks();
-        assertNotNull(getPrivateField(controller, "fadeHideRunnable"));
-
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
-        assertFalse("the two-stage hide must still remove the window",
-                controller.isWindowShowing());
+        assertTrue("the window must never auto-hide", controller.isWindowShowing());
+        List<String> texts = collectAllTexts(capsuleOf(controller));
+        assertTrue("with unread cleared the capsule must show the idle label, got: " + texts,
+                texts.contains("空闲"));
         controller.destroy();
     }
 
