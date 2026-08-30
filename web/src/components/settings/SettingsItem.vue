@@ -173,7 +173,7 @@
       <Palette :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ label }}</span>
     </template>
-    <div class="theme-picker-grid">
+    <div class="theme-picker-grid" :class="{ 'theme-picker-grid--wide': isTerminalThemeSelect }">
       <div
         v-for="opt in options"
         :key="opt.value as PropertyKey"
@@ -182,6 +182,16 @@
         @click="selectOption(opt.value)"
       >
         <div
+          v-if="previewFor(opt)?.type === 'terminal'"
+          class="theme-picker-swatch theme-picker-swatch--terminal"
+        >
+          <TerminalPreviewCard
+            :theme="(previewFor(opt) as TerminalPreview).theme"
+            :auto="opt.value === 'auto'"
+          />
+        </div>
+        <div
+          v-else
           class="theme-picker-swatch"
           :class="{ 'theme-picker-swatch--auto': opt.value === 'auto' }"
           :style="previewStyleFor(opt)"
@@ -202,8 +212,15 @@ import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown } from 'lucide-vue-ne
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
+import TerminalPreviewCard from '@/components/common/TerminalPreviewCard.vue'
 
 const { t } = useI18n()
+
+/** App 主题卡片预览（三色色块 + 主题名样例文字）。 */
+export interface ColorPreview { type: 'color'; bg: string; text: string; accent: string; themeId: string }
+/** 终端主题卡片预览（迷你终端）。theme 懒加载完成前可为 undefined（渲染骨架占位）。 */
+export interface TerminalPreview { type: 'terminal'; themeId: string; theme?: import('@xterm/xterm').ITheme }
+export type OptionPreview = ColorPreview | TerminalPreview
 
 interface Props {
   label: string
@@ -211,9 +228,10 @@ interface Props {
   type: 'switch' | 'select' | 'number' | 'text' | 'slider' | 'action' | 'info' | 'header' | 'password' | 'textarea'
   modelValue?: unknown
   options?: { label: string; value: unknown; modelName?: string }[]
-  /** Optional per-option color previews (bg/text/accent) — when provided, the
-   *  select renders as a theme grid picker instead of a plain option list. */
-  optionPreviews?: Record<string, { bg: string; text: string; accent: string }>
+  /** Optional per-option previews — when provided, the select renders as a
+   *  theme grid picker instead of a plain option list. Two kinds supported:
+   *  color (bg/text/accent swatch) and terminal (mini terminal preview). */
+  optionPreviews?: Record<string, OptionPreview>
   min?: number
   max?: number
   step?: number
@@ -277,7 +295,18 @@ const themePicker = useTabDrawer('settings', { autoRestore: false })
 /** Whether this select should render the theme grid picker (has per-option previews). */
 const isThemeSelect = computed(() => !!props.optionPreviews)
 
-/** Build the inline style for a theme swatch. Auto option gets a light/dark split. */
+/** Whether this theme select uses terminal preview cards (any option is terminal-typed). */
+const isTerminalThemeSelect = computed(() =>
+  !!props.optionPreviews &&
+  Object.values(props.optionPreviews).some(p => p.type === 'terminal')
+)
+
+/** Look up the preview payload for an option value. */
+function previewFor(opt: { label: string; value: unknown }): OptionPreview | undefined {
+  return props.optionPreviews?.[String(opt.value)]
+}
+
+/** Build the inline style for a color swatch. Auto option gets a light/dark split. */
 function previewStyleFor(opt: { label: string; value: unknown }): Record<string, string> {
   if (opt.value === 'auto') {
     return {
@@ -286,7 +315,7 @@ function previewStyleFor(opt: { label: string; value: unknown }): Record<string,
     }
   }
   const p = props.optionPreviews?.[String(opt.value)]
-  if (!p) return {}
+  if (!p || p.type !== 'color') return {}
   return {
     background: p.bg,
     color: p.text,
@@ -879,6 +908,16 @@ function confirmEdit() {
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 10px;
   padding: 12px 16px 20px;
+}
+
+.theme-picker-grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.theme-picker-swatch--terminal {
+  height: 88px;
+  border: none;
+  background: transparent;
 }
 
 .theme-picker-cell {
