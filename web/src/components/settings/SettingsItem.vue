@@ -193,12 +193,12 @@
         <div
           v-else
           class="theme-picker-swatch"
-          :class="{ 'theme-picker-swatch--auto': opt.value === 'auto' }"
+          :class="{ 'theme-picker-swatch--auto': opt.value === 'auto', 'theme-picker-swatch--label': previewFor(opt)?.type === 'color' }"
           :style="previewStyleFor(opt)"
         >
-          <span class="theme-picker-swatch-accent"></span>
+          <span class="theme-picker-swatch-label">{{ opt.label }}</span>
         </div>
-        <span class="theme-picker-cell-label">{{ opt.label }}</span>
+        <span v-if="terminalPreviewFor(opt)" class="theme-picker-cell-label">{{ opt.label }}</span>
         <span v-if="modelValue === opt.value" class="theme-picker-cell-check">✓</span>
       </div>
     </div>
@@ -936,7 +936,7 @@ function confirmEdit() {
 }
 
 .theme-picker-swatch {
-  height: 52px;
+  height: 64px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   position: relative;
@@ -949,15 +949,27 @@ function confirmEdit() {
   border: 2px dashed var(--border-color);
 }
 
-.theme-picker-swatch-accent {
+.theme-picker-swatch-label {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--swatch-accent, var(--accent-color));
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: inherit;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.theme-picker-swatch--auto .theme-picker-swatch-label {
+  color: #8a8a8a;
 }
 
 .theme-picker-cell--active .theme-picker-swatch {

@@ -104,6 +104,31 @@ describe('SettingsItem theme grid picker', () => {
     })
     // Grid must not be in wide mode
     expect(wrapper.find('.theme-picker-grid').classes()).not.toContain('theme-picker-grid--wide')
+    // Accent dot was removed; theme name is rendered inside the swatch instead
+    expect(wrapper.find('.theme-picker-swatch-accent').exists()).toBe(false)
+  })
+
+  it('renders the theme name inside color swatches (no duplicate label below)', async () => {
+    const previews: Record<string, OptionPreview> = {
+      dark: { type: 'color', bg: '#1e1e2e', text: '#cdd6f4', accent: '#89b4fa', themeId: 'dark' },
+      light: { type: 'color', bg: '#f8f9fa', text: '#212529', accent: '#4a90d9', themeId: 'light' },
+      auto: { type: 'color', bg: '#ffffff', text: '#1a1a2e', accent: '#888888', themeId: 'auto' },
+    }
+    const wrapper = mountThemeGrid({ optionPreviews: previews })
+    await openGrid(wrapper)
+
+    // Each color swatch carries the --label modifier and a label span with the option name
+    const darkSwatch = wrapper.findAll('.theme-picker-swatch')[0]
+    expect(darkSwatch.classes()).toContain('theme-picker-swatch--label')
+    const labels = wrapper.findAll('.theme-picker-swatch-label')
+    expect(labels.length).toBe(3)
+    expect(labels[0].text()).toBe('Dark')
+    expect(labels[1].text()).toBe('Light')
+    // Auto option still renders its label inside the swatch
+    expect(labels[2].text()).toBe('Auto')
+
+    // No theme-picker-cell-label duplicates below color swatches
+    expect(wrapper.find('.theme-picker-cell-label').exists()).toBe(false)
   })
 
   it('renders TerminalPreviewCard with --terminal swatches and --wide grid for terminal previews', async () => {
@@ -124,6 +149,13 @@ describe('SettingsItem theme grid picker', () => {
     expect(wrapper.find('.tpc-shell--auto').exists()).toBe(true)
     // Grid uses the wider layout for terminal cards
     expect(wrapper.find('.theme-picker-grid').classes()).toContain('theme-picker-grid--wide')
+    // Terminal cells keep the label below the card
+    const cellLabels = wrapper.findAll('.theme-picker-cell-label')
+    expect(cellLabels.length).toBe(3)
+    expect(cellLabels[0].text()).toBe('Dark')
+    expect(cellLabels[2].text()).toBe('Auto')
+    // No in-swatch label for terminal cards
+    expect(wrapper.find('.theme-picker-swatch-label').exists()).toBe(false)
   })
 
   it('applies the terminal theme colors to the preview card', async () => {
