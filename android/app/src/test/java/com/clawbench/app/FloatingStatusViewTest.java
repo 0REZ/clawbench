@@ -36,7 +36,7 @@ import static org.junit.Assert.assertTrue;
  * pending. Unread only counts sessions that are neither running nor pending.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 28)
+@Config(sdk = 28, qualifiers = "zh")
 public class FloatingStatusViewTest {
 
     private static JSONObject overview(String json) throws Exception {
@@ -325,6 +325,47 @@ public class FloatingStatusViewTest {
         assertTrue("the idle label must return when all counts drop to zero",
                 collectTexts(capsule).contains("空闲"));
         capsule.stopBreathing();
+    }
+
+    // =====================================================
+    // refreshLocaleText: re-resolves strings after a system locale change.
+    // =====================================================
+
+    @Test
+    public void refreshLocaleText_switchesIdleLabelToNewLocale() throws Exception {
+        FloatingStatusView capsule = newCapsule();
+        capsule.renderStats(0, 0, 0);
+        assertTrue("idle label must be Chinese under the zh qualifier, got: " + collectTexts(capsule),
+                collectTexts(capsule).contains("空闲"));
+
+        // Switch the runtime qualifiers to English and re-resolve the label.
+        RuntimeEnvironment.setQualifiers("en");
+        capsule.refreshLocaleText();
+
+        List<String> texts = collectTexts(capsule);
+        assertTrue("idle label must follow the new locale, got: " + texts,
+                texts.contains("Idle"));
+        capsule.stopBreathing();
+
+        RuntimeEnvironment.setQualifiers("zh");
+    }
+
+    @Test
+    public void refreshLocaleText_reRendersStatLabelsInNewLocale() throws Exception {
+        FloatingStatusView capsule = newCapsule();
+        capsule.renderStats(2, 0, 0);
+        assertTrue("running stat must be Chinese under zh, got: " + collectTexts(capsule),
+                collectTexts(capsule).contains("执行中 2"));
+
+        RuntimeEnvironment.setQualifiers("en");
+        capsule.refreshLocaleText();
+
+        List<String> texts = collectTexts(capsule);
+        assertTrue("running stat must follow the new locale, got: " + texts,
+                texts.contains("Running 2"));
+        capsule.stopBreathing();
+
+        RuntimeEnvironment.setQualifiers("zh");
     }
 
     private java.util.List<String> collectTexts(FloatingStatusView capsule) {

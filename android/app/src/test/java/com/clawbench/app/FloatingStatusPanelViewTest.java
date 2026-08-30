@@ -3,6 +3,7 @@ package com.clawbench.app;
 import android.animation.ObjectAnimator;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -29,7 +30,7 @@ import static org.junit.Assert.*;
  * those run under Robolectric against the real View measure machinery.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 28)
+@Config(sdk = 28, qualifiers = "zh")
 public class FloatingStatusPanelViewTest {
 
     private static final int WIDTH_PX = 280; // density 1.0 under Robolectric
@@ -343,6 +344,24 @@ public class FloatingStatusPanelViewTest {
 
     private ObjectAnimator headerBreathAnimator(FloatingStatusPanelView panel) throws Exception {
         return (ObjectAnimator) getField(headerContent(panel), "breathAnim");
+    }
+
+    @Test
+    public void headerCollapseButton_isChevronIconImage() throws Exception {
+        // The collapse button must be an ImageView showing the chevron-up
+        // vector icon (not a "×" text), so it reads as "collapse the panel
+        // back to the capsule" matching the Web frontend's ChevronUp.
+        FloatingStatusPanelView panel = newPanel();
+        LinearLayout header = (LinearLayout) getField(panel, "headerLayout");
+
+        // header: child 0 = shared content row, child 1 = collapse button.
+        View btn = header.getChildAt(1);
+        assertTrue("the collapse button must be an ImageView, got " + btn.getClass().getSimpleName(),
+                btn instanceof ImageView);
+        ImageView iconBtn = (ImageView) btn;
+        assertNotNull("the collapse button must carry the chevron icon",
+                iconBtn.getDrawable());
+        panel.stopBreathing();
     }
 
     @Test

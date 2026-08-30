@@ -12,6 +12,8 @@ export interface ClawBenchNative {
   // Sync (preload / JS-interface local values)
   isNativeApp(): boolean
   getLanguage(): string
+  /** Persist the language selected in the Web frontend to native prefs so native UI (splash, login page) follows it. */
+  setLanguage?(lang: string): void
   showServerDialog(): void
   openSession(sessionId: string): void
   setNativePushEnabled(enabled: boolean): void

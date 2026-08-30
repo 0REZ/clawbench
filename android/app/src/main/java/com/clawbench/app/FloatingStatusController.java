@@ -551,6 +551,23 @@ public class FloatingStatusController {
         });
     }
 
+    /**
+     * Re-render text after a system locale change. The capsule re-resolves its
+     * resource strings; an expanded panel re-fetches the overview and re-renders
+     * so the (Untitled) fallback follows the new locale. Any thread; UI
+     * mutations are marshalled.
+     */
+    public void onLocaleChanged() {
+        postToUi(() -> {
+            if (view != null) {
+                view.refreshLocaleText();
+            }
+        });
+        if (expanded) {
+            requestOverviewRefresh(true);
+        }
+    }
+
     /** App foreground state changes drive visibility directly. Any thread. */
     public void setAppForeground(boolean foreground) {
         appForeground = foreground;

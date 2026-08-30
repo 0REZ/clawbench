@@ -1551,8 +1551,11 @@
     }
   }
 
-  // Called by native code on connection failure
-  function onConnectError(msg) {
+  // Called by native code on connection failure.
+  // msg: localized error text to display. code: optional classification code
+  // ("password" / "rate_limit", from MainActivity) so the password field is
+  // shown only for auth errors — never matched against localized text.
+  function onConnectError(msg, code) {
     setConnecting(false);
     setConnecting(false, true);
     var addForm = document.getElementById('addServerForm');
@@ -1565,8 +1568,16 @@
       // fix a connection issue by entering a different password.
       var passwordGroup = document.getElementById('passwordGroup');
       var passwordEl = document.getElementById('password');
-      if (msg && (msg.indexOf('密码错误') !== -1 || msg.indexOf('尝试次数过多') !== -1 ||
-                  msg.indexOf(t('wrong_password')) !== -1 || msg.indexOf(t('too_many_attempts')) !== -1)) {
+      var isAuthError = code === 'password' || code === 'rate_limit';
+      if (!isAuthError && msg) {
+        // Fallback for older clients that don't pass a code: match against the
+        // known error phrases in the current language and the English defaults.
+        isAuthError = msg.indexOf(t('wrong_password')) !== -1
+          || msg.indexOf(t('too_many_attempts')) !== -1
+          || msg.indexOf(I18N['en']['wrong_password']) !== -1
+          || msg.indexOf(I18N['en']['too_many_attempts']) !== -1;
+      }
+      if (isAuthError) {
         passwordGroup.style.display = 'block';
         passwordEl.value = '';
         passwordEl.focus();

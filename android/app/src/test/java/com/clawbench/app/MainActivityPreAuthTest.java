@@ -70,6 +70,11 @@ public class MainActivityPreAuthTest {
     public void setUp() throws Exception {
         activity = allocateAndSpy(MainActivity.class);
 
+        // The spy activity is created via Unsafe.allocateInstance and has no
+        // attached Context, so getString() would return null. Stub it with the
+        // Chinese resource texts the assertions expect.
+        stubGetString();
+
         // Stub runOnUiThread to execute Runnables synchronously
         doAnswer(inv -> {
             Runnable r = inv.getArgument(0);
@@ -806,5 +811,19 @@ public class MainActivityPreAuthTest {
                 int.class, String.class, String.class, java.util.List.class, okhttp3.OkHttpClient.class);
         method.setAccessible(true);
         method.invoke(activity, statusCode, url, password, cookies, client);
+    }
+
+    /**
+     * Stub getString on the spy activity. The spy is allocated without an
+     * attached Context (Unsafe.allocateInstance), so getString would return
+     * null; these tests assert the Chinese resource texts, so return them by
+     * resource id.
+     */
+    private void stubGetString() {
+        doAnswer(inv -> {
+            int resId = inv.getArgument(0);
+            String v = MainActivityZhText.get(resId);
+            return v != null ? v : "";
+        }).when(activity).getString(anyInt());
     }
 }

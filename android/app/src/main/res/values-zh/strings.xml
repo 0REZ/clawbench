@@ -1,18 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ClawBench</string>
-    <string name="dialog_title">连接服务器</string>
-    <string name="dialog_positive">连接</string>
-    <string name="dialog_negative">取消</string>
-    <string name="error_no_url">请输入服务器地址</string>
     <string name="error_connection_failed">无法连接服务器</string>
-    <string name="settings_title">服务器设置</string>
     <string name="download_started">开始下载</string>
     <string name="download_failed">下载失败</string>
-    <string name="download_completed">下载完成</string>
     <string name="download_description">ClawBench 文件下载</string>
-    <string name="ssh_notification_reconnecting">后台连接断开，正在重连…</string>
-    <string name="ssh_notification_recovering">后台连接已恢复</string>
     <!-- Browser sandbox -->
     <string name="browser_back">返回主界面</string>
     <string name="browser_refresh">刷新</string>
@@ -33,7 +25,6 @@
     <!-- Browser sandbox - new features -->
     <string name="browser_forward">前进</string>
     <string name="browser_desktop_mode">桌面模式</string>
-    <string name="browser_mobile_mode">移动模式</string>
     <string name="browser_find_in_page">查找</string>
     <string name="browser_console_log">日志</string>
     <string name="browser_more">更多</string>
@@ -49,7 +40,7 @@
     <string name="browser_log_send_to_session">发送到会话</string>
     <string name="browser_log_select_all">全选</string>
     <string name="browser_log_deselect_all">取消全选</string>
-    <string name="browser_log_clear">清空日志</string>
+    <string name="browser_log_clear">清空</string>
     <string name="browser_log_send_message_hint">输入描述信息…</string>
     <string name="browser_log_send">发送</string>
     <string name="browser_log_pick_session">选择会话</string>
@@ -57,13 +48,57 @@
     <string name="browser_log_send_success">已发送到会话</string>
     <string name="browser_log_send_failed">发送失败</string>
     <string name="browser_log_no_session">未连接会话，无法发送</string>
-    <string name="browser_log_no_selection">请先选择日志条目</string>
     <string name="browser_log_auth_expired">会话已过期，请重新打开浏览器</string>
+    <string name="browser_tunnel_waiting">正在等待隧道连接…</string>
+    <string name="browser_tunnel_failed">隧道连接失败，请检查网络</string>
     <string name="press_again_to_exit">再按一次退出应用</string>
+    <!-- Floating status window -->
+    <string name="floating_stat_running">执行中 %1$d</string>
+    <string name="floating_stat_pending">待审批 %1$d</string>
+    <string name="floating_stat_unread">未读 %1$d</string>
+    <string name="floating_idle">空闲</string>
+    <string name="session_untitled">(无标题)</string>
+    <!-- Main activity: connection / login errors -->
+    <string name="conn_file_picker_title">选择文件</string>
+    <string name="conn_timeout">连接超时，请检查服务器地址和网络连接。</string>
+    <string name="conn_no_network">网络不可用，请检查网络连接。</string>
+    <string name="conn_ssl_title">SSL 证书验证失败</string>
+    <string name="conn_ssl_message">服务器使用了自签名证书，连接可能不安全。\n\n仅当您信任该服务器时才继续。</string>
+    <string name="conn_ssl_positive">信任并继续</string>
+    <string name="conn_ssl_negative">取消连接</string>
+    <string name="conn_err_dns">无法解析服务器地址，请检查域名是否正确。</string>
+    <string name="conn_err_unreachable">无法连接到服务器，请检查地址和端口。</string>
+    <string name="conn_err_timeout">连接超时，请检查服务器地址和网络连接。</string>
+    <string name="conn_err_network">网络错误，请检查网络连接。</string>
+    <string name="conn_err_connect">无法连接到服务器，请检查地址和网络连接。</string>
+    <string name="conn_err_not_clawbench">该地址不是 ClawBench 服务器。</string>
+    <string name="conn_err_password">密码错误，请检查登录密码。</string>
+    <string name="conn_err_rate_limited">尝试次数过多，请稍后再试。</string>
+    <string name="conn_err_server">服务器错误 (%1$d)，请稍后重试。</string>
+    <string name="conn_err_bad_status">连接失败 (%1$d)，请检查服务器地址。</string>
+    <string name="conn_ssl_exception">SSL 连接异常，请重新连接。</string>
+    <string name="conn_err_load">无法连接到服务器，请检查地址和网络连接。</string>
+    <string name="conn_err_auth">认证失败，请检查密码是否正确。</string>
+    <string name="conn_err_request">请求错误 (%1$d)，请检查服务器地址。</string>
+    <string name="conn_err_http_failed">连接失败，请检查服务器地址和网络连接。</string>
+    <string name="conn_render_crash">页面渲染异常，请重新连接。</string>
+    <!-- Background service notifications -->
+    <string name="ssh_notification_reconnecting">SSH 隧道断开，正在重连…</string>
+    <string name="ssh_notification_recovering">SSH 隧道已恢复</string>
+    <string name="notif_ssh_reconnecting_attempt">SSH 隧道断开，第 %1$d 次重连…</string>
+    <string name="notif_channel_bg_service">后台连接服务</string>
+    <string name="notif_channel_bg_service_desc">SSH 端口映射与后台事件监听</string>
+    <string name="notif_channel_ai_events">AI 事件通知</string>
+    <string name="notif_channel_ai_events_desc">AI会话和任务完成通知</string>
+    <string name="notif_ports_mapped">%1$d 个端口映射</string>
+    <string name="notif_terminals_open">%1$d 个终端</string>
+    <string name="notif_status_separator">，</string>
+    <string name="notif_listening">消息监听中</string>
+    <string name="notif_service_stopping">后台服务即将停止</string>
     <!-- Share feature -->
     <string name="share_file_failed">分享文件失败</string>
     <string name="share_multiple_files">分享多个文件</string>
-    <string name="share_in_success">已接收 %d 个文件，可通过聊天附件加入会话</string>
+    <string name="share_in_success">已接收 %1$d 个文件，可通过聊天附件加入会话</string>
     <string name="share_in_failed">接收文件失败</string>
     <string name="share_in_no_server">未连接服务器，无法接收文件</string>
     <!-- Push event notifications (aligned with DingTalk templates) -->

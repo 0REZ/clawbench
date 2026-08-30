@@ -70,6 +70,9 @@ const legacyKeys: Record<string, {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- vue-i18n locale type mismatch
       i18n.global.locale.value = value as any
       setLocaleCookie(value)
+      // Persist to native prefs so native UI (splash, login page) follows the
+      // in-app language even before the locale cookie is readable on cold start.
+      getNative()?.setLanguage?.(value)
     },
   },
   autoSpeech: {

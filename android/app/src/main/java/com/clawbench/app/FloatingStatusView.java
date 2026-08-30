@@ -145,6 +145,15 @@ public class FloatingStatusView extends android.widget.FrameLayout {
     }
 
     /**
+     * Re-resolve strings after a system locale change. Delegates to the shared
+     * content row so capsule text follows the system language immediately.
+     * UI thread only.
+     */
+    public void refreshLocaleText() {
+        contentView.refreshLocaleText();
+    }
+
+    /**
      * Stop the breathing animation in the content row. Called on controller
      * teardown so an infinite animator cannot keep posting frame callbacks
      * after the window is removed. UI thread only.

@@ -54,7 +54,7 @@ public class FloatingStatusContentView extends LinearLayout {
     static final int TEXT_SIZE_SP = 14;
     static final int LOGO_MARGIN_END_DP = 10;
     /** Idle-state label shown when every count is 0. */
-    private static final String IDLE_LABEL = "空闲";
+    private static final int IDLE_LABEL_RES = R.string.floating_idle;
     // Breathing animation: the running dot pulses between 30% and full opacity.
     private static final float BREATH_ALPHA_MIN = 0.3f;
     private static final float BREATH_ALPHA_MAX = 1.0f;
@@ -68,6 +68,10 @@ public class FloatingStatusContentView extends LinearLayout {
     private final float density;
     /** Idle-state label ("空闲"), gray without a dot; VISIBLE only when every count is 0. */
     private final TextView idleLabel;
+    /** Last rendered counts, kept so refreshLocaleText() can re-render after a system locale change. */
+    private int lastRunning;
+    private int lastPending;
+    private int lastUnread;
 
     public FloatingStatusContentView(Context context) {
         super(context);
@@ -89,16 +93,16 @@ public class FloatingStatusContentView extends LinearLayout {
         runningDotDrawable.setShape(GradientDrawable.OVAL);
         runningDotDrawable.setColor(COLOR_RUNNING);
         runningDot.setBackground(runningDotDrawable);
-        runningItem = buildStatItem(runningDot, "执行中");
+        runningItem = buildStatItem(runningDot, R.string.floating_stat_running);
 
-        pendingItem = buildStatItem(dot(COLOR_PERMISSION_PENDING), "待审批");
-        unreadItem = buildStatItem(dot(COLOR_UNREAD), "未读");
+        pendingItem = buildStatItem(dot(COLOR_PERMISSION_PENDING), R.string.floating_stat_pending);
+        unreadItem = buildStatItem(dot(COLOR_UNREAD), R.string.floating_stat_unread);
 
         // Idle label: gray text without a dot, shown only while every count
         // is 0. Plain TextView with the theme's secondary color, so it reads
         // clearly fainter than the live stat labels.
         idleLabel = new TextView(context);
-        idleLabel.setText(IDLE_LABEL);
+        idleLabel.setText(IDLE_LABEL_RES);
         idleLabel.setTextSize(TEXT_SIZE_SP);
         idleLabel.setSingleLine(true);
         idleLabel.setIncludeFontPadding(false);
@@ -130,9 +134,12 @@ public class FloatingStatusContentView extends LinearLayout {
     public void renderStats(int running, int pending, int unread) {
         AppLog.d("FloatingStatusContent", "renderStats running=" + running
                 + " pending=" + pending + " unread=" + unread);
-        setStat(runningItem, running, "执行中");
-        setStat(pendingItem, pending, "待审批");
-        setStat(unreadItem, unread, "未读");
+        lastRunning = running;
+        lastPending = pending;
+        lastUnread = unread;
+        setStat(runningItem, running, R.string.floating_stat_running);
+        setStat(pendingItem, pending, R.string.floating_stat_pending);
+        setStat(unreadItem, unread, R.string.floating_stat_unread);
         idleLabel.setVisibility(running == 0 && pending == 0 && unread == 0
                 ? VISIBLE : GONE);
         if (running > 0) {
@@ -143,6 +150,17 @@ public class FloatingStatusContentView extends LinearLayout {
             breathAnim.cancel();
             runningDot.setAlpha(BREATH_ALPHA_MAX);
         }
+    }
+
+    /**
+     * Re-resolve strings after a system locale change and re-render the last
+     * counts. Stat labels and the idle label are re-read from resources so
+     * the floating capsule follows the system language immediately. UI thread
+     * only.
+     */
+    public void refreshLocaleText() {
+        idleLabel.setText(IDLE_LABEL_RES);
+        renderStats(lastRunning, lastPending, lastUnread);
     }
 
     /**
@@ -158,7 +176,7 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /** Build one dot+label item, added to the row with dot leading the label. */
-    private LinearLayout buildStatItem(View dot, String label) {
+    private LinearLayout buildStatItem(View dot, int labelResId) {
         LinearLayout item = new LinearLayout(getContext());
         item.setOrientation(LinearLayout.HORIZONTAL);
         item.setGravity(Gravity.CENTER_VERTICAL);
@@ -173,7 +191,7 @@ public class FloatingStatusContentView extends LinearLayout {
         text.setSingleLine(true);
         text.setIncludeFontPadding(false);
         text.setTextColor(FloatingThemeColors.get(getContext())[1]);
-        text.setText(label);
+        text.setText(labelResId);
         item.addView(text, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -195,10 +213,11 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /** Apply a count to a stat item: show dot+label, or hide the whole group. */
-    private void setStat(LinearLayout item, int count, String prefix) {
+    private void setStat(LinearLayout item, int count, int labelResId) {
         if (count > 0) {
             item.setVisibility(VISIBLE);
-            ((TextView) item.getChildAt(1)).setText(prefix + " " + count);
+            ((TextView) item.getChildAt(1)).setText(
+                    getContext().getString(labelResId, count));
         } else {
             item.setVisibility(GONE);
         }

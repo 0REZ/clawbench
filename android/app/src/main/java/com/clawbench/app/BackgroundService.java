@@ -878,6 +878,16 @@ public class BackgroundService extends Service {
         super.onTaskRemoved(rootIntent);
     }
 
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // The system locale changed: re-resolve floating-window strings so the
+        // capsule/panel follow the system language immediately.
+        if (floatingController != null) {
+            floatingController.onLocaleChanged();
+        }
+    }
+
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
@@ -1017,7 +1027,8 @@ public class BackgroundService extends Service {
                     AppLog.w(TAG, "SSH: session disconnected, starting auto-reconnect");
                     isReconnecting = true;
                     reconnectAttempt = 0;
-                    updateNotification(forwardedPorts.size(), "SSH 隧道断开，正在重连…");
+                    updateNotification(forwardedPorts.size(),
+                            getString(R.string.ssh_notification_reconnecting));
 
                     while (monitorActive && !intentionalDisconnect && !Thread.currentThread().isInterrupted()) {
                         reconnectAttempt++;
@@ -1028,7 +1039,7 @@ public class BackgroundService extends Service {
                         if (reconnectAttempt > 1) {
                             int displayAttempt = Math.min(reconnectAttempt, 999);
                             updateNotification(forwardedPorts.size(),
-                                    "SSH 隧道断开，第 " + displayAttempt + " 次重连…");
+                                    getString(R.string.notif_ssh_reconnecting_attempt, displayAttempt));
                             try {
                                 Thread.sleep(delay);
                             } catch (InterruptedException e) {
@@ -1045,7 +1056,8 @@ public class BackgroundService extends Service {
                             AppLog.i(TAG, "SSH: auto-reconnect succeeded on attempt #" + reconnectAttempt);
                             isReconnecting = false;
                             reconnectAttempt = 0;
-                            updateNotification(forwardedPorts.size(), "SSH 隧道已恢复");
+                            updateNotification(forwardedPorts.size(),
+                                    getString(R.string.ssh_notification_recovering));
                             // Clear the "recovered" status after 3 seconds
                             try {
                                 Thread.sleep(3000);
@@ -1665,19 +1677,19 @@ public class BackgroundService extends Service {
                 // Background connectivity channel (low priority, no sound)
                 android.app.NotificationChannel channel = new android.app.NotificationChannel(
                         CHANNEL_ID,
-                        "后台连接服务",
+                        getString(R.string.notif_channel_bg_service),
                         android.app.NotificationManager.IMPORTANCE_LOW
                 );
-                channel.setDescription("SSH 端口映射与后台事件监听");
+                channel.setDescription(getString(R.string.notif_channel_bg_service_desc));
                 nm.createNotificationChannel(channel);
 
                 // AI events channel (high priority, sound + vibration)
                 android.app.NotificationChannel eventsChannel = new android.app.NotificationChannel(
                         EVENTS_CHANNEL_ID,
-                        "AI 事件通知",
+                        getString(R.string.notif_channel_ai_events),
                         android.app.NotificationManager.IMPORTANCE_HIGH
                 );
-                eventsChannel.setDescription("AI会话和任务完成通知");
+                eventsChannel.setDescription(getString(R.string.notif_channel_ai_events_desc));
                 eventsChannel.enableLights(true);
                 eventsChannel.setVibrationPattern(new long[]{0, 300, 200, 300});
                 nm.createNotificationChannel(eventsChannel);
@@ -1697,7 +1709,7 @@ public class BackgroundService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        String title = "ClawBench";
+        String title = getString(R.string.app_name);
         String text;
         if (statusText != null) {
             text = statusText;
@@ -1705,19 +1717,19 @@ public class BackgroundService extends Service {
             // Build combined status text showing port forwards and terminal sessions
             StringBuilder sb = new StringBuilder();
             if (portCount > 0) {
-                sb.append(portCount).append(" 个端口映射");
+                sb.append(getString(R.string.notif_ports_mapped, portCount));
             }
             int terms = terminalSessionCount;
             if (terms > 0) {
-                if (sb.length() > 0) sb.append("，");
-                sb.append(terms).append(" 个终端");
+                if (sb.length() > 0) sb.append(getString(R.string.notif_status_separator));
+                sb.append(getString(R.string.notif_terminals_open, terms));
             }
             if (nativeWsNeeded || nativeWsActive) {
                 if (sb.length() == 0) {
-                    sb.append("消息监听中");
+                    sb.append(getString(R.string.notif_listening));
                 }
             }
-            text = sb.length() > 0 ? sb.toString() : "后台服务即将停止";
+            text = sb.length() > 0 ? sb.toString() : getString(R.string.notif_service_stopping);
         }
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -1742,7 +1754,7 @@ public class BackgroundService extends Service {
         }
         // If SSH is down but native WS is active, show that instead of zombie port count
         if (activePortCount == 0 && (nativeWsNeeded || nativeWsActive)) {
-            return buildNotification(0, "消息监听中");
+            return buildNotification(0, getString(R.string.notif_listening));
         }
         return buildNotification(activePortCount, null);
     }
@@ -1762,7 +1774,7 @@ public class BackgroundService extends Service {
         AppLog.i(TAG, "SSH: cleaning up " + stale + " stale port entries (SSH disconnected, no reconnect possible)");
         forwardedPorts.clear();
         saveForwardedPorts();
-        updateNotification(0, nativeWsNeeded || nativeWsActive ? "消息监听中" : null);
+        updateNotification(0, nativeWsNeeded || nativeWsActive ? getString(R.string.notif_listening) : null);
     }
 
     // --- Foreground service compat ---
@@ -2897,9 +2909,9 @@ public class BackgroundService extends Service {
                     android.app.NotificationChannel channel = nm.getNotificationChannel(EVENTS_CHANNEL_ID);
                     if (channel == null) {
                         channel = new android.app.NotificationChannel(
-                                EVENTS_CHANNEL_ID, "AI 事件通知",
+                                EVENTS_CHANNEL_ID, context.getString(R.string.notif_channel_ai_events),
                                 android.app.NotificationManager.IMPORTANCE_HIGH);
-                        channel.setDescription("AI会话和任务完成通知");
+                        channel.setDescription(context.getString(R.string.notif_channel_ai_events_desc));
                         channel.enableLights(true);
                         channel.setVibrationPattern(new long[]{0, 300, 200, 300});
                         nm.createNotificationChannel(channel);

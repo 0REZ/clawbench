@@ -1,6 +1,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import i18n, { STORAGE_KEY, setLocaleCookie } from '@/i18n'
+import { getNative } from '@/utils/clawbenchNative'
 
 export function useLocale() {
   const { locale } = useI18n()
@@ -11,6 +12,9 @@ export function useLocale() {
     locale.value = lang
     localStorage.setItem(STORAGE_KEY, lang)
     setLocaleCookie(lang)
+    // Persist to native prefs so native UI (splash, login page) follows the
+    // in-app language even before the locale cookie is readable on cold start.
+    getNative()?.setLanguage?.(lang)
   }
 
   function toggleLocale() {

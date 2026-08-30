@@ -34,7 +34,7 @@ import static org.junit.Assert.assertTrue;
  * Robolectric.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 28)
+@Config(sdk = 28, qualifiers = "zh")
 public class FloatingStatusControllerTest {
 
     private static final String TAG = "FloatingStatusCtrl";

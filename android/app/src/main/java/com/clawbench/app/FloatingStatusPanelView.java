@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -29,7 +30,7 @@ import java.util.function.BiConsumer;
  * Renders the /api/ai/sessions/overview response as a scrollable list grouped
  * by project. UI is built in code (no XML): a header row with the shared
  * capsule content (logo + live stat counts, see FloatingStatusContentView)
- * and a collapse ("×") button, followed by per-project group headers and
+ * and a collapse (chevron-up) button, followed by per-project group headers and
  * session rows. Each session row shows a tri-color status indicator, a
  * single-line ellipsized title, and a red circular unread badge when
  * unreadCount > 0. Tapping a row invokes the onSessionClick callback.
@@ -72,7 +73,8 @@ public class FloatingStatusPanelView extends FrameLayout {
     private static final int PADDING_H_DP = 14;
     private static final int PADDING_V_DP = 10;
     private static final int COLLAPSE_BTN_SIZE_DP = 22;
-    private static final int COLLAPSE_BTN_TEXT_SIZE_SP = 16;
+    /** Icon size inside the collapse button (the touch target stays larger). */
+    private static final int COLLAPSE_BTN_ICON_SIZE_DP = 16;
     private static final int PROJECT_HEADER_SIZE_SP = 11;
     private static final int PROJECT_HEADER_PADDING_TOP_DP = 10;
     /** Gap between the bold project name and the following path in a group header. */
@@ -271,11 +273,18 @@ public class FloatingStatusPanelView extends FrameLayout {
         header.addView(headerContentView, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView collapseBtn = new TextView(context);
-        collapseBtn.setText("×");
-        collapseBtn.setTextSize(COLLAPSE_BTN_TEXT_SIZE_SP);
-        collapseBtn.setTextColor(colorTextSecondary);
-        collapseBtn.setGravity(Gravity.CENTER);
+        // Collapse button: a chevron-up icon (Web's ChevronUp) that collapses
+        // the expanded panel back to the capsule. Tinted with the theme's
+        // secondary text color so it matches the rest of the header on both
+        // light and dark themes.
+        ImageView collapseBtn = new ImageView(context);
+        collapseBtn.setImageResource(R.drawable.ic_panel_collapse);
+        collapseBtn.setColorFilter(colorTextSecondary);
+        collapseBtn.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        // Keep the 24dp icon visually smaller (16dp) inside the 22dp touch
+        // target via symmetric padding.
+        int iconPad = dp((COLLAPSE_BTN_SIZE_DP - COLLAPSE_BTN_ICON_SIZE_DP) / 2);
+        collapseBtn.setPadding(iconPad, iconPad, iconPad, iconPad);
         collapseBtn.setClickable(true);
         collapseBtn.setOnClickListener(v -> {
             if (onCollapseClick != null) {
@@ -624,7 +633,8 @@ public class FloatingStatusPanelView extends FrameLayout {
         }
 
         TextView title = new TextView(getContext());
-        title.setText(session.title == null || session.title.isEmpty() ? "(无标题)" : session.title);
+        title.setText(session.title == null || session.title.isEmpty()
+                ? getContext().getString(R.string.session_untitled) : session.title);
         title.setTextSize(SESSION_TITLE_SIZE_SP);
         title.setTextColor(colorTextPrimary);
         title.setSingleLine(true);
