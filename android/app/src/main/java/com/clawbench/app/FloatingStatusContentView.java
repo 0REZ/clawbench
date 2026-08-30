@@ -111,9 +111,13 @@ public class FloatingStatusContentView extends LinearLayout {
 
         // Spin animation on the running arc. Loops forever while any session
         // is running; renderStats starts/stops it with the running count.
+        // A linear interpolator keeps the rotation perfectly constant-speed —
+        // the default AccelerateDecelerateInterpolator makes each lap start
+        // slow and end slow, which reads as a visible hiccup per revolution.
         spinAnim = ObjectAnimator.ofFloat(runningDot, "rotation", 0f, 360f);
         spinAnim.setDuration(SPIN_MS);
         spinAnim.setRepeatCount(ObjectAnimator.INFINITE);
+        spinAnim.setInterpolator(new android.view.animation.LinearInterpolator());
 
         // Initial state: all groups hidden until the first renderStats.
         renderStats(0, 0, 0);

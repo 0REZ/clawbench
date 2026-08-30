@@ -37,7 +37,7 @@ import java.util.function.BiConsumer;
  *
  * Status dots follow a fixed priority (yellow > green > blue):
  *   - PENDING  (yellow): pendingApproval, regardless of running/unread
- *   - RUNNING  (green):  running && !pendingApproval — the dot breathes
+ *   - RUNNING  (green):  running && !pendingApproval — the ring-arc spins
  *   - UNREAD   (blue):   !running && !pendingApproval && unreadCount > 0
  *   - NONE:     no dot
  * The decision is the static pure function statusDotKind(SessionItem) so it
@@ -84,11 +84,12 @@ public class FloatingStatusPanelView extends FrameLayout {
     private static final int DOT_SIZE_DP = 8;
     private static final int DOT_MARGIN_END_DP = 8;
 
-    // Breathing animation for a running session's green dot (same rhythm as
-    // the capsule's running dot in FloatingStatusView).
-    private static final float BREATH_ALPHA_MIN = 0.3f;
-    private static final float BREATH_ALPHA_MAX = 1.0f;
-    private static final long BREATH_MS = 800;
+    // Spin animation for a running session's green ring-arc (same rhythm as
+    // the capsule's running indicator in FloatingStatusView).
+    private static final long SPIN_MS = 900;
+    // Skeleton placeholder rows breathe (alpha pulse) while loading.
+    private static final float SKELETON_ALPHA_MAX = 1.0f;
+    private static final long SKELETON_BREATH_MS = 800;
 
     // Skeleton loading row layout.
     private static final int SKELETON_ROWS = 4;
@@ -130,8 +131,8 @@ public class FloatingStatusPanelView extends FrameLayout {
     /** Theme-derived gray used for skeleton placeholder rows (mix of textSecondary with the panel bg). */
     private final int skeletonGray;
     private Runnable onCollapseClick;
-    /** Views currently breathing; stopped when rows are rebuilt. */
-    private final List<View> breathingDots = new ArrayList<>();
+    /** Running ring-arc views currently spinning; stopped when rows are rebuilt. */
+    private final List<View> spinningDots = new ArrayList<>();
 
     /**
      * A single session as it appears in the overview list.
@@ -358,11 +359,16 @@ public class FloatingStatusPanelView extends FrameLayout {
                 }
             }
         }
+        // Stop stale row/header animations BEFORE re-rendering so the header's
+        // spin restarts below (renderHeaderStats starts it again). Ordering
+        // matters: stopBreathing() cancels the header animator, so it must run
+        // before renderHeaderStats re-arms it — otherwise the title-bar ring
+        // never spins.
+        stopBreathing();
         renderHeaderStats(runningCount, pendingCount, unreadCount);
 
-        stopBreathing();
         listContainer.removeAllViews();
-        breathingDots.clear();
+        spinningDots.clear();
         for (ProjectGroup group : groups) {
             listContainer.addView(buildProjectHeader(group.name));
             for (SessionItem session : group.sessions) {
@@ -384,7 +390,7 @@ public class FloatingStatusPanelView extends FrameLayout {
     public void showSkeleton() {
         stopBreathing();
         listContainer.removeAllViews();
-        breathingDots.clear();
+        spinningDots.clear();
 
         for (int i = 0; i < SKELETON_ROWS; i++) {
             listContainer.addView(buildSkeletonRow());
@@ -454,8 +460,8 @@ public class FloatingStatusPanelView extends FrameLayout {
      */
     private void breatheSkeleton(ViewGroup container, long seq) {
         ObjectAnimator anim = ObjectAnimator.ofFloat(container, "alpha",
-                SKELETON_BAR_ALPHA, BREATH_ALPHA_MAX);
-        anim.setDuration(BREATH_MS * 2);
+                SKELETON_BAR_ALPHA, SKELETON_ALPHA_MAX);
+        anim.setDuration(SKELETON_BREATH_MS * 2);
         anim.setRepeatCount(ObjectAnimator.INFINITE);
         anim.setRepeatMode(ObjectAnimator.REVERSE);
         anim.addUpdateListener(a -> {
@@ -614,17 +620,21 @@ public class FloatingStatusPanelView extends FrameLayout {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
-        // Tri-color status dot: yellow (pending) > green (running, breathing)
-        // > blue (unread), else none.
+        // Tri-color status dot: yellow (pending) > green (running, spinning
+        // ring-arc) > blue (unread), else none.
         StatusDotKind kind = statusDotKind(session);
         if (kind != StatusDotKind.NONE) {
             View dot = new View(getContext());
-            GradientDrawable dotDrawable = new GradientDrawable();
-            dotDrawable.setShape(GradientDrawable.OVAL);
-            dotDrawable.setColor(colorFor(kind));
-            dot.setBackground(dotDrawable);
             if (kind == StatusDotKind.RUNNING) {
-                breathingDots.add(dot);
+                // Running: the same ring-arc spinner as the capsule/header —
+                // a faint full ring plus a short foreground arc that rotates.
+                dot.setBackground(new ArcProgressDrawable(COLOR_RUNNING, dp(DOT_SIZE_DP)));
+                spinningDots.add(dot);
+            } else {
+                GradientDrawable dotDrawable = new GradientDrawable();
+                dotDrawable.setShape(GradientDrawable.OVAL);
+                dotDrawable.setColor(colorFor(kind));
+                dot.setBackground(dotDrawable);
             }
             LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(
                     dp(DOT_SIZE_DP), dp(DOT_SIZE_DP));
@@ -671,26 +681,26 @@ public class FloatingStatusPanelView extends FrameLayout {
     }
 
     /**
-     * Start the breathing alpha loop on every running session's dot. Each dot
+     * Start the rotation loop on every running session's ring-arc. Each dot
      * animates independently so one session finishing does not stall the others;
      * the animators are cancelled in stopBreathing() (called at the top of the
-     * next render and on teardown).
+     * next render and on teardown). A linear interpolator keeps the rotation
+     * constant-speed — the default AccelerateDecelerate reads as a hiccup per lap.
      */
     private void startBreathing() {
-        for (View dot : breathingDots) {
-            ObjectAnimator anim = ObjectAnimator.ofFloat(dot, "alpha",
-                    BREATH_ALPHA_MIN, BREATH_ALPHA_MAX);
-            anim.setDuration(BREATH_MS);
+        for (View dot : spinningDots) {
+            ObjectAnimator anim = ObjectAnimator.ofFloat(dot, "rotation", 0f, 360f);
+            anim.setDuration(SPIN_MS);
             anim.setRepeatCount(ObjectAnimator.INFINITE);
-            anim.setRepeatMode(ObjectAnimator.REVERSE);
+            anim.setInterpolator(new android.view.animation.LinearInterpolator());
             anim.start();
             dot.setTag(anim);
         }
     }
 
     /**
-     * Stop all running-dot breathing animations and restore full opacity.
-     * Covers the title bar's shared content row (which owns its own breathing
+     * Stop all running-dot spin animations and reset rotation.
+     * Covers the title bar's shared content row (which owns its own spin
      * animation) and the session rows. Called before every list rebuild so
      * stale rows never keep animating, and by the controller on teardown so
      * infinite animators cannot keep posting frame callbacks after the window
@@ -699,14 +709,14 @@ public class FloatingStatusPanelView extends FrameLayout {
     public void stopBreathing() {
         cancelSkeletonBreath();
         headerContentView.stopBreathing();
-        for (View dot : breathingDots) {
+        for (View dot : spinningDots) {
             Object tag = dot.getTag();
             if (tag instanceof ObjectAnimator) {
                 ((ObjectAnimator) tag).cancel();
             }
-            dot.setAlpha(BREATH_ALPHA_MAX);
+            dot.setRotation(0f);
         }
-        breathingDots.clear();
+        spinningDots.clear();
     }
 
     /**

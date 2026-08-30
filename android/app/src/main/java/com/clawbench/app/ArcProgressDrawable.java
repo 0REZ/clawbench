@@ -8,25 +8,35 @@ import android.graphics.drawable.Drawable;
 
 /**
  * A small ring-arc drawable used as the "running" loading indicator in the
- * floating status capsule. Draws a partial arc (270°) with a round cap; the
- * host view rotates it continuously while any session is running, producing
- * a spinner-like loading effect.
+ * floating status capsule. Draws a full background ring (the foreground color
+ * at low opacity) plus a short foreground arc (90°) with a round cap; the host
+ * view rotates it continuously while any session is running, producing a
+ * spinner-like loading effect with a visible track.
  */
 public class ArcProgressDrawable extends Drawable {
 
-    private static final int SWEEP_DEGREES = 270;
-    private static final float STROKE_FRACTION = 0.22f;
+    private static final int SWEEP_DEGREES = 90;
+    private static final float STROKE_FRACTION = 0.16f;
+    /** Track (background ring) opacity as a fraction of the arc color. */
+    private static final int TRACK_ALPHA = 60;
 
-    private final Paint paint;
+    private final Paint arcPaint;
+    private final Paint trackPaint;
     private final float strokeWidth;
 
     public ArcProgressDrawable(int color, int sizePx) {
-        paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        paint.setColor(color);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeCap(Paint.Cap.ROUND);
+        arcPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        arcPaint.setColor(color);
+        arcPaint.setStyle(Paint.Style.STROKE);
+        arcPaint.setStrokeCap(Paint.Cap.ROUND);
         strokeWidth = Math.max(1f, sizePx * STROKE_FRACTION);
-        paint.setStrokeWidth(strokeWidth);
+        arcPaint.setStrokeWidth(strokeWidth);
+
+        trackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        trackPaint.setColor(color);
+        trackPaint.setStyle(Paint.Style.STROKE);
+        trackPaint.setAlpha(TRACK_ALPHA);
+        trackPaint.setStrokeWidth(strokeWidth);
     }
 
     public ArcProgressDrawable(int color, float density) {
@@ -42,18 +52,23 @@ public class ArcProgressDrawable extends Drawable {
         }
         float pad = strokeWidth / 2f;
         RectF arc = new RectF(pad, pad, w - pad, h - pad);
-        canvas.drawArc(arc, 270f, SWEEP_DEGREES, false, paint);
+        // Background track: a full ring at low opacity.
+        canvas.drawArc(arc, 0f, 360f, false, trackPaint);
+        // Foreground arc: a short segment (rotated by the host view).
+        canvas.drawArc(arc, 270f, SWEEP_DEGREES, false, arcPaint);
     }
 
     @Override
     public void setAlpha(int alpha) {
-        paint.setAlpha(alpha);
+        arcPaint.setAlpha(alpha);
+        trackPaint.setAlpha((int) (alpha * TRACK_ALPHA / 255f));
         invalidateSelf();
     }
 
     @Override
     public void setColorFilter(android.graphics.ColorFilter colorFilter) {
-        paint.setColorFilter(colorFilter);
+        arcPaint.setColorFilter(colorFilter);
+        trackPaint.setColorFilter(colorFilter);
         invalidateSelf();
     }
 

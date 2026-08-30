@@ -482,6 +482,24 @@ public class FloatingStatusPanelViewTest {
         panel.stopBreathing();
     }
 
+    @Test
+    public void render_keepsHeaderSpinningAfterRebuild() throws Exception {
+        // Regression: render() used to call renderHeaderStats() first, then
+        // stopBreathing() which cancelled the header's spin animator — so the
+        // title-bar ring never rotated after a render. stopBreathing must run
+        // BEFORE renderHeaderStats re-arms the animation.
+        FloatingStatusPanelView panel = newPanel();
+
+        panel.render(new JSONObject(overviewWith(2)), null);
+
+        ObjectAnimator anim = headerSpinAnimator(panel);
+        assertTrue("header running arc must spin after render with running > 0",
+                anim.isRunning());
+        assertEquals("header spin must loop forever", ObjectAnimator.INFINITE,
+                org.robolectric.Shadows.shadowOf(anim).getActualRepeatCount());
+        panel.stopBreathing();
+    }
+
     // =====================================================
     // Skeleton loading placeholder
     // =====================================================
