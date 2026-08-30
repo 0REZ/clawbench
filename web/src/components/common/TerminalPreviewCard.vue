@@ -1,5 +1,5 @@
 <template>
-  <div class="tpc-shell" :class="{ 'tpc-shell--placeholder': !theme, 'tpc-shell--auto': auto }" :style="shellStyle">
+  <div class="tpc-shell" :class="{ 'tpc-shell--placeholder': !theme && !auto, 'tpc-shell--auto': auto }" :style="shellStyle">
     <div class="tpc-titlebar">
       <span class="tpc-dot tpc-dot--red"></span>
       <span class="tpc-dot tpc-dot--yellow"></span>
@@ -8,11 +8,10 @@
     <div class="tpc-body">
       <div class="tpc-line">
         <span class="tpc-prompt" :style="promptStyle">$</span>
-        <span class="tpc-cmd">ls</span>
+        <span>ls</span>
       </div>
       <div class="tpc-line">
         <span class="tpc-dir" :style="dirStyle">src</span>
-        <span class="tpc-sep">  </span>
         <span class="tpc-file" :style="fileStyle">main.go</span>
       </div>
     </div>
@@ -22,6 +21,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ITheme } from '@xterm/xterm'
+import { darkTheme, lightTheme } from '@/utils/terminalThemes'
 
 const props = defineProps<{
   /** Terminal theme colors. Undefined while lazy-loading → placeholder skeleton. */
@@ -32,7 +32,9 @@ const props = defineProps<{
 
 const shellStyle = computed<Record<string, string>>(() => {
   if (props.auto) {
-    return { background: 'linear-gradient(135deg, #ffffff 0%, #ffffff 48%, #1a1a2e 52%, #1a1a2e 100%)' }
+    return {
+      background: `linear-gradient(135deg, ${lightTheme.background} 0%, ${lightTheme.background} 48%, ${darkTheme.background} 52%, ${darkTheme.background} 100%)`,
+    }
   }
   if (!props.theme) return {}
   return {
@@ -116,12 +118,12 @@ const fileStyle = computed<Record<string, string>>(() => {
   color: var(--text-secondary);
 }
 
-.tpc-cmd {
-  color: inherit;
-}
-
 .tpc-dir,
 .tpc-file {
   color: var(--text-secondary);
+}
+
+.tpc-file {
+  margin-left: 6px;
 }
 </style>

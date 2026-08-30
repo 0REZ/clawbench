@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import TerminalPreviewCard from '@/components/common/TerminalPreviewCard.vue'
 
-function makeTheme(overrides: Record<string, string> = {}) {
+function makeTheme(overrides: Record<string, unknown> = {}) {
   return {
     background: '#1e1e2e',
     foreground: '#cdd6f4',
@@ -58,5 +58,14 @@ describe('TerminalPreviewCard', () => {
     expect(wrapper.find('.tpc-prompt').attributes('style')).toContain('green')
     expect(wrapper.find('.tpc-dir').attributes('style')).toContain('blue')
     expect(wrapper.find('.tpc-file').attributes('style')).toContain('cyan')
+  })
+
+  it('falls back to muted styling when theme lacks ansi colors', () => {
+    const wrapper = mount(TerminalPreviewCard, {
+      props: { theme: makeTheme({ green: undefined, blue: undefined, cyan: undefined }), auto: false },
+    })
+    expect(wrapper.find('.tpc-prompt').attributes('style')).toBeUndefined()
+    expect(wrapper.find('.tpc-dir').attributes('style')).toBeUndefined()
+    expect(wrapper.find('.tpc-file').attributes('style')).toBeUndefined()
   })
 })
