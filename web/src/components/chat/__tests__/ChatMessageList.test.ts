@@ -109,7 +109,7 @@ describe('ChatMessageList — force pin is guarded by user scrolling', () => {
     // onScrollStopped resets ownership and clears the deferred flag no matter what
     expect(source).toContain('function onScrollStopped()')
     // pendingFollow is always cleared here — stale pins never fire later
-    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false\s*if \(dist <= NEAR_EDGE_THRESHOLD\) \{\s*scrollToBottom\(true\)/)
+    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false\s*if \(dist <= NEAR_BOTTOM_PX\) \{\s*scrollToBottom\(true\)/)
     expect(source).toContain('setProgrammatic(false)')
   })
 
@@ -188,7 +188,7 @@ describe('ChatMessageList — DOM reconciliation key (listKey)', () => {
  * Fix: follow is decided by live geometry + a "user left the bottom" latch.
  * - While the viewport is at the bottom, streamed content follows (with a
  *   grace band that absorbs render-flush height jumps).
- * - The moment the user scrolls away from the bottom (past NEAR_EDGE_THRESHOLD),
+ * - The moment the user scrolls away from the bottom (past NEAR_BOTTOM_PX),
  *   userLeftBottom latches on and ALL follow is suppressed — a user reading
  *   older content is never yanked back, regardless of how much arrives.
  * - userLeftBottom clears only when the user scrolls back to the bottom.
@@ -205,7 +205,7 @@ describe('ChatMessageList — stream-follow persistence', () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     // Leaving the bottom past the near-edge threshold latches the "left" flag
-    expect(source).toContain('if (distFromBottom > NEAR_EDGE_THRESHOLD) {')
+    expect(source).toContain('if (distFromBottom > NEAR_BOTTOM_PX) {')
     expect(source).toContain('userLeftBottom = true')
     // Returning to the bottom clears it
     expect(source).toContain('userLeftBottom = false')
@@ -253,7 +253,7 @@ describe('ChatMessageList — per-session scroll position memory', () => {
     const source = typeof mod.default === 'string' ? mod.default : ''
     // The session-switch watcher reads the old DOM's live distance before teardown
     expect(source).toContain('saveChatScrollPosition(oldSid, el.scrollTop)')
-    expect(source).toContain('dist > NEAR_EDGE_THRESHOLD')
+    expect(source).toContain('dist > NEAR_BOTTOM_PX')
   })
 
   it('forgets a session left at the bottom (default scroll-to-bottom on return)', async () => {

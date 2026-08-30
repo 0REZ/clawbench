@@ -150,7 +150,7 @@ import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import { store } from '@/stores/app.ts'
 import { computeRemainingCount } from '@/utils/messageListUtils.ts'
 import { StreamFrameScheduler } from '@/utils/streamFrameScheduler'
-import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS } from '@/utils/scrollState'
+import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS, NEAR_BOTTOM_PX } from '@/utils/scrollState'
 import { saveChatScrollPosition, clearChatScrollPosition, getChatScrollPosition } from '@/utils/chatScrollMemory'
 
 const { t } = useI18n()
@@ -402,7 +402,11 @@ let scrollDownTimer = null
 let lastScrollTop = 0
 const SCROLL_BUTTON_HIDE_DELAY = 3000
 
-const NEAR_EDGE_THRESHOLD = 100
+// "At the bottom" threshold — shared single source of truth with
+// scrollState.ts (NEAR_BOTTOM_PX). The top-edge threshold stays separate:
+// it only decides when the scroll-up FAB hides, which should not grow with
+// the (deliberately generous) bottom threshold.
+const NEAR_TOP_THRESHOLD = 100
 const SCROLL_BUTTON_TRIGGER = 200
 const SCROLL_DELTA_THRESHOLD = 10
 
@@ -426,8 +430,8 @@ function handleScroll() {
   const el = messagesRef.value
 
   const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  const nearBottom = distFromBottom < NEAR_EDGE_THRESHOLD
-  const nearTop = el.scrollTop < NEAR_EDGE_THRESHOLD
+  const nearBottom = distFromBottom < NEAR_BOTTOM_PX
+  const nearTop = el.scrollTop < NEAR_TOP_THRESHOLD
   isAtBottom.value = nearBottom
 
   // Scroll-stop detection: any scroll event restarts the window. After
@@ -447,7 +451,7 @@ function handleScroll() {
     // the near-bottom threshold marks a deliberate leave — a user reading older
     // content must never be yanked back, regardless of how much new content
     // arrives. Clearing happens when they scroll back to the bottom below.
-    if (distFromBottom > NEAR_EDGE_THRESHOLD) {
+    if (distFromBottom > NEAR_BOTTOM_PX) {
       userLeftBottom = true
     } else {
       userLeftBottom = false
@@ -547,10 +551,10 @@ function onScrollStopped() {
   const el = messagesRef.value
   if (!el) return
   const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-  if (dist <= NEAR_EDGE_THRESHOLD) isAtBottom.value = true
+  if (dist <= NEAR_BOTTOM_PX) isAtBottom.value = true
   if (pendingFollow) {
     pendingFollow = false
-    if (dist <= NEAR_EDGE_THRESHOLD) {
+    if (dist <= NEAR_BOTTOM_PX) {
       scrollToBottom(true)
     }
   }
@@ -601,7 +605,7 @@ function savePositionNow() {
   const el = messagesRef.value
   if (sid && el) {
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (dist > NEAR_EDGE_THRESHOLD) {
+    if (dist > NEAR_BOTTOM_PX) {
       saveChatScrollPosition(sid, el.scrollTop)
     } else {
       clearChatScrollPosition(sid)
@@ -678,7 +682,7 @@ function followToBottom(streaming, force) {
     const gap = el2.scrollHeight - el2.scrollTop - el2.clientHeight
     // Sync the externally-consumed isAtBottom flag: a pin with zero gap
     // emits no scroll event, so handleScroll never runs.
-    isAtBottom.value = gap <= NEAR_EDGE_THRESHOLD
+    isAtBottom.value = gap <= NEAR_BOTTOM_PX
     if (gap <= 0) return
     const state2 = {
       owner: scrollOwner.value,
@@ -908,7 +912,7 @@ watch(() => props.currentSessionId, (newSid, oldSid) => {
   if (oldSid && messagesRef.value) {
     const el = messagesRef.value
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (dist > NEAR_EDGE_THRESHOLD) {
+    if (dist > NEAR_BOTTOM_PX) {
       saveChatScrollPosition(oldSid, el.scrollTop)
     } else {
       clearChatScrollPosition(oldSid)
@@ -1013,17 +1017,17 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
           const maxTop = el2.scrollHeight - el2.clientHeight
           el2.scrollTop = Math.min(savedPos, maxTop)
           const dist = el2.scrollHeight - el2.scrollTop - el2.clientHeight
-          isAtBottom.value = dist <= NEAR_EDGE_THRESHOLD
+          isAtBottom.value = dist <= NEAR_BOTTOM_PX
           setProgrammatic(false)
           // A restored position away from the bottom means the user is reading
           // earlier content — keep the follow latch on so streaming never yanks
           // them back to the bottom. Only a restore that lands at the bottom
           // clears the latch (stream may then follow as usual).
-          userLeftBottom = dist > NEAR_EDGE_THRESHOLD
+          userLeftBottom = dist > NEAR_BOTTOM_PX
           lastScrollAt = 0
           // Show the scroll-up FAB so the user can jump back to the top of a
           // long session they resumed mid-way (matches manual scroll behavior).
-          if (dist > NEAR_EDGE_THRESHOLD) {
+          if (dist > NEAR_BOTTOM_PX) {
             scrolledUp.value = true
             clearTimeout(scrollUpTimer)
             scrollUpTimer = setTimeout(() => { scrolledUp.value = false }, SCROLL_BUTTON_HIDE_DELAY)
@@ -1035,7 +1039,7 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
   }
 
   if (!oldMsgs || oldMsgs.length === 0) return
-  if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD) return // at bottom → let scrollToBottom pin
+  if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX) return // at bottom → let scrollToBottom pin
   el.__prevScrollHeight = el.scrollHeight
   el.__prevScrollTop = el.scrollTop
   scrollAnchor = captureAnchor(el)

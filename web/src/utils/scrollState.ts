@@ -52,8 +52,15 @@ export interface ScrollStateInput {
 
 /** Silent window after the last scroll event before we consider scrolling "stopped". */
 export const SCROLL_STOP_MS = 250
-/** Distance from the bottom (px) that still counts as "at the bottom". */
-export const NEAR_BOTTOM_PX = 100
+/**
+ * Distance from the bottom (px) that still counts as "at the bottom".
+ * Generous on purpose: the viewport does not have to be pinned exactly to the
+ * bottom for the user to be considered "at the bottom" — a small scroll away
+ * (a finger twitch, a half-fling) should NOT flip the app out of follow mode.
+ * Shared as the single source of truth by ChatMessageList (scroll anchoring,
+ * savePositionNow, restore) and ChatPanelContent (load-more anchoring).
+ */
+export const NEAR_BOTTOM_PX = 200
 /**
  * When streaming, how far above the bottom the viewport may sit while we still
  * follow. The DOM height lags the streaming token stream (throttled render

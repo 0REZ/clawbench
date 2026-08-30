@@ -165,6 +165,7 @@
 import { ref, computed, watch, onUnmounted, onMounted, inject, provide, toRef, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
+import { NEAR_BOTTOM_PX } from '@/utils/scrollState'
 import { apiGet, apiPost } from '@/utils/api'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
@@ -964,7 +965,7 @@ async function handleLoadMore() {
     if (!el) return
     const oldScrollHeight = el.scrollHeight
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    const wasAtBottom = distFromBottom < 100
+    const wasAtBottom = distFromBottom < NEAR_BOTTOM_PX
     // When not at the bottom, anchor the viewport to the first visible message
     // instead of relying on the pure scrollHeight delta — prepended content plus
     // async growth (Mermaid, lazy original text) can shift the delta and drift

@@ -107,7 +107,7 @@ describe('shouldFollowStream — streaming grace band', () => {
   })
 
   it('does not follow a streamed-away viewport when NOT streaming', () => {
-    expect(shouldFollowStream(baseInput({ streaming: false, nearBottomDist: 200 }), false)).toBe(false)
+    expect(shouldFollowStream(baseInput({ streaming: false, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
   })
 
   it('never overrides an active user scroll, even within the grace band', () => {
@@ -124,8 +124,9 @@ describe('shouldFollowStream — user left the bottom (must never be yanked back
   it('suppresses follow entirely once the user scrolled away, regardless of distance', () => {
     // Far away
     expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 5000 }), false)).toBe(false)
-    // Small gap inside the grace band — leaving is still respected
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 200 }), false)).toBe(false)
+    // Small gap outside the bottom threshold but inside the grace band —
+    // leaving is still respected
+    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
   })
 
   it('suppresses follow inside the grace band once the user left', () => {
