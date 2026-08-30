@@ -111,48 +111,68 @@ export function resetAgents(): void {
  * list where stale snapshot names sit next to the real runtime names.
  *
  * Fix: when an ACP-reported entry's id is a known tier alias, apply its name
- * to the skeleton entry whose id contains the same tier token, then drop the
- * alias entry. Backend-agnostic: consumes only the unified acpStates
- * channel; no env or per-backend config is read.
+ * to the skeleton entry whose id contains the same tier token, then REMOVE
+ * the consumed alias entries from the ACP merge input — so the subsequent
+ * id-dedupe merge cannot re-append them. Backend-agnostic: consumes only the
+ * unified acpStates channel; no env or per-backend config is read.
+ *
+ * Returns the pair of merge inputs: the renamed skeleton plus the filtered
+ * ACP list. Alias entries are dropped ONLY when their name was applied to a
+ * skeleton row (or they are the meta `default` tier); an alias whose tier has
+ * no skeleton counterpart stays selectable in the filtered list.
  *
  * 档位别名对齐（修订 3）：claude-agent-acp 以档位别名上报模型列表，其
  * name 携带 env 重定向后的真实模型名；按别名将真名写入骨架同档位条目，
- * 然后移除别名条目。仅消费统一的 acpStates 通道，不读取任何 env 或
- * 后端专属配置，对所有 ACP 后端一致生效。
+ * 并把已消费的别名条目从合并输入中移除——后续按 id 去重的 merge 不会再
+ * 把它们追加回来。仅消费统一的 acpStates 通道，不读取任何 env 或后端
+ * 专属配置。返回一对合并输入：改名后的骨架 + 过滤后的 ACP 表。仅当别名
+ * 的名字已应用到某个骨架条目（或它是 `default` 元档位）时才丢弃；骨架中
+ * 无对应档位的别名保留在过滤表中，维持可选。
  */
-const TIER_ALIASES = new Set(['default', 'opus', 'sonnet', 'haiku', 'fast', 'plan'])
+const TIER_ALIASES = new Set(['default', 'opus', 'sonnet', 'haiku'])
+
+export interface TierAlignedModels {
+    cli: Array<{ id: string; name: string; default?: boolean }>
+    acp: Array<{ id: string; name: string }>
+}
+
+function tierAliasOf(id: string): string {
+    return id.toLowerCase().replace(/[^a-z]/g, '')
+}
 
 export function alignTierAliases(
     cliModels: Array<{ id: string; name: string; default?: boolean }>,
     acpModels: Array<{ id: string; name: string }>,
-): Array<{ id: string; name: string; default?: boolean }> {
+): TierAlignedModels {
+    // alias → real model name, from ACP entries whose id IS a tier alias.
     const byAlias = new Map<string, string>()
     for (const m of acpModels) {
-        const alias = m.id.replace(/[^a-z]/g, '')
+        const alias = tierAliasOf(m.id)
         if (TIER_ALIASES.has(alias) && m.name) byAlias.set(alias, m.name)
     }
-    if (byAlias.size === 0) return cliModels
-    const out: Array<{ id: string; name: string; default?: boolean }> = []
-    for (const m of cliModels) {
+    // No alias entries → nothing to align; pass both lists through untouched.
+    if (byAlias.size === 0) return { cli: cliModels, acp: acpModels }
+    // Apply each alias's real name onto skeleton rows containing the same
+    // tier token. `default` is a meta tier (fallback marker), never applied.
+    const applied = new Set<string>()
+    const cli = cliModels.map(m => {
         const tokens = m.id.toLowerCase().replace(/[^a-z]/g, ' ').split(' ')
-        let hit = ''
-        for (const alias of byAlias.keys()) {
-            if (tokens.includes(alias)) { hit = alias; break }
+        for (const [alias, name] of byAlias) {
+            if (alias !== 'default' && tokens.includes(alias)) {
+                applied.add(alias)
+                return { ...m, name }
+            }
         }
-        out.push(hit ? { ...m, name: byAlias.get(hit)! } : m)
-    }
-    // Append any remaining alias-named entries the skeleton cannot represent
-    for (const m of acpModels) {
-        const alias = m.id.replace(/[^a-z]/g, '')
-        // Skip the meta "default" tier — it is a fallback marker, not a
-        // concrete model option. 跳过无具体模型名的元档位。
-        if (alias === 'default') continue
-        if (!TIER_ALIASES.has(alias)) continue
-        if (!out.some(x => x.name === m.name)) {
-            out.push({ id: m.id, name: m.name })
-        }
-    }
-    return out
+        return m
+    })
+    // Drop consumed alias entries (and the meta `default`) from the merge
+    // input; keep normal entries and unalignable aliases as-is.
+    const acp = acpModels.filter(m => {
+        const alias = tierAliasOf(m.id)
+        if (!TIER_ALIASES.has(alias)) return true
+        return !applied.has(alias) && alias !== 'default'
+    })
+    return { cli, acp }
 }
 
 export function mergeModelLists(
@@ -413,8 +433,8 @@ export function updateACPModelList(agentId: string, models: Array<{ id: string; 
         cliModels = (agent.models || []).map(m => ({ id: m.id, name: m.name, default: !!m.default }))
         originalModels.set(agentId, cliModels)
     }
-    const aligned = alignTierAliases(cliModels, models)
-    agent.models = mergeModelLists(aligned, models, currentModelId)
+    const { cli: aligned, acp: filtered } = alignTierAliases(cliModels, models)
+    agent.models = mergeModelLists(aligned, filtered, currentModelId)
 }
 
 /**

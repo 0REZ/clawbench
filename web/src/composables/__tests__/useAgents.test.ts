@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { useAgents, resetAgents, updateACPModelList, restoreOriginalModels, setCLIModels, populateACPStateFromCache, registerIdentityUpdaters, invalidateACPStateCache } from '@/composables/useAgents'
+import { useAgents, resetAgents, updateACPModelList, restoreOriginalModels, setCLIModels, populateACPStateFromCache, registerIdentityUpdaters, invalidateACPStateCache, alignTierAliases, mergeModelLists } from '@/composables/useAgents'
 
 // Mock apiGet/apiPatch/apiPost/apiDelete to control agent data
 const mockApiGet = vi.fn()
@@ -1326,4 +1326,90 @@ describe('useAgents', () => {
       expect(agentCanResume('claude')).toBe(false) // no acpCommand on testAgents
     })
   })
+})
+
+// --- alignTierAliases (revision 3: tier-alias alignment) ---
+describe('alignTierAliases', () => {
+    it('applies alias real names onto skeleton rows and removes consumed aliases from the merge input', () => {
+        const cli = [
+            { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
+            { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', default: true },
+            { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku' },
+        ]
+        const acp = [
+            { id: 'default', name: 'glm-5.3[1m]' },
+            { id: 'opus', name: 'glm-5.3[1m]' },
+            { id: 'sonnet', name: 'glm-4.7[1m]' },
+            { id: 'haiku', name: 'glm-4.6[1m]' },
+        ]
+        const { cli: aligned, acp: filtered } = alignTierAliases(cli, acp)
+        // Skeleton rows keep their ids but carry the redirected real names.
+        expect(aligned.map(m => [m.id, m.name])).toEqual([
+            ['claude-opus-4-20250514', 'glm-5.3[1m]'],
+            ['claude-sonnet-4-20250514', 'glm-4.7[1m]'],
+            ['claude-3-5-haiku-20241022', 'glm-4.6[1m]'],
+        ])
+        // Consumed aliases + the meta default are gone from the merge input.
+        expect(filtered).toEqual([])
+    })
+
+    it('full pipeline collapses the doubled list: skeleton-only output', () => {
+        const cli = [
+            { id: 'claude-opus-4-20250514', name: 'Claude Opus 4' },
+            { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+        ]
+        const acp = [
+            { id: 'default', name: 'glm-5.3[1m]' },
+            { id: 'opus', name: 'glm-5.3[1m]' },
+            { id: 'sonnet', name: 'glm-4.7[1m]' },
+        ]
+        const { cli: aligned, acp: filtered } = alignTierAliases(cli, acp)
+        const merged = mergeModelLists(aligned, filtered)
+        // 2 skeleton entries, NOT 2 + alias re-appends.
+        expect(merged).toHaveLength(2)
+        expect(merged.map(m => m.id)).toEqual(['claude-opus-4-20250514', 'claude-sonnet-4-20250514'])
+        expect(merged.map(m => m.name)).toEqual(['glm-5.3[1m]', 'glm-4.7[1m]'])
+    })
+
+    it('keeps an alias selectable when the skeleton has no matching tier row', () => {
+        const cli = [{ id: 'some-other-model', name: 'Other' }]
+        const acp = [{ id: 'opus', name: 'glm-5.3[1m]' }]
+        const { cli: aligned, acp: filtered } = alignTierAliases(cli, acp)
+        expect(aligned).toEqual([{ id: 'some-other-model', name: 'Other' }])
+        // opus has no skeleton counterpart → stays in the merge input.
+        expect(filtered).toEqual([{ id: 'opus', name: 'glm-5.3[1m]' }])
+    })
+
+    it('passes both lists through untouched when no alias entries are reported', () => {
+        const cli = [{ id: 'gpt-x', name: 'GPT X', default: true }]
+        const acp = [{ id: 'gpt-x', name: 'GPT X (runtime)' }]
+        const r = alignTierAliases(cli, acp)
+        expect(r.cli).toBe(cli)
+        expect(r.acp).toBe(acp)
+    })
+
+    it('never renames skeleton rows for generic id tokens', () => {
+        // 'fast' / 'plan' are NOT tier aliases — ids containing them must not
+        // be touched even when an ACP report happens to use such ids.
+        const cli = [
+            { id: 'glm-4.5-fast', name: 'GLM-4.5 Fast' },
+            { id: 'kimi-plan-2025', name: 'Kimi Plan' },
+        ]
+        const acp = [
+            { id: 'fast', name: 'glm-5.3[1m]' },
+            { id: 'plan', name: 'glm-5.3[1m]' },
+        ]
+        const r = alignTierAliases(cli, acp)
+        expect(r.cli).toEqual(cli)
+        // Unknown ids are normal entries → kept in the merge input.
+        expect(r.acp).toEqual(acp)
+    })
+
+    it('matches aliases case-insensitively', () => {
+        const cli = [{ id: 'claude-opus-4-20250514', name: 'Claude Opus 4' }]
+        const acp = [{ id: 'Opus', name: 'glm-5.3[1m]' }]
+        const { cli: aligned, acp: filtered } = alignTierAliases(cli, acp)
+        expect(aligned[0].name).toBe('glm-5.3[1m]')
+        expect(filtered).toEqual([])
+    })
 })
