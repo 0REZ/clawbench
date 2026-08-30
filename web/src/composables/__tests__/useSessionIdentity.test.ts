@@ -67,7 +67,7 @@ vi.mock('@/composables/useLocale', () => ({
 }))
 
 vi.mock('@/stores/app', () => ({
-    store: { state: { chatInitialMessages: 50, chatPageSize: 50 } },
+    store: { state: { chatInitialMessages: 50, chatPageSize: 50, projectRoot: '/test/project' } },
 }))
 
 vi.mock('@/utils/chatSessionUtils', () => ({
@@ -76,10 +76,12 @@ vi.mock('@/utils/chatSessionUtils', () => ({
 }))
 
 import { useSessionIdentity, registerSessionActions, initSessionFromAPI, resetIdentity, clearSessionIdentity, updateModeState, updateAvailableModes, clearModeState, updateCommandState, clearCommandState, updateThinkingEffortState, updateAvailableThinkingEfforts, clearThinkingEffortState, updateUsageState, clearUsageState, clearAllUsageState, clearUsageStateById, toggleAutoApprove, getSessionId, prefetchCommands, registerSessionDrawerRef, registerOpenSessionTabOverride, reconcileRunningSessions, renameSession } from '@/composables/useSessionIdentity'
+import { recordRecentSession } from '@/composables/useRecentSession'
 
 describe('useSessionIdentity', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        localStorage.clear()
     })
 
     // ── Identity refs ──
@@ -440,6 +442,103 @@ describe('useSessionIdentity', () => {
             await expect(initSessionFromAPI()).resolves.toBeUndefined()
             // Should not change existing values
             expect(identity.currentSessionId.value).toBe('existing')
+
+            vi.unstubAllGlobals()
+        })
+
+        it('requests stored recent session first', async () => {
+            const identity = useSessionIdentity()
+            recordRecentSession('stored-session')
+
+            const mockFetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ sessionId: 'stored-session' }),
+            })
+            vi.stubGlobal('fetch', mockFetch)
+
+            await initSessionFromAPI()
+
+            expect(mockFetch).toHaveBeenCalledTimes(1)
+            expect(String(mockFetch.mock.calls[0][0])).toContain('session_id=stored-session')
+            expect(identity.currentSessionId.value).toBe('stored-session')
+
+            vi.unstubAllGlobals()
+        })
+
+        it('clears stale stored session (404) and falls back to default request', async () => {
+            const identity = useSessionIdentity()
+            // Cold start: no session identity yet.
+            identity.currentSessionId.value = ''
+            recordRecentSession('gone-session')
+
+            const mockFetch = vi.fn()
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 404,
+                    json: () => Promise.resolve({ msgKey: 'SessionNotFound' }),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: () => Promise.resolve({ sessionId: 'fallback-session' }),
+                })
+            vi.stubGlobal('fetch', mockFetch)
+
+            await initSessionFromAPI()
+            await nextTick()
+
+            expect(mockFetch).toHaveBeenCalledTimes(2)
+            expect(String(mockFetch.mock.calls[0][0])).toContain('session_id=gone-session')
+            expect(String(mockFetch.mock.calls[1][0])).not.toContain('session_id=')
+            // The fallback session becomes the new "last opened" record.
+            expect(JSON.parse(localStorage.getItem('clawbench-recent-session:/test/project')!).sessionId).toBe('fallback-session')
+            expect(identity.currentSessionId.value).toBe('fallback-session')
+
+            vi.unstubAllGlobals()
+        })
+
+        it('clears stored session that belongs to another project (403) and falls back', async () => {
+            const identity = useSessionIdentity()
+            // Cold start: no session identity yet.
+            identity.currentSessionId.value = ''
+            recordRecentSession('foreign-session')
+
+            const mockFetch = vi.fn()
+                .mockResolvedValueOnce({
+                    ok: false,
+                    status: 403,
+                    json: () => Promise.resolve({ msgKey: 'AccessDenied' }),
+                })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    json: () => Promise.resolve({ sessionId: 'fallback-session' }),
+                })
+            vi.stubGlobal('fetch', mockFetch)
+
+            await initSessionFromAPI()
+            await nextTick()
+
+            expect(mockFetch).toHaveBeenCalledTimes(2)
+            // The fallback session becomes the new "last opened" record.
+            expect(JSON.parse(localStorage.getItem('clawbench-recent-session:/test/project')!).sessionId).toBe('fallback-session')
+            expect(identity.currentSessionId.value).toBe('fallback-session')
+
+            vi.unstubAllGlobals()
+        })
+
+        it('does not request recent session when nothing stored', async () => {
+            const identity = useSessionIdentity()
+
+            const mockFetch = vi.fn().mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({ sessionId: 'default-session' }),
+            })
+            vi.stubGlobal('fetch', mockFetch)
+
+            await initSessionFromAPI()
+
+            expect(mockFetch).toHaveBeenCalledTimes(1)
+            expect(String(mockFetch.mock.calls[0][0])).not.toContain('session_id=')
+            expect(identity.currentSessionId.value).toBe('default-session')
 
             vi.unstubAllGlobals()
         })

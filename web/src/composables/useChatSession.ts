@@ -6,6 +6,7 @@ import { appLog } from '@/utils/appLog'
 
 const TAG = 'ChatSession'
 import { updateAvailableModes, updateCommandState, updateAvailableThinkingEfforts, clearUsageStateById, updateUsageState, currentAgentId as _currentAgentId, clearSessionIdentity, reconcileRunningSessions } from '@/composables/useSessionIdentity.ts'
+import { getRecentSession, clearRecentSession } from '@/composables/useRecentSession'
 import { clearPlanState, updatePlanEntries } from '@/composables/usePlanProgress'
 import { useAgents, restoreOriginalModels, getAgentThinkingEffortLevels, populateACPStateFromCache } from '@/composables/useAgents'
 import { store } from '@/stores/app.ts'
@@ -471,24 +472,44 @@ export function useChatSession(options: UseChatSessionOptions) {
         // AbortController timeout is a safety net only; the backend itself has
         // ACP RPC timeouts (60s) so 60s gives ample room even for slow remote
         // connections. On abort, we catch and bail gracefully (no toast error).
+        //
+        // Prefer the last opened session for this project (per-project
+        // localStorage). If that session no longer exists (404) or belongs to
+        // another project (403), drop the stale entry and fall back to the
+        // default recovery (GetLatestSessionID by updated_at).
+        const storedSessionId = getRecentSession()
         const recoverCtrl = new AbortController()
         const recoverTimer = setTimeout(() => recoverCtrl.abort(), 60000)
-        let recoverResp: Response
         // Load agents in parallel with recovery fetch
         const agentsPromise = agents.value.length === 0 ? loadAgents() : Promise.resolve()
-        try {
-          recoverResp = await fetch(`/api/ai/chat?limit=${limit}&view=summary`, { signal: recoverCtrl.signal })
-        } catch (e) {
-          clearTimeout(recoverTimer)
-          if (recoverCtrl.signal.aborted) {
-            // Timeout — bail without error toast, let retry handle it
-            return
+        const doRecover = async (withStored: boolean): Promise<Response | null> => {
+          const url = withStored && storedSessionId
+            ? `/api/ai/chat?limit=${limit}&view=summary&session_id=${encodeURIComponent(storedSessionId)}`
+            : `/api/ai/chat?limit=${limit}&view=summary`
+          try {
+            return await fetch(url, { signal: recoverCtrl.signal })
+          } catch (e) {
+            if (recoverCtrl.signal.aborted) {
+              // Timeout — bail without error toast, let retry handle it
+              return null
+            }
+            throw e
           }
-          throw e
+        }
+        let recoverResp = await doRecover(true)
+        if (storedSessionId && recoverResp && !recoverResp.ok) {
+          // Stored session is gone (404) or no longer in this project (403) —
+          // remove it and retry with default logic.
+          clearRecentSession()
+          recoverResp = await doRecover(false)
         }
         clearTimeout(recoverTimer)
         await agentsPromise
         if (loadHistorySeq !== mySeq) { return }
+        if (!recoverResp) {
+          // Aborted / timeout — bail, let retry handle it
+          return
+        }
         if (recoverResp.ok) {
           const recoverData = await recoverResp.json()
           if (loadHistorySeq !== mySeq) { return }

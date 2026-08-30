@@ -352,6 +352,8 @@ vi.mock('@/utils/chatStreamUtils', async (importOriginal) => {
 // ── Import after mocks ──
 
 import { useChatSession, loadSessionsOnce, resetChatSessionState } from '@/composables/useChatSession'
+import { recordRecentSession } from '@/composables/useRecentSession'
+import { store } from '@/stores/app.ts'
 import { chatMessageReducer } from '@/utils/chatStreamUtils.ts'
 
 // Get direct references to the mocked functions from useSessionIdentity
@@ -5758,6 +5760,109 @@ describe('loadHistory session_id recovery', () => {
     expect(mockIdentity.currentSessionTitle).toBe('Recovered Session')
     expect(mockIdentity.currentBackend).toBe('claude')
     expect(mockIdentity.currentAgentId).toBe('agent1')
+  })
+
+  it('recovers the last opened session (stored session_id) when currentSessionId is empty', async () => {
+    store.state.projectRoot = '/test/proj'
+    localStorage.setItem('clawbench-recent-session:/test/proj', JSON.stringify({ sessionId: 'stored-s1', accessedAt: Date.now() }))
+    globalThis.fetch = vi.fn()
+      // Recovery call with stored session_id
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'stored-s1',
+          sessionTitle: 'Stored Session',
+          backend: 'claude',
+          agentId: 'agent1',
+          messages: [{ id: 'm1' }],
+          total: 1,
+          running: false,
+        }),
+      })
+
+    const currentSessionId = ref('') // empty — triggers recovery
+    const messages = ref([])
+    const options = {
+      currentSessionId,
+      messages,
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    await session.loadHistory(true, false, false)
+
+    // First call: recovery with stored session_id (single call since it returns messages)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('session_id=stored-s1'), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(currentSessionId.value).toBe('stored-s1')
+  })
+
+  it('clears stale stored session (404) and falls back to default recovery', async () => {
+    store.state.projectRoot = '/test/proj'
+    localStorage.setItem('clawbench-recent-session:/test/proj', JSON.stringify({ sessionId: 'gone-s1', accessedAt: Date.now() }))
+    globalThis.fetch = vi.fn()
+      // First call: stored session_id → 404
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: '会话不存在', msgKey: 'SessionNotFound' }),
+      })
+      // Second call: fallback without session_id → valid session
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'fallback-s1',
+          sessionTitle: 'Fallback Session',
+          backend: 'claude',
+          agentId: 'agent1',
+          messages: [{ id: 'm1' }],
+          total: 1,
+          running: false,
+        }),
+      })
+
+    const currentSessionId = ref('') // empty — triggers recovery
+    const messages = ref([])
+    const options = {
+      currentSessionId,
+      messages,
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    await session.loadHistory(true, false, false)
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('session_id=gone-s1'), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // Fallback request must NOT carry session_id
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, expect.not.stringContaining('session_id='), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // Stale entry removed
+    expect(localStorage.getItem('clawbench-recent-session:/test/proj')).toBeNull()
+    expect(currentSessionId.value).toBe('fallback-s1')
   })
 
   it('returns early when recovery yields no session', async () => {
