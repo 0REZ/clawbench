@@ -294,7 +294,7 @@ func (b *CLIBackend) runStream(
 		// Check if this is the final "result" line — send raw_output
 		// before parsing so the handler receives it before the "done" event.
 		if strings.HasPrefix(line, `{"type":"result"`) {
-			ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 		}
 
 		slog.Debug(b.BackendName+" stream: raw line", "session_id", req.SessionID, "line", line)
@@ -305,7 +305,7 @@ func (b *CLIBackend) runStream(
 		// is cancelled before step_finish/turn.completed emits the metadata event.
 		if capturedID := parser.GetCapturedSessionID(); capturedID != "" && capturedID != lastCapturedSessionID {
 			lastCapturedSessionID = capturedID
-			ch <- StreamEvent{Type: "session_capture", Content: capturedID}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "session_capture", Content: capturedID})
 		}
 
 		// Check context after parsing
@@ -316,7 +316,7 @@ func (b *CLIBackend) runStream(
 				slog.String("session_id", req.SessionID),
 			)
 			if rawLines.Len() > 0 {
-				ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}
+				emitStreamEvent(ch, "cli", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 			}
 			return
 		default:
@@ -339,11 +339,11 @@ func (b *CLIBackend) runStream(
 	// being closed by terminate() or normal EOF. A cancelled stream produces its
 	// own terminal signal, so it is also skipped here.
 	if err := scanner.Err(); err != nil && ctx.Err() == nil && !isStreamEndError(err) {
-		ch <- StreamEvent{
+		emitStreamEvent(ch, "cli", StreamEvent{
 			Type:    "warning",
 			Content: fmt.Sprintf("AI output parse error: %v", err),
 			Reason:  ReasonParseError,
-		}
+		})
 	}
 
 	// Completion diagnostics (abnormal exit / stderr output) unless the stream
@@ -364,7 +364,7 @@ func (b *CLIBackend) runStream(
 			if stderr != "" {
 				warnMsg = fmt.Sprintf("AI backend exited abnormally\n%s", stderr)
 			}
-			ch <- StreamEvent{Type: "warning", Content: warnMsg, Reason: ReasonBackendExit}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "warning", Content: warnMsg, Reason: ReasonBackendExit})
 		} else if stderrBuf.Len() > 0 {
 			stderr := stderrBuf.String()
 			slog.Warn(
@@ -372,13 +372,13 @@ func (b *CLIBackend) runStream(
 				slog.String("session_id", req.SessionID),
 				slog.String("stderr", stderr),
 			)
-			ch <- StreamEvent{Type: "warning", Content: stderr}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "warning", Content: stderr})
 		}
 	}
 
 	// Send raw output event after all other events
 	if rawLines.Len() > 0 {
-		ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 	}
 }
 

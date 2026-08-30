@@ -62,8 +62,6 @@ func (b *VeCLIBackend) vecliPreStart(cmd *exec.Cmd, req ChatRequest) {
 //  3. On process exit, this wrapper reads the session-summary JSON file
 //  4. Emits metadata event (token counts, duration, model) from summary
 //  5. Emits done event
-//
-//nolint:gocognit,gocyclo // complex stream parsing logic
 func (b *VeCLIBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	// VeCLI does not support resume — always start a new session
 	req.Resume = false
@@ -93,20 +91,15 @@ func (b *VeCLIBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 			if ev.Type == "done" {
 				continue
 			}
-			// Use non-blocking send to prevent goroutine leak if consumer has stopped
-			select {
-			case outCh <- ev:
-			default:
-			}
+			// Non-blocking send to prevent goroutine leak if consumer stopped;
+			// a full channel drops the event with a WARN (emitStreamEvent).
+			emitStreamEvent(outCh, "vecli", ev)
 		}
 
 		// If context was cancelled (user cancel or disconnect),
 		// skip session-summary reading — the process was killed.
 		if ctx.Err() != nil {
-			select {
-			case outCh <- StreamEvent{Type: "done"}:
-			default:
-			}
+			emitStreamEvent(outCh, "vecli", StreamEvent{Type: "done"})
 			// Clean up summary file if it exists
 			if sp, ok := b.summaryMap.LoadAndDelete(summaryKey); ok {
 				if path, typeOk := sp.(string); typeOk {
@@ -131,10 +124,7 @@ func (b *VeCLIBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 					slog.Debug("vecli: failed to parse session-summary", "error", parseErr)
 				} else {
 					meta := summary.extractMetadata(req.Model)
-					select {
-					case outCh <- StreamEvent{Type: "metadata", Meta: meta}:
-					default:
-					}
+					emitStreamEvent(outCh, "vecli", StreamEvent{Type: "metadata", Meta: meta})
 				}
 			} else {
 				slog.Debug("vecli: session-summary file not found", "path", path, "error", readErr)
@@ -142,10 +132,7 @@ func (b *VeCLIBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 		}
 
 		// Always emit done at the end
-		select {
-		case outCh <- StreamEvent{Type: "done"}:
-		default:
-		}
+		emitStreamEvent(outCh, "vecli", StreamEvent{Type: "done"})
 	}()
 
 	return outCh, nil

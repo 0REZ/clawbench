@@ -64,12 +64,12 @@ func (p *GrokStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 	switch msg.Type {
 	case "text":
 		if msg.Data != "" {
-			ch <- StreamEvent{Type: "content", Content: msg.Data}
+			emitStreamEvent(ch, "grok", StreamEvent{Type: "content", Content: msg.Data})
 		}
 
 	case "thought":
 		if msg.Data != "" {
-			ch <- StreamEvent{Type: "thinking", Content: msg.Data}
+			emitStreamEvent(ch, "grok", StreamEvent{Type: "thinking", Content: msg.Data})
 		}
 
 	case "end":
@@ -78,9 +78,9 @@ func (p *GrokStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 			slog.Debug("grok stream: captured session ID", "session_id", msg.SessionID)
 		}
 		if meta := grokMetadataFromEnd(&msg); meta != nil {
-			ch <- StreamEvent{Type: "metadata", Meta: meta}
+			emitStreamEvent(ch, "grok", StreamEvent{Type: "metadata", Meta: meta})
 		}
-		ch <- StreamEvent{Type: "done"}
+		emitStreamEvent(ch, "grok", StreamEvent{Type: "done"})
 
 	case "error":
 		errMsg := msg.Message
@@ -94,7 +94,7 @@ func (p *GrokStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		if msg.SessionID != "" {
 			p.sessionID = msg.SessionID
 		}
-		ch <- StreamEvent{Type: "error", Error: errMsg}
+		emitStreamEvent(ch, "grok", StreamEvent{Type: "error", Error: errMsg})
 
 	default:
 		// Non-exhaustive protocol: ignore unknown event types.

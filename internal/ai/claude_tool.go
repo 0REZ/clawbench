@@ -57,7 +57,7 @@ func handleClaudeContentBlockDelta(msg *ClaudeStreamMessage, state *ClaudeStream
 		}
 		if msg.Event.Delta.Text != "" {
 			state.ReceivedPartial = true
-			ch <- StreamEvent{Type: "content", Content: msg.Event.Delta.Text}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "content", Content: msg.Event.Delta.Text})
 		}
 	case "input_json_delta":
 		if tool, ok := state.ActiveTools[msg.Event.Index]; ok {
@@ -69,7 +69,7 @@ func handleClaudeContentBlockDelta(msg *ClaudeStreamMessage, state *ClaudeStream
 	case "thinking_delta":
 		if msg.Event.Delta.Thinking != "" {
 			state.ReceivedPartialThinking = true
-			ch <- StreamEvent{Type: "thinking", Content: msg.Event.Delta.Thinking}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "thinking", Content: msg.Event.Delta.Thinking})
 		}
 	}
 }
@@ -110,11 +110,11 @@ func handleClaudeToolUseStart(msg *ClaudeStreamMessage, state *ClaudeStreamToolS
 		slog.Debug("stream: auto-closing tool at reused index", "index", msg.Event.Index, "tool_id", existing.ID, "tool_name", existing.Name)
 		closed := *existing
 		closed.Done = true
-		ch <- StreamEvent{Type: "tool_use", Tool: &closed}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_use", Tool: &closed})
 	}
 	state.ActiveTools[msg.Event.Index] = tool
 	startCopy := *tool
-	ch <- StreamEvent{Type: "tool_use", Tool: &startCopy}
+	emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_use", Tool: &startCopy})
 	if tool.Input == "" {
 		if state.EmittedToolInputEmpty == nil {
 			state.EmittedToolInputEmpty = make(map[string]bool)
@@ -151,11 +151,11 @@ func handleClaudeContentBlockStop(msg *ClaudeStreamMessage, state *ClaudeStreamT
 			if accum.IsError {
 				status = "error"
 			}
-			ch <- StreamEvent{Type: "tool_result", Tool: &ToolCall{
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_result", Tool: &ToolCall{
 				ID:     accum.ToolUseID,
 				Output: truncateToolOutput(accum.Output.String()),
 				Status: status,
-			}}
+			}})
 			delete(state.ActiveToolResults, msg.Event.Index)
 		}
 	}
@@ -163,7 +163,7 @@ func handleClaudeContentBlockStop(msg *ClaudeStreamMessage, state *ClaudeStreamT
 	if tool, ok := state.ActiveTools[msg.Event.Index]; ok {
 		closed := *tool
 		closed.Done = true
-		ch <- StreamEvent{Type: "tool_use", Tool: &closed}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_use", Tool: &closed})
 		if closed.Input == "" {
 			if state.EmittedToolInputEmpty == nil {
 				state.EmittedToolInputEmpty = make(map[string]bool)
@@ -172,7 +172,7 @@ func handleClaudeContentBlockStop(msg *ClaudeStreamMessage, state *ClaudeStreamT
 		}
 		delete(state.ActiveTools, msg.Event.Index)
 	} else if state.ActiveThinkingBlocks != nil && state.ActiveThinkingBlocks[msg.Event.Index] {
-		ch <- StreamEvent{Type: "thinking_done"}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "thinking_done"})
 		delete(state.ActiveThinkingBlocks, msg.Event.Index)
 	} else {
 		slog.Debug("stream: content_block_stop for unknown index", "index", msg.Event.Index)
