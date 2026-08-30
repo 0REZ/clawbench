@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { useAgents, resetAgents, updateACPModelList, restoreOriginalModels, setCLIModels, populateACPStateFromCache, registerIdentityUpdaters, invalidateACPStateCache } from '@/composables/useAgents'
+import { useAgents, resetAgents, updateACPModelList, restoreOriginalModels, setCLIModels, populateACPStateFromCache, registerIdentityUpdaters, invalidateACPStateCache, alignTierAliases } from '@/composables/useAgents'
 
 // Mock apiGet/apiPatch/apiPost/apiDelete to control agent data
 const mockApiGet = vi.fn()
@@ -510,6 +510,74 @@ describe('useAgents', () => {
     it('does nothing for unknown agent', () => {
       // Should not throw
       updateAgentField('nonexistent', 'preferredModel', 'test')
+    })
+  })
+
+  // --- mergeModelLists (pure function) ---
+
+  // --- alignTierAliases (pure function) ---
+
+  describe('alignTierAliases', () => {
+    it('aligns ACP tier-alias names onto matching skeleton entries and drops alias entries', () => {
+      const aligned = alignTierAliases(
+        [
+          { id: 'claude-opus-4-20250514', name: 'claude-opus-4-20250514', default: true },
+          { id: 'claude-sonnet-4-20250514', name: 'claude-sonnet-4-20250514' },
+          { id: 'claude-haiku-4-20250514', name: 'claude-haiku-4-20250514' },
+        ],
+        [
+          { id: 'opus', name: 'glm-5.3[1m]' },
+          { id: 'sonnet', name: 'deepseek-v3' },
+          { id: 'haiku', name: 'qwen-max' },
+        ],
+      )
+      expect(aligned).toEqual([
+        { id: 'claude-opus-4-20250514', name: 'glm-5.3[1m]', default: true },
+        { id: 'claude-sonnet-4-20250514', name: 'deepseek-v3' },
+        { id: 'claude-haiku-4-20250514', name: 'qwen-max' },
+      ])
+    })
+
+    it('skips the meta "default" tier', () => {
+      const aligned = alignTierAliases(
+        [{ id: 'claude-sonnet-4-20250514', name: 'claude-sonnet-4-20250514' }],
+        [{ id: 'default', name: 'claude-sonnet-4-20250514' }],
+      )
+      expect(aligned).toEqual([{ id: 'claude-sonnet-4-20250514', name: 'claude-sonnet-4-20250514' }])
+    })
+
+    it('appends alias entries the skeleton cannot represent', () => {
+      const aligned = alignTierAliases(
+        [{ id: 'claude-opus-4-20250514', name: 'claude-opus-4-20250514' }],
+        [
+          { id: 'sonnet', name: 'deepseek-v3' },
+          { id: 'fast', name: 'qwen-turbo' },
+        ],
+      )
+      expect(aligned).toEqual([
+        { id: 'claude-opus-4-20250514', name: 'claude-opus-4-20250514' },
+        { id: 'sonnet', name: 'deepseek-v3' },
+        { id: 'fast', name: 'qwen-turbo' },
+      ])
+    })
+
+    it('returns CLI list unchanged when no tier aliases present', () => {
+      const cli = [{ id: 'claude-sonnet-4-20250514', name: 'claude-sonnet-4-20250514' }]
+      const aligned = alignTierAliases(cli, [{ id: 'real-model', name: 'Real Model' }])
+      expect(aligned).toEqual(cli)
+    })
+
+    it('handles empty lists', () => {
+      expect(alignTierAliases([], [])).toEqual([])
+      expect(alignTierAliases([{ id: 'a', name: 'A' }], [])).toEqual([{ id: 'a', name: 'A' }])
+    })
+
+    it('does not mutate inputs', () => {
+      const cli = [{ id: 'claude-sonnet-4-20250514', name: 'claude-sonnet-4-20250514' }]
+      const acp = [{ id: 'sonnet', name: 'deepseek-v3' }]
+      alignTierAliases(cli, acp)
+      expect(cli[0].name).toBe('claude-sonnet-4-20250514')
+      expect(acp[0].name).toBe('deepseek-v3')
     })
   })
 
