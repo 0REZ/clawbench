@@ -325,7 +325,6 @@ function previewStyleFor(opt: { label: string; value: unknown }): Record<string,
   return {
     background: p.bg,
     color: p.text,
-    '--swatch-accent': p.accent,
   }
 }
 
@@ -957,6 +956,9 @@ function confirmEdit() {
   justify-content: center;
   text-align: center;
   padding: 4px 6px;
+}
+
+.theme-picker-swatch-label-text {
   font-size: 11px;
   font-weight: 500;
   line-height: 1.3;
@@ -968,8 +970,8 @@ function confirmEdit() {
   word-break: break-word;
 }
 
-.theme-picker-swatch--auto .theme-picker-swatch-label {
-  color: #8a8a8a;
+.theme-picker-swatch--auto .theme-picker-swatch-label-text {
+  color: #666666;
 }
 
 .theme-picker-cell--active .theme-picker-swatch {
