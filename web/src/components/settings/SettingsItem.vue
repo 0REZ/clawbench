@@ -196,7 +196,9 @@
           :class="{ 'theme-picker-swatch--auto': opt.value === 'auto', 'theme-picker-swatch--label': previewFor(opt)?.type === 'color' }"
           :style="previewStyleFor(opt)"
         >
-          <span class="theme-picker-swatch-label">{{ opt.label }}</span>
+          <span class="theme-picker-swatch-label">
+            <span class="theme-picker-swatch-label-text">{{ opt.label }}</span>
+          </span>
         </div>
         <span v-if="terminalPreviewFor(opt)" class="theme-picker-cell-label">{{ opt.label }}</span>
         <span v-if="modelValue === opt.value" class="theme-picker-cell-check">✓</span>
