@@ -21,6 +21,10 @@ export interface ClawBenchNative {
   setFloatingWindowEnabled(enabled: boolean): void
   /** Read the persisted floating status window state (Android; no-op on desktop). */
   getFloatingWindowEnabled(): boolean
+  /** Enable/disable the Android 16 Live Updates status chip (Android; no-op on desktop). */
+  setLiveUpdateEnabled(enabled: boolean): void
+  /** Read the persisted Live Updates chip state (Android; no-op on desktop). */
+  getLiveUpdateEnabled(): boolean
   updateLastSeenEventId(id: string): void
   setKeepScreenOn(on: boolean): void
   log(level: string, tag: string, msg: string): void

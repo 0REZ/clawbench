@@ -1840,10 +1840,11 @@ public class MainActivity extends AppCompatActivity {
         pauseWebView();
         // App going to background — start native WS so we still get
         // notifications when Android kills the WebView process. Also needed
-        // when only the floating window is enabled (its events come over the
-        // same native WS, independent of push notifications).
+        // when only the floating window or the Live Updates chip is enabled
+        // (both consume events over the same native WS, independent of push).
         if (webViewConnected && (BackgroundService.isNativePushEnabled(this)
-                || BackgroundService.isFloatingWindowEnabled(this))) {
+                || BackgroundService.isFloatingWindowEnabled(this)
+                || BackgroundService.isLiveUpdateEnabled(this))) {
             BackgroundService.startNativeEventWs(this);
         }
     }
@@ -3534,6 +3535,28 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean isFloatingWindowEnabled() {
             return BackgroundService.isFloatingWindowEnabled(activity);
+        }
+
+        /**
+         * Enable or disable the Android 16 Live Updates status chip from the
+         * WebView settings UI. Persisted through BackgroundService; takes
+         * effect on the running service immediately when it is alive.
+         * Independent of the floating window toggle.
+         */
+        @JavascriptInterface
+        public void setLiveUpdateEnabled(boolean enabled) {
+            AppLog.i(TAG, "JSBridge: setLiveUpdateEnabled=" + enabled);
+            BackgroundService.setLiveUpdateEnabled(activity, enabled);
+        }
+
+        /**
+         * Check whether the Android 16 Live Updates status chip is currently
+         * enabled. Used by the WebView to read the initial state on settings
+         * page load.
+         */
+        @JavascriptInterface
+        public boolean isLiveUpdateEnabled() {
+            return BackgroundService.isLiveUpdateEnabled(activity);
         }
 
         /**

@@ -136,6 +136,15 @@ const legacyKeys: Record<string, {
       } catch { /* not in app mode */ }
     },
   },
+  liveUpdate: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: boolean) {
+      try {
+        getNative()?.setLiveUpdateEnabled?.(!!value)
+      } catch { /* not in app mode */ }
+    },
+  },
   sortField: {
     key: '',
     format: 'raw',
@@ -273,6 +282,7 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   headerShortcutTips: true,
   notificationSound: true,
   floatingStatusWindow: false,
+  liveUpdate: true,
 }
 
 // Build reactive local config from legacy localStorage + defaults
@@ -446,6 +456,13 @@ export function useSettingsConfig() {
     } catch { /* not in app mode */ }
   }
 
+  /** Sync the local Live Updates chip preference to Android native. */
+  function syncLiveUpdateToNative() {
+    try {
+      getNative()?.setLiveUpdateEnabled?.(!!localConfig.liveUpdate)
+    } catch { /* not in app mode */ }
+  }
+
   async function loadConfig() {
     try {
       const data = await apiGet<Record<string, unknown>>('/api/config')
@@ -457,6 +474,8 @@ export function useSettingsConfig() {
     syncPushModeToNative()
     // Sync floating status window preference to Android native
     syncFloatingWindowToNative()
+    // Sync Live Updates chip preference to Android native
+    syncLiveUpdateToNative()
   }
 
   async function patchConfig(changes: Record<string, unknown>): Promise<{ needsRestart: boolean; changedColdFields: string[]; warnings: string[] }> {

@@ -1714,6 +1714,8 @@ export default {
       notificationSoundDesc: 'Play alert sound and vibration when tasks complete or need approval (disable to avoid interrupting Bluetooth audio)',
       floatingStatusWindow: 'Floating Status Window',
       floatingStatusWindowDesc: 'Show a floating status capsule on screen when the app is in background (requires overlay permission)',
+      liveUpdate: 'Live Updates',
+      liveUpdateDesc: 'Show the session status as an ongoing chip on the lock screen and in the status bar (Android 16+)',
       pushMode: 'Push Mode',
       pushModeDesc: 'Choose how to receive notifications',
       pushModeNative: 'Native Push',

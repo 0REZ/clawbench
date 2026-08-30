@@ -97,6 +97,7 @@ public class BackgroundService extends Service {
     private static final String KEY_LAST_SEEN_EVENT_ID = "last_seen_event_id";
     private static final String KEY_NATIVE_PUSH_ENABLED = "native_push_enabled";
     private static final String KEY_FLOATING_WINDOW_ENABLED = "floating_window_enabled";
+    private static final String KEY_LIVE_UPDATE_ENABLED = "live_update_enabled";
 
     // Reconnect parameters: exponential backoff delays in milliseconds
     private static final int[] RECONNECT_DELAYS_MS = {5000, 10000, 30000, 60000, 120000};
@@ -315,9 +316,10 @@ public class BackgroundService extends Service {
                 .apply();
         if (!enabled) {
             // Stop native WS and cancel WorkManager polling — but only when the
-            // floating window is also disabled: the floating window consumes the
-            // same native WS event stream, so it must keep the connection alive.
-            if (!isFloatingWindowEnabled(context)) {
+            // floating window and the Live Updates chip are also disabled: both
+            // consume the same native WS event stream, so either one keeps the
+            // connection alive.
+            if (!isFloatingWindowEnabled(context) && !isLiveUpdateEnabled(context)) {
                 stopNativeEventWs(context);
             }
             cancelPendingEventsWork(context);
@@ -349,6 +351,34 @@ public class BackgroundService extends Service {
         BackgroundService svc = instance;
         if (svc != null && isRunning) {
             svc.syncFloatingController();
+        }
+    }
+
+    /**
+     * Check whether the Android 16 Live Updates (promoted ongoing notification)
+     * feature is enabled. Defaults to true — it is a core background status
+     * surface, unlike the opt-in floating window.
+     */
+    public static boolean isLiveUpdateEnabled(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_LIVE_UPDATE_ENABLED, true);
+    }
+
+    /**
+     * Enable or disable the Android 16 Live Updates status chip.
+     * Takes effect immediately when the service is running: enabling creates
+     * the manager, disabling destroys it (which removes any visible chip).
+     * Otherwise the change applies on the next service creation.
+     */
+    public static void setLiveUpdateEnabled(Context context, boolean enabled) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_LIVE_UPDATE_ENABLED, enabled)
+                .apply();
+        AppLog.i(TAG, "LiveUpdate: set enabled=" + enabled);
+        BackgroundService svc = instance;
+        if (svc != null && isRunning) {
+            svc.syncLiveUpdateController();
         }
     }
 
@@ -387,6 +417,25 @@ public class BackgroundService extends Service {
             floatingController.destroy();
             floatingController = null;
             AppLog.i(TAG, "FloatingWindow: controller destroyed (toggle off)");
+        }
+    }
+
+    /**
+     * Align the Live Updates manager with the persisted enable flag.
+     * Creates the manager when the feature is enabled, destroys it (removing
+     * any visible chip) when disabled. Called from onCreate() and whenever the
+     * toggle changes while the service is running. Independent of the floating
+     * window — either can be on while the other is off.
+     */
+    private void syncLiveUpdateController() {
+        boolean enabled = isLiveUpdateEnabled(this);
+        if (enabled && liveUpdateManager == null) {
+            liveUpdateManager = new LiveUpdateManager(this);
+            AppLog.i(TAG, "LiveUpdate: manager initialized");
+        } else if (!enabled && liveUpdateManager != null) {
+            liveUpdateManager.destroy();
+            liveUpdateManager = null;
+            AppLog.i(TAG, "LiveUpdate: manager destroyed (toggle off)");
         }
     }
 
@@ -719,10 +768,10 @@ public class BackgroundService extends Service {
         syncFloatingController();
 
         // Android 16 Live Updates: a promoted ongoing notification summarizing
-        // running / pending-approval / unread session counts. Always active
-        // while the service runs (no separate opt-in toggle) and consumes the
-        // same overview + event stream as the floating window.
-        liveUpdateManager = new LiveUpdateManager(this);
+        // running / pending-approval / unread session counts. Independent of
+        // the floating window (separate opt-in toggle, on by default). Created
+        // here so it lives exactly as long as this Service instance.
+        syncLiveUpdateController();
 
         // NOTE: Do NOT call stopSelf() here even if forwardedPorts is empty!
         // The Service may have been started by startForegroundService(ADD_PORT)
@@ -2815,7 +2864,9 @@ public class BackgroundService extends Service {
      * (network I/O).
      */
     private void fetchOverviewSessions(String serverUrl) {
-        if (floatingController == null) {
+        // The overview feeds both the floating window and the Live Updates
+        // chip; pull it whenever either consumer is alive.
+        if (floatingController == null && liveUpdateManager == null) {
             return;
         }
         try {
