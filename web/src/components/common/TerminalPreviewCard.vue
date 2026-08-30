@@ -30,7 +30,7 @@ const props = defineProps<{
   auto?: boolean
 }>()
 
-const shellStyle = computed<Record<string, string>>(() => {
+const shellStyle = computed(() => {
   if (props.auto) {
     return {
       background: `linear-gradient(135deg, ${lightTheme.background} 0%, ${lightTheme.background} 48%, ${darkTheme.background} 52%, ${darkTheme.background} 100%)`,
@@ -43,17 +43,17 @@ const shellStyle = computed<Record<string, string>>(() => {
   }
 })
 
-const promptStyle = computed<Record<string, string>>(() => {
+const promptStyle = computed(() => {
   if (props.auto || !props.theme?.green) return {}
   return { color: props.theme.green }
 })
 
-const dirStyle = computed<Record<string, string>>(() => {
+const dirStyle = computed(() => {
   if (props.auto || !props.theme?.blue) return {}
   return { color: props.theme.blue }
 })
 
-const fileStyle = computed<Record<string, string>>(() => {
+const fileStyle = computed(() => {
   if (props.auto || !props.theme?.cyan) return {}
   return { color: props.theme.cyan }
 })
