@@ -45,6 +45,7 @@
         :type="entry.field.type"
         :model-value="getLocalValue(entry.field)"
         :options="resolveFieldOptions(entry.field)"
+        :option-previews="entry.field.key === 'terminalTheme' ? terminalThemePreviews : undefined"
         :min="entry.field.min"
         :max="entry.field.max"
         :step="entry.field.step"
@@ -168,7 +169,8 @@ import { useFrp } from '@/composables/useFrp'
 import { useRagStatus } from '@/composables/useRagStatus'
 import { useDialog } from '@/composables/useDialog'
 import { apiPost } from '@/utils/api'
-import { SORTED_THEME_IDS, formatThemeName } from '@/utils/terminalThemes'
+import { SORTED_THEME_IDS, formatThemeName, loadThemesModule } from '@/utils/terminalThemes'
+import type { TerminalPreview } from './SettingsItem.vue'
 
 // ── Props & Emits ──
 
@@ -206,6 +208,34 @@ const {
 
 const activeKey = ref<string | null>(null)
 const entryPicker = useTabDrawer('settings', { autoRestore: false })
+
+// ── Terminal theme lazy loading ──
+
+const loadedTerminalThemes = ref<Record<string, import('@xterm/xterm').ITheme> | null>(null)
+
+/** 懒加载终端主题配色（首次打开终端主题网格时触发）。失败时卡片保持占位骨架。 */
+async function ensureTerminalThemesLoaded() {
+  if (loadedTerminalThemes.value) return
+  try {
+    loadedTerminalThemes.value = await loadThemesModule()
+  } catch {
+    // 加载失败：卡片保持占位骨架，不阻断网格交互
+  }
+}
+
+const isTerminalThemeField = computed(() =>
+  props.config.commonFields.some(f => f.key === 'terminalTheme')
+)
+
+const terminalThemePreviews = computed<Record<string, TerminalPreview> | undefined>(() => {
+  if (!isTerminalThemeField.value) return undefined
+  const map: Record<string, TerminalPreview> = {}
+  map.auto = { type: 'terminal', themeId: 'auto' }
+  for (const id of SORTED_THEME_IDS) {
+    map[id] = { type: 'terminal', themeId: id, theme: loadedTerminalThemes.value?.[id] }
+  }
+  return map
+})
 
 // ── Lifecycle ──
 
@@ -413,6 +443,7 @@ function resolveFieldOptions(field: ItemSpec): { label: string; value: unknown }
 function handleEditToggle(key: string, open: boolean) {
   if (open) {
     activeKey.value = key
+    if (key === 'terminalTheme') void ensureTerminalThemesLoaded()
   } else if (activeKey.value === key) {
     activeKey.value = null
   }
