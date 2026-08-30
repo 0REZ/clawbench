@@ -984,6 +984,14 @@ export function useChatSession(options: UseChatSessionOptions) {
       // dedup (loadHistoryInProgress) so has_new_messages + completed don't double-call.
       if (sid === currentSessionId.value && !loading.value && (data.has_new_messages || data.status === 'completed' || data.status === 'cancelled')) {
         loadHistory(false, false, true)
+        // The user is actively viewing this session, so its execution finishing
+        // must clear its unread badge. This is the reliable completion signal
+        // even when the chat_stream 'done' event was missed (e.g. WS reconnect
+        // delivers a fresh session_update). Loading history (GET /api/ai/chat)
+        // no longer marks read — only an explicit mark-as-read call does.
+        if (data.status === 'completed' || data.status === 'cancelled') {
+          markSessionRead(sid).catch(() => {})
+        }
       }
       // Recalculate chatUnread from backend instead of optimistically setting true.
       // The old code unconditionally set chatUnread=true here, which caused phantom
@@ -1263,6 +1271,7 @@ export function useChatSession(options: UseChatSessionOptions) {
     loadHistory,
     loadMoreMessages,
     switchSession,
+    markSessionRead,
     createSession,
     archiveSession,
     destroySession,

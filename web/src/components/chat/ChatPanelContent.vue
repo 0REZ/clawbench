@@ -374,7 +374,7 @@ const session = useChatSession({
 //   useSessionManager's watch(loading) safety net (loading true→false triggers fetchQueue)
 // - 'cancelled': user cancelled → clear locally for immediate UI response
 // - 'error': error occurred → don't touch pending messages; backend preserves queue
-function onStreamEnd(reason) {
+async function onStreamEnd(reason) {
   if (reason === 'done') {
     playNotificationSound()
     if (autoSpeech.enabled.value) {
@@ -394,9 +394,13 @@ function onStreamEnd(reason) {
       // Auto-speech off — restore screen lock since no TTS will play
       autoSpeech.onOutputEndNoSpeech()
     }
-    // Recalculate chatUnread after stream completes — the current session's
-    // unreadCount is now 0 (UpdateLastRead called by loadHistory), so
-    // chatUnread should be false if no other sessions have unread messages.
+    // Recalculate chatUnread after stream completes — mark the current session
+    // read first so the session list reflects the cleared unread state, then
+    // refresh so chatUnread is false if no other sessions have unread messages.
+    const sid = identity.currentSessionId.value
+    if (sid) {
+      await session.markSessionRead(sid).catch(() => {})
+    }
     loadSessionsOnce()
     // Refresh git branch — AI agent may have checked out a different branch
     store.loadGitBranch().catch(() => {})
@@ -405,6 +409,11 @@ function onStreamEnd(reason) {
     messageStore.dispatch({ type: 'clear_pending' })
     // Restore screen lock — output was cancelled, no TTS will play
     autoSpeech.onOutputEndNoSpeech()
+    // User was viewing this session while cancelling — clear its unread badge
+    const sid = identity.currentSessionId.value
+    if (sid) {
+      session.markSessionRead(sid).catch(() => {})
+    }
     // Refresh git state — agent may have modified files before cancellation
     store.loadGitBranch().catch(() => {})
   }

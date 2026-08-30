@@ -792,6 +792,75 @@ describe('onSessionEvent', () => {
     })
   })
 
+  // ── Current-session completion marks the session read ──
+  // Bug: when the user is viewing a session and its execution finishes, the
+  // frontend never called POST /api/ai/chat/read, so the session list kept
+  // showing an unread badge even for the currently-viewed session.
+
+  it('marks current session read when it completes while being viewed', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('marks current session read when it is cancelled while being viewed', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'current-s1', status: 'cancelled' })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('does NOT mark read when a non-current session completes', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'other-s2', status: 'completed' })
+
+    // Allow the debounced loadSessionsOnce (500ms) and any pending loadHistory
+    // calls to run, then assert no mark-read POST was issued.
+    await new Promise((r) => setTimeout(r, 600))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
+    )
+    expect(readCalls).toHaveLength(0)
+  })
+
   // ── Safety net: loading stuck when session completes ──
   // Bug: chat_stream 'done' event was missed (e.g. WS disconnect), so
   // loading.value stays true. The session_update 'completed' event should

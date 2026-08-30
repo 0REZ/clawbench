@@ -1154,7 +1154,21 @@ func GetSessionsPaged(projectPath, backend string, limit int, cursor string, cur
 // Previously ran asynchronously (goroutine), which caused a race: the session
 // list still showed unread messages after the user opened the session.
 func UpdateLastRead(sessionID string) {
-	WriteExec("UPDATE chat_sessions SET last_read_at = CURRENT_TIMESTAMP WHERE id = ?", sessionID)
+	// Set last_read_at to at least the newest finalized assistant message's
+	// created_at. The unread query compares h.created_at > s2.last_read_at with
+	// second-precision SQLite DATETIME — if a message finalized in the same
+	// second as the mark-read call, CURRENT_TIMESTAMP would still leave it
+	// "unread". Anchoring last_read_at to the newest message created_at makes
+	// the comparison robust (last_read_at >= created_at ⇒ not unread).
+	// Falls back to CURRENT_TIMESTAMP when no finalized assistant message exists.
+	WriteExec(`
+		UPDATE chat_sessions
+		SET last_read_at = COALESCE(
+			(SELECT MAX(created_at) FROM chat_history
+			 WHERE session_id = ? AND role = 'assistant' AND streaming = 0),
+			CURRENT_TIMESTAMP
+		)
+		WHERE id = ?`, sessionID, sessionID)
 	// Broadcast a status change so connected clients (e.g. the Android floating
 	// window) can refresh their unread counts. WS-only: no push notification and
 	// no pending event — reading a session must not create a notification.
