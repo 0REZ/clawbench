@@ -643,6 +643,30 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
   }
 
+  /**
+   * Explicitly mark a session as read via POST /api/ai/chat/read.
+   * Loading history (GET /api/ai/chat) does NOT mark read anymore — that
+   * happens only when the user actively opens the session (switchSession),
+   * so automatic reloads never clear an unread badge the user hasn't seen.
+   */
+  async function markSessionRead(sessionId: string): Promise<void> {
+    if (!sessionId) return
+    const params = new URLSearchParams({ session_id: sessionId })
+    // No project_path: MarkChatRead falls back to the cookie project for
+    // ownership verification. Passing the current projectRoot would 403 when
+    // the session belongs to a different project (e.g. a notification deep
+    // link into another project's session). Same-project switches work via
+    // the cookie; cross-project opens degrade gracefully (read not marked,
+    // session still opens).
+    const resp = await fetch(`/api/ai/chat/read?${params.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!resp.ok) {
+      appLog.w(TAG, `markSessionRead failed for ${sessionId.slice(0, 12)}: ${resp.status}`)
+    }
+  }
+
   async function switchSession(sessionId: string) {
     // Bump loadHistorySeq so any in-flight loadHistory results are discarded
     // (switchSession takes priority over stale loadHistory responses).
@@ -688,6 +712,17 @@ export function useChatSession(options: UseChatSessionOptions) {
     // immediate=true skips the loadHistoryInProgress queue and
     // handles switching/inputDisabled in its finally block.
     await loadHistory(!hasSavedPos, true, false, true)
+
+    // Mark the session as read. Loading history (loadHistory → GET /api/ai/chat)
+    // no longer marks a session read on the backend — only an explicit user
+    // action of opening the session should clear its unread badge. Automatic
+    // reloads (WS reconnect refresh, completion-event refresh) hit loadHistory
+    // too, so marking read must happen HERE, at the user-intent switch point,
+    // and not inside loadHistory itself.
+    // Await before loadSessionsOnce so the session list reflects the cleared
+    // unread state (chatUnread) — the backend's UpdateLastRead must complete
+    // first or loadSessionsOnce reads a stale unread badge.
+    await markSessionRead(sessionId).catch(() => {})
 
     // Recalculate global chatUnread after switching — the backend has already
     // marked this session as read (UpdateLastRead), so the session list will

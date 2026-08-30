@@ -1484,7 +1484,8 @@ describe('switchSession', () => {
 
   it('calls loadSessionsOnce after successful switch to recalculate chatUnread', async () => {
     // First call: GET /api/ai/chat?session_id=s2 (switchSession fetch)
-    // Second call: GET /api/ai/sessions (loadSessionsOnce fetch)
+    // Second call: POST /api/ai/chat/read (switchSession marks read)
+    // Third call: GET /api/ai/sessions (loadSessionsOnce fetch)
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -1501,6 +1502,10 @@ describe('switchSession', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: () => Promise.resolve({
           sessions: [
             { id: 's2', unreadCount: 0, running: false },
@@ -1513,12 +1518,56 @@ describe('switchSession', () => {
 
     // loadSessionsOnce is fire-and-forget — wait for it to complete
     await vi.waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3)
     })
 
     // After switching to s2 and recalculating, no unread sessions remain
     expect(mockState.chatUnreadCount).toBe(0)
-    // fetch called twice: once for chat history, once for sessions list
+    // fetch called 3 times: chat history, mark-read, sessions list
+  })
+
+  it('marks the switched session read via POST /api/ai/chat/read', async () => {
+    // switchSession must explicitly mark the session read: loading history
+    // (GET /api/ai/chat) no longer does it server-side, so user-intent opens
+    // must call the dedicated /chat/read endpoint.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's2',
+          messages: [],
+          total: 0,
+          backend: 'claude',
+          agentId: 'agent1',
+          modelId: '',
+          thinkingEffort: '',
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [
+            { id: 's2', unreadCount: 0, running: false },
+          ],
+        }),
+      })
+
+    const session = createSession()
+    await session.switchSession('s2')
+
+    const readCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCall).toBeDefined()
+    expect(String(readCall![0])).toContain(`session_id=s2`)
   })
 
   it('clears chatUnread after switching when all sessions are read', async () => {
@@ -1537,6 +1586,10 @@ describe('switchSession', () => {
           thinkingEffort: '',
           running: false,
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -1577,6 +1630,10 @@ describe('switchSession', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: () => Promise.resolve({
           sessions: [
             { id: 's2', unreadCount: 0, running: false },
@@ -1588,8 +1645,12 @@ describe('switchSession', () => {
     const session = createSession()
     await session.switchSession('s2')
 
-    // s3 is still unread — flashing should continue
-    expect(mockState.chatUnreadCount).toBeGreaterThan(0)
+    // loadSessionsOnce is fire-and-forget inside switchSession,
+    // wait for it to complete before checking state
+    await vi.waitFor(() => {
+      // s3 is still unread — flashing should continue
+      expect(mockState.chatUnreadCount).toBeGreaterThan(0)
+    })
   })
 
   it('sets inputDisabled=false even when switchSession fetch fails', async () => {
@@ -2299,6 +2360,10 @@ describe('chatUnread integration', () => {
           thinkingEffort: '',
           running: false,
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -3914,6 +3979,61 @@ describe('handleWsReconnect', () => {
       const forceFullCalls = onRenderUpdate.mock.calls.filter((c: any[]) => c[0] === true)
       expect(forceFullCalls.length).toBeGreaterThanOrEqual(1)
     })
+
+    vi.restoreAllMocks()
+  })
+
+  it('does NOT mark the session read (no /chat/read call) on WS reconnect refresh', async () => {
+    // Automatic reloads (WS reconnect) only refresh message history — they
+    // must NOT clear the unread badge. Marking read is reserved for explicit
+    // user intent (switchSession).
+    const loading = ref(false)
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        // First call: loadSessionsOnce — s1 idle.
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [{ id: 's1', running: false }],
+          totalCount: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        // Second call: loadHistory.
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's1', messages: [], total: 0, running: false,
+        }),
+      })
+
+    await session.handleWsReconnect()
+
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBe(0)
 
     vi.restoreAllMocks()
   })

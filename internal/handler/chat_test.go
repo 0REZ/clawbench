@@ -1615,6 +1615,74 @@ func TestAIChat_Get_SessionBelongsToSameProject(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// TestAIChat_Get_DoesNotMarkRead verifies that loading history via
+// GET /api/ai/chat does NOT mark the session as read. Marking read is an
+// explicit user action routed through POST /api/ai/chat/read — automatic
+// reloads (WS reconnect refresh, completion-event refresh, pagination) must
+// not clear an unread badge the user hasn't viewed yet.
+func TestAIChat_Get_DoesNotMarkRead(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	db := service.UnsafeDBForTest()
+	sessionID := "get-does-not-mark-read"
+	_, err := db.Exec(`INSERT INTO chat_sessions (id, project_path, backend, title, agent_id, agent_source, model, session_type, archived) VALUES (?, ?, 'claude', 'get no mark', 'claude', 'default', '', 'chat', 0)`, sessionID, env.ProjectDir)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, 'assistant', 'unread reply', ?, 'claude', 0)`, env.ProjectDir, sessionID)
+	require.NoError(t, err)
+
+	// Before: session shows 1 unread and last_read_at is nil.
+	sessions, err := service.GetSessions(env.ProjectDir, "claude")
+	require.NoError(t, err)
+	var before *model.ChatSession
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			before = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, before, "session should exist in list")
+	assert.Equal(t, 1, before.UnreadCount, "session should start unread")
+	assert.Nil(t, before.LastReadAt, "last_read_at should be NULL before GET")
+
+	// GET /api/ai/chat must NOT mark the session read.
+	req := newRequest(t, http.MethodGet, "/api/ai/chat?session_id="+sessionID, nil)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(AIChat, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// After: last_read_at still NULL and unread badge remains.
+	sessions, err = service.GetSessions(env.ProjectDir, "claude")
+	require.NoError(t, err)
+	var after *model.ChatSession
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			after = &sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, after, "session should still exist in list")
+	assert.Nil(t, after.LastReadAt, "GET must not set last_read_at")
+	assert.Equal(t, 1, after.UnreadCount, "unread badge must survive a plain GET")
+
+	// Explicit POST /api/ai/chat/read still clears it.
+	req2 := newRequest(t, http.MethodPost, "/api/ai/chat/read?session_id="+sessionID, nil)
+	req2 = withProjectCookie(req2, env.ProjectDir)
+	w2 := callHandler(MarkChatRead, req2)
+	assertOK(t, w2)
+
+	sessions, err = service.GetSessions(env.ProjectDir, "claude")
+	require.NoError(t, err)
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			after = &sessions[i]
+			break
+		}
+	}
+	assert.NotNil(t, after.LastReadAt, "explicit mark-read must set last_read_at")
+	assert.Equal(t, 0, after.UnreadCount, "explicit mark-read must clear unread")
+}
+
 // TestAIChat_Post_SessionBelongsToDifferentProject verifies that the POST path
 // in AIChat rejects access to a session that belongs to another project.
 func TestAIChat_Post_SessionBelongsToDifferentProject(t *testing.T) {
