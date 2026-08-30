@@ -135,6 +135,68 @@ public class FloatingStatusPanelViewTest {
     }
 
     // =====================================================
+    // baseName: project header name extraction (pure)
+    // =====================================================
+
+    @Test
+    public void baseName_takesLastPathSegment() {
+        assertEquals("clawbench", FloatingStatusPanelView.baseName("/home/user/projects/clawbench"));
+    }
+
+    @Test
+    public void baseName_handlesBackslashWindowsPaths() {
+        assertEquals("proj", FloatingStatusPanelView.baseName("C:\\Users\\me\\proj"));
+    }
+
+    @Test
+    public void baseName_handlesTrailingSlash() {
+        assertEquals("proj", FloatingStatusPanelView.baseName("/home/user/proj/"));
+        assertEquals("proj", FloatingStatusPanelView.baseName("/home/user/proj\\"));
+    }
+
+    @Test
+    public void baseName_rootPath_returnsAsIs() {
+        assertEquals("/", FloatingStatusPanelView.baseName("/"));
+    }
+
+    @Test
+    public void baseName_nullOrEmpty_returnsAsIs() {
+        assertEquals("", FloatingStatusPanelView.baseName(""));
+        assertEquals("", FloatingStatusPanelView.baseName(null));
+    }
+
+    @Test
+    public void render_projectHeader_showsNameThenPathWithDifferentStyles() throws Exception {
+        // The group header must lead with the short project name (bold primary
+        // text) followed by the full path (regular secondary text).
+        FloatingStatusPanelView panel = newPanel();
+        String json = "{\"projects\":[{\"name\":\"/home/user/projects/clawbench\",\"sessions\":["
+                + "{\"id\":\"r\",\"title\":\"t\",\"running\":true,\"pendingApproval\":false,\"unreadCount\":0}"
+                + "]}],\"total\":1}";
+        panel.render(new JSONObject(json), null);
+
+        ViewGroup list = (ViewGroup) getField(panel, "listContainer");
+        View header = list.getChildAt(0);
+        assertTrue("the first child must be the group header LinearLayout",
+                header instanceof LinearLayout);
+        LinearLayout headerRow = (LinearLayout) header;
+        assertEquals(2, headerRow.getChildCount());
+
+        TextView nameView = (TextView) headerRow.getChildAt(0);
+        assertEquals("the name must be the last path segment", "clawbench",
+                nameView.getText().toString());
+        assertEquals("the name must be the bold typeface",
+                android.graphics.Typeface.DEFAULT_BOLD, nameView.getTypeface());
+
+        TextView pathView = (TextView) headerRow.getChildAt(1);
+        assertEquals("the path must be the full path", "/home/user/projects/clawbench",
+                pathView.getText().toString());
+        assertNotSame("the path must use a different typeface than the bold name",
+                nameView.getTypeface(), pathView.getTypeface());
+        panel.stopBreathing();
+    }
+
+    // =====================================================
     // statusDotKind: pure status-dot decision (Task 3)
     // =====================================================
 
@@ -360,12 +422,19 @@ public class FloatingStatusPanelViewTest {
     private boolean sessionRowHasStatusDot(ViewGroup list) {
         for (int i = 0; i < list.getChildCount(); i++) {
             View child = list.getChildAt(i);
+            // Skip project group headers: a header is a LinearLayout whose
+            // children are both TextViews (bold name + path), never a status dot.
             if (!(child instanceof LinearLayout)) {
-                continue; // skip project headers
+                continue;
             }
             LinearLayout row = (LinearLayout) child;
             if (row.getChildCount() == 0) {
                 continue;
+            }
+            if (row.getChildAt(0) instanceof TextView
+                    && row.getChildCount() >= 2
+                    && row.getChildAt(1) instanceof TextView) {
+                continue; // project header: name + path TextViews
             }
             View first = row.getChildAt(0);
             if (first instanceof TextView) {

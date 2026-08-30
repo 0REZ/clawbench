@@ -75,6 +75,8 @@ public class FloatingStatusPanelView extends FrameLayout {
     private static final int COLLAPSE_BTN_TEXT_SIZE_SP = 16;
     private static final int PROJECT_HEADER_SIZE_SP = 11;
     private static final int PROJECT_HEADER_PADDING_TOP_DP = 10;
+    /** Gap between the bold project name and the following path in a group header. */
+    private static final int PROJECT_HEADER_NAME_PATH_GAP_DP = 6;
     private static final int SESSION_ROW_PADDING_TOP_DP = 10;
     private static final int SESSION_TITLE_SIZE_SP = 13;
     private static final int DOT_SIZE_DP = 8;
@@ -533,17 +535,68 @@ public class FloatingStatusPanelView extends FrameLayout {
     }
 
     private View buildProjectHeader(String name) {
-        TextView header = new TextView(getContext());
-        header.setText(name);
-        header.setTextSize(PROJECT_HEADER_SIZE_SP);
-        header.setTextColor(colorTextSecondary);
-        header.setTypeface(Typeface.DEFAULT_BOLD);
-        header.setIncludeFontPadding(false);
+        // Project group header: the short project name (last path segment) in
+        // bold primary text leads, followed by the full path in regular
+        // secondary text. The path is given the remaining width and ellipsizes
+        // on one line, so a long path never pushes the name off-screen.
+        LinearLayout header = new LinearLayout(getContext());
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView nameView = new TextView(getContext());
+        nameView.setText(baseName(name));
+        nameView.setTextSize(PROJECT_HEADER_SIZE_SP);
+        nameView.setTextColor(colorTextPrimary);
+        nameView.setTypeface(Typeface.DEFAULT_BOLD);
+        nameView.setIncludeFontPadding(false);
+        nameView.setSingleLine(true);
+        header.addView(nameView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView pathView = new TextView(getContext());
+        pathView.setText(name);
+        pathView.setTextSize(PROJECT_HEADER_SIZE_SP);
+        pathView.setTextColor(colorTextSecondary);
+        pathView.setTypeface(Typeface.DEFAULT);
+        pathView.setIncludeFontPadding(false);
+        pathView.setSingleLine(true);
+        pathView.setMaxLines(1);
+        pathView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams pathLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pathLp.setMargins(dp(PROJECT_HEADER_NAME_PATH_GAP_DP), 0, 0, 0);
+        header.addView(pathView, pathLp);
+
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(PROJECT_HEADER_PADDING_TOP_DP);
         header.setLayoutParams(lp);
         return header;
+    }
+
+    /**
+     * Extract the last path segment (project name) from a project path, e.g.
+     * "/home/user/proj" -> "proj". Pure: handles both '/' and '\' separators
+     * and trailing slashes, with no Android framework dependency.
+     */
+    static String baseName(String path) {
+        if (path == null || path.isEmpty()) {
+            return path == null ? "" : path;
+        }
+        int end = path.length();
+        while (end > 0 && (path.charAt(end - 1) == '/' || path.charAt(end - 1) == '\\')) {
+            end--;
+        }
+        int start = end;
+        while (start > 0) {
+            char c = path.charAt(start - 1);
+            if (c == '/' || c == '\\') {
+                break;
+            }
+            start--;
+        }
+        String base = path.substring(start, end);
+        return base.isEmpty() ? path : base;
     }
 
     private View buildSessionRow(SessionItem session, String projectPath,
