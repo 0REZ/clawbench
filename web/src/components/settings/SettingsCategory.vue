@@ -93,6 +93,7 @@ import { useDesktopDownload } from '@/composables/useDesktopDownload'
 import { downloadByUrl } from '@/utils/download'
 import { categoryItems, isPanelOnlyCategory, getCategoryPanels, isDependsOnMet, isSubPageRoute, getSubPagePanel, type ItemSpec, type CategoryEntry, type GroupPanelConfig } from './settingsFieldMap'
 import { THEMES } from '@/utils/themeMeta'
+import type { OptionPreview } from './SettingsItem.vue'
 
 const props = defineProps<{
   categoryId: string
@@ -247,11 +248,13 @@ function resolveOptionLabel(_itemKey: string, opt: { labelKey: string; value: un
 }
 
 /** Color previews for the theme picker grid (includes a special 'auto' entry). */
-const themePreviews = computed<Record<string, { bg: string; text: string; accent: string }>>(() => {
-  const map: Record<string, { bg: string; text: string; accent: string }> = {}
-  for (const t of THEMES) map[t.id] = t.preview
+const themePreviews = computed<Record<string, OptionPreview>>(() => {
+  const map: Record<string, OptionPreview> = {}
+  for (const t of THEMES) {
+    map[t.id] = { type: 'color', bg: t.preview.bg, text: t.preview.text, accent: t.preview.accent, themeId: t.id }
+  }
   // Auto option: neutral light/dark split handled by CSS, no real colors needed
-  map.auto = { bg: '#ffffff', text: '#1a1a2e', accent: '#888888' }
+  map.auto = { type: 'color', bg: '#ffffff', text: '#1a1a2e', accent: '#888888', themeId: 'auto' }
   return map
 })
 

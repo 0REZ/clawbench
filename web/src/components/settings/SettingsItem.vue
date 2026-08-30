@@ -182,11 +182,11 @@
         @click="selectOption(opt.value)"
       >
         <div
-          v-if="previewFor(opt)?.type === 'terminal'"
+          v-if="terminalPreviewFor(opt)"
           class="theme-picker-swatch theme-picker-swatch--terminal"
         >
           <TerminalPreviewCard
-            :theme="(previewFor(opt) as TerminalPreview).theme"
+            :theme="terminalPreviewFor(opt)?.theme"
             :auto="opt.value === 'auto'"
           />
         </div>
@@ -304,6 +304,12 @@ const isTerminalThemeSelect = computed(() =>
 /** Look up the preview payload for an option value. */
 function previewFor(opt: { label: string; value: unknown }): OptionPreview | undefined {
   return props.optionPreviews?.[String(opt.value)]
+}
+
+/** Narrow an option's preview to a terminal preview (undefined for color/absent). */
+function terminalPreviewFor(opt: { label: string; value: unknown }): TerminalPreview | undefined {
+  const p = previewFor(opt)
+  return p?.type === 'terminal' ? p : undefined
 }
 
 /** Build the inline style for a color swatch. Auto option gets a light/dark split. */
