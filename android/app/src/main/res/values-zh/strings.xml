@@ -95,6 +95,7 @@
     <string name="live_update_running">执行中</string>
     <string name="live_update_pending">待审批</string>
     <string name="live_update_unread">未读</string>
+    <string name="live_update_idle">空闲</string>
     <string name="live_update_joiner"> · </string>
     <string name="notif_ports_mapped">%1$d 个端口映射</string>
     <string name="notif_terminals_open">%1$d 个终端</string>
