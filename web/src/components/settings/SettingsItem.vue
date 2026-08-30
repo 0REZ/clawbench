@@ -199,6 +199,11 @@
           <span class="theme-picker-swatch-label">
             <span class="theme-picker-swatch-label-text">{{ opt.label }}</span>
           </span>
+          <component
+            :is="themeBaseIconFor(opt)"
+            :size="12"
+            class="theme-picker-swatch-base-icon"
+          />
         </div>
         <span v-if="terminalPreviewFor(opt)" class="theme-picker-cell-label">{{ opt.label }}</span>
         <span v-if="modelValue === opt.value" class="theme-picker-cell-check">✓</span>
@@ -210,11 +215,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown } from 'lucide-vue-next'
+import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown, Sun, Moon } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
 import TerminalPreviewCard from '@/components/common/TerminalPreviewCard.vue'
+import { isDarkTheme, resolveThemeId } from '@/utils/themeMeta'
 
 const { t } = useI18n()
 
@@ -327,7 +333,17 @@ function previewStyleFor(opt: { label: string; value: unknown }): Record<string,
   return {
     background: p.bg,
     color: p.text,
+    '--swatch-accent': p.accent,
   }
+}
+
+/**
+ * Light/dark indicator icon for a color swatch (sun for light, moon for dark).
+ * Auto follows the resolved system theme, mirroring the AppHeader theme menu.
+ */
+function themeBaseIconFor(opt: { label: string; value: unknown }) {
+  const themeId = opt.value === 'auto' ? resolveThemeId('auto') : String(opt.value)
+  return isDarkTheme(themeId) ? Moon : Sun
 }
 
 // Slider debounce: only emit final value after 300ms of inactivity
@@ -948,6 +964,15 @@ function confirmEdit() {
 .theme-picker-swatch--auto {
   /* light/dark split is set via inline background */
   border: 2px dashed var(--border-color);
+}
+
+/* Light/dark indicator icon in the top-right corner of a color swatch */
+.theme-picker-swatch-base-icon {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  color: var(--swatch-accent, var(--text-muted));
+  flex-shrink: 0;
 }
 
 .theme-picker-swatch-label {

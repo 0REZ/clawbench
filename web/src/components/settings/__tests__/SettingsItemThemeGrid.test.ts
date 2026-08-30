@@ -1,8 +1,25 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import type { OptionPreview } from '@/components/settings/SettingsItem.vue'
 import SettingsItem from '@/components/settings/SettingsItem.vue'
+
+// jsdom has no window.matchMedia — resolveThemeId('auto') needs it
+beforeAll(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
+})
 
 const i18n = createI18n({
   legacy: false,
@@ -23,6 +40,8 @@ vi.mock('lucide-vue-next', () => ({
   RotateCcw: { name: 'RotateCcw', template: '<span class="icon-rebuild" />' },
   ChevronsUpDown: { name: 'ChevronsUpDown', template: '<span class="icon-chevron" />' },
   Palette: { name: 'Palette', template: '<span class="icon-palette" />' },
+  Sun: { name: 'Sun', template: '<span class="lucide-sun" />' },
+  Moon: { name: 'Moon', template: '<span class="lucide-moon" />' },
 }))
 
 // Mock useTabDrawer so the theme picker drawer state is test-controllable
@@ -87,11 +106,19 @@ async function openGrid(wrapper: ReturnType<typeof mount>) {
 describe('SettingsItem theme grid picker', () => {
   it('renders color swatches (no --terminal modifier) when optionPreviews are color-typed', async () => {
     const previews: Record<string, OptionPreview> = {
-      dark: { type: 'color', bg: '#1e1e2e', text: '#cdd6f4', accent: '#89b4fa', themeId: 'dark' },
-      light: { type: 'color', bg: '#f8f9fa', text: '#212529', accent: '#4a90d9', themeId: 'light' },
+      'github-dark': { type: 'color', bg: '#161b22', text: '#c9d1d9', accent: '#58a6ff', themeId: 'github-dark' },
+      'github-light': { type: 'color', bg: '#f8f9fa', text: '#212529', accent: '#4a90d9', themeId: 'github-light' },
       auto: { type: 'color', bg: '#ffffff', text: '#1a1a2e', accent: '#888888', themeId: 'auto' },
     }
-    const wrapper = mountThemeGrid({ optionPreviews: previews })
+    const wrapper = mountThemeGrid({
+      modelValue: 'github-dark',
+      options: [
+        { label: 'Dark', value: 'github-dark' },
+        { label: 'Light', value: 'github-light' },
+        { label: 'Auto', value: 'auto' },
+      ],
+      optionPreviews: previews,
+    })
     await openGrid(wrapper)
 
     const swatches = wrapper.findAll('.theme-picker-swatch')
@@ -106,15 +133,28 @@ describe('SettingsItem theme grid picker', () => {
     expect(wrapper.find('.theme-picker-grid').classes()).not.toContain('theme-picker-grid--wide')
     // Accent dot was removed; theme name is rendered inside the swatch instead
     expect(wrapper.find('.theme-picker-swatch-accent').exists()).toBe(false)
+    // Light/dark indicator icon: dark theme → Moon, light theme → Sun
+    const icons = wrapper.findAll('.theme-picker-swatch-base-icon')
+    expect(icons.length).toBe(3)
+    expect(icons[0].attributes('class')).toContain('lucide-moon')
+    expect(icons[1].attributes('class')).toContain('lucide-sun')
   })
 
   it('renders the theme name inside color swatches (no duplicate label below)', async () => {
     const previews: Record<string, OptionPreview> = {
-      dark: { type: 'color', bg: '#1e1e2e', text: '#cdd6f4', accent: '#89b4fa', themeId: 'dark' },
-      light: { type: 'color', bg: '#f8f9fa', text: '#212529', accent: '#4a90d9', themeId: 'light' },
+      'github-dark': { type: 'color', bg: '#161b22', text: '#c9d1d9', accent: '#58a6ff', themeId: 'github-dark' },
+      'github-light': { type: 'color', bg: '#f8f9fa', text: '#212529', accent: '#4a90d9', themeId: 'github-light' },
       auto: { type: 'color', bg: '#ffffff', text: '#1a1a2e', accent: '#888888', themeId: 'auto' },
     }
-    const wrapper = mountThemeGrid({ optionPreviews: previews })
+    const wrapper = mountThemeGrid({
+      modelValue: 'github-dark',
+      options: [
+        { label: 'Dark', value: 'github-dark' },
+        { label: 'Light', value: 'github-light' },
+        { label: 'Auto', value: 'auto' },
+      ],
+      optionPreviews: previews,
+    })
     await openGrid(wrapper)
 
     // Each color swatch carries the --label modifier and a label span with the option name
