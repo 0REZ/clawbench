@@ -102,7 +102,7 @@ public class FloatingStatusContentView extends LinearLayout {
         // is 0. Plain TextView with the theme's secondary color, so it reads
         // clearly fainter than the live stat labels.
         idleLabel = new TextView(context);
-        idleLabel.setText(IDLE_LABEL_RES);
+        idleLabel.setText(UserLanguage.resolve(context, IDLE_LABEL_RES));
         idleLabel.setTextSize(TEXT_SIZE_SP);
         idleLabel.setSingleLine(true);
         idleLabel.setIncludeFontPadding(false);
@@ -153,13 +153,13 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /**
-     * Re-resolve strings after a system locale change and re-render the last
-     * counts. Stat labels and the idle label are re-read from resources so
-     * the floating capsule follows the system language immediately. UI thread
-     * only.
+     * Re-resolve strings after a language change (in-app switch or system
+     * locale change) and re-render the last counts. Stat labels and the idle
+     * label are re-read from resources so the floating capsule follows the
+     * language immediately. UI thread only.
      */
     public void refreshLocaleText() {
-        idleLabel.setText(IDLE_LABEL_RES);
+        idleLabel.setText(UserLanguage.resolve(getContext(), IDLE_LABEL_RES));
         renderStats(lastRunning, lastPending, lastUnread);
     }
 
@@ -191,7 +191,7 @@ public class FloatingStatusContentView extends LinearLayout {
         text.setSingleLine(true);
         text.setIncludeFontPadding(false);
         text.setTextColor(FloatingThemeColors.get(getContext())[1]);
-        text.setText(labelResId);
+        text.setText(UserLanguage.resolve(getContext(), labelResId));
         item.addView(text, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -217,7 +217,7 @@ public class FloatingStatusContentView extends LinearLayout {
         if (count > 0) {
             item.setVisibility(VISIBLE);
             ((TextView) item.getChildAt(1)).setText(
-                    getContext().getString(labelResId, count));
+                    UserLanguage.resolve(getContext(), labelResId, count));
         } else {
             item.setVisibility(GONE);
         }

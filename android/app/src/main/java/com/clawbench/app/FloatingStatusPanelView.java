@@ -634,7 +634,7 @@ public class FloatingStatusPanelView extends FrameLayout {
 
         TextView title = new TextView(getContext());
         title.setText(session.title == null || session.title.isEmpty()
-                ? getContext().getString(R.string.session_untitled) : session.title);
+                ? UserLanguage.resolve(getContext(), R.string.session_untitled) : session.title);
         title.setTextSize(SESSION_TITLE_SIZE_SP);
         title.setTextColor(colorTextPrimary);
         title.setSingleLine(true);

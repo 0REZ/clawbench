@@ -2463,6 +2463,13 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             activity.prefs.edit().putString(KEY_LANGUAGE, lang).apply();
+            // The floating window (owned by BackgroundService) reads the same
+            // pref; refresh it immediately so capsule/panel follow the in-app
+            // language switch without waiting for a system locale change.
+            BackgroundService bg = BackgroundService.getInstance();
+            if (bg != null) {
+                bg.refreshFloatingLocale();
+            }
         }
 
         /**

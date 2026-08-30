@@ -883,6 +883,15 @@ public class BackgroundService extends Service {
         super.onConfigurationChanged(newConfig);
         // The system locale changed: re-resolve floating-window strings so the
         // capsule/panel follow the system language immediately.
+        refreshFloatingLocale();
+    }
+
+    /**
+     * Re-render floating-window text after a language change (in-app switch via
+     * setLanguage or a system locale change). Safe to call when the controller
+     * is not running.
+     */
+    public void refreshFloatingLocale() {
         if (floatingController != null) {
             floatingController.onLocaleChanged();
         }
