@@ -3,7 +3,7 @@
     <div
       v-if="active"
       class="completion-popover-backdrop"
-      @click.self="safeDismiss"
+      @click.self="handleBackdropClick"
     >
       <Transition name="completion-popover-card" mode="out-in" appear>
         <div :key="active.sessionId + active.kind" class="completion-popover">
@@ -71,7 +71,7 @@ import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCo
 import { gt } from '@/composables/useLocale'
 import { canSendInput } from '@/utils/quoteQuestionUtils'
 
-const { active, dismiss } = useCompletionPopover()
+const { active, dismiss, dismissOnBackdrop } = useCompletionPopover()
 const { getAgentBackend } = useAgents()
 
 const agentBackend = computed(() => {
@@ -115,9 +115,9 @@ watch(active, () => {
     userMessageExpanded.value = false
 }, { immediate: true })
 
-// 点击 backdrop 空白处关闭
-function safeDismiss(): void {
-    dismiss()
+// 点击 backdrop 空白处关闭（带最小停留时长防误触保护）
+function handleBackdropClick(): void {
+    dismissOnBackdrop()
 }
 
 function autoResizeTextarea(): void {

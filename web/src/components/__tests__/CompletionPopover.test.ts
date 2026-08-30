@@ -10,6 +10,7 @@ const mockState = {
     active: ref(null),
     queue: ref([]),
     dismiss: vi.fn(),
+    dismissOnBackdrop: vi.fn(),
 }
 
 const { mockGetAgentBackend } = vi.hoisted(() => ({
@@ -47,7 +48,6 @@ describe('CompletionPopover', () => {
         mockState.queue = ref([])
         mockGetAgentBackend.mockReturnValue('')
     })
-
     function mountPopover() {
         return mount(CompletionPopover, { attachTo: document.body })
     }
@@ -418,8 +418,9 @@ describe('CompletionPopover', () => {
         expect(mockState.dismiss).not.toHaveBeenCalled()
     })
 
-    it('clicking outside the card (on the backdrop) hides without navigating', () => {
+    it('clicking outside the card (on the backdrop) goes through the guarded dismiss', () => {
         mockState.active = ref(makeItem())
+        mockState.dismissOnBackdrop.mockReturnValue(true)
         mountPopover()
 
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
@@ -429,7 +430,9 @@ describe('CompletionPopover', () => {
         backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
         expect(dispatchSpy).not.toHaveBeenCalled()
-        expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        // backdrop 关闭走带防误触保护的 dismissOnBackdrop（最小停留时长在 composable 层拦截）
+        expect(mockState.dismissOnBackdrop).toHaveBeenCalledTimes(1)
+        expect(mockState.dismiss).not.toHaveBeenCalled()
     })
 
     it('clicking a code-block copy button inside the summary does not navigate', () => {
