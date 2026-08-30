@@ -25,8 +25,8 @@ import org.json.JSONObject;
  * unread finished sessions. When nothing is left, the notification is removed
  * (a bare "空闲" chip would be noise). The expanded card breaks the counts
  * down across all three groups: the status-bar chip renders the short
- * single-group line (contentText), while the expanded-by-default card shows
- * the full "执行中 2 · 待审批 1 · 未读 3" breakdown (BigTextStyle).
+ * single-group line (contentTitle), while the expanded-by-default card shows
+ * the full "执行中 2 · 待审批 1 · 未读 3" breakdown (contentText / BigTextStyle).
  *
  * Data source parity with the floating window: the service feeds this manager
  * the same /api/ai/sessions/overview snapshots (on WS connect and on events)
@@ -305,11 +305,16 @@ public class LiveUpdateManager {
         ensureChannel();
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(appContext, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(appContext.getString(R.string.app_name))
-                // Status-bar chip shows the short single-group summary; the
-                // expanded card shows the full breakdown via BigTextStyle.
-                .setContentText(chip)
+                // The launcher icon (auto-rendered as a monochrome silhouette
+                // by the system for status-bar small icons) shows the app's own
+                // mark on the chip instead of a generic notification glyph.
+                .setSmallIcon(R.mipmap.ic_launcher)
+                // ColorOS fluid cloud (and most OEM chips) render the status
+                // text from contentTitle, so the live status goes there. The
+                // expanded card shows the full breakdown via contentText /
+                // BigTextStyle.
+                .setContentTitle(chip)
+                .setContentText(summary)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(summary))
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
