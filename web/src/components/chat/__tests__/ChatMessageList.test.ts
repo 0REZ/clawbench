@@ -216,6 +216,20 @@ describe('ChatMessageList — stream-follow persistence', () => {
     const source = typeof mod.default === 'string' ? mod.default : ''
     expect(source).toContain('userLeftBottom = false')
   })
+
+  it('the bottom FAB (scrollToBottomSmooth) clears the follow latch', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // A user who scrolled up earlier and then taps the bottom FAB has
+    // explicitly asked to return to the bottom — the "left the bottom" latch
+    // must clear so streaming follow resumes. Without it the next streamed
+    // content that briefly pushes the gap past the edge is rejected and the
+    // list appears to stop auto-scrolling despite the user being at the bottom.
+    expect(source).toContain('function scrollToBottomSmooth()')
+    expect(source).toContain('userLeftBottom = false')
+    // The clearing must live INSIDE scrollToBottomSmooth (not merely anywhere)
+    expect(source).toMatch(/scrollToBottomSmooth\(\)[\s\S]*?userLeftBottom = false/)
+  })
 })
 
 /**
@@ -274,6 +288,24 @@ describe('ChatMessageList — per-session scroll position memory', () => {
     // the restore flag is not set — the restore bails and the intended
     // force-scroll-to-bottom after send is never overridden.
     expect(source).toMatch(/pendingRestoreSessionId = newSid && getChatScrollPosition\(newSid\) != null \? newSid : null/)
+  })
+
+  it('saves the current session position on unmount (teardown without a session switch)', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Project switch rebuilds the whole component tree (projectKey) without
+    // going through the session-switch watcher — the watcher only saves on an
+    // explicit currentSessionId change. savePositionNow() must apply the same
+    // save/forget contract so returning to the session restores the reading
+    // position instead of falling back to scroll-to-bottom.
+    expect(source).toContain('function savePositionNow()')
+    expect(source).toContain('saveChatScrollPosition(sid, el.scrollTop)')
+    expect(source).toContain('clearChatScrollPosition(sid)')
+    // Called from onBeforeUnmount AND exposed for hotSwitchProject, which must
+    // invoke it BEFORE resetIdentity clears currentSessionId (after the clear
+    // neither the watcher nor unmount can read the id anymore).
+    expect(source).toContain('savePositionNow()')
+    expect(source).toContain('savePositionNow,')
   })
 })
 

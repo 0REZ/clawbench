@@ -588,9 +588,36 @@ function handleCtrlArrowMsgJump(e) {
   }
 }
 
+// Save the current session's reading position before the message list DOM is
+// torn down. The currentSessionId watcher only saves on an explicit session
+// switch; a teardown WITHOUT a switch would otherwise lose the position and
+// fall back to scroll-to-bottom when the user returns. Same contract as the
+// watcher: away from the bottom → remember; at the bottom → forget.
+// Called from onBeforeUnmount AND externally (hotSwitchProject saves the
+// position BEFORE resetIdentity clears currentSessionId — once the identity is
+// cleared the prop is empty and neither this nor the watcher can save).
+function savePositionNow() {
+  const sid = props.currentSessionId
+  const el = messagesRef.value
+  if (sid && el) {
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist > NEAR_EDGE_THRESHOLD) {
+      saveChatScrollPosition(sid, el.scrollTop)
+    } else {
+      clearChatScrollPosition(sid)
+    }
+  }
+}
+
 onMounted(() => document.addEventListener('click', onDocumentClick, true))
 onMounted(() => document.addEventListener('keydown', handleCtrlArrowMsgJump))
 onBeforeUnmount(() => {
+  // Note: during hotSwitchProject the identity is cleared BEFORE this runs
+  // (resetIdentity → currentSessionId=''), so props.currentSessionId is empty
+  // here and savePositionNow() no-ops. The external savePositionNow() call in
+  // hotSwitchProject handles that path. This unmount hook covers other
+  // teardown paths where the identity is still intact.
+  savePositionNow()
   document.removeEventListener('click', onDocumentClick, true)
   document.removeEventListener('keydown', handleCtrlArrowMsgJump)
   scrollFrameScheduler.cancelAll()
@@ -774,6 +801,13 @@ function scrollToBottomSmooth() {
   scrollDownTimer = setTimeout(() => { scrolledDown.value = false }, SCROLL_BUTTON_HIDE_DELAY)
   setProgrammatic(true)
   const el = messagesRef.value
+  // The user explicitly asked to return to the bottom — clear the
+  // "user left the bottom" latch so streaming follow resumes once the smooth
+  // scroll settles. Without this, a user who scrolled up earlier and then
+  // tapped the bottom FAB would stay "latched" (userLeftBottom=true) — the
+  // next streamed content that briefly pushed nearBottomDist past the edge
+  // would be rejected and the list would appear to stop auto-scrolling.
+  userLeftBottom = false
   el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   // Ownership released by onScrollStopped when the smooth scroll settles.
 }
@@ -1020,6 +1054,7 @@ defineExpose({
   scrollToBottomSmooth,
   scrollToMessage: scrollToMessageUserMsg,
   messagesRef,
+  savePositionNow,
   isAtBottom: () => isAtBottom.value,
   scrolledUp,
   scrolledDown,

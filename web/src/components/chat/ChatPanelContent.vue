@@ -1266,6 +1266,14 @@ onUnmounted(() => {
     document.removeEventListener('keydown', handleDeleteKey)
     notification.closeAll()
 })
+
+// Forward ChatMessageList's savePositionNow so App.vue can save the current
+// session's scroll position BEFORE resetIdentity() clears currentSessionId
+// during a hot project switch (after the clear, neither the session-switch
+// watcher nor onBeforeUnmount can read the id anymore).
+defineExpose({
+  savePositionNow: () => messageListRef.value?.savePositionNow(),
+})
 </script>
 
 <style scoped>
