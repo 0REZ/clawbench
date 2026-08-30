@@ -60,7 +60,7 @@ const { mockState, resetMockState } = vi.hoisted(() => {
   return { mockState, resetMockState }
 })
 
-const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, mockForceCleanupStreamingState, resetAdditionalMocks } = vi.hoisted(() => {
+const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, mockForceCleanupStreamingState, mockOnAppForeground, resetAdditionalMocks } = vi.hoisted(() => {
   const mockIdentity: Record<string, string | boolean> = {
     currentSessionTitle: '',
     currentBackend: '',
@@ -97,6 +97,16 @@ const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, 
     parseMessages: vi.fn().mockReturnValue([]),
   }
   const mockForceCleanupStreamingState = vi.fn().mockReturnValue(undefined)
+  // Captures callbacks registered via onAppForeground by useChatSession —
+  // tests fire these to simulate app background/foreground transitions.
+  const foregroundHandlers: Array<(fg: boolean) => void> = []
+  const mockOnAppForeground = vi.fn((cb: (fg: boolean) => void) => {
+    foregroundHandlers.push(cb)
+    return () => {
+      const idx = foregroundHandlers.indexOf(cb)
+      if (idx !== -1) foregroundHandlers.splice(idx, 1)
+    }
+  })
   function resetAdditionalMocks() {
     Object.keys(mockIdentity).forEach(k => { mockIdentity[k] = k === 'autoApprove' ? false : '' })
     mockToastFn.mockReset()
@@ -119,8 +129,9 @@ const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, 
     mockForceCleanupStreamingState.mockReset().mockReturnValue(undefined)
     mockAppInForeground.value = true
     mockIsReplayingEvents.value = false
+    foregroundHandlers.length = 0
   }
-  return { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockForceCleanupStreamingState, mockIdentityFns, resetAdditionalMocks }
+  return { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockForceCleanupStreamingState, mockIdentityFns, mockOnAppForeground, resetAdditionalMocks }
 })
 
 // ── Mocks ──
@@ -307,6 +318,7 @@ vi.mock('@/composables/useToast', () => ({
 }))
 vi.mock('@/composables/useAppForeground', () => ({
   useAppForeground: () => ({ appInForeground: mockAppInForeground }),
+  onAppForeground: mockOnAppForeground,
 }))
 vi.mock('@/composables/useGlobalEvents', () => ({
   useGlobalEvents: () => ({ isReplayingEvents: mockIsReplayingEvents }),
@@ -1337,6 +1349,88 @@ describe('onSessionEvent', () => {
         typeof url === 'string' &&
         url.startsWith('/api/ai/chat/read') &&
         (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBe(0)
+  })
+})
+
+// ── Returning to foreground marks the current session read ──
+// Bug: a session that completed while the app was backgrounded kept its unread
+// badge after the user returned to the app, even though they were now actively
+// viewing it. The completion paths deliberately skip mark-read while
+// backgrounded (so the floating window can show the badge); the foreground
+// transition is where the badge must finally be cleared.
+
+describe('foreground return marks current session read', () => {
+  beforeEach(() => {
+    resetMockState()
+    resetChatSessionState()
+    resetAdditionalMocks()
+    mockOnAppForeground.mockClear()
+  })
+
+  // Helper: capture the onAppForeground callback registered by useChatSession.
+  function captureForegroundHandlers() {
+    const calls = mockOnAppForeground.mock.calls
+    return calls.map(c => c[0]) as Array<(fg: boolean) => void>
+  }
+
+  function createForegroundTestSession() {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+    return session
+  }
+
+  it('marks the current session read when the app returns to the foreground', async () => {
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+    expect(handlers.length).toBeGreaterThan(0)
+
+    // Simulate the app returning to the foreground (Android onResume).
+    handlers[handlers.length - 1](true)
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('does NOT mark read when the app transitions to the background', async () => {
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+
+    // Simulate the app going to the background (Android onPause).
+    handlers[handlers.length - 1](false)
+
+    await new Promise(r => setTimeout(r, 50))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
+    )
+    expect(readCalls.length).toBe(0)
+  })
+
+  it('does nothing when returning to foreground with no active session', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    })
+    const { session, options } = createSessionInternal()
+    options.currentSessionId.value = ''
+    const handlers = captureForegroundHandlers()
+
+    handlers[handlers.length - 1](true)
+
+    await new Promise(r => setTimeout(r, 50))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
     )
     expect(readCalls.length).toBe(0)
   })

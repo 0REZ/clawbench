@@ -1277,6 +1277,7 @@ onUnmounted(() => {
     document.removeEventListener('keydown', handleJumpUnread)
     document.removeEventListener('keydown', handleOpenSessionList)
     document.removeEventListener('keydown', handleDeleteKey)
+    session.removeForegroundReadListener()
     notification.closeAll()
 })
 </script>

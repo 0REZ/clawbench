@@ -2,7 +2,7 @@ import { ref, computed, type Ref } from 'vue'
 import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast.ts'
 import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
-import { useAppForeground } from '@/composables/useAppForeground'
+import { useAppForeground, onAppForeground } from '@/composables/useAppForeground'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { appLog } from '@/utils/appLog'
 
@@ -754,6 +754,24 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
   }
 
+  // Returning to foreground: if the currently-active session has unread
+  // messages, mark it read immediately — the user is looking at it now. This
+  // covers the case where the session completed while the app was backgrounded
+  // (the completion paths skip mark-read there so the floating window can show
+  // the unread badge) and the user returns to it.
+  // markSessionRead is idempotent: the backend anchors last_read_at to the
+  // newest finalized assistant message, so a session with nothing new just
+  // refreshes the anchor harmlessly. loadSessionsOnce (deduped) re-reads the
+  // unread state so the session list badge clears without waiting for a WS
+  // event round-trip.
+  const removeForegroundReadListener = onAppForeground((fg) => {
+    if (!fg) return
+    const sid = currentSessionId.value
+    if (!sid) return
+    markSessionRead(sid).catch(() => {})
+    loadSessionsOnce()
+  })
+
   async function switchSession(sessionId: string) {
     // Bump loadHistorySeq so any in-flight loadHistory results are discarded
     // (switchSession takes priority over stale loadHistory responses).
@@ -1374,6 +1392,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     continueFromExecution,
     forkSession,
     checkContinueSession,
+    // Unsubscribes the foreground-transition mark-read listener. Must be
+    // called when the hosting component unmounts (SPA project switch) so the
+    // module-level foregroundListeners array does not grow stale closures.
+    removeForegroundReadListener,
     // Agent helpers — delegate to singleton
     getAgentBackend,
     getAgentName,

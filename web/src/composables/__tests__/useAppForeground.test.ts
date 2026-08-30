@@ -68,4 +68,35 @@ describe('useAppForeground', () => {
     visibilityHandler?.()
     expect(appInForeground.value).toBe(true)
   })
+
+  it('notifies onAppForeground listeners only on actual transitions', async () => {
+    ;(window as unknown as { __setAppForeground: (fg: boolean) => void }).__setAppForeground = () => {}
+    const { useAppForeground: useFG, onAppForeground: onFG } = await import('../useAppForeground')
+    const { appInForeground } = useFG()
+
+    const calls: boolean[] = []
+    const unsubscribe = onFG((fg) => calls.push(fg))
+
+    const bridge = (window as unknown as { __setAppForeground: (fg: boolean) => void }).__setAppForeground
+
+    // Background → listener fires with false.
+    bridge(false)
+    expect(calls).toEqual([false])
+    expect(appInForeground.value).toBe(false)
+
+    // Foreground → listener fires with true.
+    bridge(true)
+    expect(calls).toEqual([false, true])
+
+    // Same-state no-op (e.g. repeated onResume with no pause in between)
+    // must not fire again.
+    bridge(true)
+    expect(calls).toEqual([false, true])
+
+    // Unsubscribed listener stops receiving notifications.
+    unsubscribe()
+    bridge(false)
+    expect(calls).toEqual([false, true])
+    expect(appInForeground.value).toBe(false)
+  })
 })
