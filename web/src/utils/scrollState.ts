@@ -9,13 +9,17 @@
  * still scrolling — the "弹回" (snap-back) bug.
  *
  * Follow contract (what the user expects):
- * - While the viewport sits at the bottom, new streamed content follows.
- * - The moment the user scrolls away from the bottom (even a little), follow
- *   stops entirely and never yanks them back — regardless of how much content
- *   arrives, until they scroll back to the bottom.
+ * - While the viewport sits at/near the bottom (within NEAR_BOTTOM_PX),
+ *   new streamed content follows. The threshold is deliberately generous
+ *   (200px): a small scroll away — a finger twitch, a half-fling — does NOT
+ *   flip the app out of follow mode.
+ * - Once the user scrolls away PAST that threshold, follow stops entirely
+ *   and never yanks them back — regardless of how much content arrives,
+ *   until they scroll back into the near-bottom band.
  * - A "grace band" exists ONLY to cover the case where the viewport is pinned
  *   to the bottom but the DOM hasn't grown there yet (throttled render flush /
- *   async markdown). It never applies once the user has scrolled away.
+ *   async markdown). It never applies once the user has scrolled away past
+ *   the near-bottom threshold.
  *
  * These functions are pure (no Vue/DOM) so the decision logic is unit-testable.
  */

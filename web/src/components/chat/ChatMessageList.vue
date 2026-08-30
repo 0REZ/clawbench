@@ -407,6 +407,10 @@ const SCROLL_BUTTON_HIDE_DELAY = 3000
 // it only decides when the scroll-up FAB hides, which should not grow with
 // the (deliberately generous) bottom threshold.
 const NEAR_TOP_THRESHOLD = 100
+// How far the user must scroll away from an edge before a FAB appears.
+// Independently equal to NEAR_BOTTOM_PX (both 200) — keep in sync if the
+// bottom threshold changes materially, but they serve different purposes:
+// NEAR_BOTTOM_PX gates stream-follow, SCROLL_BUTTON_TRIGGER gates FAB display.
 const SCROLL_BUTTON_TRIGGER = 200
 const SCROLL_DELTA_THRESHOLD = 10
 
@@ -430,7 +434,9 @@ function handleScroll() {
   const el = messagesRef.value
 
   const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  const nearBottom = distFromBottom < NEAR_BOTTOM_PX
+  // `<=` so the boundary (exactly NEAR_BOTTOM_PX) is "at the bottom", matching
+  // the userLeftBottom latch below (`> NEAR_BOTTOM_PX` = left) with no gap.
+  const nearBottom = distFromBottom <= NEAR_BOTTOM_PX
   const nearTop = el.scrollTop < NEAR_TOP_THRESHOLD
   isAtBottom.value = nearBottom
 
@@ -447,10 +453,11 @@ function handleScroll() {
   if (!programmaticScrolling) {
     scrollOwner.value = 'user'
     lastScrollAt = Date.now()
-    // Track whether the user deliberately left the bottom. ANY scroll away past
-    // the near-bottom threshold marks a deliberate leave — a user reading older
-    // content must never be yanked back, regardless of how much new content
-    // arrives. Clearing happens when they scroll back to the bottom below.
+    // Track whether the user deliberately left the bottom. Only scrolling past
+    // the (generous) near-bottom threshold marks a deliberate leave — a small
+    // scroll within the band keeps follow active. A user reading older content
+    // must never be yanked back, regardless of how much new content arrives.
+    // Clearing happens when they scroll back into the near-bottom band below.
     if (distFromBottom > NEAR_BOTTOM_PX) {
       userLeftBottom = true
     } else {
@@ -509,6 +516,9 @@ function handleScroll() {
 
   if (loadMorePending) return
   if (!props.hasMore || props.loadingMore) return
+  // Load-more fires only when truly pinned to the top (< 50px), tighter than
+  // NEAR_TOP_THRESHOLD (FAB hide) — near the top the user is still reading,
+  // fetching history must not trigger on a casual swipe.
   if (el.scrollTop < 50) {
     loadMorePending = true
     emit('load-more')

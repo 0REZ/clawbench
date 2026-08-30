@@ -93,7 +93,9 @@ describe('shouldFollowStream', () => {
 
 describe('shouldFollowStream — streaming grace band', () => {
   it('follows when streaming and the viewport gap is within the grace band (DOM lags tokens)', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 200 }), false)).toBe(true)
+    // Just outside the bottom threshold but inside the grace band — streaming
+    // follow absorbs the DOM-height lag without needing to be exactly at bottom.
+    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(true)
     expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX }), false)).toBe(true)
   })
 
@@ -112,9 +114,9 @@ describe('shouldFollowStream — streaming grace band', () => {
 
   it('never overrides an active user scroll, even within the grace band', () => {
     const now = 10000
-    const input = baseInput({ streaming: true, owner: 'user', lastScrollAt: now - 50, now, nearBottomDist: 200 })
+    const input = baseInput({ streaming: true, owner: 'user', lastScrollAt: now - 50, now, nearBottomDist: NEAR_BOTTOM_PX + 1 })
     expect(shouldFollowStream(input, true)).toBe(false)
-    expect(shouldFollowStream(baseInput({ streaming: true, userTouching: true, nearBottomDist: 200 }), true)).toBe(false)
+    expect(shouldFollowStream(baseInput({ streaming: true, userTouching: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), true)).toBe(false)
   })
 })
 
