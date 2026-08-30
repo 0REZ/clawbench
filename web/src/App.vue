@@ -20,6 +20,7 @@
         :recent-files-available="recentFilesCount"
         @open-project-dialog="handleOpenProjectDialog"
         @select-recent-file="handleAppHeaderRecentFileSelect"
+        @create-session="handleSessionCreate()"
       />
       <ConnectionOverlay />
 
@@ -434,7 +435,6 @@ import ToastNotification from './components/common/ToastNotification.vue'
 import CompletionPopover from './components/common/CompletionPopover.vue'
 import DialogOverlay from './components/common/DialogOverlay.vue'
 import SessionDrawer from './components/session/SessionDrawer.vue'
-import SessionSidebar from './components/session/SessionSidebar.vue'
 import SessionSearchDrawer from './components/session/SessionSearchDrawer.vue'
 import AcpSessionDrawer from './components/chat/AcpSessionDrawer.vue'
 import QuoteQuestionBar from './components/common/QuoteQuestionBar.vue'
@@ -447,6 +447,7 @@ import { useTaskTab, registerSwitchTab, onTaskEvent } from '@/composables/useTas
 import { useTabDrawer, onTabSwitch, resetTabDrawerState } from '@/composables/useTabDrawer.ts'
 import { resetAgents, useAgents } from '@/composables/useAgents'
 import { useSessionIdentity, registerSessionDrawerRef, registerOpenSessionTabOverride, resetIdentity } from './composables/useSessionIdentity.ts'
+import SessionSidebar from './components/session/SessionSidebar.vue'
 import { useSessionSidebar } from './composables/useSessionSidebar.ts'
 import { loadSessionsOnce, resetChatSessionState } from './composables/useChatSession.ts'
 import { resetAllCrudLists } from '@/composables/useCrudList'
@@ -795,6 +796,12 @@ provide('toast', toast)
 const sessionIdentity = useSessionIdentity()
 const { getAgentBackend, getAgentName } = useAgents()
 
+const sessionSidebarRef = ref(null)
+watch(sessionSidebarRef, (ref) => {
+  if (ref) {
+    sessionSidebar.registerAddSessionLocally((s) => ref.addSessionLocally(s))
+  }
+}, { immediate: true })
 const sessionSidebar = useSessionSidebar()
 sessionSidebar.registerOpenDrawer(() => sessionIdentity.sessionDrawer.open())
 // Route the session-list entry (Ctrl+K / session button) through the sidebar
@@ -1027,7 +1034,6 @@ const chatKeyboardActive = computed(() => chatActive.value === 'chat' && chatKey
 
 const quoteQuestion = useQuoteQuestion()
 const sessionDrawerRef = ref(null)
-const sessionSidebarRef = ref(null)
 
 // Register SessionDrawer ref so identity.openAgentSelector() works
 watch(sessionDrawerRef, (ref) => {
@@ -1035,11 +1041,6 @@ watch(sessionDrawerRef, (ref) => {
 }, { immediate: true })
 
 // Bridge: add new sessions to the sidebar once its ref is available
-watch(sessionSidebarRef, (ref) => {
-  if (ref) {
-    sessionSidebar.registerAddSessionLocally((s) => ref.addSessionLocally(s))
-  }
-}, { immediate: true })
 
 // Register identity actions (switchSession, createSession, etc.)
 // These will be overwritten by ChatPanelContent when it mounts, but
@@ -1079,6 +1080,10 @@ function handleDrawerPin() {
 
 function handleSessionArchive(sessionId, backend) {
   sessionIdentity.archiveSession(sessionId, backend)
+}
+
+function handleSessionUnimport(sessionId) {
+  sessionIdentity.unimportSession(sessionId)
 }
 
 function handleSessionDestroy(sessionId) {

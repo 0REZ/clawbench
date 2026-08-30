@@ -65,7 +65,7 @@ const props = defineProps({
   isActive: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['select', 'archive', 'destroy'])
+const emit = defineEmits(['select', 'archive', 'unimport', 'destroy'])
 
 const { t } = useI18n()
 const { getAgentBackend, getAgentName } = useAgents()
@@ -146,13 +146,18 @@ function selectSession(sessionId, backend) {
 }
 
 async function archiveSession(sessionId) {
+  // Same dialog rework as ChatInputBar: primary = archive (explicitly
+  // labeled), the former "delete permanently" slot = unimport (DB-only).
+  // The destructive path is gone from this dialog.
+  // 与 ChatInputBar 相同的弹窗改造：主按钮=归档（明确标注），
+  // 原「永久删除」按钮位=移除（仅清数据库记录）。破坏性入口从此移除。
   const isRunning = props.runningSessionIds.has(sessionId)
   const confirmMsg = isRunning ? t('session.confirmArchiveRunning') : t('session.confirmArchive')
   const confirmed = await dialog.confirm(confirmMsg, {
-    dangerous: true,
-    extraText: t('chat.archive.destroyBtn'),
-    extraPrimedText: t('chat.archive.destroyBtnPrimed'),
-    onExtraAction: () => emit('destroy', sessionId),
+    confirmText: t('chat.archive.archiveBtn'),
+    extraText: t('chat.archive.unimportBtn'),
+    extraPrimedText: t('chat.archive.unimportBtn'),
+    onExtraAction: () => emit('unimport', sessionId),
   })
   if (confirmed) {
     const session = sessions.value.find(s => s.id === sessionId)

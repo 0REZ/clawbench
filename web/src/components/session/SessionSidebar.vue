@@ -26,6 +26,7 @@
         :is-active="isActive"
         @select="handleSelect"
         @archive="handleArchive"
+        @unimport="$emit('unimport', $event)"
         @destroy="$emit('destroy', $event)"
       />
     </div>
@@ -50,7 +51,7 @@ defineProps({
   isActive: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['select', 'archive', 'destroy', 'close', 'resize', 'open-session-search', 'create', 'create-agent-select'])
+const emit = defineEmits(['select', 'archive', 'unimport', 'destroy', 'close', 'resize', 'open-session-search', 'create', 'create-agent-select'])
 
 const { t } = useI18n()
 const { agents, loadAgents } = useAgents()

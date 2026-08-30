@@ -29,6 +29,7 @@ export interface UseSessionManagerOptions {
   switchSessionCore: (sessionId: string) => Promise<void>
   createSessionCore: (agentId?: string) => Promise<void>
   archiveSessionCore: (sessionId: string, backend?: string) => Promise<void>
+  unimportSessionCore: (sessionId: string, backend?: string) => Promise<void>
   destroySessionCore: (sessionId: string) => Promise<void>
   continueFromExecutionCore: (taskId: number, execId: number, switchTabFn: (tab: string) => void) => Promise<boolean>
   forkSessionCore: (sessionId: string, beforeMessageId?: number, agentId?: string) => Promise<boolean>
@@ -60,6 +61,7 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     switchSessionCore,
     createSessionCore,
     archiveSessionCore,
+    unimportSessionCore,
     destroySessionCore,
     continueFromExecutionCore,
     forkSessionCore,
@@ -211,6 +213,40 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     await archiveSessionCore(sessionId, backend)
   }
 
+  /**
+   * Unimport ("移除") a session — DB-record-only removal; the transcript file
+   * stays on disk and the session re-appears in the external sessions list.
+   * 移除会话：仅清数据库记录；会话文件保留，会话回到「外部恢复区」列表。
+   */
+  async function unimportSession(sessionId: string, backend?: string) {
+    cleanupActiveStream()
+    if (runningSessions.value.has(sessionId)) {
+      try { await cancelChat(sessionId) } catch {}
+    }
+    try {
+      await fetch(`/api/ai/queue?session_id=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+    } catch {}
+    clearPendingMessages()
+    await unimportSessionCore(sessionId, backend)
+  }
+
+  /** Unimport the current session (convenience for ChatInputBar button). */
+  async function unimportCurrentSession(deleteDraft: (id: string) => void) {
+    const sid = identity.currentSessionId.value
+    if (!sid) return
+    cleanupActiveStream()
+    if (runningSessions.value.has(sid)) {
+      try { await cancelChat(sid) } catch {}
+    }
+    try {
+      await fetch(`/api/ai/queue?session_id=${encodeURIComponent(sid)}`, { method: 'DELETE' })
+    } catch {}
+    clearPendingMessages()
+    await unimportSessionCore(sid, identity.currentBackend.value)
+    deleteDraft(sid)
+    _restoreInputState.cleanupDraft?.(sid)
+  }
+
   /** Archive the current session (convenience for ChatInputBar button). */
   async function archiveCurrentSession(deleteDraft: (id: string) => void) {
     const archivedId = identity.currentSessionId.value
@@ -293,6 +329,7 @@ export function useSessionManager(options: UseSessionManagerOptions) {
       switchSession,
       createSession,
       archiveSession,
+      unimportSession,
       destroySession,
       sendMessage: extra.sendMessage,
       openChatPanel: extra.openChatPanel,
@@ -311,6 +348,8 @@ export function useSessionManager(options: UseSessionManagerOptions) {
     createSession,
     archiveSession,
     archiveCurrentSession,
+    unimportSession,
+    unimportCurrentSession,
     destroySession,
     destroyCurrentSession,
     continueFromExecution,

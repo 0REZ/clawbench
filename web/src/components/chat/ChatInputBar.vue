@@ -13,12 +13,6 @@
           <List :size="14" />
         </button>
         <button class="chat-action-btn"
-          @click="handleCreateClick"
-          @contextmenu.prevent="emit('create-session')"
-          :title="t('chat.create.selectAgentOrLongPress')">
-          <Plus :size="14" />
-        </button>
-        <button class="chat-action-btn"
           @click="$emit('open-session-search')"
           :title="t('chat.actions.sessionSearch')">
           <Search :size="14" />
@@ -268,7 +262,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
+import { Code2, List, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
@@ -479,6 +473,7 @@ const emit = defineEmits([
   'create-session',
   'show-agent-selector',
   'archive-session',
+  'unimport-session',
   'destroy-session',
   'open-user-msg-index',
   'refresh-session',
@@ -1076,19 +1071,24 @@ const recentReferencedFiles = computed(() => {
   return computeRecentReferencedFiles(props.messages, props.attachedFiles, props.currentFile?.path)
 })
 
-function handleCreateClick(e) {
-  // On desktop, click = show agent selector (short tap equivalent)
-  if (e.detail === 0) return
-  emit('show-agent-selector')
-}
-
 async function handleArchive() {
   if (!props.currentSessionId) return
+  // Dialog rework (minimal-diff): the primary button now performs "archive"
+  // (explicitly labeled), while the slot previously occupied by the
+  // destructive "permanently delete" now performs "unimport" — a DB-record-
+  // only removal. The destructive path no longer exists in this dialog, so
+  // a mis-tap on mobile can no longer irreversibly delete the on-disk
+  // transcript. Unimported sessions fall back to the external sessions
+  // list and can be re-loaded at any time.
+  // 弹窗最小化改造：主按钮明确标注为「归档」；原「永久删除」按钮位改为
+  // 「确认移除」——仅删除数据库记录。破坏性的永久删除入口从此弹窗移除，
+  // 移动端误触不再可能不可逆地删除磁盘上的会话文件；被移除的会话回到
+  // 外部恢复区列表，随时可重新载入。
   const confirmed = await dialog.confirm(t('chat.archive.confirm'), {
-    dangerous: true,
-    extraText: t('chat.archive.destroyBtn'),
-    extraPrimedText: t('chat.archive.destroyBtnPrimed'),
-    onExtraAction: () => emit('destroy-session'),
+    confirmText: t('chat.archive.archiveBtn'),
+    extraText: t('chat.archive.unimportBtn'),
+    extraPrimedText: t('chat.archive.unimportBtn'),
+    onExtraAction: () => emit('unimport-session'),
   })
   if (confirmed) {
     emit('archive-session')

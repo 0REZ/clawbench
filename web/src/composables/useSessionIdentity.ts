@@ -396,6 +396,7 @@ let _switchSession: ((sessionId: string) => Promise<void>) | null = null
 let _createSession: ((agentId?: string) => Promise<void>) | null = null
 let _archiveSession: ((sessionId: string, backend?: string) => Promise<void>) | null = null
 let _destroySession: ((sessionId: string) => Promise<void>) | null = null
+let _unimportSession: ((sessionId: string, backend?: string) => Promise<void>) | null = null
 let _sendMessage: ((text: string) => Promise<void>) | null = null
 let _openChatPanel: (() => void) | null = null
 let _continueFromExecution: ((taskId: number, execId: number, switchTabFn: (tab: string) => void) => Promise<boolean>) | null = null
@@ -412,6 +413,7 @@ export interface SessionActions {
   createSession: (agentId?: string) => Promise<void>
   archiveSession: (sessionId: string, backend?: string) => Promise<void>
   destroySession: (sessionId: string) => Promise<void>
+  unimportSession: (sessionId: string, backend?: string) => Promise<void>
   sendMessage: (text: string) => Promise<void>
   openChatPanel: () => void
   continueFromExecution: (taskId: number, execId: number, switchTabFn: (tab: string) => void) => Promise<boolean>
@@ -433,6 +435,7 @@ export function registerSessionActions(actions: SessionActions) {
   _createSession = actions.createSession
   _archiveSession = actions.archiveSession
   _destroySession = actions.destroySession
+  _unimportSession = actions.unimportSession
   _sendMessage = actions.sendMessage
   _openChatPanel = actions.openChatPanel
   _continueFromExecution = actions.continueFromExecution
@@ -446,6 +449,7 @@ export function registerSessionActions(actions: SessionActions) {
     bridge.createSession = actions.createSession
     bridge.switchSession = actions.switchSession
     bridge.archiveSession = actions.archiveSession
+    bridge.unimportSession = actions.unimportSession
   }
 }
 
@@ -650,6 +654,18 @@ export function useSessionIdentity() {
   }
 
   /**
+   * Unimport ("移除") a session: removes only the DB record so the session
+   * falls back to the external sessions list; the transcript file stays
+   * intact and can be re-loaded at any time.
+   * 移除会话：仅删数据库记录，会话回到外部恢复区列表，文件完好可随时载回。
+   */
+  async function unimportSession(sessionId: string, backend?: string) {
+    if (_unimportSession) {
+      await _unimportSession(sessionId, backend)
+    }
+  }
+
+  /**
    * Send a message to the current session. Delegates to ChatPanel
    * if available, otherwise makes a direct API call.
    */
@@ -780,6 +796,7 @@ export function useSessionIdentity() {
     switchSession,
     createSession,
     archiveSession,
+    unimportSession,
     destroySession,
     sendMessage,
     openChatPanel,

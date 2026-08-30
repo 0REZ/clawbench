@@ -104,6 +104,7 @@
       @create-session="() => manager.createSession()"
       @show-agent-selector="handleShowAgentSelector"
       @archive-session="() => manager.archiveCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
+      @unimport-session="() => manager.unimportCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @destroy-session="() => manager.destroyCurrentSession((draftId) => inputBarRef.value?.deleteDraft(draftId))"
       @open-user-msg-index="handleOpenUserMsgIndex"
       @refresh-session="handleRefreshSession"
@@ -507,6 +508,7 @@ const manager = useSessionManager({
   switchSessionCore: session.switchSession,
   createSessionCore: session.createSession,
   archiveSessionCore: session.archiveSession,
+  unimportSessionCore: session.unimportSession,
   destroySessionCore: session.destroySession,
   continueFromExecutionCore: session.continueFromExecution,
   forkSessionCore: session.forkSession,

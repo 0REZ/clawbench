@@ -291,6 +291,78 @@ func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": false, "sessionCount": sessionCount})
 }
 
+// UnimportSession handles DELETE /api/ai/session/unimport — moves a loaded
+// session back to the "external sessions" list by removing ONLY the ClawBench
+// DB records. The on-disk agent transcript (e.g. ~/.claude/projects/**/*.jsonl)
+// is never touched, and no ACP session/delete is sent, so the session remains
+// fully recoverable from the external list (re-load any time).
+//
+// For an empty session (no finalized messages and no agent-side transcript)
+// there is nothing external to fall back to, so removing the DB row makes it
+// disappear entirely — which is the desired outcome for stray empty sessions.
+//
+// UnimportSession 处理 DELETE /api/ai/session/unimport —— 仅删除 ClawBench
+// 数据库中的会话记录，把会话移回「外部恢复区」列表。磁盘上的 agent 会话
+// 文件（如 ~/.claude/projects/**/*.jsonl）绝不触碰，也不会发送 ACP
+// session/delete，因此会话随时可从外部列表重新载入、完整可恢复。
+// 空会话（无已落库消息、无 agent 侧文件）没有外部实体可回退，删除记录
+// 后即彻底消失——这正是清理误建空会话的预期行为。
+func UnimportSession(w http.ResponseWriter, r *http.Request) {
+	projectPath, ok := requireProject(w, r)
+	if !ok {
+		return
+	}
+
+	if !requireMethod(w, r, http.MethodDelete) {
+		return
+	}
+
+	sessionID, ok := requireSessionID(w, r)
+	if !ok {
+		return
+	}
+
+	// Cancel a running session first so no orphan agent process remains.
+	// 先取消运行中的会话，避免遗留 agent 进程。
+	if service.IsSessionRunning(sessionID) {
+		slog.Info("cancelling running session before unimport", "session_id", sessionID)
+		service.CancelSession(sessionID)
+	}
+
+	// Close (but do NOT ACP-delete) the agent connection. Closing alone keeps
+	// the agent-side transcript intact; the external list re-discovers it via
+	// the agent's own session/list on next enumeration.
+	// 仅关闭连接（不调用 ACP 删除）：agent 侧会话文件保持原样，
+	// 外部列表下次列举时会自动重新发现它。
+	if agentID := service.GetSessionAgentID(sessionID); agentID != "" {
+		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
+			slog.Info("acp: closing connection for unimported session", "session_id", sessionID, "agent_id", agentID)
+			go ai.GetACPConnManager().CloseConn(sessionID)
+		}
+	}
+
+	// Best-effort RAG cleanup (no-op when RAG is not initialized).
+	// 顺带清理 RAG 索引（未启用 RAG 时为空操作）。
+	if chunksDeleted, err := service.PurgeRAGChunksBySessionIDs([]string{sessionID}); err != nil {
+		slog.Warn("failed to purge RAG chunks for unimported session", "session_id", sessionID, "err", err)
+	} else if chunksDeleted > 0 {
+		slog.Info("purged RAG chunks for unimported session", "session_id", sessionID, "chunks", chunksDeleted)
+	}
+
+	// HardDeleteSession is a pure-DB transaction (chat_history, tool_calls,
+	// thinking, summaries, raw_responses, task_executions, chat_sessions).
+	// It contains no filesystem or ACP calls — exactly the unimport semantics.
+	// HardDeleteSession 是纯数据库事务，不含任何文件系统或 ACP 调用，
+	// 正是「移除」所需的语义。
+	if err := service.HardDeleteSession(sessionID); err != nil {
+		model.WriteError(w, model.Internal(fmt.Errorf("failed to unimport session")))
+		return
+	}
+
+	sessionCount, _ := service.GetSessionCount(projectPath)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "unimported": true, "sessionCount": sessionCount})
+}
+
 // DestroySession handles DELETE for physically removing a session and all its data.
 // Unlike ArchiveSession, this irreversibly removes the session
 // from the database — chat_history, tool_calls, raw_responses, task_executions, and

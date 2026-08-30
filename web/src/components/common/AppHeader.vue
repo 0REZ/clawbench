@@ -169,6 +169,35 @@
       </div>
     </Teleport>
 
+    <!-- New-entity dropdown (新会话 lives here, future "new ..." items can join)
+         Sits between the recent-files capsule and the theme picker so that
+         "new session" is no longer a one-tap destructive-ish action inside
+         the session menu — a mis-tap there created an empty session that
+         then had to be manually removed. -->
+    <!-- 新建下拉：收纳「新会话」及未来其它「新 XX」入口。位于最近文件与
+         主题按钮之间；「新会话」从会话菜单移除，避免菜单内一次误触即
+         创建空会话、还需繁琐移除。 -->
+    <button ref="newMenuBtnRef" class="theme-quick-toggle" :title="t('appHeader.newMenu')" :aria-label="t('appHeader.newMenu')" @click="newMenuOpen = !newMenuOpen">
+      <SquarePen :size="14" />
+    </button>
+    <PopupMenu v-model:show="newMenuOpen" :target-element="newMenuBtnRef" :max-width="220" anchor="right">
+      <div class="theme-picker">
+        <div class="theme-picker-title">{{ t('appHeader.newMenu') }}</div>
+        <div class="theme-picker-list">
+          <button
+            class="theme-item"
+            role="menuitem"
+            tabindex="-1"
+            @click="newMenuOpen = false; emit('create-session')"
+            @keydown.enter="newMenuOpen = false; emit('create-session')"
+          >
+            <SquarePen :size="14" style="margin-right: 8px; flex-shrink: 0" />
+            <span>{{ t('appHeader.newSession') }}</span>
+          </button>
+        </div>
+      </div>
+    </PopupMenu>
+
     <!-- Quick theme picker -->
     <button ref="themeBtnRef" class="theme-quick-toggle" :title="t('appHeader.themePicker')" :aria-label="t('appHeader.themePicker')" @click="toggleThemeMenu">
       <Palette :size="14" />
@@ -212,7 +241,7 @@
 </template>
 
 <script setup lang="ts">
-import { Projector, Search, GitBranch, Server, FileText, Settings2, FolderOpen, Cpu, Activity, MemoryStick, Database, X, Palette, Sun, Moon } from 'lucide-vue-next'
+import { Projector, Search, GitBranch, Server, FileText, Settings2, FolderOpen, Cpu, Activity, MemoryStick, Database, X, Palette, Sun, Moon, SquarePen } from 'lucide-vue-next'
 import { ref, computed, onMounted, onUnmounted, inject, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
@@ -261,6 +290,8 @@ const shortcutTipsOpen = ref(false)
 // Quick theme picker
 const themeBtnRef = ref<HTMLElement | null>(null)
 const themeMenuOpen = ref(false)
+const newMenuBtnRef = ref<HTMLElement | null>(null)
+const newMenuOpen = ref(false)
 const currentThemeValue = computed(() => localConfig.theme || 'auto')
 const autoPreviewColors = computed(() => getThemePreviewColor(resolveThemeId('auto')))
 
@@ -303,7 +334,7 @@ const props = defineProps({
     currentFilePath: String,
     recentFilesAvailable: { type: Number, default: 0 },
 })
-const emit = defineEmits(['openProjectDialog', 'selectRecentFile'])
+const emit = defineEmits(['openProjectDialog', 'selectRecentFile', 'create-session'])
 
 const { entries: recentFileEntries, removeRecentFile } = useRecentFiles()
 

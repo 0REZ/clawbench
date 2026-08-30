@@ -796,6 +796,48 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
   }
 
+  // Unimport ("移除") a session: removes ONLY the ClawBench DB records so the
+  // session falls back to the "external sessions" list; the agent-side
+  // transcript file is never touched and remains fully re-loadable.
+  // Empty sessions (no transcript) simply disappear — desired for strays.
+  // 移除会话：仅删除 ClawBench 数据库记录，会话回到「外部恢复区」列表；
+  // agent 侧会话文件绝不触碰，随时可重新载入。空会话无外部实体，
+  // 移除后直接消失——正是清理误建空会话的预期行为。
+  async function unimportSession(sessionId: string, backend?: string) {
+    if (pendingSessionOps.value.has(sessionId)) return
+    pendingSessionOps.value.add(sessionId)
+    try {
+      const resp = await fetch(`/api/ai/session/unimport?session_id=${encodeURIComponent(sessionId)}&backend=${encodeURIComponent(backend || '')}`, {
+        method: 'DELETE',
+      })
+      const data = await resp.json()
+      if (data.ok) {
+        clearUsageStateById(sessionId)
+        clearChatScrollPosition(sessionId)
+        if (sessionId === currentSessionId.value) {
+          const sessionsResp = await fetch('/api/ai/sessions')
+          const sessionsData = await sessionsResp.json()
+          if (sessionsData.sessions && sessionsData.sessions.length > 0) {
+            await switchSession(sessionsData.sessions[0].id)
+          } else {
+            await createSession('')
+          }
+        } else {
+          await loadSessionsOnce()
+        }
+        if (typeof data.sessionCount === 'number') store.state.sessionCount = data.sessionCount
+        toast.show(gt('chat.session.unimported'), { icon: '↩️', type: 'success', duration: 2000 })
+      } else {
+        toast.show(gt('chat.session.unimportFailed'), { icon: '⚠️', type: 'error' })
+      }
+    } catch (err: unknown) {
+      appLog.e(TAG, 'Failed to unimport session:', err)
+      toast.show(gt('chat.session.unimportFailed'), { icon: '⚠️', type: 'error' })
+    } finally {
+      pendingSessionOps.value.delete(sessionId)
+    }
+  }
+
   async function archiveSession(sessionId: string, backend: string) {
     // Prevent concurrent deletes for the same session
     if (pendingSessionOps.value.has(sessionId)) return
@@ -1230,6 +1272,7 @@ export function useChatSession(options: UseChatSessionOptions) {
     switchSession,
     createSession,
     archiveSession,
+    unimportSession,
     destroySession,
     onSessionEvent,
     loadSessionsOnce: loadSessionsOnceInner,
