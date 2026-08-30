@@ -1169,7 +1169,6 @@ async function handleDestroyFromSearch(session) {
     {
       title: gt('sessionSearch.destroy'),
       confirmText: gt('common.confirm'),
-      dangerous: true,
     }
   )
   if (!confirmed) return

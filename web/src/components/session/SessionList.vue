@@ -149,7 +149,7 @@ async function archiveSession(sessionId) {
   const isRunning = props.runningSessionIds.has(sessionId)
   const confirmMsg = isRunning ? t('session.confirmArchiveRunning') : t('session.confirmArchive')
   const confirmed = await dialog.confirm(confirmMsg, {
-    dangerous: true,
+    confirmText: t('chat.actions.archiveSession'),
     extraText: t('chat.archive.destroyBtn'),
     extraPrimedText: t('chat.archive.destroyBtnPrimed'),
     onExtraAction: () => emit('destroy', sessionId),

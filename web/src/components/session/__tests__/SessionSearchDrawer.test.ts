@@ -18,7 +18,7 @@ vi.mock('vue-i18n', () => ({
       'sessionSearch.roleUser': 'User',
       'sessionSearch.roleAssistant': 'Assistant',
       'sessionSearch.resume': 'Resume Session',
-      'sessionSearch.destroy': 'Delete permanently',
+      'sessionSearch.destroy': 'Remove',
       'sessionSearch.openSession': 'Open',
       'sessionSearch.modeHybrid': 'Hybrid',
       'sessionSearch.modeFts': 'Full-text',
@@ -314,7 +314,7 @@ describe('SessionSearchDrawer', () => {
     await flushPromises()
 
     expect(wrapper.find('.detail-destroy-btn').exists()).toBe(true)
-    expect(wrapper.find('.detail-destroy-btn').text()).toBe('Delete permanently')
+    expect(wrapper.find('.detail-destroy-btn').text()).toBe('Remove')
   })
 
   it('does not show destroy button for non-archived session in detail view', async () => {

@@ -252,11 +252,16 @@ func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 	if msgCount == 0 {
 		slog.Info("archiving empty session → hard-delete", "session_id", sessionID)
 
-		// Best-effort tell the ACP agent to delete its copy of the session on
-		// permanent deletion. Failures are logged, not propagated to the frontend.
+		// Close (but do NOT ACP-delete) the agent connection. The agent-side
+		// transcript stays on disk so the session remains recoverable from the
+		// external list. Closing alone is safe for empty sessions — their
+		// ephemeral mapping is dropped here, and re-discovery happens on the
+		// next session/list enumeration.
+		// 仅关闭（不 ACP 删除）agent 连接：磁盘上的 agent 会话文件保持原样，
+		// 会话仍可从外部列表重新发现。空会话的连接映射在此释放。
 		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
-			slog.Info("acp: deleting session for empty archived session", "session_id", sessionID, "agent_id", agentID)
-			go ai.GetACPConnManager().DeleteSession(sessionID)
+			slog.Info("acp: closing connection for empty archived session", "session_id", sessionID, "agent_id", agentID)
+			go ai.GetACPConnManager().CloseConn(sessionID)
 		}
 
 		// Delete RAG chunks (best-effort, no-op if RAG not initialized)
@@ -316,12 +321,16 @@ func DestroySession(w http.ResponseWriter, r *http.Request) {
 		service.CancelSession(sessionID)
 	}
 
-	// Close the ACP connection for this session before destroying
+	// Close (but do NOT ACP-delete) the agent connection. The agent-side
+	// transcript stays on disk so the session remains recoverable from the
+	// external list. Destroy now only removes the ClawBench DB records.
+	// 仅关闭（不 ACP 删除）agent 连接：磁盘上的 agent 会话文件保持原样，
+	// 会话仍可从外部列表重新发现。destroy 现在只删 ClawBench 数据库记录。
 	agentID := service.GetSessionAgentID(sessionID)
 	if agentID != "" {
 		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
-			slog.Info("acp: deleting connection for destroyed session", "session_id", sessionID, "agent_id", agentID)
-			go ai.GetACPConnManager().DeleteSession(sessionID)
+			slog.Info("acp: closing connection for removed session", "session_id", sessionID, "agent_id", agentID)
+			go ai.GetACPConnManager().CloseConn(sessionID)
 		}
 	}
 

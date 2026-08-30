@@ -529,3 +529,74 @@ func TestServeSessionsOverview_EmptyResult(t *testing.T) {
 	assert.Equal(t, 0, result.Total)
 	assert.Empty(t, result.Projects)
 }
+
+// ── DestroySession: DB-only removal, ACP connection closed (never deleted) ──
+
+func TestDestroySession_ClosesACPConnAndHardDeletes(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	origAgents := model.Agents
+	t.Cleanup(func() { model.Agents = origAgents })
+
+	model.Agents = map[string]*model.Agent{
+		"acp-test-agent": {
+			ID:         "acp-test-agent",
+			Backend:    "claude",
+			Transport:  "cli",
+			AcpCommand: "claude --acp",
+		},
+	}
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "destroy-me", "acp-test-agent", "", "default", "chat")
+	require.NoError(t, err)
+
+	mgr := ai.GetACPConnManager()
+	client := ai.NewClawBenchACPClient()
+	conn := &ai.ACPConn{}
+	conn.SetClientForTest(client)
+	conn.SetSessionMappingForTest(sessionID, "acp-session-destroy")
+	mgr.SetConnForTest(sessionID, conn)
+	// Don't defer cleanup — DestroySession should close it.
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/destroy?session_id="+sessionID, nil)
+	withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(DestroySession, req)
+	assertOK(t, w)
+
+	// The ACP connection is closed (CloseConn removes it from the manager) —
+	// never ACP session/delete'd. The connection being gone proves the close
+	// path ran; DestroySession no longer calls DeleteSession at all.
+	assert.Eventually(t, func() bool { return mgr.GetConn(sessionID) == nil }, 2*time.Second, 10*time.Millisecond, "ACP connection should be closed by DestroySession")
+
+	// DB records are gone (chat_sessions hard-deleted, no orphans in history).
+	var nSessions, nHistory int
+	db := service.UnsafeDBForTest()
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chat_sessions WHERE id = ?", sessionID).Scan(&nSessions))
+	require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sessionID).Scan(&nHistory))
+	assert.Equal(t, 0, nSessions, "chat_sessions row should be hard-deleted")
+	assert.Equal(t, 0, nHistory, "chat_history rows should be removed")
+}
+
+func TestDestroySession_NoSessionID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/destroy", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(DestroySession, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestDestroySession_BadMethod(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodPost, "/api/ai/session/destroy", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(DestroySession, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
