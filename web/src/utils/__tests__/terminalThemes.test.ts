@@ -37,6 +37,7 @@ import {
   getAppThemeBg,
   loadThemesModule,
   resetThemesCache,
+  buildTerminalThemePreviews,
   darkTheme,
   lightTheme,
 } from '@/utils/terminalThemes'
@@ -240,6 +241,38 @@ describe('terminalThemes', () => {
         if (prev == null) continue
         expect(luminance(cur)).toBeLessThanOrEqual(luminance(prev))
       }
+    })
+  })
+
+  describe('buildTerminalThemePreviews', () => {
+    it('includes an auto entry without a theme', () => {
+      const map = buildTerminalThemePreviews(null)
+      expect(map[TERMINAL_THEME_AUTO]).toEqual({ type: 'terminal', themeId: TERMINAL_THEME_AUTO })
+      expect(map[TERMINAL_THEME_AUTO].theme).toBeUndefined()
+    })
+
+    it('returns auto + one key per sorted theme id', () => {
+      const map = buildTerminalThemePreviews(null)
+      expect(Object.keys(map)).toHaveLength(SORTED_THEME_IDS.length + 1)
+      for (const id of SORTED_THEME_IDS) {
+        expect(map[id]).toEqual({ type: 'terminal', themeId: id, theme: undefined })
+      }
+    })
+
+    it('wires loaded themes to each entry and none to auto', () => {
+      const themes = {
+        Dracula: { background: '#1e1f29' },
+        Github: { background: '#ffffff' },
+      } as unknown as Record<string, import('@xterm/xterm').ITheme>
+      const map = buildTerminalThemePreviews(themes)
+      expect(map.Dracula.theme).toEqual({ background: '#1e1f29' })
+      expect(map.Github.theme).toEqual({ background: '#ffffff' })
+      expect(map[TERMINAL_THEME_AUTO].theme).toBeUndefined()
+    })
+
+    it('leaves theme undefined for ids missing from the loaded map', () => {
+      const map = buildTerminalThemePreviews({})
+      expect(map.Dracula.theme).toBeUndefined()
     })
   })
 })

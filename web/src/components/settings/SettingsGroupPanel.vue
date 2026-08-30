@@ -169,7 +169,7 @@ import { useFrp } from '@/composables/useFrp'
 import { useRagStatus } from '@/composables/useRagStatus'
 import { useDialog } from '@/composables/useDialog'
 import { apiPost } from '@/utils/api'
-import { SORTED_THEME_IDS, formatThemeName, loadThemesModule } from '@/utils/terminalThemes'
+import { SORTED_THEME_IDS, buildTerminalThemePreviews, formatThemeName, loadThemesModule } from '@/utils/terminalThemes'
 import type { TerminalPreview } from './SettingsItem.vue'
 
 // ── Props & Emits ──
@@ -229,12 +229,7 @@ const isTerminalThemeField = computed(() =>
 
 const terminalThemePreviews = computed<Record<string, TerminalPreview> | undefined>(() => {
   if (!isTerminalThemeField.value) return undefined
-  const map: Record<string, TerminalPreview> = {}
-  map.auto = { type: 'terminal', themeId: 'auto' }
-  for (const id of SORTED_THEME_IDS) {
-    map[id] = { type: 'terminal', themeId: id, theme: loadedTerminalThemes.value?.[id] }
-  }
-  return map
+  return buildTerminalThemePreviews(loadedTerminalThemes.value)
 })
 
 // ── Lifecycle ──

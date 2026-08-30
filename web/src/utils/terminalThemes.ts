@@ -406,3 +406,20 @@ function backgroundLuminance(hex: string): number {
   if (!rgb) return 0
   return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
 }
+
+/**
+ * 构造终端主题选择网格的 previews map（含 auto 条目）。
+ * theme 未加载时为 undefined。显式过滤 auto，避免未来 SORTED_THEME_IDS
+ * 加入 'auto' 时循环覆盖掉先插入的 auto 条目。
+ */
+export function buildTerminalThemePreviews(
+  themes: Record<string, ITheme> | null,
+): Record<string, { type: 'terminal'; themeId: string; theme?: ITheme }> {
+  const map: Record<string, { type: 'terminal'; themeId: string; theme?: ITheme }> = {}
+  map[TERMINAL_THEME_AUTO] = { type: 'terminal', themeId: TERMINAL_THEME_AUTO }
+  for (const id of SORTED_THEME_IDS) {
+    if (id === TERMINAL_THEME_AUTO) continue
+    map[id] = { type: 'terminal', themeId: id, theme: themes?.[id] }
+  }
+  return map
+}
