@@ -141,7 +141,15 @@ const legacyKeys: Record<string, {
     format: 'raw',
     sideEffect(value: boolean) {
       try {
-        getNative()?.setLiveUpdateEnabled?.(!!value)
+        const native = getNative()
+        native?.setLiveUpdateEnabled?.(!!value)
+        // Enabling the chip is only meaningful when the system will actually
+        // promote it. If not, guide the user to the Live Updates permission
+        // screen (falls back to the app notification settings on ROMs without
+        // a promotion-specific screen).
+        if (value && native?.canPostPromotedNotifications?.() === false) {
+          native.openLiveUpdateSettings?.()
+        }
       } catch { /* not in app mode */ }
     },
   },

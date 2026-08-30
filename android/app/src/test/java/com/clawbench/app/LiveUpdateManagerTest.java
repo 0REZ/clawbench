@@ -4,6 +4,7 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import static org.junit.Assert.assertEquals;
@@ -190,5 +191,23 @@ public class LiveUpdateManagerTest {
     @Test
     public void shouldRefresh_visibleWithinWindow_throttled() {
         assertFalse(LiveUpdateManager.shouldRefresh(1, 0, 0, true, 1000, 950));
+    }
+
+    // =====================================================
+    // canPostPromoted: promotion availability gate
+    // =====================================================
+
+    @Test
+    public void canPostPromoted_belowApi36_false() {
+        // @Config(sdk=28) → Build.VERSION.SDK_INT < 36, so promotion is
+        // always unavailable regardless of the NotificationManager state.
+        assertFalse("below API 36 promotion must be unavailable",
+                LiveUpdateManager.canPostPromoted(RuntimeEnvironment.getApplication()));
+    }
+
+    @Test
+    public void canPostPromoted_nullContext_false() {
+        assertFalse("null context must not throw and must report unavailable",
+                LiveUpdateManager.canPostPromoted(null));
     }
 }

@@ -602,6 +602,48 @@ describe('useSettingsConfig', () => {
       localStorage.removeItem('clawbench-settings-liveUpdate')
       restoreNativeMock(original)
     })
+
+    it('opens the Live Updates settings when enabling without promotion permission', () => {
+      const mockOpenSettings = vi.fn()
+      const original = (window as any).ClawBenchNative
+      ;(window as any).ClawBenchNative = {
+        setLiveUpdateEnabled: vi.fn(),
+        canPostPromotedNotifications: () => false,
+        openLiveUpdateSettings: mockOpenSettings,
+      }
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', true)
+
+      expect(mockOpenSettings).toHaveBeenCalledTimes(1)
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      if (original) {
+        ;(window as any).ClawBenchNative = original
+      } else {
+        delete (window as any).ClawBenchNative
+      }
+    })
+
+    it('does not open settings when promotion permission is already available', () => {
+      const mockOpenSettings = vi.fn()
+      const original = (window as any).ClawBenchNative
+      ;(window as any).ClawBenchNative = {
+        setLiveUpdateEnabled: vi.fn(),
+        canPostPromotedNotifications: () => true,
+        openLiveUpdateSettings: mockOpenSettings,
+      }
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', true)
+
+      expect(mockOpenSettings).not.toHaveBeenCalled()
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      if (original) {
+        ;(window as any).ClawBenchNative = original
+      } else {
+        delete (window as any).ClawBenchNative
+      }
+    })
   })
 
   // ── applyUIScale / getUIScale ──

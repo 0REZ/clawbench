@@ -6,9 +6,11 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 
 import androidx.core.app.NotificationCompat;
 
@@ -343,8 +345,7 @@ public class LiveUpdateManager {
         Notification notification = builder.build();
         // Only claim FLAG_PROMOTED_ONGOING on API 36+; canPostPromotedNotifications
         // tells us whether the system will actually promote it.
-        boolean promoted = Build.VERSION.SDK_INT >= 36
-                && notificationManager.canPostPromotedNotifications();
+        boolean promoted = canPostPromoted(appContext);
         AppLog.d(TAG, "posting live update: chip=\"" + chip + "\" summary=\"" + summary
                 + "\" promoted=" + promoted + " (sdk=" + Build.VERSION.SDK_INT + ")");
         notificationManager.notify(NOTIFICATION_ID, notification);
@@ -373,5 +374,68 @@ public class LiveUpdateManager {
         return PendingIntent.getActivity(
                 appContext, 0, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    // ------------------------------------------------------------------
+    // Promotion support / settings navigation
+    // ------------------------------------------------------------------
+
+    /**
+     * Whether the system will actually promote a Live Updates request right
+     * now. On Android 16+ this reflects canPostPromotedNotifications() (which
+     * accounts for the user's Live Updates setting and the app's permission);
+     * on older systems promotion is unavailable, so this is false.
+     */
+    public static boolean canPostPromoted(Context context) {
+        if (Build.VERSION.SDK_INT < 36) {
+            return false;
+        }
+        NotificationManager nm =
+                (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        return nm != null && nm.canPostPromotedNotifications();
+    }
+
+    /**
+     * Open the system screen where the user can enable Live Updates for this
+     * app. Tries the promotion-specific actions in order, falling back to the
+     * app notification settings screen (which exists on every device) when a
+     * specific action is missing or throws.
+     *
+     * @param context an Activity context (the settings screen is launched from
+     *                it); null-safe and exception-safe.
+     */
+    public static void openPromotedSettings(Context context) {
+        if (context == null) {
+            return;
+        }
+        String pkg = context.getPackageName();
+        // Known promotion-settings actions, most specific first. The exact
+        // action name varies across Android versions / OEMs (the documented
+        // ACTION_MANAGE_APP_PROMOTED_NOTIFICATIONS does not exist on some
+        // builds, where ACTION_APP_NOTIFICATION_PROMOTION_SETTINGS is the real
+        // one), so probe each and fall through on failure.
+        String[] promotionActions = {
+                "android.settings.MANAGE_APP_PROMOTED_NOTIFICATIONS",
+                "android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS",
+        };
+        for (String action : promotionActions) {
+            try {
+                Intent intent = new Intent(action, Uri.parse("package:" + pkg));
+                if (context.getPackageManager().resolveActivity(intent, 0) != null) {
+                    context.startActivity(intent);
+                    return;
+                }
+            } catch (Exception e) {
+                AppLog.w(TAG, "promoted settings action unavailable: " + action, e);
+            }
+        }
+        // Fallback: the per-app notification settings screen exists everywhere.
+        try {
+            Intent fallback = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, pkg);
+            context.startActivity(fallback);
+        } catch (Exception e) {
+            AppLog.w(TAG, "failed to open notification settings", e);
+        }
     }
 }

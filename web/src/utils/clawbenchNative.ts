@@ -25,6 +25,10 @@ export interface ClawBenchNative {
   setLiveUpdateEnabled(enabled: boolean): void
   /** Read the persisted Live Updates chip state (Android; no-op on desktop). */
   getLiveUpdateEnabled(): boolean
+  /** Whether the system can currently promote Live Updates for this app (Android; false on desktop). */
+  canPostPromotedNotifications?(): boolean
+  /** Open the system screen to enable Live Updates for this app (Android; no-op on desktop). */
+  openLiveUpdateSettings?(): void
   updateLastSeenEventId(id: string): void
   setKeepScreenOn(on: boolean): void
   log(level: string, tag: string, msg: string): void

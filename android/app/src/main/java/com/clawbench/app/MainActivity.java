@@ -3560,6 +3560,27 @@ public class MainActivity extends AppCompatActivity {
         }
 
         /**
+         * Whether the system is currently able to promote Live Updates for
+         * this app (Android 16+ and the user's Live Updates permission granted).
+         * The WebView uses this to decide whether to guide the user to settings.
+         */
+        @JavascriptInterface
+        public boolean canPostPromotedNotifications() {
+            return LiveUpdateManager.canPostPromoted(activity);
+        }
+
+        /**
+         * Open the system screen where the user can enable Live Updates for
+         * this app (falls back to the app notification settings when no
+         * promotion-specific screen exists on this device/ROM).
+         */
+        @JavascriptInterface
+        public void openLiveUpdateSettings() {
+            AppLog.i(TAG, "JSBridge: openLiveUpdateSettings");
+            LiveUpdateManager.openPromotedSettings(activity);
+        }
+
+        /**
          * Check whether native push notifications are currently enabled.
          * Used by the WebView to read the initial state on settings page load.
          */
