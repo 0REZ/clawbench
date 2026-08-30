@@ -1748,26 +1748,23 @@ defineExpose({
     content: '';
     position: absolute;
     top: 0;
-    left: 0;
-    width: 40%;
+    left: -60%;
+    width: 60%;
     height: 100%;
-    transform: translateX(-140%);
     background: linear-gradient(
         90deg,
-        transparent 0%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 12%, rgba(255,255,255,0.08)) 25%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 30%, rgba(255,255,255,0.22)) 50%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 12%, rgba(255,255,255,0.08)) 75%,
-        transparent 100%
+        transparent,
+        color-mix(in srgb, var(--accent-color, #0066cc) 14%, transparent),
+        transparent
     );
-    animation: sweep-light 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: sweep-light 2s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
 }
 
 @keyframes sweep-light {
-    0% { transform: translateX(-40%); opacity: 0; }
-    10% { opacity: 1; }
-    90% { opacity: 1; }
-    100% { transform: translateX(200%); opacity: 0; }
+    0% { left: -60%; }
+    100% { left: 100%; }
 }
 
 .chat-action-btn svg {
