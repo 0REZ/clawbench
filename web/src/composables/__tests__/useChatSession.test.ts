@@ -117,6 +117,8 @@ const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, 
     mockUtilsFns.buildMessageSnapshot.mockReset().mockReturnValue('')
     mockUtilsFns.parseMessages.mockReset().mockReturnValue([])
     mockForceCleanupStreamingState.mockReset().mockReturnValue(undefined)
+    mockAppInForeground.value = true
+    mockIsReplayingEvents.value = false
   }
   return { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockForceCleanupStreamingState, mockIdentityFns, resetAdditionalMocks }
 })
@@ -303,6 +305,12 @@ vi.mock('@/composables/useSessionIdentity.ts', () => ({
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ show: mockToastFn }),
 }))
+vi.mock('@/composables/useAppForeground', () => ({
+  useAppForeground: () => ({ appInForeground: mockAppInForeground }),
+}))
+vi.mock('@/composables/useGlobalEvents', () => ({
+  useGlobalEvents: () => ({ isReplayingEvents: mockIsReplayingEvents }),
+}))
 vi.mock('@/composables/useNotification', () => ({
   useNotification: () => ({ play: vi.fn() }),
 }))
@@ -359,6 +367,12 @@ import { chatMessageReducer } from '@/utils/chatStreamUtils.ts'
 // Get direct references to the mocked functions from useSessionIdentity
 const mockUpdateUsageState = vi.hoisted(() => vi.fn())
 const mockClearUsageState = vi.hoisted(() => vi.fn())
+// App foreground signal for useAppForeground mock — tests flip this to
+// simulate the app being backgrounded (Android onPause) vs foregrounded.
+const mockAppInForeground = vi.hoisted(() => ({ value: true }))
+// WS replay signal for useGlobalEvents mock — tests flip this to simulate
+// fetchPendingEvents replaying events missed while the WS was down.
+const mockIsReplayingEvents = vi.hoisted(() => ({ value: false }))
 
 // ── Helpers ──
 
@@ -1230,6 +1244,101 @@ describe('onSessionEvent', () => {
     expect(onDisconnectStream).toHaveBeenCalled()
     // onConnectStream should NOT be called (placeholder is data-driven).
     expect(onConnectStream).not.toHaveBeenCalled()
+  })
+
+  it('does NOT mark the current session read on completion while the app is backgrounded', async () => {
+    // Backgrounded app (Android onPause) — a session finishing here must keep
+    // its unread badge so the floating window can show it. The completion
+    // still reloads history, but must not POST /api/ai/chat/read.
+    mockAppInForeground.value = false
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    // Wait for the async loadHistory to complete
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url]) => typeof url === 'string' && url.startsWith('/api/ai/chat/read')
+    )
+    expect(readCalls.length).toBe(0)
+  })
+
+  it('marks the current session read on completion while the app is foregrounded', async () => {
+    mockAppInForeground.value = true
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    // Wait for the async loadHistory + markSessionRead to complete
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+    await new Promise(r => setTimeout(r, 50))
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does NOT mark read for a completion replayed after WS reconnect', async () => {
+    // fetchPendingEvents() is replaying a completion that was broadcast while
+    // the WS was down (app was backgrounded). The user never saw it finish, so
+    // the unread badge must survive — even though the app is now foreground.
+    mockAppInForeground.value = true
+    mockIsReplayingEvents.value = true
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+    await new Promise(r => setTimeout(r, 50))
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBe(0)
   })
 })
 

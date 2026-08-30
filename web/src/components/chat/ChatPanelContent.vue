@@ -202,6 +202,7 @@ import { playNotificationSound } from '@/composables/useNotificationSound.ts'
 import { useAutoSpeech, extractSpeakableText } from '@/composables/useAutoSpeech.ts'
 import { useSwipeSession } from '@/composables/useSwipeSession.ts'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
+import { useAppForeground } from '@/composables/useAppForeground'
 import { store } from '@/stores/app.ts'
 
 import { useDialog } from '@/composables/useDialog'
@@ -351,6 +352,9 @@ const {
 // Debounce map for onToolUpdate fetches — max one fetch per 3s per tool
 const toolUpdateFetchDebounce = new Map()
 
+// Reliable app foreground/background signal (Android JS bridge + fallback).
+const { appInForeground } = useAppForeground()
+
 const session = useChatSession({
   currentSessionId: identity.currentSessionId,
   messages,
@@ -398,8 +402,11 @@ async function onStreamEnd(reason) {
     // Recalculate chatUnread after stream completes — mark the current session
     // read first so the session list reflects the cleared unread state, then
     // refresh so chatUnread is false if no other sessions have unread messages.
+    // Only mark read while the app is in the foreground: a session that
+    // completes in the background (app paused, floating window showing) must
+    // keep its unread badge so the floating window displays it.
     const sid = identity.currentSessionId.value
-    if (sid) {
+    if (sid && appInForeground.value) {
       await session.markSessionRead(sid).catch(() => {})
     }
     loadSessionsOnce()
@@ -410,9 +417,11 @@ async function onStreamEnd(reason) {
     messageStore.dispatch({ type: 'clear_pending' })
     // Restore screen lock — output was cancelled, no TTS will play
     autoSpeech.onOutputEndNoSpeech()
-    // User was viewing this session while cancelling — clear its unread badge
+    // User was viewing this session while cancelling — clear its unread badge.
+    // Guarded on foreground: a cancellation arriving while the app is paused
+    // must leave the badge intact for the floating window.
     const sid = identity.currentSessionId.value
-    if (sid) {
+    if (sid && appInForeground.value) {
       session.markSessionRead(sid).catch(() => {})
     }
     // Refresh git state — agent may have modified files before cancellation

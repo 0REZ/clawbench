@@ -217,6 +217,10 @@ public class BackgroundService extends Service {
     // Service instance's lifecycle. Created in onCreate() when the floating
     // window feature is enabled, destroyed in onDestroy(). Null otherwise.
     private FloatingStatusController floatingController;
+    // Android 16 Live Updates (promoted ongoing notification). Always present
+    // while the service runs; it mirrors the floating window's overview + event
+    // data source so the status-bar chip and the floating capsule agree.
+    private LiveUpdateManager liveUpdateManager;
     // Most recently seen session_id from session_update/task_update events,
     // tracked so the panel's session rows can deep-link into the right session.
     private volatile String floatingSessionId = "";
@@ -714,6 +718,12 @@ public class BackgroundService extends Service {
         // Created here so it lives exactly as long as this Service instance.
         syncFloatingController();
 
+        // Android 16 Live Updates: a promoted ongoing notification summarizing
+        // running / pending-approval / unread session counts. Always active
+        // while the service runs (no separate opt-in toggle) and consumes the
+        // same overview + event stream as the floating window.
+        liveUpdateManager = new LiveUpdateManager(this);
+
         // NOTE: Do NOT call stopSelf() here even if forwardedPorts is empty!
         // The Service may have been started by startForegroundService(ADD_PORT)
         // and the ADD_PORT intent hasn't been delivered yet (onStartCommand comes
@@ -838,6 +848,10 @@ public class BackgroundService extends Service {
         if (floatingController != null) {
             floatingController.destroy();
             floatingController = null;
+        }
+        if (liveUpdateManager != null) {
+            liveUpdateManager.destroy();
+            liveUpdateManager = null;
         }
         stopConnectionMonitor();
         releaseWifiLock();
@@ -2443,6 +2457,19 @@ public class BackgroundService extends Service {
                     AppLog.w(TAG, "FloatingWindow: handleEvent failed", e);
                 }
 
+                // Feed the Live Updates status chip from the same event stream.
+                // Isolated so a manager exception cannot break the notification
+                // / cursor logic below.
+                try {
+                    if (liveUpdateManager != null
+                            && ("session_update".equals(event) || "task_update".equals(event))) {
+                        liveUpdateManager.onEvent(event, data.optString("status", ""),
+                                data.optString("session_id", ""));
+                    }
+                } catch (Exception e) {
+                    AppLog.w(TAG, "LiveUpdate: onEvent failed", e);
+                }
+
                 // Only notify for terminal states and permission pending
                 String status = data.optString("status", "");
                 boolean shouldNotify = false;
@@ -2829,7 +2856,12 @@ public class BackgroundService extends Service {
                     return;
                 }
                 JSONObject data = new JSONObject(body);
-                floatingController.onOverviewLoaded(data);
+                if (floatingController != null) {
+                    floatingController.onOverviewLoaded(data);
+                }
+                if (liveUpdateManager != null) {
+                    liveUpdateManager.onOverviewLoaded(data);
+                }
             }
         } catch (Exception e) {
             AppLog.w(TAG, "FloatingWindow: overview poll failed", e);
@@ -2910,6 +2942,20 @@ public class BackgroundService extends Service {
             String projectPath = data.optString("project_path", "");
             String sessionTitle = data.optString("session_title", "");
             String toolName = data.optString("tool_name", "");
+
+            // Sync the Live Updates status chip from the same event when the
+            // service instance is alive (WS may be down — this is exactly the
+            // Worker fallback the chip relies on). Isolated so a failure here
+            // cannot break the regular event notification below.
+            try {
+                BackgroundService svc = getInstance();
+                if (svc != null && svc.liveUpdateManager != null
+                        && ("session_update".equals(eventType) || "task_update".equals(eventType))) {
+                    svc.liveUpdateManager.onEvent(eventType, status, sessionId);
+                }
+            } catch (Exception e) {
+                AppLog.w(TAG, "LiveUpdate: Worker onEvent failed", e);
+            }
 
             // Ensure notification channel exists
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -90,6 +90,8 @@
     <string name="notif_channel_bg_service_desc">SSH port forwarding and background event listening</string>
     <string name="notif_channel_ai_events">AI event notifications</string>
     <string name="notif_channel_ai_events_desc">AI session and task completion notifications</string>
+    <string name="notif_channel_live_update">Session status</string>
+    <string name="notif_channel_live_update_desc">Ongoing session status shown on the lock screen and in the status bar</string>
     <string name="notif_ports_mapped">%1$d port mapping(s)</string>
     <string name="notif_terminals_open">%1$d terminal(s)</string>
     <string name="notif_status_separator">, </string>

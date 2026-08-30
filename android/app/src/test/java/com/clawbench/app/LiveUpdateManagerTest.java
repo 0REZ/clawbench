@@ -1,0 +1,155 @@
+package com.clawbench.app;
+
+import org.json.JSONObject;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+/**
+ * Unit tests for LiveUpdateManager.
+ *
+ * The pure decision functions (computeStats / chipText / cardSummary /
+ * shouldRefresh) have no Android framework dependency and are tested with
+ * plain JUnit. computeStats delegates to FloatingStatusController.computeStats,
+ * which is already covered by FloatingStatusControllerTest; here we assert the
+ * Live Update wrapper returns the same three-tuple for representative
+ * overviews. chipText / cardSummary / shouldRefresh are the Live Update
+ * specific rendering + throttle logic.
+ */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 28, qualifiers = "zh")
+public class LiveUpdateManagerTest {
+
+    private static JSONObject overview(String... sessionJson) throws Exception {
+        StringBuilder sb = new StringBuilder("{\"projects\":[{\"name\":\"/p\",\"sessions\":[");
+        for (int i = 0; i < sessionJson.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append(sessionJson[i]);
+        }
+        sb.append("]}],\"total\":").append(sessionJson.length).append('}');
+        return new JSONObject(sb.toString());
+    }
+
+    private static String session(String id, boolean running, boolean pending, int unread) {
+        return "{\"id\":\"" + id + "\",\"running\":" + running
+                + ",\"pendingApproval\":" + pending + ",\"unreadCount\":" + unread + "}";
+    }
+
+    // =====================================================
+    // computeStats: overview -> {running, pending, unread}
+    // =====================================================
+
+    @Test
+    public void computeStats_runningAndUnread() throws Exception {
+        JSONObject o = overview(
+                session("s1", true, false, 0),
+                session("s2", false, false, 2));
+        int[] stats = LiveUpdateManager.computeStats(o);
+        assertEquals(1, stats[0]); // running
+        assertEquals(0, stats[1]); // pending
+        assertEquals(1, stats[2]); // one session with unread messages
+    }
+
+    @Test
+    public void computeStats_pendingWinsOverRunning() throws Exception {
+        // A session that is both running and pending counts as pending only.
+        JSONObject o = overview(session("s1", true, true, 0));
+        int[] stats = LiveUpdateManager.computeStats(o);
+        assertEquals(0, stats[0]);
+        assertEquals(1, stats[1]);
+        assertEquals(0, stats[2]);
+    }
+
+    @Test
+    public void computeStats_emptyOverview() throws Exception {
+        int[] stats = LiveUpdateManager.computeStats(new JSONObject("{\"projects\":[],\"total\":0}"));
+        assertEquals(0, stats[0]);
+        assertEquals(0, stats[1]);
+        assertEquals(0, stats[2]);
+    }
+
+    @Test
+    public void computeStats_nullSafe() {
+        int[] stats = LiveUpdateManager.computeStats(null);
+        assertEquals(0, stats[0]);
+        assertEquals(0, stats[1]);
+        assertEquals(0, stats[2]);
+    }
+
+    // =====================================================
+    // chipText: single-line status-bar summary
+    // =====================================================
+
+    @Test
+    public void chipText_pendingFirst() {
+        assertEquals("待审批 1", LiveUpdateManager.chipText(2, 1, 3));
+    }
+
+    @Test
+    public void chipText_runningSecond() {
+        assertEquals("执行中 2", LiveUpdateManager.chipText(2, 0, 3));
+    }
+
+    @Test
+    public void chipText_unreadLast() {
+        assertEquals("未读 3", LiveUpdateManager.chipText(0, 0, 3));
+    }
+
+    @Test
+    public void chipText_emptyWhenNothing() {
+        assertEquals("", LiveUpdateManager.chipText(0, 0, 0));
+    }
+
+    // =====================================================
+    // cardSummary: expanded-card breakdown
+    // =====================================================
+
+    @Test
+    public void cardSummary_allGroups() {
+        assertEquals("执行中 2 · 待审批 1 · 未读 3",
+                LiveUpdateManager.cardSummary(2, 1, 3));
+    }
+
+    @Test
+    public void cardSummary_omitsZeroGroups() {
+        assertEquals("执行中 1", LiveUpdateManager.cardSummary(1, 0, 0));
+        assertEquals("待审批 2", LiveUpdateManager.cardSummary(0, 2, 0));
+        assertEquals("未读 5", LiveUpdateManager.cardSummary(0, 0, 5));
+    }
+
+    @Test
+    public void cardSummary_emptyWhenNothing() {
+        assertEquals("", LiveUpdateManager.cardSummary(0, 0, 0));
+    }
+
+    // =====================================================
+    // shouldRefresh: throttle + empty-workspace semantics
+    // =====================================================
+
+    @Test
+    public void shouldRefresh_emptyWorkspace_alwaysImmediate() {
+        assertTrue(LiveUpdateManager.shouldRefresh(0, 0, 0, true, 1000, 100));
+    }
+
+    @Test
+    public void shouldRefresh_notVisible_immediate() {
+        assertTrue(LiveUpdateManager.shouldRefresh(1, 0, 0, false, 1000, 100));
+    }
+
+    @Test
+    public void shouldRefresh_visibleAfterThrottleWindow_immediate() {
+        long now = 1000;
+        long last = now - LiveUpdateManager.THROTTLE_MS; // exactly at the edge
+        assertTrue(LiveUpdateManager.shouldRefresh(1, 0, 0, true, now, last));
+    }
+
+    @Test
+    public void shouldRefresh_visibleWithinWindow_throttled() {
+        assertFalse(LiveUpdateManager.shouldRefresh(1, 0, 0, true, 1000, 950));
+    }
+}

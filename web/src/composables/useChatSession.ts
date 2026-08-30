@@ -2,6 +2,8 @@ import { ref, computed, type Ref } from 'vue'
 import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast.ts'
 import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
+import { useAppForeground } from '@/composables/useAppForeground'
+import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { appLog } from '@/utils/appLog'
 
 const TAG = 'ChatSession'
@@ -103,6 +105,17 @@ export function useChatSession(options: UseChatSessionOptions) {
   } = options
 
   const toast = useToast()
+
+  // Reliable app foreground/background signal. Completion events must only
+  // auto-mark a session read while the user is actually looking at the app —
+  // otherwise a session finishing in the background (e.g. Android app paused,
+  // floating window active) would clear its unread badge before the floating
+  // window ever showed it.
+  const { appInForeground } = useAppForeground()
+  // True while the global WS is replaying events missed while disconnected.
+  // Replayed completions (session finished while the app was backgrounded and
+  // the WS was down) must NOT be auto-marked read — the user never saw them.
+  const { isReplayingEvents } = useGlobalEvents()
 
   // ── Session state sync helper ──
   // Shared logic for syncing session identity, available modes/commands/plan,
@@ -1072,7 +1085,14 @@ export function useChatSession(options: UseChatSessionOptions) {
         // even when the chat_stream 'done' event was missed (e.g. WS reconnect
         // delivers a fresh session_update). Loading history (GET /api/ai/chat)
         // no longer marks read — only an explicit mark-as-read call does.
-        if (data.status === 'completed' || data.status === 'cancelled') {
+        // Guarded on app foreground + not a replayed event: a completion
+        // delivered while the app is paused (Android) must NOT clear the badge
+        // — the floating window shows unread sessions only in the background,
+        // and a session finishing there is exactly what should surface as
+        // unread. Same for events replayed after a reconnect: the user was not
+        // watching when it finished, so the badge must survive until opened.
+        if ((data.status === 'completed' || data.status === 'cancelled')
+            && appInForeground.value && !isReplayingEvents.value) {
           markSessionRead(sid).catch(() => {})
         }
       }

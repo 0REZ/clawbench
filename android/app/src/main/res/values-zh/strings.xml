@@ -90,6 +90,8 @@
     <string name="notif_channel_bg_service_desc">SSH 端口映射与后台事件监听</string>
     <string name="notif_channel_ai_events">AI 事件通知</string>
     <string name="notif_channel_ai_events_desc">AI会话和任务完成通知</string>
+    <string name="notif_channel_live_update">会话状态</string>
+    <string name="notif_channel_live_update_desc">在锁屏和状态栏持续展示的会话进行状态</string>
     <string name="notif_ports_mapped">%1$d 个端口映射</string>
     <string name="notif_terminals_open">%1$d 个终端</string>
     <string name="notif_status_separator">，</string>

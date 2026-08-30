@@ -1828,6 +1828,15 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         isForeground = false;
+        // Notify the frontend BEFORE pausing the WebView so the JS engine is
+        // fully active when the foreground signal is processed. This is the
+        // reliable foreground signal the completion paths use to decide whether
+        // marking a session read is a user action or a background auto-refresh.
+        // document.visibilityState is unreliable in Android WebView (onPause
+        // doesn't reliably flip it to 'hidden'), so the frontend cannot depend
+        // on it. The floating window's unread badge depends on this: a session
+        // that completes in the background must NOT be auto-marked read.
+        notifyFrontendAppForeground(false);
         pauseWebView();
         // App going to background — start native WS so we still get
         // notifications when Android kills the WebView process. Also needed
@@ -1844,6 +1853,7 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         isForeground = true;
         resumeWebView();
+        notifyFrontendAppForeground(true);
         // App returning to foreground — always stop native WS (WebView WS handles events)
         BackgroundService.stopNativeEventWs(this);
         // Handle notification tap intent + re-dispatch pending navigation
@@ -1868,6 +1878,29 @@ public class MainActivity extends AppCompatActivity {
     void resumeWebView() {
         webView.onResume();
         // No webView.resumeTimers() needed — pauseTimers() is no longer called.
+    }
+
+    /**
+     * Push the app's foreground state into the WebView's JS. The frontend uses
+     * this as its authoritative foreground signal for "user is looking at the
+     * app" decisions (e.g. auto-marking a just-completed session read).
+     * document.visibilityState is unreliable in Android WebView (onPause()
+     * does not reliably flip it to 'hidden'), so the bridge is the trusted
+     * signal; on non-Android hosts the frontend falls back to
+     * document.visibilityState. Best-effort: no-op when the WebView isn't
+     * ready or JS is unavailable.
+     */
+    void notifyFrontendAppForeground(boolean foreground) {
+        if (webView == null || !webViewConnected) {
+            return;
+        }
+        try {
+            webView.evaluateJavascript(
+                    "if (typeof window.__setAppForeground === 'function') window.__setAppForeground(" + foreground + ")",
+                    null);
+        } catch (Exception e) {
+            AppLog.w(TAG, "MainActivity: notifyFrontendAppForeground failed", e);
+        }
     }
 
     /**
