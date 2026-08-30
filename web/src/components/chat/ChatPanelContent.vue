@@ -362,7 +362,7 @@ const session = useChatSession({
   onParseAssistantContent: (content) => render.parseAssistantContent(content),
   onExtractScheduledTasks: (msgs) => render.extractScheduledTasks(msgs),
   onRenderUpdate: (forceFull) => render.updateRenderedContents(forceFull),
-  onScrollBottom: (force, streaming) => scrollBottom(force, streaming),
+  onScrollBottom: (force) => scrollBottom(force),
   onDisconnectStream: () => stream.disconnectStream(),
   onOpen: () => emit('open'),
   onStreamDone: playNotificationSound,
@@ -448,7 +448,7 @@ const stream = useChatStream({
   currentBackend: identity.currentBackend,
   loading,
   onRenderNeeded: (forceFull) => render.updateRenderedContents(forceFull),
-  onScrollBottom: (force, streaming) => scrollBottom(force, streaming),
+  onScrollBottom: (force) => scrollBottom(force),
   onLoadHistory: () => session.loadHistory(false),
   onMessage: () => emit('message'),
   onOpen: () => emit('open'),
@@ -960,8 +960,8 @@ async function handleToolSendMessage(text) {
     }
 }
 
-function scrollBottom(force = false, streaming = false) {
-    messageListRef.value?.scrollToBottom(force, streaming)
+function scrollBottom(force = false) {
+    messageListRef.value?.scrollToBottom(force)
 }
 
 // Async render flush (throttled 300ms + rAF) grows the content height AFTER

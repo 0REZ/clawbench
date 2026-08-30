@@ -21,7 +21,7 @@ export interface UseChatStreamOptions {
   currentBackend: Ref<string>
   loading: Ref<boolean>
   onRenderNeeded: (forceFull?: boolean) => void
-  onScrollBottom: (force?: boolean, streaming?: boolean) => void
+  onScrollBottom: (force?: boolean) => void
   onLoadHistory: () => Promise<void>
   onMessage: () => void
   onOpen: () => void
@@ -95,7 +95,7 @@ export function useChatStream(options: UseChatStreamOptions) {
     renderScheduler.schedule('render', onRenderNeeded)
     // Streaming context: content is still arriving, so the viewport should
     // follow even if the container height hasn't grown to the bottom yet.
-    renderScheduler.schedule('scroll', () => onScrollBottom(false, true))
+    renderScheduler.schedule('scroll', () => onScrollBottom(false))
   }
 
   // ── Subscription (decoupled from streaming state) ──
@@ -191,7 +191,7 @@ export function useChatStream(options: UseChatStreamOptions) {
     } else if ((streaming as ChatMessage).fromDB) {
       delete (streaming as ChatMessage).fromDB
     }
-    onScrollBottom(false, true)
+    onScrollBottom(false)
   }
 
   /** Stop the active stream state (watchdog/counter) without touching the subscription. */
@@ -263,7 +263,7 @@ export function useChatStream(options: UseChatStreamOptions) {
               parentQueueId: anchorIdx !== -1 ? String(messages.value[anchorIdx].id) : undefined,
             } as ChatMessage })
             onRenderNeeded()
-            onScrollBottom(false, true)
+            onScrollBottom(false)
           }
           // ws_stream_start is idempotent: it re-sets the id on the existing
           // streaming message (a no-op when the placeholder above already
@@ -295,10 +295,9 @@ export function useChatStream(options: UseChatStreamOptions) {
         if (!findStreamingMsg(messages.value)) return
         const thinkingData = payload as unknown as ThinkingEventData
         dispatch({ type: 'ws_thinking', text: thinkingData.text ?? '', key: `thinking-${thinkingBlockCounter++}` })
+        // debouncedRender schedules the scroll pin in the same rAF — no
+        // separate onScrollBottom here (duplicate pin in the same frame).
         debouncedRender()
-        if (isOpen.value) {
-          onScrollBottom(false, true)
-        }
         break
       }
 
@@ -345,7 +344,7 @@ export function useChatStream(options: UseChatStreamOptions) {
           onToolUpdate(data.id)
         }
         if (isOpen.value) {
-          onScrollBottom(false, true)
+          onScrollBottom(false)
         }
         break
       }
@@ -361,7 +360,7 @@ export function useChatStream(options: UseChatStreamOptions) {
           onToolResult(data.id)
         }
         if (isOpen.value) {
-          onScrollBottom(false, true)
+          onScrollBottom(false)
         }
         break
       }
@@ -395,7 +394,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         loading.value = false
         onMessage()
         if (isOpen.value) {
-          onScrollBottom(false, true)
+          onScrollBottom(false)
         }
         onStreamEnd?.('done')
         if (!isOpen.value) {
@@ -439,7 +438,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         // Unlock input immediately — don't wait for loadHistory REST round-trip.
         loading.value = false
         if (isOpen.value) {
-          onScrollBottom(false, true)
+          onScrollBottom(false)
         }
         // Sync from DB in the background.
         onLoadHistory().then(() => {
@@ -597,10 +596,9 @@ export function useChatStream(options: UseChatStreamOptions) {
 
         dispatch({ type: 'ws_user_message', data: { ...userData, backend: currentBackend.value } })
 
+        // debouncedRender schedules the scroll pin in the same rAF — no
+        // separate onScrollBottom here (duplicate pin in the same frame).
         debouncedRender()
-        if (isOpen.value) {
-          onScrollBottom(false, true)
-        }
         break
       }
 
@@ -632,7 +630,7 @@ export function useChatStream(options: UseChatStreamOptions) {
 
           if (isOpen.value) {
             onRenderNeeded()
-            onScrollBottom(false, true)
+            onScrollBottom(false)
           }
         }
         break

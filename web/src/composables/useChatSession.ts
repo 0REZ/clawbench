@@ -75,7 +75,7 @@ export interface UseChatSessionOptions {
   onParseAssistantContent: (content: string) => Record<string, unknown>
   onExtractScheduledTasks: (msgs: Array<Record<string, unknown>>) => void
   onRenderUpdate: (forceFull: boolean) => void
-  onScrollBottom: (force?: boolean, streaming?: boolean) => void
+  onScrollBottom: (force?: boolean) => void
   onDisconnectStream: () => void
   onOpen: () => void
   onStreamDone?: () => void
@@ -255,12 +255,12 @@ export function useChatSession(options: UseChatSessionOptions) {
     let keepInputDisabled = false
     if (isRunning) {
       loading.value = true
-      onScrollBottom(forceScrollBottom, true)
+      onScrollBottom(forceScrollBottom)
     } else if (isReplayPending) {
       loading.value = true
       if (immediate) keepInputDisabled = true
       else inputDisabled.value = true
-      onScrollBottom(forceScrollBottom, true)
+      onScrollBottom(forceScrollBottom)
     } else {
       loading.value = false
       onScrollBottom(forceScrollBottom)

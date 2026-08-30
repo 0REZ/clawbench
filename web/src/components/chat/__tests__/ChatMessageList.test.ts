@@ -55,7 +55,7 @@ describe('ChatMessageList — scroll sticky抖动 fix', () => {
     // The rAF correction must not scroll while the user is scrolling.
     expect(source).toContain('if (isUserScrolling(buildScrollState())) return')
     // …and must not follow once the user has scrolled away (non-force).
-    expect(source).toContain('shouldFollowStream(buildScrollState(), force)')
+    expect(source).toContain('shouldPin(buildScrollState(), force)')
   })
 
   it('scrollToBottom returns early when the user is scrolling (touch drag)', async () => {
@@ -114,8 +114,7 @@ describe('ChatMessageList — force pin is guarded by user scrolling', () => {
     // Guards imported from the pure module, fed by the shared state builder
     expect(source).toContain('function buildScrollState()')
     expect(source).toContain('if (isUserScrolling(buildScrollState()))')
-    expect(source).toContain('shouldFollowStream(buildScrollState(), force)')
-  })
+    expect(source).toContain('shouldPin(buildScrollState(), force)')  })
   it('force pin is deferred (pendingFollow) while the user is scrolling, not applied', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
@@ -130,8 +129,11 @@ describe('ChatMessageList — force pin is guarded by user scrolling', () => {
     const source = typeof mod.default === 'string' ? mod.default : ''
     // onScrollStopped resets ownership and clears the deferred flag no matter what
     expect(source).toContain('function onScrollStopped()')
-    // pendingFollow is always cleared here — stale pins never fire later
-    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false\s*if \(dist <= NEAR_BOTTOM_PX\) \{\s*scrollToBottom\(true\)/)
+    // pendingFollow is always cleared here — stale pins never fire later.
+    // The flush gate is the tighter RESUME_FOLLOW_PX band (returning to the
+    // bottom is an explicit gesture; the generous NEAR_BOTTOM_PX band would
+    // re-enable snap-back while the user rests inside it mid-stream).
+    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false\s*if \(dist <= RESUME_FOLLOW_PX\) \{\s*scrollToBottom\(true\)/)
     expect(source).toContain('setProgrammatic(false)')
   })
 
@@ -228,11 +230,14 @@ describe('ChatMessageList — stream-follow persistence', () => {
   it('a user who scrolls away from the bottom is never yanked back (userLeftBottom)', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // Leaving the bottom past the near-edge threshold latches the "left" flag
-    expect(source).toContain('if (distFromBottom > NEAR_BOTTOM_PX) {')
-    expect(source).toContain('userLeftBottom = true')
-    // Returning to the bottom clears it
-    expect(source).toContain('userLeftBottom = false')
+    // Leaving the bottom is DIRECTION-driven, not distance-driven: any upward
+    // drag latches the "left" flag immediately — a user who stops mid-drag
+    // inside the near-bottom band must stay locked, or the next streamed pin
+    // yanks them (the snap-back jitter bug).
+    expect(source).toContain('scrollingUp: el.scrollTop < lastScrollTop')
+    expect(source).toContain('updateUserLeftBottom(userLeftBottom, {')
+    // Returning to the bottom (within RESUME_FOLLOW_PX) clears it
+    expect(source).toContain('updateUserLeftBottom')
   })
 
   it('session switch resets the follow latch', async () => {
@@ -253,6 +258,44 @@ describe('ChatMessageList — stream-follow persistence', () => {
     expect(source).toContain('userLeftBottom = false')
     // The clearing must live INSIDE scrollToBottomSmooth (not merely anywhere)
     expect(source).toMatch(/scrollToBottomSmooth\(\)[\s\S]*?userLeftBottom = false/)
+  })
+
+  it('an upward drag inside the near-bottom band latches userLeftBottom immediately', async () => {
+    // Root cause of "很难拖上去、抽搐" (snap-back jitter): the old latch only
+    // fired past NEAR_BOTTOM_PX, so a user who stopped mid-drag inside the
+    // band stayed "at the bottom" and the next streamed pin yanked them back.
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The latch decision delegates to the direction-driven pure function
+    expect(source).toContain('userLeftBottom = updateUserLeftBottom(')
+    expect(source).toContain('scrollingUp: el.scrollTop < lastScrollTop')
+    // The old distance-only latch must be gone
+    expect(source).not.toContain('if (distFromBottom > NEAR_BOTTOM_PX) {')
+  })
+
+  it('streamed pin paths skip the write when already glued to the bottom (gap <= 0)', async () => {
+    // followToBottom's rAF correction and the content-growth observer both
+    // re-pin on every streamed frame; writing the same scrollTop emits an
+    // unnecessary scroll event that restarts the 250ms user-scroll window.
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // rAF correction: no write when the gap is already <= 0
+    expect(source).toMatch(/const gap = el2\.scrollHeight - el2\.scrollTop - el2\.clientHeight[\s\S]*?if \(gap <= 0\) return/)
+    // Content-growth observer: same skip
+    expect(source).toContain('if (el.scrollHeight - el.scrollTop - el.clientHeight <= 0) return')
+  })
+
+  it('the latch block is NOT gated on !programmaticScrolling', async () => {
+    // Regression fix: during a stream, followToBottom re-arms setProgrammatic(true)
+    // every frame, so programmaticScrolling stays true for the whole stream.
+    // Gating the user-scroll latch on `!programmaticScrolling` blocked it entirely —
+    // the user could scroll far away and still get yanked back to the bottom.
+    // User drags are distinguished by the input flags alone (which programmatic
+    // pins never set).
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toContain('if (userTouching || wheelActive || mouseDownActive) {')
+    expect(source).not.toContain('if (!programmaticScrolling && (userTouching || wheelActive || mouseDownActive)) {')
   })
 })
 
@@ -286,11 +329,10 @@ describe('ChatMessageList — content-growth observer backstop', () => {
     // Observe the .chat-messages-list wrapper (its box = content height)
     expect(source).toContain('new ResizeObserver(() => onContentGrown())')
     expect(source).toContain('contentResizeObserver.observe(inner)')
-    // Re-pin guard: never pull back a user who scrolled away, never fight an
-    // active scroll — mirrors followToBottom's guards.
+    // Re-pin guard: unified pin decision — never pull back a user who scrolled
+    // away, never fight an active scroll.
     expect(source).toContain('function onContentGrown()')
-    expect(source).toContain('if (userLeftBottom || !messagesRef.value) return')
-    expect(source).toContain('shouldFollowStream(buildScrollState(), false)')
+    expect(source).toContain('if (!shouldPin(buildScrollState(), false)) return')
     // Re-observe when listKey rebuilds the DOM (session switch / load-more)
     expect(source).toContain('watch(listKey')
     expect(source).toContain('observeContentGrowth()')
