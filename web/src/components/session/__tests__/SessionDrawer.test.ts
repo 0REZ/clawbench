@@ -155,15 +155,17 @@ describe('SessionDrawer', () => {
       expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(true)
     })
 
-    it('emits create directly for a single agent', async () => {
+    it('opens the agent selector even for a single agent', async () => {
       mockAgentsHolder.list = [{ id: 'agent-1', name: 'Agent One', backend: 'cli' }]
       const wrapper = mountDrawer()
       await nextTick()
       wrapper.findComponent(SessionListHeaderStub).vm.$emit('create')
       await nextTick()
-      expect(wrapper.emitted('create')).toBeTruthy()
-      expect(wrapper.emitted('create')![0]).toEqual(['agent-1'])
-      expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(false)
+      // Direct create would be a one-tap mis-tap risk on mobile; the selector
+      // must open even with one agent. 即使只有一个智能体也必须弹选择器，
+      // 避免一键误触直接建空会话。
+      expect(wrapper.emitted('create')).toBeUndefined()
+      expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(true)
     })
   })
 
@@ -204,15 +206,16 @@ describe('SessionDrawer', () => {
       expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(true)
     })
 
-    it('emits create directly for a single agent', async () => {
+    it('opens the selector even for a single agent', async () => {
       mockAgentsHolder.list = [{ id: 'agent-1', name: 'Agent One', backend: 'cli' }]
       const wrapper = mountDrawer()
       await flushPromises()
       await wrapper.vm.openAgentSelector()
       await nextTick()
-      expect(wrapper.emitted('create')).toBeTruthy()
-      expect(wrapper.emitted('create')![0]).toEqual(['agent-1'])
-      expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(false)
+      // Direct create would be a one-tap mis-tap risk on mobile; the selector
+      // must open even with one agent. 即使只有一个智能体也必须弹选择器。
+      expect(wrapper.emitted('create')).toBeUndefined()
+      expect(wrapper.vm.agentSelectorDrawer.isOpen.value).toBe(true)
     })
   })
 

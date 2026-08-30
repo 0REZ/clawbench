@@ -1084,16 +1084,19 @@ const recentReferencedFiles = computed(() => {
   return computeRecentReferencedFiles(props.messages, props.attachedFiles, props.currentFile?.path)
 })
 
-function handleCreateClick(e) {
-  // On desktop, click = show agent selector (short tap equivalent)
-  if (e.detail === 0) return
+function handleCreateClick() {
+  // Always open the agent selector, even with a single agent — a one-tap
+  // "create" here is easy to mis-tap on mobile and would create an empty
+  // session. Requiring an explicit agent selection prevents accidental
+  // session creation. 始终弹智能体选择器（哪怕只有一个智能体）——
+  // 一次误触即建空会话在移动端很容易发生，强制选择智能体可避免误建。
   emit('show-agent-selector')
 }
 
 async function handleArchive() {
   if (!props.currentSessionId) return
   const confirmed = await dialog.confirm(t('chat.archive.confirm'), {
-    dangerous: true,
+    confirmText: t('chat.actions.archiveSession'),
     extraText: t('chat.archive.destroyBtn'),
     extraPrimedText: t('chat.archive.destroyBtnPrimed'),
     onExtraAction: () => emit('destroy-session'),

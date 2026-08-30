@@ -663,11 +663,11 @@ watch(() => toolDetailIsOpen.value, (show) => {
 
 async function handleShowAgentSelector() {
   await agentsComposable.loadAgents()
-  // If only one agent exists, skip the selector and create directly
-  if (agentsList.value.length === 1) {
-    manager.createSession(agentsList.value[0].id)
-    return
-  }
+  // Always open the selector, even with a single agent — a direct create
+  // here would be a one-tap action that is easy to mis-tap on mobile,
+  // creating an empty session. Requiring an explicit selection prevents it.
+  // 始终打开选择器（哪怕只有一个智能体）——直接创建是一键动作，
+  // 移动端容易误触生成空会话；强制选择可避免误建。
   identity.openAgentSelector()
 }
 

@@ -66,7 +66,7 @@ const { isWideScreen } = useWideScreenLayout()
 const bottomSheetRef = ref(null)
 const agentSelectorRef = ref(null)
 const listRef = ref(null)
-const { agents, loadAgents } = useAgents()
+const { loadAgents } = useAgents()
 const agentSelectorDrawer = useTabDrawer('chat', { autoRestore: false })
 
 const sessionCount = computed(() => store.state.sessionCount)
@@ -76,21 +76,16 @@ defineExpose({ openAgentSelector, addSessionLocally })
 
 async function openAgentSelector() {
   await loadAgents()
-  if (agents.value.length === 1) {
-    emit('create', agents.value[0].id)
-    bottomSheetRef.value?.close()
-    return
-  }
+  // Always open the selector, even with a single agent — a direct create
+  // is a one-tap action easily mis-tapped on mobile, creating an empty
+  // session. Requiring an explicit selection prevents accidental creation.
+  // 始终打开选择器（哪怕只有一个智能体）——直接创建是一键动作，
+  // 移动端容易误触生成空会话；强制选择可避免误建。
   agentSelectorDrawer.open()
 }
 
 async function handleCreateClick() {
   await loadAgents()
-  if (agents.value.length === 1) {
-    emit('create', agents.value[0].id)
-    bottomSheetRef.value?.close()
-    return
-  }
   agentSelectorDrawer.open()
 }
 
