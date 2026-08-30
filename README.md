@@ -212,7 +212,8 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Extended Thinking**: Complex tasks auto-trigger extended thinking, reasoning visible in real time
 - **File Path Navigation**: Clickable file paths in AI responses, with line range navigation
 - **Localhost URL Navigation**: localhost URLs in AI responses (e.g., http://localhost:3000) are auto-detected with an open button; in App mode, port mapping is auto-registered and the URL opens via WebView with zero manual config
-- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder, one-click send, input placeholder hint showing current quick send; long-press fills input box (with progressive fill bar) for editing before sending; message clusters analysis discovers recurring patterns and adds them
+- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder; an input-bar trailing icon injects the command into the input box for editing before sending; input placeholder hints at the current quick send; message clusters analysis discovers recurring patterns and adds them
+- **Input Draft & Attachment Restore**: When switching sessions, unsent input text, attached files and staged quotes are snapshotted and restored when you switch back — no lost input from accidental session switches
 - **Quote & Ask**: Select code or text, ask AI directly, auto-attaches context
 - **Current Directory Attachment**: Chat input supports attaching current directory context, AI auto-gets directory structure
 - **Drag & Paste Upload**: Drag files onto chat area or paste clipboard content (screenshots/files), auto-upload and attach as tags without opening the attach drawer
