@@ -23,8 +23,8 @@ import org.json.JSONObject;
  * lock screen and at the top of the notification drawer.
  *
  * The chip shows a single, mutually-exclusive summary — pending approvals
- * first (most urgent: user action required), then running sessions, then
- * unread finished sessions. When nothing is left the notification is removed
+ * first (most urgent: user action required), then unread finished sessions,
+ * then running sessions. When nothing is left the notification is removed
  * so the status bar stays clean until the next session becomes active. The
  * expanded card always shows the counts for all three groups — "执行中 2 ·
  * 待审批 0 · 未读 3" — with the status-bar chip rendering the short
@@ -95,6 +95,13 @@ public class LiveUpdateManager {
     private volatile long lastPostedMs;
     /** Last time an overview was requested from an event (throttle anchor). */
     private volatile long lastOverviewRequestMs;
+    /**
+     * Monotonically increasing notification tag. Some ROMs (ColorOS fluid
+     * cloud) cache the chip text of a promoted ongoing notification per
+     * notification key and do not refresh the title on same-key updates;
+     * rotating the tag forces a fresh key so the chip always rebuilds.
+     */
+    private int currentTag;
     /** Whether a refresh is already scheduled within the throttle window. */
     private volatile boolean refreshScheduled;
     /** Whether a notification is currently visible. */
@@ -186,9 +193,7 @@ public class LiveUpdateManager {
         handler.post(() -> {
             refreshScheduled = false;
             visible = false;
-            if (notificationManager != null) {
-                notificationManager.cancel(NOTIFICATION_ID);
-            }
+            cancelChip();
         });
         runningSessions.clear();
         pendingSessions.clear();
@@ -225,19 +230,20 @@ public class LiveUpdateManager {
     }
 
     /**
-     * Which group the status-bar chip highlights: "pending" wins over
-     * "running", running wins over "unread" — only the most urgent group is
-     * shown on the chip. "" when every count is 0. Pure: only primitives.
+     * Which group the status-bar chip highlights, most urgent first: pending
+     * approvals (user action required), then unread finished sessions, then
+     * running — so a finished-but-unread result outranks an in-flight session.
+     * "" when every count is 0. Pure: only primitives.
      */
     public static String chipGroup(int running, int pending, int unread) {
         if (pending > 0) {
             return "pending";
         }
-        if (running > 0) {
-            return "running";
-        }
         if (unread > 0) {
             return "unread";
+        }
+        if (running > 0) {
+            return "running";
         }
         return "";
     }
@@ -358,9 +364,7 @@ public class LiveUpdateManager {
         // the status bar stays clean until the next session becomes active.
         if (pendingCount == 0 && runningCount == 0 && unreadCount == 0) {
             visible = false;
-            if (notificationManager != null) {
-                notificationManager.cancel(NOTIFICATION_ID);
-            }
+            cancelChip();
             return;
         }
         visible = true;
@@ -418,7 +422,34 @@ public class LiveUpdateManager {
         boolean promoted = canPostPromoted(appContext);
         AppLog.d(TAG, "posting live update: chip=\"" + chip + "\" summary=\"" + summary
                 + "\" promoted=" + promoted + " (sdk=" + Build.VERSION.SDK_INT + ")");
-        notificationManager.notify(NOTIFICATION_ID, notification);
+        // Rotate the tag: some ROMs (ColorOS fluid cloud) do not refresh the
+        // chip title of a promoted ongoing notification on same-key updates.
+        // A fresh tag makes it a brand-new notification key, forcing a rebuild.
+        // The previous tag's notification is cancelled first so the notification
+        // drawer never accumulates stale entries — at most one chip exists.
+        String tag = "live-" + (++currentTag);
+        if (currentTag > 1) {
+            notificationManager.cancel("live-" + (currentTag - 1), NOTIFICATION_ID);
+        }
+        notificationManager.notify(tag, NOTIFICATION_ID, notification);
+    }
+
+    /**
+     * Cancel the currently visible chip. Because the tag rotates, the
+     * previous and current tags are both cancelled so no stale chip can
+     * linger. Main thread only (called from doRefresh / destroy on the
+     * main looper).
+     */
+    private void cancelChip() {
+        if (notificationManager == null) {
+            return;
+        }
+        if (currentTag > 0) {
+            notificationManager.cancel("live-" + currentTag, NOTIFICATION_ID);
+        }
+        if (currentTag > 1) {
+            notificationManager.cancel("live-" + (currentTag - 1), NOTIFICATION_ID);
+        }
     }
 
     private void ensureChannel() {

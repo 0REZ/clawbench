@@ -98,14 +98,15 @@ public class LiveUpdateManagerTest {
     }
 
     @Test
-    public void chipText_runningSecond() {
-        assertEquals("🟢 执行中 2", LiveUpdateManager.chipText(2, 0, 3,
+    public void chipText_unreadOutranksRunning() {
+        // Unread finished sessions outrank running ones on the chip.
+        assertEquals("🔵 未读 3", LiveUpdateManager.chipText(2, 0, 3,
                 L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
-    public void chipText_unreadLast() {
-        assertEquals("🔵 未读 3", LiveUpdateManager.chipText(0, 0, 3,
+    public void chipText_runningWhenNoPendingOrUnread() {
+        assertEquals("🟢 执行中 2", LiveUpdateManager.chipText(2, 0, 0,
                 L_RUNNING, L_PENDING, L_UNREAD));
     }
 
@@ -176,17 +177,19 @@ public class LiveUpdateManagerTest {
 
     @Test
     public void cardSummary_usesInjectedLabelsAndJoiner() {
-        // Chip shows running → card shows pending + unread.
-        assertEquals("🟡 Pending 0 | 🔵 Unread 3",
+        // Chip shows unread (outranks running) → card shows running + pending.
+        assertEquals("🟢 Running 2 | 🟡 Pending 0",
                 LiveUpdateManager.cardSummary(2, 0, 3,
                         "Running", "Pending", "Unread", " | "));
     }
 
     @Test
     public void chipGroup_priorityOrder() {
+        // Most urgent first: pending approval > unread > running.
         assertEquals("pending", LiveUpdateManager.chipGroup(2, 1, 3));
-        assertEquals("running", LiveUpdateManager.chipGroup(2, 0, 3));
+        assertEquals("unread", LiveUpdateManager.chipGroup(2, 0, 3));
         assertEquals("unread", LiveUpdateManager.chipGroup(0, 0, 3));
+        assertEquals("running", LiveUpdateManager.chipGroup(2, 0, 0));
         assertEquals("", LiveUpdateManager.chipGroup(0, 0, 0));
     }
 
