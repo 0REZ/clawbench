@@ -1130,7 +1130,17 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
     case 'clear':
       return []
     case 'prepend_older': {
-      state.unshift(...action.olderMsgs)
+      // Defensive dedup: the "older" page must never contain rows already in
+      // the array. A raced loadMore with an empty/string before_id cursor makes
+      // the backend return the most recent window again (instead of strictly
+      // older rows), which would otherwise prepend a full copy of the loaded
+      // history — the reported AABBCC "every message doubled" bug that only a
+      // forced db_load (refresh) could heal. Skip any incoming row whose id
+      // already exists in the array (string or numeric, same identity).
+      const existing = new Set(state.map((m) => String(m.id)))
+      const fresh = action.olderMsgs.filter((m) => !existing.has(String(m.id)))
+      if (fresh.length === 0) return state
+      state.unshift(...fresh)
       sortMessages(state)
       return state
     }

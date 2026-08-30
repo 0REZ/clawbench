@@ -171,6 +171,13 @@ export function useChatSession(options: UseChatSessionOptions) {
     // bubbles and adopted _remote rows — so every loadHistory converges to what
     // an app restart would show (the ActionBar refresh behaves like a restart).
     dispatch({ type: 'db_load', dbMessages: parsed as ChatMessage[] })
+    // The loaded-window cursor follows the authoritative DB snapshot: after a
+    // db_load the oldest loaded row IS the snapshot's oldest DB row. This
+    // update is idempotent for repeated loads of the same window, and a new
+    // window (different session / grew) always lands on the correct oldest id.
+    // While the snapshot holds no DB rows, the cursor is cleared (nothing
+    // loaded to paginate from).
+    oldestLoadedId.value = oldestDbId(parsed)
     const prevTotal = totalMessages.value
     totalMessages.value = (sessionData.total as number) || messages.value.length
     queuedCount.value = (sessionData.queuedCount as number) || 0
@@ -346,13 +353,46 @@ export function useChatSession(options: UseChatSessionOptions) {
   // or when a loadHistory reports the session grew (total increased) — a
   // routine refresh of an already-exhausted history keeps the flag set.
   const noMoreHistory = ref(false)
+  // ── Loaded-window state (authoritative pagination cursor) ──
+  // The numeric DB id of the OLDEST message currently loaded in the messages
+  // array. This is the single source of truth for "how far back have we
+  // loaded" — it is explicitly maintained by the loading actions and does NOT
+  // derive from the messages array. The array is a view; it can be cleared
+  // (session switch), rebuilt (db_load), or mutated by stream events without
+  // ever corrupting the pagination cursor.
+  //
+  // null means no DB history is loaded yet (the array is empty or holds only
+  // transient pending/streaming bubbles). While null, loadMore must not fire —
+  // an empty array has nothing to paginate from, and sending an empty
+  // before_id would make the backend return the most-recent window (a full
+  // copy of the history), producing the reported "every message doubled"
+  // (AABBCC) bug.
+  const oldestLoadedId = ref<number | null>(null)
+  // ── Window helpers ──
+  // Extract the oldest numeric DB id from a parsed messages snapshot.
+  // Ignores transient string-id bubbles (pending/_remote/streaming placeholders)
+  // and returns null when there is no DB-backed row.
+  function oldestDbId(msgs: Array<{ id?: unknown }>): number | null {
+    let oldest: number | null = null
+    for (const m of msgs) {
+      if (typeof m.id !== 'number') continue
+      if (oldest === null || m.id < oldest) oldest = m.id
+    }
+    return oldest
+  }
   // Plan C: compare non-queued loaded messages against non-queued total.
   // The queued messages in the messages array are pending bubbles, not loaded
   // history. Using filter(!m.queueId) instead of `length - queuedCount` keeps
   // the loaded count accurate even when queuedCount (a server snapshot) drifts
   // from the rows actually present in the messages array.
+  //
+  // Root-cause fix: hasMore is gated on oldestLoadedId != null. While no DB
+  // history is loaded (session switch just cleared the array, or a brand-new
+  // session still holding only transient bubbles), hasMore is false — the top
+  // scroll can never fire a loadMore against an empty window.
   const hasMore = computed(() => {
     if (noMoreHistory.value) return false
+    if (oldestLoadedId.value === null) return false
     const loaded = messages.value.filter((m) => !(m as ChatMessage).queueId).length
     return loaded < totalMessages.value - queuedCount.value
   })
@@ -605,15 +645,29 @@ export function useChatSession(options: UseChatSessionOptions) {
     loadingMore.value = true
     try {
       const pageSize = store.state.chatPageSize
-      // Use cursor-based pagination: pass the id of the oldest loaded message
-      const oldestMsg = messages.value[0]
-      const beforeId = (oldestMsg?.id as string) || ''
-      const resp = await fetch(`/api/ai/chat?session_id=${encodeURIComponent(currentSessionId.value)}&limit=${pageSize}&before_id=${encodeURIComponent(beforeId)}&view=summary`)
+      // Cursor-based pagination: the before_id is the oldest loaded DB row id,
+      // tracked independently of the messages array (oldestLoadedId). The
+      // cursor is never derived from the array, so a cleared/rebuilt array can
+      // never yield an empty/string before_id — the exact cause of the
+      // reported "every message doubled" (AABBCC) bug (empty before_id made
+      // the backend return the most-recent window again).
+      const beforeId = oldestLoadedId.value
+      if (beforeId === null) {
+        return
+      }
+      const resp = await fetch(`/api/ai/chat?session_id=${encodeURIComponent(currentSessionId.value)}&limit=${pageSize}&before_id=${beforeId}&view=summary`)
       if (!resp.ok) return
       const data = await resp.json()
       const olderMsgs = parseMessages(data.messages || [], onParseAssistantContent, undefined, data.running)
       if (olderMsgs.length > 0) {
         dispatch({ type: 'prepend_older', olderMsgs: olderMsgs as ChatMessage[] })
+        // Advance the loaded-window cursor to the oldest newly-loaded row.
+        // After a successful loadMore the window's bottom edge is the oldest
+        // DB id among the prepended rows — again independent of the array.
+        const newestOldest = oldestDbId(olderMsgs)
+        if (newestOldest !== null) {
+          oldestLoadedId.value = newestOldest
+        }
         totalMessages.value = data.total || totalMessages.value
         // Refresh queuedCount from the latest response (plan C) — it may have
         // changed since the initial load (e.g. messages drained meanwhile).
@@ -690,6 +744,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     dispatch({ type: 'clear' })
     // New session — history existence must be re-evaluated on load.
     noMoreHistory.value = false
+    // The loaded-window cursor is part of session identity: clearing the
+    // message array must also clear "how far back we loaded". While null,
+    // hasMore is false and loadMore cannot fire against the empty window.
+    oldestLoadedId.value = null
     // Clear stale blockAskQuestions from previous session
     Object.keys(blockTasks).forEach(k => delete blockTasks[k])
     Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
@@ -769,6 +827,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     // the gap between clearSessionIdentity('') and switchSession is the
     // window where the recovery path can load old messages.
     dispatch({ type: 'clear' })
+    // The loaded-window cursor belongs to the cleared session; reset it so
+    // hasMore/loadMore can't act on the stale window during the async gap.
+    noMoreHistory.value = false
+    oldestLoadedId.value = null
     try {
       const body = agentId ? { agentId } : {}
       const resp = await fetch('/api/ai/sessions', {
@@ -1266,6 +1328,7 @@ export function useChatSession(options: UseChatSessionOptions) {
     queuedCount,
     hasMore,
     loadingMore,
+    oldestLoadedId,
     switching,
     // Operations
     loadHistory,

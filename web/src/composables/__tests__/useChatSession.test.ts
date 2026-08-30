@@ -4641,6 +4641,105 @@ describe('loadMoreMessages', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
+  it('hasMore stays false while no DB history is loaded (cursor null) — the AABBCC trigger is structurally impossible', async () => {
+    // Reported AABBCC duplicate root cause: during a session switch the array
+    // is cleared (dispatch clear), the old hasMore (computed from array length)
+    // momentarily flipped true, and a top scroll fired loadMoreMessages with an
+    // empty before_id → the backend returned the full history → prepend_older
+    // doubled everything. With the loaded-window state, clear() also resets the
+    // cursor to null and hasMore is gated on it — so the trigger cannot exist.
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([] as any[]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    // Even with total > 0, a null cursor (no DB history loaded) forces hasMore false.
+    session.totalMessages.value = 6
+    session.queuedCount.value = 0
+    expect(session.oldestLoadedId.value).toBeNull()
+    expect(session.hasMore.value).toBe(false)
+
+    // A db_load that returns DB rows establishes the cursor and re-enables hasMore.
+    mockUtilsFns.parseMessages.mockReturnValueOnce([
+      { id: 38954, role: 'user', content: 'A' },
+      { id: 38955, role: 'assistant', content: 'A reply' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [{ id: 38954 }, { id: 38955 }],
+        total: 6,
+        queuedCount: 0,
+        running: false,
+      }),
+    })
+    await session.loadHistory(true, false, false)
+    expect(session.oldestLoadedId.value).toBe(38954)
+    expect(session.hasMore.value).toBe(true)
+  })
+
+  it('clears the cursor on switchSession (dispatch clear) so the next session starts from a clean window', async () => {
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([{ id: 38954, role: 'user' }, { id: 38955, role: 'assistant' }] as any[]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    // Establish a loaded window, then switch session (clear resets the cursor).
+    session.oldestLoadedId.value = 38954
+    session.totalMessages.value = 6
+
+    const sid2 = 'target-session'
+    mockUtilsFns.parseMessages.mockReturnValueOnce([])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: sid2,
+        messages: [],
+        total: 0,
+        queuedCount: 0,
+        running: false,
+      }),
+    })
+    await session.switchSession(sid2)
+
+    expect(session.oldestLoadedId.value).toBeNull()
+    expect(session.hasMore.value).toBe(false)
+    // loadMoreMessages must not fire against the null cursor.
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await session.loadMoreMessages()
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsBefore)
+  })
+
   it('refreshes queuedCount from the loadMore response (plan C)', async () => {
     // First: loadHistory returns 2 normal messages + 5 queued → queuedCount=5.
     mockUtilsFns.parseMessages
@@ -5013,6 +5112,8 @@ describe('loadMoreMessages', () => {
     const session = useChatSession(options)
     session.totalMessages.value = 55
     session.queuedCount.value = 15
+    // Establish a real loaded window (normal rows start at id 1).
+    session.oldestLoadedId.value = 1
 
     // Non-queued loaded (40) == non-queued total (55-15=40) → no more history.
     expect(session.hasMore.value).toBe(false)
