@@ -90,42 +90,43 @@ public class LiveUpdateManagerTest {
     private static final String L_PENDING = "待审批";
     private static final String L_UNREAD = "未读";
     private static final String L_JOINER = " · ";
-    private static final String L_IDLE = "空闲";
 
     @Test
     public void chipText_pendingFirst() {
         assertEquals("待审批 1", LiveUpdateManager.chipText(2, 1, 3,
-                L_RUNNING, L_PENDING, L_UNREAD, L_IDLE));
+                L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
     public void chipText_runningSecond() {
         assertEquals("执行中 2", LiveUpdateManager.chipText(2, 0, 3,
-                L_RUNNING, L_PENDING, L_UNREAD, L_IDLE));
+                L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
     public void chipText_unreadLast() {
         assertEquals("未读 3", LiveUpdateManager.chipText(0, 0, 3,
-                L_RUNNING, L_PENDING, L_UNREAD, L_IDLE));
+                L_RUNNING, L_PENDING, L_UNREAD));
     }
 
     @Test
-    public void chipText_idleWhenNothing() {
-        assertEquals("空闲", LiveUpdateManager.chipText(0, 0, 0,
-                L_RUNNING, L_PENDING, L_UNREAD, L_IDLE));
-        assertEquals("Idle", LiveUpdateManager.chipText(0, 0, 0,
-                "Running", "Pending", "Unread", "Idle"));
+    public void chipText_emptyWhenNothing() {
+        // The chip is removed entirely before chipText is consulted when every
+        // count is 0, so the function returns "" (never rendered).
+        assertEquals("", LiveUpdateManager.chipText(0, 0, 0,
+                L_RUNNING, L_PENDING, L_UNREAD));
+        assertEquals("", LiveUpdateManager.chipText(0, 0, 0,
+                "Running", "Pending", "Unread"));
     }
 
     @Test
     public void chipText_usesInjectedLabels() {
         assertEquals("Running 2", LiveUpdateManager.chipText(2, 0, 0,
-                "Running", "Pending", "Unread", "Idle"));
+                "Running", "Pending", "Unread"));
         assertEquals("Pending 1", LiveUpdateManager.chipText(0, 1, 0,
-                "Running", "Pending", "Unread", "Idle"));
+                "Running", "Pending", "Unread"));
         assertEquals("Unread 3", LiveUpdateManager.chipText(0, 0, 3,
-                "Running", "Pending", "Unread", "Idle"));
+                "Running", "Pending", "Unread"));
     }
 
     // =====================================================
@@ -136,35 +137,36 @@ public class LiveUpdateManagerTest {
     public void cardSummary_allGroups() {
         assertEquals("执行中 2 · 待审批 1 · 未读 3",
                 LiveUpdateManager.cardSummary(2, 1, 3,
-                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER, L_IDLE));
+                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
     }
 
     @Test
     public void cardSummary_includesZeroGroups() {
         assertEquals("执行中 1 · 待审批 0 · 未读 0",
                 LiveUpdateManager.cardSummary(1, 0, 0,
-                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER, L_IDLE));
+                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
         assertEquals("执行中 0 · 待审批 2 · 未读 0",
                 LiveUpdateManager.cardSummary(0, 2, 0,
-                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER, L_IDLE));
+                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
         assertEquals("执行中 0 · 待审批 0 · 未读 5",
                 LiveUpdateManager.cardSummary(0, 0, 5,
-                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER, L_IDLE));
+                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
     }
 
     @Test
-    public void cardSummary_idleWhenNothing() {
-        assertEquals("空闲", LiveUpdateManager.cardSummary(0, 0, 0,
-                L_RUNNING, L_PENDING, L_UNREAD, L_JOINER, L_IDLE));
-        assertEquals("Idle", LiveUpdateManager.cardSummary(0, 0, 0,
-                "Running", "Pending", "Unread", " | ", "Idle"));
+    public void cardSummary_allZeroCounts() {
+        // Never rendered (the chip is removed first), but the function still
+        // produces a deterministic three-group line.
+        assertEquals("执行中 0 · 待审批 0 · 未读 0",
+                LiveUpdateManager.cardSummary(0, 0, 0,
+                        L_RUNNING, L_PENDING, L_UNREAD, L_JOINER));
     }
 
     @Test
     public void cardSummary_usesInjectedLabelsAndJoiner() {
         assertEquals("Running 2 | Pending 0 | Unread 3",
                 LiveUpdateManager.cardSummary(2, 0, 3,
-                        "Running", "Pending", "Unread", " | ", "Idle"));
+                        "Running", "Pending", "Unread", " | "));
     }
 
     // =====================================================

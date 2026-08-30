@@ -67,7 +67,7 @@ Live Updates requires the user to enable it in system settings, and **each ROM h
 - Shares the `/api/ai/sessions/overview` snapshot and WS event stream with the floating window
 - Mutually exclusive chip priority: pending-approval > running > unread (chip shows only the most urgent)
 - Expanded card always shows all three counts (including zeros)
-- When nothing is active, keeps an "Idle" chip; only service shutdown removes it
+- When nothing is active the chip is removed (the status bar stays clean until the next session becomes active)
 - 5s throttle coalesces refreshes; elapsed time is driven by the system's `when` field, so power cost is minimal
 
 ## Related code

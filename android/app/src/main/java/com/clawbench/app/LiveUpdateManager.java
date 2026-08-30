@@ -24,14 +24,13 @@ import org.json.JSONObject;
  *
  * The chip shows a single, mutually-exclusive summary — pending approvals
  * first (most urgent: user action required), then running sessions, then
- * unread finished sessions. When nothing is left the chip stays visible in
- * an idle "空闲" state (mirroring the floating capsule), so the user always
- * has a glanceable status; only service shutdown removes it. The expanded
- * card always shows the counts for all three groups — "执行中 2 · 待审批 0 ·
- * 未读 3" — with the status-bar chip rendering the short single-group line
- * (contentTitle) and the expanded-by-default card showing the full breakdown
- * (contentText / BigTextStyle). Labels are loaded from string resources for
- * i18n.
+ * unread finished sessions. When nothing is left the notification is removed
+ * so the status bar stays clean until the next session becomes active. The
+ * expanded card always shows the counts for all three groups — "执行中 2 ·
+ * 待审批 0 · 未读 3" — with the status-bar chip rendering the short
+ * single-group line (contentTitle) and the expanded-by-default card showing
+ * the full breakdown (contentText / BigTextStyle). Labels are loaded from
+ * string resources for i18n.
  *
  * Data source parity with the floating window: the service feeds this manager
  * the same /api/ai/sessions/overview snapshots (on WS connect and on events)
@@ -190,14 +189,13 @@ public class LiveUpdateManager {
     /**
      * The single summary line shown on the status-bar chip. Pending wins over
      * running, running wins over unread — only the most urgent group is shown,
-     * because the chip fits a few characters at most. When every count is 0
-     * the idle label is shown instead (the chip stays visible, like the
-     * floating capsule's "空闲" state). Labels are injected for i18n. Pure:
-     * only primitives.
+     * because the chip fits a few characters at most. The caller removes the
+     * chip before this when every count is 0, so "" here is never rendered.
+     * Labels are injected for i18n. Pure: only primitives.
      */
     public static String chipText(int running, int pending, int unread,
                                   String runningLabel, String pendingLabel,
-                                  String unreadLabel, String idleLabel) {
+                                  String unreadLabel) {
         if (pending > 0) {
             return pendingLabel + " " + pending;
         }
@@ -207,23 +205,19 @@ public class LiveUpdateManager {
         if (unread > 0) {
             return unreadLabel + " " + unread;
         }
-        return idleLabel;
+        return "";
     }
 
     /**
-     * Expanded-card summary. While any session is active it always shows all
-     * three counts (including zeros), e.g. "执行中 2 · 待审批 0 · 未读 3", so
-     * the breakdown is predictable. When every count is 0 the idle label is
-     * shown instead — a full "执行中 0 · 待审批 0 · 未读 0" would read as
-     * noise for a state that is supposed to say "nothing going on".
-     * Labels and the joiner are injected for i18n. Pure: only primitives.
+     * Expanded-card summary. It always shows all three counts (including
+     * zeros), e.g. "执行中 2 · 待审批 0 · 未读 3", so the breakdown is
+     * predictable. The caller removes the chip before this when every count
+     * is 0. Labels and the joiner are injected for i18n. Pure: only
+     * primitives.
      */
     public static String cardSummary(int running, int pending, int unread,
                                      String runningLabel, String pendingLabel,
-                                     String unreadLabel, String joiner, String idleLabel) {
-        if (pending == 0 && running == 0 && unread == 0) {
-            return idleLabel;
-        }
+                                     String unreadLabel, String joiner) {
         return runningLabel + " " + running + joiner
                 + pendingLabel + " " + pending + joiner
                 + unreadLabel + " " + unread;
@@ -231,14 +225,14 @@ public class LiveUpdateManager {
 
     /**
      * Whether a refresh should be posted immediately. Pure: only primitives.
-     * An empty workspace refreshes immediately (to the idle state — the chip
-     * is never removed while the service runs); otherwise the first event is
-     * immediate and subsequent ones within THROTTLE_MS are merged.
+     * An empty workspace refreshes immediately (so the chip can be removed
+     * right away); otherwise the first event is immediate and subsequent ones
+     * within THROTTLE_MS are merged.
      */
     static boolean shouldRefresh(int running, int pending, int unread,
                                  boolean visible, long nowMs, long lastPostedMs) {
         if (pending == 0 && running == 0 && unread == 0) {
-            return true; // idle transition — show it right away
+            return true; // idle — remove the chip right away
         }
         if (!visible) {
             return true; // first appearance is always immediate
@@ -288,22 +282,26 @@ public class LiveUpdateManager {
 
     private void doRefresh() {
         lastPostedMs = System.currentTimeMillis();
-        // Even an empty workspace keeps the chip visible in an idle "空闲"
-        // state (mirroring the floating capsule); only destroy() removes it.
+        // An empty workspace removes the chip — nothing is worth showing, so
+        // the status bar stays clean until the next session becomes active.
+        if (pendingCount == 0 && runningCount == 0 && unreadCount == 0) {
+            visible = false;
+            if (notificationManager != null) {
+                notificationManager.cancel(NOTIFICATION_ID);
+            }
+            return;
+        }
         visible = true;
-        String idle = appContext.getString(R.string.live_update_idle);
         notifyInternal(
                 chipText(runningCount, pendingCount, unreadCount,
                         appContext.getString(R.string.live_update_running),
                         appContext.getString(R.string.live_update_pending),
-                        appContext.getString(R.string.live_update_unread),
-                        idle),
+                        appContext.getString(R.string.live_update_unread)),
                 cardSummary(runningCount, pendingCount, unreadCount,
                         appContext.getString(R.string.live_update_running),
                         appContext.getString(R.string.live_update_pending),
                         appContext.getString(R.string.live_update_unread),
-                        appContext.getString(R.string.live_update_joiner),
-                        idle));
+                        appContext.getString(R.string.live_update_joiner)));
     }
 
     /**

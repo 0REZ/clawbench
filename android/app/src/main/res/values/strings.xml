@@ -95,7 +95,6 @@
     <string name="live_update_running">Running</string>
     <string name="live_update_pending">Awaiting approval</string>
     <string name="live_update_unread">Unread</string>
-    <string name="live_update_idle">Idle</string>
     <string name="live_update_joiner"> · </string>
     <string name="notif_ports_mapped">%1$d port mapping(s)</string>
     <string name="notif_terminals_open">%1$d terminal(s)</string>
