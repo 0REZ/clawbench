@@ -13,6 +13,7 @@
           class="session-row"
           :class="{ active: session.id === currentSessionId, running: session.running, 'session-row-active': listNav.activeIndex.value === idx }"
         >
+          <span v-if="session.running" class="session-running-line"></span>
           <div
             class="session-item"
             :class="{ active: session.id === currentSessionId }"
@@ -308,6 +309,30 @@ onUnmounted(() => {
   animation: scan-bg 2s ease-in-out infinite;
   pointer-events: none;
   z-index: 0;
+}
+
+/* Bottom guide line — dimmed green, sweeps in sync with the full-row light (same
+   keyframes/duration/easing so both bands move together). */
+.session-running-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.session-running-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(34, 197, 94, 0.5), transparent);
+  animation: scan-bg 2s ease-in-out infinite;
 }
 
 .session-row.active.running {
