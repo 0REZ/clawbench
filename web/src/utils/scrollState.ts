@@ -62,7 +62,7 @@ export const SCROLL_STOP_MS = 250
  * bottom for the user to be considered "at the bottom" — a small scroll away
  * (a finger twitch, a half-fling) should NOT flip the app out of follow mode.
  * Shared as the single source of truth by ChatMessageList (scroll anchoring,
- * savePositionNow, restore) and ChatPanelContent (load-more anchoring).
+ * array-replacement restore) and ChatPanelContent (load-more anchoring).
  */
 export const NEAR_BOTTOM_PX = 200
 /**

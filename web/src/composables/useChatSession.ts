@@ -15,7 +15,6 @@ import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage, type ChatMessageAction } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
-import { hasChatScrollPosition, clearChatScrollPosition } from '@/utils/chatScrollMemory'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -761,13 +760,6 @@ export function useChatSession(options: UseChatSessionOptions) {
     // loadHistory's own mySeq check handles the actual guard.
     ++loadHistorySeq
 
-    // Session scroll memory: if the target session was left scrolled away from
-    // the bottom, do NOT force-scroll to the bottom — ChatMessageList restores
-    // the remembered position after the new messages render. Sessions left at
-    // the bottom (or never visited) have no memory → force-scroll to bottom.
-    const hasSavedPos = hasChatScrollPosition(sessionId)
-    appLog.d(TAG, `switchSession: target ${sessionId.slice(0, 12)} hasSavedPos=${hasSavedPos}`)
-
     // Disconnect stream and invalidate snapshot before switching identity.
     onDisconnectStream()
     lastMessageSnapshot = ''  // Invalidate snapshot — new session may have different data
@@ -803,7 +795,8 @@ export function useChatSession(options: UseChatSessionOptions) {
     // - Placeholder restoration for running sessions (rebuildFromDb)
     // immediate=true skips the loadHistoryInProgress queue and
     // handles switching/inputDisabled in its finally block.
-    await loadHistory(!hasSavedPos, true, false, true)
+    // Session switches always land at the bottom: forceScrollBottom=true.
+    await loadHistory(true, true, false, true)
 
     // Mark the session as read. Loading history (loadHistory → GET /api/ai/chat)
     // no longer marks a session read on the backend — only an explicit user
@@ -939,9 +932,6 @@ export function useChatSession(options: UseChatSessionOptions) {
       if (data.ok) {
         // Evict usage cache for the deleted session
         clearUsageStateById(sessionId)
-        // Evict scroll-position memory so archived/destroyed sessions don't
-        // leak entries in chatScrollMemory
-        clearChatScrollPosition(sessionId)
         // If deleted current session, switch to another
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')
@@ -986,8 +976,6 @@ export function useChatSession(options: UseChatSessionOptions) {
       const data = await resp.json()
       if (data.ok) {
         clearUsageStateById(sessionId)
-        // Evict scroll-position memory for the destroyed session
-        clearChatScrollPosition(sessionId)
         // After destroying current session, switch to another or create new
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')

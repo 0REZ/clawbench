@@ -233,79 +233,39 @@ describe('ChatMessageList — stream-follow persistence', () => {
 })
 
 /**
- * Tests for the per-session scroll position memory.
+ * Session switches always land at the bottom — no per-session scroll position
+ * memory (chatScrollMemory was removed). The currentSessionId watcher only
+ * resets the scroll state machine for the freshly rebuilt list; the actual
+ * force-scroll-to-bottom is driven by switchSession's loadHistory(true).
  *
- * Root cause: switching sessions always force-scrolled to the bottom
- * (loadHistory(true)), discarding the user's reading position in the previous
- * session. The message list DOM is rebuilt on session switch (listKey contains
- * the session id), so the browser's scrollTop is lost.
- *
- * Fix:
- * - The currentSessionId watcher remembers the old session's scrollTop when
- *   the user left it scrolled away from the bottom; a session left at the
- *   bottom is forgotten so switching back uses the default scroll-to-bottom.
- * - The listKey watcher restores the remembered position (nextTick + rAF, so
- *   scrollHeight is settled) when switching back to a remembered session.
+ * The messages watcher keeps ONLY the array-replacement anchor (captureAnchor /
+ * restoreAnchor) for when content is prepended/loaded while the user is NOT at
+ * the bottom — a same-session, mid-reading reload must not jump the view.
  */
-describe('ChatMessageList — per-session scroll position memory', () => {
-  it('saves the old session position when the user left it away from the bottom', async () => {
+describe('ChatMessageList — session switch resets scroll state, no position memory', () => {
+  it('resets the full scroll state machine on session switch', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // The session-switch watcher reads the old DOM's live distance before teardown
-    expect(source).toContain('saveChatScrollPosition(oldSid, el.scrollTop)')
-    expect(source).toContain('dist > NEAR_BOTTOM_PX')
+    // State machine reset on currentSessionId change
+    expect(source).toContain('watch(() => props.currentSessionId')
+    expect(source).toContain('userLeftBottom = false')
+    expect(source).toContain('pendingFollow = false')
+    // No position memory left behind
+    expect(source).not.toContain('saveChatScrollPosition')
+    expect(source).not.toContain('clearChatScrollPosition')
+    expect(source).not.toContain('getChatScrollPosition')
+    expect(source).not.toContain('pendingRestoreSessionId')
+    expect(source).not.toContain('savePositionNow')
   })
 
-  it('forgets a session left at the bottom (default scroll-to-bottom on return)', async () => {
+  it('keeps the array-replacement anchor for mid-reading reloads', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    expect(source).toContain('clearChatScrollPosition(oldSid)')
-  })
-
-  it('flags the target session for restore on switch, executed by the messages watcher', async () => {
-    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
-    const source = typeof mod.default === 'string' ? mod.default : ''
-    // The session-switch watcher flags the target when it has a remembered
-    // position (explicit state, not oldKey segment comparison — Vue's watcher
-    // oldValue is "previous flush value", so a listKey-segment check silently
-    // suppresses the restore).
-    expect(source).toContain('pendingRestoreSessionId')
-    expect(source).toContain('getChatScrollPosition(newSid) != null')
-    // The restore executes in the messages watcher once history landed and
-    // only for the flagged session (same-session growth never flags it).
-    expect(source).toContain('pendingRestoreSessionId === props.currentSessionId')
-    expect(source).toContain('requestAnimationFrame')
-    expect(source).toContain('Math.min(savedPos, maxTop)')
-    // Ultra-fast B→C switch: the rAF restore must not apply B's position to
-    // C's DOM — it bails when the session changed before the rAF fired.
-    expect(source).toContain('props.currentSessionId !== restoredSid')
-  })
-
-  it('does NOT restore on same-session message growth (send/stream must scroll to bottom)', async () => {
-    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
-    const source = typeof mod.default === 'string' ? mod.default : ''
-    // Sending a message grows the array but currentSessionId never changes, so
-    // the restore flag is not set — the restore bails and the intended
-    // force-scroll-to-bottom after send is never overridden.
-    expect(source).toMatch(/pendingRestoreSessionId = newSid && getChatScrollPosition\(newSid\) != null \? newSid : null/)
-  })
-
-  it('saves the current session position on unmount (teardown without a session switch)', async () => {
-    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
-    const source = typeof mod.default === 'string' ? mod.default : ''
-    // Project switch rebuilds the whole component tree (projectKey) without
-    // going through the session-switch watcher — the watcher only saves on an
-    // explicit currentSessionId change. savePositionNow() must apply the same
-    // save/forget contract so returning to the session restores the reading
-    // position instead of falling back to scroll-to-bottom.
-    expect(source).toContain('function savePositionNow()')
-    expect(source).toContain('saveChatScrollPosition(sid, el.scrollTop)')
-    expect(source).toContain('clearChatScrollPosition(sid)')
-    // Called from onBeforeUnmount AND exposed for hotSwitchProject, which must
-    // invoke it BEFORE resetIdentity clears currentSessionId (after the clear
-    // neither the watcher nor unmount can read the id anymore).
-    expect(source).toContain('savePositionNow()')
-    expect(source).toContain('savePositionNow,')
+    // The messages watcher still anchors the first visible message when the
+    // array is replaced (loadHistory / prepend) while not at the bottom.
+    expect(source).toContain('function captureAnchor(el)')
+    expect(source).toContain('function restoreAnchor(el, anchor)')
+    expect(source).toContain('scrollAnchor = captureAnchor(el)')
   })
 })
 

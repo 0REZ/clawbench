@@ -209,7 +209,6 @@
                       </div>
                     </template>
                     <ChatPanelContent
-                      ref="chatPanelContentRef"
                       :active="isWideScreen || activeTab === 'chat'"
                       :keyboard-active="chatShortcutActive"
                       :current-file="currentFile"
@@ -544,13 +543,6 @@ async function hotSwitchProject(newProjectPath, pendingSessionId, pendingTaskNav
   }
 
   // ── Phase 3: Reset module-level singletons ──
-  // Save the current session's scroll position BEFORE resetIdentity() clears
-  // currentSessionId. Once cleared, ChatMessageList's session-switch watcher
-  // won't fire and its onBeforeUnmount sees an empty id — neither can save.
-  // This explicit call (ChatPanelContent → ChatMessageList.savePositionNow)
-  // preserves the reading position across the component-tree rebuild so
-  // switching back to this project restores it instead of jumping to bottom.
-  chatPanelContentRef.value?.savePositionNow()
   resetIdentity()
   resetAgents()
   resetChatSessionState()
@@ -1046,7 +1038,6 @@ const chatKeyboardActive = computed(() => chatActive.value === 'chat' && chatKey
 const quoteQuestion = useQuoteQuestion()
 const sessionDrawerRef = ref(null)
 const sessionSidebarRef = ref(null)
-const chatPanelContentRef = ref(null)
 
 // Register SessionDrawer ref so identity.openAgentSelector() works
 watch(sessionDrawerRef, (ref) => {
