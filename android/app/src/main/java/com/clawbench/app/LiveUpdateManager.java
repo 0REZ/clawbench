@@ -23,10 +23,11 @@ import org.json.JSONObject;
  * The chip shows a single, mutually-exclusive summary — pending approvals
  * first (most urgent: user action required), then running sessions, then
  * unread finished sessions. When nothing is left, the notification is removed
- * (a bare "空闲" chip would be noise). The expanded card breaks the counts
- * down across all three groups: the status-bar chip renders the short
- * single-group line (contentTitle), while the expanded-by-default card shows
- * the full "执行中 2 · 待审批 1 · 未读 3" breakdown (contentText / BigTextStyle).
+ * (a bare "空闲" chip would be noise). The expanded card always shows the
+ * counts for all three groups — "执行中 2 · 待审批 0 · 未读 3" — with the
+ * status-bar chip rendering the short single-group line (contentTitle) and
+ * the expanded-by-default card showing the full breakdown (contentText /
+ * BigTextStyle). Labels are loaded from string resources for i18n.
  *
  * Data source parity with the floating window: the service feeds this manager
  * the same /api/ai/sessions/overview snapshots (on WS connect and on events)
@@ -186,40 +187,34 @@ public class LiveUpdateManager {
      * The single summary line shown on the status-bar chip. Pending wins over
      * running, running wins over unread — only the most urgent group is shown,
      * because the chip fits a few characters at most. "" when nothing is left.
-     * Pure: only org.json / primitives.
+     * Labels are injected for i18n. Pure: only primitives.
      */
-    public static String chipText(int running, int pending, int unread) {
+    public static String chipText(int running, int pending, int unread,
+                                  String runningLabel, String pendingLabel, String unreadLabel) {
         if (pending > 0) {
-            return "待审批 " + pending;
+            return pendingLabel + " " + pending;
         }
         if (running > 0) {
-            return "执行中 " + running;
+            return runningLabel + " " + running;
         }
         if (unread > 0) {
-            return "未读 " + unread;
+            return unreadLabel + " " + unread;
         }
         return "";
     }
 
     /**
-     * Expanded-card summary across all three groups, e.g.
-     * "执行中 2 · 待审批 1 · 未读 3". Groups with zero count are omitted.
-     * Pure: only org.json / primitives.
+     * Expanded-card summary across all three groups. Unlike the chip, the card
+     * always shows all three counts (including zeros), e.g.
+     * "执行中 2 · 待审批 0 · 未读 3", so the breakdown is predictable.
+     * Labels and the joiner are injected for i18n. Pure: only primitives.
      */
-    public static String cardSummary(int running, int pending, int unread) {
-        StringBuilder sb = new StringBuilder();
-        if (running > 0) {
-            sb.append("执行中 ").append(running);
-        }
-        if (pending > 0) {
-            if (sb.length() > 0) sb.append(" · ");
-            sb.append("待审批 ").append(pending);
-        }
-        if (unread > 0) {
-            if (sb.length() > 0) sb.append(" · ");
-            sb.append("未读 ").append(unread);
-        }
-        return sb.toString();
+    public static String cardSummary(int running, int pending, int unread,
+                                     String runningLabel, String pendingLabel,
+                                     String unreadLabel, String joiner) {
+        return runningLabel + " " + running + joiner
+                + pendingLabel + " " + pending + joiner
+                + unreadLabel + " " + unread;
     }
 
     /**
@@ -288,8 +283,16 @@ public class LiveUpdateManager {
             return;
         }
         visible = true;
-        notifyInternal(chipText(runningCount, pendingCount, unreadCount),
-                cardSummary(runningCount, pendingCount, unreadCount));
+        notifyInternal(
+                chipText(runningCount, pendingCount, unreadCount,
+                        appContext.getString(R.string.live_update_running),
+                        appContext.getString(R.string.live_update_pending),
+                        appContext.getString(R.string.live_update_unread)),
+                cardSummary(runningCount, pendingCount, unreadCount,
+                        appContext.getString(R.string.live_update_running),
+                        appContext.getString(R.string.live_update_pending),
+                        appContext.getString(R.string.live_update_unread),
+                        appContext.getString(R.string.live_update_joiner)));
     }
 
     /**
