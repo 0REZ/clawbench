@@ -25,7 +25,7 @@
       @task-card-click="(taskId) => $emit('task-card-click', taskId)"
       @send-message="handleToolSendMessage"
       @remove-pending="handleRemovePending"
-      @render-flush="scrollBottom()"
+      @render-flush="handleRenderFlush"
       @toggle-summary="handleToggleSummary"
       @ensure-content="(msg) => ensureMessageContent(msg)"
       @resume-session="handleResumeSession"
@@ -964,6 +964,14 @@ function scrollBottom(force = false, streaming = false) {
     messageListRef.value?.scrollToBottom(force, streaming)
 }
 
+// Async render flush (throttled 300ms + rAF) grows the content height AFTER
+// the initial scroll-to-bottom already ran. If the user has not scrolled away
+// (shouldStayPinned — e.g. just switched into this session), force re-pin so
+// the list stays glued to the bottom. If the user scrolled away, nothing happens.
+function handleRenderFlush() {
+    if (messageListRef.value?.shouldStayPinned?.()) scrollBottom(true)
+}
+
 async function handleLoadMore() {
     const el = messageListRef.value?.messagesRef
     if (!el) return
@@ -1118,9 +1126,9 @@ async function ensureMessageContent(msg) {
         // The newly filled blocks grow the container height, but the browser
         // keeps the old scrollTop — so a force-scrolled view (session switch
         // back into this chat) ends up visually stuck mid-list. Re-sync once:
-        // - at bottom (session switch): isAtBottom=true → pinned back to bottom
-        // - user manually toggled original while reading: isAtBottom=false → keep position
-        if (messageListRef.value?.isAtBottom?.()) scrollBottom()
+        // - at bottom (session switch): shouldStayPinned → pinned back to bottom
+        // - user manually toggled original while reading: shouldStayPinned=false → keep position
+        if (messageListRef.value?.shouldStayPinned?.()) scrollBottom(true)
     } catch (err) {
         appLog.w(TAG, 'failed to load original content', err)
     } finally {

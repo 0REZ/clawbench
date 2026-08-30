@@ -53,16 +53,16 @@ describe('ChatMessageList — scroll sticky抖动 fix', () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     // The rAF correction must not scroll while the user is scrolling.
-    expect(source).toContain('if (isUserScrolling(state2)) return')
+    expect(source).toContain('if (isUserScrolling(buildScrollState())) return')
     // …and must not follow once the user has scrolled away (non-force).
-    expect(source).toContain('shouldFollowStream(state2, force)')
+    expect(source).toContain('shouldFollowStream(buildScrollState(), force)')
   })
 
   it('scrollToBottom returns early when the user is scrolling (touch drag)', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     // The guard is the unified isUserScrolling check, not a raw userTouching flag.
-    expect(source).toContain('if (isUserScrolling(state()))')
+    expect(source).toContain('if (isUserScrolling(buildScrollState()))')
     expect(source).not.toContain('if (userTouching && !force) return')
   })
 
@@ -73,9 +73,9 @@ describe('ChatMessageList — scroll sticky抖动 fix', () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     // scrollToBottom must consult isUserScrolling before pinning
-    expect(source).toContain('isUserScrolling(state())')
+    expect(source).toContain('isUserScrolling(buildScrollState())')
     // A force pin during a user scroll is deferred, not applied
-    expect(source).toMatch(/if \(isUserScrolling\(state\(\)\)\) \{\s*if \(force\) pendingFollow = true/)
+    expect(source).toMatch(/if \(isUserScrolling\(buildScrollState\(\)\)\) \{\s*if \(force\) pendingFollow = true/)
     // The old "force overrides userTouching" check must be gone
     expect(source).not.toContain('if (userTouching && !force) return')
   })
@@ -108,19 +108,21 @@ describe('ChatMessageList — ensure-content event pass-through', () => {
  *   message when the user is not at the bottom.
  */
 describe('ChatMessageList — force pin is guarded by user scrolling', () => {
-  it('scrollToBottom computes distance live and consults the scroll-state guards', async () => {
+  it('scrollToBottom consults the scroll-state guards', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // Live geometry, not the cached isAtBottom ref
-    expect(source).toContain('const dist = el.scrollHeight - el.scrollTop - el.clientHeight')
-    // Guards imported from the pure module
-    expect(source).toContain('isUserScrolling(state())')
-    expect(source).toContain('shouldFollowStream(state(), force)')
+    // Guards imported from the pure module, fed by the shared state builder
+    expect(source).toContain('function buildScrollState()')
+    expect(source).toContain('if (isUserScrolling(buildScrollState()))')
+    expect(source).toContain('shouldFollowStream(buildScrollState(), force)')
   })
   it('force pin is deferred (pendingFollow) while the user is scrolling, not applied', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    expect(source).toMatch(/if \(isUserScrolling\(state\(\)\)\) \{\s*if \(force\) pendingFollow = true\s*return\s*\}/)
+    // A force pin during a user scroll is deferred to pendingFollow and never
+    // applied while the user is still scrolling (the appLog diagnostic line
+    // sits between the two statements).
+    expect(source).toMatch(/if \(isUserScrolling\(buildScrollState\(\)\)\) \{\s*if \(force\) pendingFollow = true[\s\S]*?return\s*\}/)
   })
 
   it('onScrollStopped clears pendingFollow unconditionally and flushes only near the bottom', async () => {
@@ -200,18 +202,20 @@ describe('ChatMessageList — DOM reconciliation key (listKey)', () => {
  * Tests for the stream-follow persistence fix.
  *
  * Root cause: a single throttled render flush (ContentBlocks.vue, 300ms) can
- * grow scrollHeight far beyond STREAM_FOLLOW_GRACE_PX in one frame when a burst
- * of tokens arrives at once. scrollToBottom's static distance check then rejects
- * the follow (gap > grace band) and the viewport is never pulled down again —
- * every later flush re-reads an even larger gap, so follow is lost permanently.
+ * grow scrollHeight by a large amount in one frame when a burst of tokens
+ * arrives at once. A distance-based follow check then rejects the follow
+ * (gap too big) and the viewport is never pulled down again — every later
+ * flush re-reads an even larger gap, so follow is lost permanently.
  *
- * Fix: follow is decided by live geometry + a "user left the bottom" latch.
- * - While the viewport is at the bottom, streamed content follows (with a
- *   grace band that absorbs render-flush height jumps).
+ * Fix: follow is decided ONLY by "did the user scroll away?" — no distance or
+ * grace-band heuristic.
+ * - As long as the user has not deliberately left the bottom, content growth
+ *   (streaming, render flush, lazy load) always re-pins to the bottom.
  * - The moment the user scrolls away from the bottom (past NEAR_BOTTOM_PX),
  *   userLeftBottom latches on and ALL follow is suppressed — a user reading
  *   older content is never yanked back, regardless of how much arrives.
- * - userLeftBottom clears only when the user scrolls back to the bottom.
+ * - userLeftBottom clears when the user scrolls back near the bottom, switches
+ *   session, or taps the bottom FAB.
  */
 describe('ChatMessageList — stream-follow persistence', () => {
   it('scrollToBottom consults the geometry + userLeftBottom state', async () => {
@@ -249,6 +253,30 @@ describe('ChatMessageList — stream-follow persistence', () => {
     expect(source).toContain('userLeftBottom = false')
     // The clearing must live INSIDE scrollToBottomSmooth (not merely anywhere)
     expect(source).toMatch(/scrollToBottomSmooth\(\)[\s\S]*?userLeftBottom = false/)
+  })
+})
+
+/**
+ * Content-growth observer: async rendering (Mermaid deferred, throttled flush,
+ * lazy original text) can grow the list height AFTER the initial pin, with no
+ * dedicated scroll call. ResizeObserver is the universal backstop that re-pins
+ * whenever content grows while the user has NOT scrolled away.
+ */
+describe('ChatMessageList — content-growth observer backstop', () => {
+  it('observes the content wrapper and re-pins on growth unless the user left', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // Observe the .chat-messages-list wrapper (its box = content height)
+    expect(source).toContain('new ResizeObserver(() => onContentGrown())')
+    expect(source).toContain('contentResizeObserver.observe(inner)')
+    // Re-pin guard: never pull back a user who scrolled away, never fight an
+    // active scroll — mirrors followToBottom's guards.
+    expect(source).toContain('function onContentGrown()')
+    expect(source).toContain('if (userLeftBottom || !messagesRef.value) return')
+    expect(source).toContain('shouldFollowStream(buildScrollState(), false)')
+    // Re-observe when listKey rebuilds the DOM (session switch / load-more)
+    expect(source).toContain('watch(listKey')
+    expect(source).toContain('observeContentGrowth()')
   })
 })
 

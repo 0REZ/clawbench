@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS, NEAR_BOTTOM_PX, STREAM_FOLLOW_GRACE_PX, type ScrollStateInput } from '../scrollState'
+import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS, type ScrollStateInput } from '../scrollState'
 
 function baseInput(overrides: Partial<ScrollStateInput> = {}): ScrollStateInput {
   return {
@@ -7,7 +7,6 @@ function baseInput(overrides: Partial<ScrollStateInput> = {}): ScrollStateInput 
     userTouching: false,
     lastScrollAt: 0,
     now: 0,
-    nearBottomDist: 500,
     ...overrides,
   }
 }
@@ -49,114 +48,34 @@ describe('isUserScrolling', () => {
 describe('shouldFollowStream', () => {
   it('returns false while the user is scrolling even with force=true (force never overrides active scrolling)', () => {
     const now = 10000
-    const input = baseInput({ owner: 'user', userTouching: false, lastScrollAt: now - 50, now, nearBottomDist: 0 })
+    const input = baseInput({ owner: 'user', userTouching: false, lastScrollAt: now - 50, now })
     expect(shouldFollowStream(input, true)).toBe(false)
     // Touch held — the root cause of the snap-back bug
-    expect(shouldFollowStream(baseInput({ userTouching: true, nearBottomDist: 0 }), true)).toBe(false)
+    expect(shouldFollowStream(baseInput({ userTouching: true }), true)).toBe(false)
   })
 
-  it('returns true when stationary and already near the bottom', () => {
-    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
-    expect(shouldFollowStream(baseInput({ nearBottomDist: 0 }), false)).toBe(true)
+  it('returns true for any content growth when the user never scrolled away', () => {
+    // No distance/grace-band heuristics: content growing at any time (streaming,
+    // lazy render flush, async markdown) keeps the view pinned to the bottom as
+    // long as the user has not deliberately left.
+    expect(shouldFollowStream(baseInput({}), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ owner: 'programmatic' }), false)).toBe(true)
+    expect(shouldFollowStream(baseInput({ owner: 'idle' }), false)).toBe(true)
   })
 
-  it('returns false when stationary but scrolled away (no force)', () => {
-    expect(shouldFollowStream(baseInput({ nearBottomDist: 500 }), false)).toBe(false)
+  it('returns false when the user scrolled away from the bottom (no force)', () => {
+    expect(shouldFollowStream(baseInput({ userLeftBottom: true }), false)).toBe(false)
   })
 
-  it('returns true for force pins when stationary even if scrolled away', () => {
-    expect(shouldFollowStream(baseInput({ nearBottomDist: 500 }), true)).toBe(true)
+  it('returns true for force pins even when the user scrolled away (send message / session switch)', () => {
+    expect(shouldFollowStream(baseInput({ userLeftBottom: true }), true)).toBe(true)
   })
 
-  it('returns false for programmatic owner when jumped to the middle', () => {
-    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: 500 }), false)).toBe(false)
+  it('follow resumes once the user scrolls back to the bottom (userLeftBottom cleared)', () => {
+    expect(shouldFollowStream(baseInput({ userLeftBottom: false }), false)).toBe(true)
   })
 
-  it('returns true for programmatic owner when target is near the bottom', () => {
-    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: 50 }), false)).toBe(true)
-  })
-
-  it('boundary: exactly NEAR_BOTTOM_PX follows; NEAR_BOTTOM_PX+1 does not (non-force)', () => {
-    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
-    expect(shouldFollowStream(baseInput({ nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
-  })
-
-  it('returns true for programmatic owner at exactly NEAR_BOTTOM_PX, false just beyond', () => {
-    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
-    expect(shouldFollowStream(baseInput({ owner: 'programmatic', nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
-  })
-
-  it('force + userTouching never follows even when near the bottom', () => {
-    expect(shouldFollowStream(baseInput({ userTouching: true, nearBottomDist: 0 }), true)).toBe(false)
-  })
-})
-
-describe('shouldFollowStream — streaming grace band', () => {
-  it('follows when streaming and the viewport gap is within the grace band (DOM lags tokens)', () => {
-    // Just outside the bottom threshold but inside the grace band — streaming
-    // follow absorbs the DOM-height lag without needing to be exactly at bottom.
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(true)
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX }), false)).toBe(true)
-  })
-
-  it('does not follow when streaming but the user scrolled far beyond the grace band', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX + 1 }), false)).toBe(false)
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 2000 }), false)).toBe(false)
-  })
-
-  it('still follows when streaming near the bottom (unchanged base behavior)', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, nearBottomDist: 50 }), false)).toBe(true)
-  })
-
-  it('does not follow a streamed-away viewport when NOT streaming', () => {
-    expect(shouldFollowStream(baseInput({ streaming: false, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
-  })
-
-  it('never overrides an active user scroll, even within the grace band', () => {
-    const now = 10000
-    const input = baseInput({ streaming: true, owner: 'user', lastScrollAt: now - 50, now, nearBottomDist: NEAR_BOTTOM_PX + 1 })
-    expect(shouldFollowStream(input, true)).toBe(false)
-    expect(shouldFollowStream(baseInput({ streaming: true, userTouching: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), true)).toBe(false)
-  })
-})
-
-describe('shouldFollowStream — user left the bottom (must never be yanked back)', () => {
-  const now = 100000
-
-  it('suppresses follow entirely once the user scrolled away, regardless of distance', () => {
-    // Far away
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 5000 }), false)).toBe(false)
-    // Small gap outside the bottom threshold but inside the grace band —
-    // leaving is still respected
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: NEAR_BOTTOM_PX + 1 }), false)).toBe(false)
-  })
-
-  it('suppresses follow inside the grace band once the user left', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: STREAM_FOLLOW_GRACE_PX }), false)).toBe(false)
-  })
-
-  it('force pins still apply when the user left the bottom (send message / session switch)', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: 5000 }), true)).toBe(true)
-  })
-
-  it('follow resumes once the user scrolls back to the bottom', () => {
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: false, nearBottomDist: 0 }), false)).toBe(true)
-  })
-
-  it('near-bottom check wins even if a stale userLeftBottom flag is set (user returned)', () => {
-    expect(shouldFollowStream(baseInput({ userLeftBottom: true, nearBottomDist: 50 }), false)).toBe(true)
-    expect(shouldFollowStream(baseInput({ streaming: true, userLeftBottom: true, nearBottomDist: NEAR_BOTTOM_PX }), false)).toBe(true)
-  })
-
-  it('an active user scroll while leaving is never overridden (userLeftBottom + scrolling)', () => {
-    const input = baseInput({
-      streaming: true,
-      userLeftBottom: true,
-      owner: 'user',
-      lastScrollAt: now - 50,
-      now,
-      nearBottomDist: 3000,
-    })
-    expect(shouldFollowStream(input, true)).toBe(false)
+  it('force + userTouching never follows (hand always wins)', () => {
+    expect(shouldFollowStream(baseInput({ userTouching: true }), true)).toBe(false)
   })
 })
