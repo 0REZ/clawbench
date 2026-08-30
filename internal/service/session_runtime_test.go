@@ -219,10 +219,45 @@ func TestCancelSession_Running_NoCancelFunc(t *testing.T) {
 	assert.False(t, IsSessionRunning("session-stuck"))
 }
 
-func TestCancelSession_Running_NoCancelFunc_ClearsQueue(t *testing.T) {
+func TestCancelAllSessions(t *testing.T) {
 	cleanupAllSessionState()
 	defer cleanupAllSessionState()
 
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-all-1", cancel1)
+	RegisterSessionCancel("session-all-2", cancel2)
+
+	// Cancels every registered session.
+	CancelAllSessions()
+
+	assert.Error(t, ctx1.Err(), "session-all-1 context must be cancelled")
+	assert.Error(t, ctx2.Err(), "session-all-2 context must be cancelled")
+}
+
+func TestCancelAllSessions_Empty(t *testing.T) {
+	cleanupAllSessionState()
+	defer cleanupAllSessionState()
+
+	// No registered sessions — must be a safe no-op.
+	assert.NotPanics(t, CancelAllSessions)
+}
+
+func TestCancelAllSessions_BadValue(t *testing.T) {
+	cleanupAllSessionState()
+	defer cleanupAllSessionState()
+
+	// A non-CancelFunc value must be evicted, not panic.
+	sessionCancels.Store("session-bad", "not-a-cancel-func")
+
+	assert.NotPanics(t, CancelAllSessions)
+	_, ok := sessionCancels.Load("session-bad")
+	assert.False(t, ok, "non-CancelFunc entry must be removed")
+}
+
+func TestCancelSession_Running_NoCancelFunc_ClearsQueue(t *testing.T) {
+	cleanupAllSessionState()
+	defer cleanupAllSessionState()
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	_, err = db.Exec(drainTestSchema)

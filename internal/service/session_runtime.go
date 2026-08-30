@@ -450,6 +450,31 @@ func UnregisterSessionCancel(sessionID string) {
 	sessionCancels.Delete(sessionID)
 }
 
+// CancelAllSessions cancels every registered session context without clearing
+// the running state or finalizing anything. Called by the graceful-shutdown
+// path so every active executor's event loop exits on ctx.Done() and runs
+// Finalize (streaming=0 + final content) before the DB closes. This is what
+// unblocks CLI-backend streams whose process is still alive — unlike ACP
+// prompts there is no per-connection promptCancel to invoke.
+//
+// Entries are removed after cancelling (mirroring CancelSession's
+// LoadAndDelete) so no stale cancel func outlives the shutdown.
+func CancelAllSessions() {
+	sessionCancels.Range(func(key, value any) bool {
+		cancel, ok := value.(context.CancelFunc)
+		if !ok {
+			sessionCancels.Delete(key)
+			return true
+		}
+		cancel()
+		sessionCancels.Delete(key)
+		if sid, ok := key.(string); ok {
+			slog.Debug("shutdown: cancelled session", slog.String("session_id", sid))
+		}
+		return true
+	})
+}
+
 // SetCancelReason records the cancellation reason for a session without cancelling it.
 // Used by the WS handler when a client disconnects — the AI session continues running
 // but the reason is stored for the session finalizer to read later.

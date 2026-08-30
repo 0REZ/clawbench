@@ -1701,6 +1701,46 @@ func TestCancelAllExecutions_NoMatchingTask(t *testing.T) {
 	assert.False(t, cancelled, "no cancel func should be called for unrelated task")
 }
 
+// ---------- CancelAllRunning ----------
+
+func TestCancelAllRunning(t *testing.T) {
+	s, cleanup := setupScheduler(t)
+	defer cleanup()
+
+	var cancelled1, cancelled2, cancelled3 bool
+
+	s.AddRunningExecution(&service.RunningExecution{
+		ID: "exec-1", TaskID: 1, CancelFunc: func() { cancelled1 = true }, StartedAt: time.Now(), TriggerType: "auto",
+	})
+	s.AddRunningExecution(&service.RunningExecution{
+		ID: "exec-2", TaskID: 1, CancelFunc: func() { cancelled2 = true }, StartedAt: time.Now(), TriggerType: "manual",
+	})
+	s.AddRunningExecution(&service.RunningExecution{
+		ID: "exec-3", TaskID: 2, CancelFunc: func() { cancelled3 = true }, StartedAt: time.Now(), TriggerType: "auto",
+	})
+
+	// Cancel everything regardless of task — shutdown path semantics.
+	s.CancelAllRunning()
+
+	assert.True(t, cancelled1, "exec-1 cancel func should be called")
+	assert.True(t, cancelled2, "exec-2 cancel func should be called")
+	assert.True(t, cancelled3, "exec-3 (different task) should ALSO be cancelled")
+}
+
+func TestCancelAllRunning_NilScheduler(t *testing.T) {
+	// Nil receiver must be a safe no-op (shutdown path guards with this).
+	var s *service.Scheduler
+	assert.NotPanics(t, func() { s.CancelAllRunning() })
+}
+
+func TestCancelAllRunning_Empty(t *testing.T) {
+	s, cleanup := setupScheduler(t)
+	defer cleanup()
+
+	// No running executions — must not panic.
+	assert.NotPanics(t, func() { s.CancelAllRunning() })
+}
+
 // ---------- cleanZombieExecutions ----------
 
 func TestCleanZombieExecutions(t *testing.T) {

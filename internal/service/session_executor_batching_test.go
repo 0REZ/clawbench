@@ -1,0 +1,401 @@
+package service
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"clawbench/internal/ai"
+	"clawbench/internal/model"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// --- Batched tool-call upserts ---
+
+// TestExecutor_BatchedToolCallsFlushedTogether verifies that multiple tool
+// events arriving between flush windows are upserted as a batch by the flush
+// rather than written per event, and that the batch is cleared after flushing.
+func TestExecutor_BatchedToolCallsFlushedTogether(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	// Keep the package-global activeStreams registry clean for later tests.
+	defer executor.unregisterActiveStream()
+
+	// Two distinct tools, each emitting several incremental events. The first
+	// event triggers an immediate flush (lastFlush starts zeroed), but the
+	// second tool's events land in the pending batch and stay queued.
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "tool_use", Tool: &ai.ToolCall{Name: "Read", ID: "bt-1", Input: `{"file_path":"/a.go"}`, Done: false}})
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "tool_use", Tool: &ai.ToolCall{Name: "Bash", ID: "bt-2", Input: `{"command":"ls"}`, Done: false}})
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "tool_use", Tool: &ai.ToolCall{Name: "Read", ID: "bt-1", Input: `{"file_path":"/a.go"}`, Done: true}})
+
+	// The second tool's row is queued, not written — it landed after the first
+	// event's flush and no flush window elapsed since.
+	r2, err := GetToolCall("bt-2", msgID)
+	require.NoError(t, err)
+	assert.Nil(t, r2, "tool-call upsert must be deferred to the flush window")
+
+	// One flush persists the queued row (and re-upserts bt-1 with its final
+	// done=true state).
+	executor.flushStreamingMessage()
+
+	r1, err := GetToolCall("bt-1", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, r1)
+	assert.True(t, r1.Done, "bt-1 final state must reflect the last update")
+	r2, err = GetToolCall("bt-2", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, r2)
+
+	// Queue is cleared after the flush: a second flush writes nothing new.
+	executor.flushStreamingMessage()
+	assert.Len(t, executor.pendingToolCalls, 0, "pending tool-call set must be drained by flush")
+}
+
+// TestExecutor_BatchedContextStateFlushed verifies that context-state updates
+// (usage/mode) are accumulated in the pending map and applied atomically by
+// the flush, rather than written per event.
+func TestExecutor_BatchedContextStateFlushed(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:        ModeInteractive,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+	})
+	// Keep the package-global activeStreams registry clean for later tests.
+	defer executor.unregisterActiveStream()
+
+	// Burst of usage updates — the pending map keeps only the latest per key.
+	for i := range 5 {
+		executor.persistContextStateToPending(ai.StreamEvent{
+			Type: "usage_update",
+			Usage: &ai.UsageState{
+				InputTokens:  i * 100,
+				OutputTokens: i * 10,
+			},
+		})
+	}
+	executor.persistContextStateToPending(ai.StreamEvent{
+		Type: "mode_update",
+		Mode: &ai.ModeState{CurrentModeID: "code"},
+	})
+
+	// Not yet in DB.
+	assert.Nil(t, GetContextState(sid), "context state must be deferred to the flush window")
+
+	executor.flushStreamingMessage()
+
+	state := GetContextState(sid)
+	require.NotNil(t, state)
+	require.NotNil(t, state.Usage)
+	assert.Equal(t, 400, state.Usage.InputTokens, "latest usage value must win")
+	require.NotNil(t, state.Mode)
+	assert.Equal(t, "code", state.Mode.CurrentModeID)
+
+	// Pending map drained.
+	assert.Len(t, executor.pendingContextPatches, 0, "pending context patches must be drained by flush")
+}
+
+// TestExecutor_FlushSkipsUnchangedContent verifies that a rate-limited flush
+// does not re-write the streaming row when the marshaled content is unchanged,
+// while a content change does write.
+func TestExecutor_FlushSkipsUnchangedContent(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:        ModeInteractive,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+	})
+	// Keep the package-global activeStreams registry clean for later tests.
+	defer executor.unregisterActiveStream()
+
+	// First flush writes the initial content.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: "hello"})
+	executor.flushStreamingMessage()
+	require.NotEmpty(t, executor.lastWrittenContent, "first flush must record written content")
+
+	// Second flush with no change must not re-write (lastWrittenContent unchanged).
+	before := executor.lastWrittenContent
+	executor.flushStreamingMessage()
+	assert.Equal(t, before, executor.lastWrittenContent, "unchanged flush must not rewrite")
+
+	// A change is picked up by the marshaled comparison.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "content", Content: " world"})
+	executor.flushStreamingMessage()
+	assert.NotEqual(t, before, executor.lastWrittenContent, "changed content must be written")
+}
+
+// TestExecutor_FlushStreamingNow_IncludeThinkingAndBatched verifies that the
+// graceful-shutdown flush persists both the batched tool-call rows and the
+// streaming content (with thinking) in one shot.
+func TestExecutor_FlushStreamingNow_IncludeThinkingAndBatched(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// Accumulate blocks + queue a tool-call via the event path.
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content", Content: "hello"})
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "tool_use", Tool: &ai.ToolCall{Name: "Read", ID: "shutdown-batch-1", Done: true}})
+
+	// Graceful shutdown flush.
+	FlushStreamingNow()
+
+	// Tool-call row persisted.
+	record, err := GetToolCall("shutdown-batch-1", msgID)
+	require.NoError(t, err)
+	require.NotNil(t, record, "graceful flush must persist batched tool-call rows")
+
+	// Streaming row content persisted: text + tool_use blocks.
+	content := readStreamingContent(t, msgID)
+	blocks, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocks, 2)
+}
+
+// --- Batched thinking upserts ---
+
+// TestExecutor_ThinkingFlushedPeriodically verifies that a growing thinking
+// block is persisted to chat_thinking on every flush window with a stable
+// think_id (the upsert overwrites the row), while the content row keeps only
+// the slim think_id marker (no full text).
+func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	// Must unregister: the activeStreams registry is package-global, and a
+	// leftover executor's flush would run against the NEXT test's DB (where
+	// AUTOINCREMENT message IDs collide), deleting that test's chat_thinking
+	// rows via DeleteThinkingByMessage.
+	defer executor.unregisterActiveStream()
+
+	// Thinking grows: flush1 persists "part1", flush2 overwrites with
+	// "part1part2" under the SAME think_id.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part1"})
+	executor.flushStreamingMessage()
+	require.Len(t, executor.blocks, 1)
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID, "thinking block must get a stable think_id on flush")
+
+	rec, err := GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "part1", rec.Text)
+
+	// Second flush with more thinking — same think_id, updated text.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part2"})
+	executor.flushStreamingMessage()
+	assert.Equal(t, firstID, executor.blocks[0].ThinkID, "think_id must be stable across flushes")
+	rec, err = GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "part1part2", rec.Text)
+
+	// Only one row for this think_id (upsert, not insert).
+	count := 0
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&count)
+	assert.Equal(t, 1, count, "periodic flush must upsert, not accumulate rows")
+
+	// Content row stays slim: think_id marker present, full text absent.
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocksRaw, 1)
+	thinkingBlock, ok := blocksRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "thinking", thinkingBlock["type"])
+	assert.Equal(t, firstID, thinkingBlock["think_id"], "content must carry the think_id marker for lazy-load")
+	assert.NotContains(t, content, "part1part2", "content must NOT carry the full thinking text")
+}
+
+// TestExecutor_ThinkingFlush_FinalizeReusesID verifies that Finalize reuses the
+// periodic-flush think_id (no orphan/duplicate rows) and that the final text
+// (after any merge) overwrites the periodic-flush row.
+func TestExecutor_ThinkingFlush_FinalizeReusesID(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+
+	// Periodic flush first, capturing the stable think_id.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "early"})
+	executor.flushStreamingMessage()
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID)
+
+	// Finalize: full blocks (thinking text + think_id) → slimmed into
+	// chat_thinking under the SAME id.
+	result := executor.buildResult(true, time.Now())
+	finalized := executor.Finalize(result, nil)
+	require.NotZero(t, finalized.MsgID)
+
+	rec, err := GetThinking(firstID, finalized.MsgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec, "Finalize must keep the periodic-flush think_id")
+	assert.Equal(t, "early", rec.Text)
+
+	// No duplicate rows for that id.
+	count := 0
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = ?", firstID).Scan(&count)
+	assert.Equal(t, 1, count)
+}
+
+// TestExecutor_ThinkingFlush_MergeUpdatesText verifies that when
+// MergeConsecutiveThinkingBlocks concatenates two thinking fragments in
+// Finalize, the merged text overwrites the periodic-flush row (the slim logic
+// reuses the existing think_id and re-extracts the final text).
+func TestExecutor_ThinkingFlush_MergeUpdatesText(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+
+	// Two separate thinking fragments — periodic flush persists the first.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "frag-a"})
+	executor.flushStreamingMessage()
+	firstID := executor.blocks[0].ThinkID
+
+	// A second thinking block appears (e.g. interleaved after a tool_use).
+	executor.blocks = append(executor.blocks, model.ContentBlock{Type: "thinking", Text: "frag-b"})
+
+	// Finalize merges consecutive thinking blocks and must end up with the
+	// combined text under the first block's think_id.
+	result := executor.buildResult(true, time.Now())
+	finalized := executor.Finalize(result, nil)
+
+	rec, err := GetThinking(firstID, finalized.MsgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "frag-afrag-b", rec.Text, "merged thinking text must overwrite the periodic-flush row")
+}
+
+// TestExecutor_ContentReset_ClearsThinkingAndLastWritten verifies that a
+// content_reset removes stale chat_thinking rows written by the periodic flush
+// (so a retry can't leave the frontend lazy-loading reasoning from the failed
+// attempt) and resets lastWrittenContent so the retry's first flush is written.
+func TestExecutor_ContentReset_ClearsThinkingAndLastWritten(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// First (failed) attempt: thinking is periodically flushed to chat_thinking.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "stale reasoning"})
+	executor.flushStreamingMessage()
+	require.NotEmpty(t, executor.blocks[0].ThinkID)
+	rec, err := GetThinking(executor.blocks[0].ThinkID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec, "periodic flush must persist the stale thinking")
+
+	// content_reset fires on retry.
+	executor.handleNonTerminalEvent(ai.StreamEvent{Type: "content_reset"})
+
+	// Stale chat_thinking row removed.
+	var cnt int
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&cnt)
+	assert.Zero(t, cnt, "content_reset must delete stale periodic-flush thinking rows")
+
+	// lastWrittenContent reset so the retry's first flush always writes.
+	assert.Empty(t, executor.lastWrittenContent, "content_reset must reset lastWrittenContent")
+	executor.flushStreamingMessage()
+	assert.NotEmpty(t, executor.lastWrittenContent, "first flush after reset must write")
+
+	// No stale thinking visible for the message.
+	var cntAfter int
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&cntAfter)
+	assert.Zero(t, cntAfter, "no thinking rows must reappear after the retry flush with empty blocks")
+}

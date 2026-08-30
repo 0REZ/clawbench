@@ -117,8 +117,16 @@ func GetThinkingBySessionAll(sessionID string) ([]ThinkingRecord, error) {
 }
 
 // slimThinkingInContent parses content JSON, extracts thinking block text into
-// ThinkingRecord entries (generating think_id), and rewrites the content with
-// slim thinking blocks ({type:"thinking", think_id, done} — text removed).
+// ThinkingRecord entries, and rewrites the content with slim thinking blocks
+// ({type:"thinking", think_id, done} — text removed).
+//
+// think_id handling:
+//   - Block without think_id: a fresh ID is generated and the text extracted.
+//   - Block with think_id (already slimmed, or pre-assigned by the periodic
+//     flush in SessionExecutor): the ID is reused and any text still present is
+//     extracted so the final text (after MergeConsecutiveThinkingBlocks
+//     concatenation) overwrites the periodic-flush rows.
+//
 // Thinking blocks without text are slimmed too (think_id assigned, no record);
 // if nothing changed, returns content unchanged with empty records.
 func slimThinkingInContent(content string) (string, []ThinkingRecord, error) {
@@ -137,16 +145,19 @@ func slimThinkingInContent(content string) (string, []ThinkingRecord, error) {
 		if !ok || block["type"] != "thinking" {
 			continue
 		}
-		if _, alreadySlim := block["think_id"]; alreadySlim {
-			continue
-		}
 		text, _ := block["text"].(string)
-		thinkID := generateThinkingID()
+		thinkID, hasID := block["think_id"].(string)
+		if !hasID || thinkID == "" {
+			thinkID = generateThinkingID()
+			block["think_id"] = thinkID
+			changed = true
+		}
 		delete(block, "text")
-		block["think_id"] = thinkID
-		changed = true
+		// Extract text whenever present — even for a pre-existing think_id — so
+		// the final (possibly merged) text overwrites periodic-flush rows.
 		if text != "" {
 			records = append(records, ThinkingRecord{ThinkID: thinkID, Text: text})
+			changed = true
 		}
 	}
 	if !changed {

@@ -228,6 +228,7 @@ type ImageAttachment struct {
 type ContentBlock struct {
 	Type        string         `json:"type"`                   // "thinking", "tool_use", "text", "warning", "error"
 	Text        string         `json:"text,omitempty"`         // thinking, text, or warning/error content
+	ThinkID     string         `json:"think_id,omitempty"`     // thinking: stable ID for chat_thinking upsert (full text lives there; content keeps this slim marker)
 	Reason      string         `json:"reason,omitempty"`       // structured reason code for i18n (e.g. "disconnect", "timeout", "parse_error")
 	ErrorCode   int            `json:"error_code,omitempty"`   // structured error code (e.g. ACP JSON-RPC code -32603)
 	HTTPStatus  int            `json:"http_status,omitempty"`  // upstream HTTP status when available (e.g. 500)
