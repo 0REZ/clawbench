@@ -503,6 +503,16 @@ function handleScroll() {
       scrolledDown.value = false
       clearTimeout(scrollDownTimer)
     }
+    // A programmatic jump to the top (FAB scroll-to-top) reaches scrollTop=0
+    // just like a manual scroll — load older history the same way. This check
+    // must run BEFORE the programmatic return below, otherwise the top-FAB
+    // scroll never triggers load-more (only a subsequent manual scroll does).
+    if (loadMorePending) return
+    if (!props.hasMore || props.loadingMore) return
+    if (el.scrollTop < 50) {
+      loadMorePending = true
+      emit('load-more')
+    }
     return
   }
 

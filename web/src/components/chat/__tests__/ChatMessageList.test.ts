@@ -257,6 +257,23 @@ describe('ChatMessageList — stream-follow persistence', () => {
 })
 
 /**
+ * Load-more must also fire when the TOP FAB programmatically scrolls to the
+ * top — the programmatic branch of handleScroll used to `return` before the
+ * load-more check, so only a subsequent manual scroll triggered history load.
+ */
+describe('ChatMessageList — programmatic scroll-to-top triggers load-more', () => {
+  it('load-more check runs before the programmatic return', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toContain('function scrollToTop()')
+    // The programmatic-scroll branch must run the load-more check BEFORE its
+    // return, not after (the manual-scroll path).
+    expect(source).toMatch(/if \(programmaticScrolling\) \{[\s\S]*?emit\('load-more'\)[\s\S]*?return\n  \}/)
+    expect(source).toContain("emit('load-more')")
+  })
+})
+
+/**
  * Content-growth observer: async rendering (Mermaid deferred, throttled flush,
  * lazy original text) can grow the list height AFTER the initial pin, with no
  * dedicated scroll call. ResizeObserver is the universal backstop that re-pins
