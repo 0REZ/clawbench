@@ -1082,10 +1082,6 @@ function handleSessionArchive(sessionId, backend) {
   sessionIdentity.archiveSession(sessionId, backend)
 }
 
-function handleSessionUnimport(sessionId) {
-  sessionIdentity.unimportSession(sessionId)
-}
-
 function handleSessionDestroy(sessionId) {
   sessionIdentity.destroySession(sessionId)
 }
