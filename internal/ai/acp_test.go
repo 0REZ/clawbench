@@ -758,6 +758,15 @@ func TestMapACPError_UnknownCode(t *testing.T) {
 	assert.Equal(t, ReasonBackendExit, event.Reason) // default
 }
 
+func TestMapACPError_CarriesStructuredFields(t *testing.T) {
+	event := mapACPError(-32603, "internal error")
+	assert.Equal(t, "error", event.Type)
+	assert.Equal(t, -32603, event.ErrorCode)
+	assert.Equal(t, "agent", event.ErrorSource)
+	assert.Contains(t, event.Error, "-32603")
+	assert.Contains(t, event.Error, "internal error")
+}
+
 // --- forwardACPEvent tests ---
 
 func TestForwardACPEvent_Basic(t *testing.T) {

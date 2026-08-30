@@ -77,6 +77,7 @@ const (
 	ReasonParseError    = "parse_error"    // CLI output parsing error
 	ReasonBackendExit   = "backend_exit"   // CLI process exited abnormally
 	ReasonRequestFailed = "request_failed" // Codex turn.failed
+	ReasonRefused       = "refused"        // ACP stopReason=refusal (agent declined / model unavailable / upstream error)
 	ReasonPanic         = "panic"          // AI goroutine panicked
 )
 
@@ -270,6 +271,9 @@ type StreamEvent struct {
 	Type           string                 // "content", "thinking", "metadata", "done", "error", "tool_use", "tool_result", "raw_output", "queue_drain", "queue_cancel", "session_capture", "mode_update", "config_update", "commands_update", "thinking_effort_update", "plan_update", "model_list_update", "usage_update", "user_message", "stream_start", "replay_done", "content_reset"
 	Content        string                 // Incremental text (Type=content, Type=thinking) or captured session ID (Type=session_capture)
 	Reason         string                 // Structured reason code for i18n (e.g. "disconnect", "timeout", "parse_error")
+	ErrorCode      int                    // Structured error code (e.g. ACP JSON-RPC code -32603)
+	HTTPStatus     int                    // Upstream HTTP status when available (e.g. 500)
+	ErrorSource    string                 // "agent" | "clawbench" | "network"
 	Meta           *Metadata              // Metadata (Type=metadata)
 	Error          string                 // Error message (Type=error)
 	Tool           *ToolCall              // Tool call info (Type=tool_use, Type=tool_result)

@@ -787,9 +787,11 @@ func mapACPError(code int, message string) StreamEvent {
 		reason = ReasonContextCancel // request cancelled
 	}
 	return StreamEvent{
-		Type:   "error",
-		Error:  fmt.Sprintf("ACP error %d: %s", code, message),
-		Reason: reason,
+		Type:       "error",
+		Error:      fmt.Sprintf("ACP error %d: %s", code, message),
+		Reason:     reason,
+		ErrorCode:  code,
+		ErrorSource: "agent",
 	}
 }
 

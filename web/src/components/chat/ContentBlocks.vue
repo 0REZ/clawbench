@@ -115,6 +115,7 @@
       <div v-else-if="block.type === 'error'" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <span v-if="errorSourceLabel(block)" class="error-source-chip" :class="'src-' + (block.error_source || '')">{{ errorSourceLabel(block) }}</span>
         <button v-if="isResetableReason(block.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: block.reason })">
           {{ t('chat.contentBlocks.resetSession') }}
         </button>
@@ -123,6 +124,7 @@
       <div v-else-if="block.type === 'warning' && isSevereWarning(block)" class="chat-error-card">
         <AlertTriangle :size="14" class="error-icon" />
         <span class="error-text">{{ getWarningText(block) }}</span>
+        <span v-if="errorSourceLabel(block)" class="error-source-chip" :class="'src-' + (block.error_source || '')">{{ errorSourceLabel(block) }}</span>
         <button v-if="isResetableReason(block.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: block.reason })">
           {{ t('chat.contentBlocks.resetSession') }}
         </button>
@@ -131,6 +133,7 @@
       <div v-else-if="block.type === 'warning'" class="chat-warning-card">
         <AlertCircle :size="14" class="warning-icon" />
         <span class="warning-text">{{ getWarningText(block) }}</span>
+        <span v-if="errorSourceLabel(block)" class="error-source-chip" :class="'src-' + (block.error_source || '')">{{ errorSourceLabel(block) }}</span>
         <button v-if="block.reason === 'restart'" class="warning-continue-btn" @click.stop="$emit('send-message', t('chat.contentBlocks.continue'))">
           {{ t('chat.contentBlocks.continue') }}
         </button>
@@ -221,6 +224,7 @@ import { useThinkingContent } from '@/composables/useThinkingContent.ts'
 import {
   isSevereWarning,
   getWarningText as getWarningTextUtil,
+  getErrorSourceLabel,
   statusClass as statusClassUtil,
   statusLabel as statusLabelUtil,
   statusLabelSimple as statusLabelSimpleUtil,
@@ -278,11 +282,12 @@ async function fetchToolCallInputForAutoExpand(block: any, msgId: string | numbe
 
 // Re-export utility functions with i18n context bound
 function getWarningText(block: any) { return getWarningTextUtil(block, t) }
+function errorSourceLabel(block: any) { return getErrorSourceLabel(block, t) }
 
 /** Reasons that indicate a stuck/broken agent session — showing a "reset session"
  *  button lets the user recycle the agent connection and recover.
  *  User-initiated cancels (user_cancel/context_cancel) are excluded. */
-const RESETABLE_REASONS = new Set(['empty', 'request_failed', 'backend_exit', 'timeout', 'parse_error', 'panic', 'disconnect'])
+const RESETABLE_REASONS = new Set(['empty', 'request_failed', 'refused', 'backend_exit', 'timeout', 'parse_error', 'panic', 'disconnect'])
 function isResetableReason(reason: string | undefined): boolean {
   return !!reason && RESETABLE_REASONS.has(reason)
 }
@@ -951,6 +956,45 @@ onUnmounted(() => {
 
 :root[data-theme-base="dark"] .chat-warning-card .warning-text {
   color: var(--color-yellow, #fcd34d);
+}
+
+.error-source-chip {
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* Source-specific chip colors: agent = amber, clawbench = red, network = blue */
+.error-source-chip.src-agent {
+  color: var(--color-yellow, #d97706);
+  background: color-mix(in srgb, var(--color-yellow, #f59e0b) 14%, transparent);
+}
+
+.error-source-chip.src-clawbench {
+  color: var(--color-red, #dc2626);
+  background: color-mix(in srgb, var(--color-red, #ef4444) 12%, transparent);
+}
+
+.error-source-chip.src-network {
+  color: var(--color-blue, #2563eb);
+  background: color-mix(in srgb, var(--color-blue, #3b82f6) 12%, transparent);
+}
+
+:root[data-theme-base="dark"] .error-source-chip.src-agent {
+  color: var(--color-yellow, #fcd34d);
+}
+
+:root[data-theme-base="dark"] .error-source-chip.src-clawbench {
+  color: var(--color-red, #fca5a5);
+}
+
+:root[data-theme-base="dark"] .error-source-chip.src-network {
+  color: var(--color-blue, #93c5fd);
 }
 
 .chat-warning-card .warning-continue-btn {

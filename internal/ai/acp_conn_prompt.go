@@ -160,6 +160,29 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 		return fmt.Errorf("acp: prompt: %w", err)
 	}
 
+	// Refusal (stopReason="refusal"): the agent declined to answer — e.g. the
+	// requested model is unresolvable, the provider returned an upstream error,
+	// or the request was refused. The agent streams NO content blocks for a
+	// refusal, so without this check the executor would classify the turn as
+	// "AI returned no content" (reason=empty) — a misleading dead-end that
+	// hides the real cause and offers no actionable error code. Surface a
+	// warning event with the structured source + error code so the frontend
+	// can display it and offer a session reset.
+	if resp.StopReason == acp.StopReasonRefusal {
+		slog.Warn("acp conn: prompt refused by agent",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
+			"stop_reason", resp.StopReason)
+		httpStatus := acpHTTPStatusFromMeta(resp.Meta)
+		forwardACPEvent(streamCh, StreamEvent{
+			Type:        "warning",
+			Content:     "AI request refused by the agent (model unavailable or upstream error)",
+			Reason:      ReasonRefused,
+			ErrorCode:   -32603, // JSON-RPC internal error (matches CodeBuddy refusal rpcCode)
+			HTTPStatus:  httpStatus,
+			ErrorSource: "agent",
+		})
+	}
+
 	// PromptResponse.Usage (UNSTABLE): emit metadata and usage_update events
 	// so input/output token counts are persisted and shown in the context chip.
 	if resp.Usage != nil {
@@ -167,6 +190,32 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 	}
 
 	return nil
+}
+
+// acpHTTPStatusFromMeta scans a PromptResponse._meta map for an upstream HTTP
+// status. Some agents embed it (e.g. {"httpStatus":500}); returns 0 when absent.
+func acpHTTPStatusFromMeta(meta map[string]any) int {
+	if meta == nil {
+		return 0
+	}
+	for _, key := range []string{"httpStatus", "http_status", "status"} {
+		if v, ok := meta[key]; ok {
+			if f, ok := v.(float64); ok {
+				return int(f)
+			}
+			if i, ok := v.(int); ok {
+				return i
+			}
+		}
+	}
+	// Nested _meta.data / _meta.error payloads.
+	if data, ok := meta["data"].(map[string]any); ok {
+		return acpHTTPStatusFromMeta(data)
+	}
+	if data, ok := meta["error"].(map[string]any); ok {
+		return acpHTTPStatusFromMeta(data)
+	}
+	return 0
 }
 
 // emitPromptResponseUsage emits metadata and usage_update events from a

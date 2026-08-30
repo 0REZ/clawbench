@@ -472,7 +472,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         // assistant, or to the last assistant when the stream already ended
         // (backend crash after done) — so the user never needs a reload to see
         // it.
-        dispatch({ type: 'ws_error', text: errorData?.error || 'Unknown error', reason: errorData?.reason })
+        dispatch({ type: 'ws_error', text: errorData?.error || 'Unknown error', reason: errorData?.reason, errorCode: errorData?.error_code, httpStatus: errorData?.http_status, errorSource: errorData?.error_source })
         _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
         loading.value = false
         onStreamEnd?.('error')
@@ -488,8 +488,8 @@ export function useChatStream(options: UseChatStreamOptions) {
       case 'warning': {
         if (sessionChanged()) return
         if (!findStreamingMsg(messages.value)) return
-        const warningData = payload as { text?: string; reason?: string }
-        dispatch({ type: 'ws_warning', text: warningData.text || '', reason: warningData.reason })
+        const warningData = payload as { text?: string; reason?: string; error_code?: number; http_status?: number; error_source?: string }
+        dispatch({ type: 'ws_warning', text: warningData.text || '', reason: warningData.reason, errorCode: warningData.error_code, httpStatus: warningData.http_status, errorSource: warningData.error_source })
         if (isOpen.value) {
           onRenderNeeded()
         }
