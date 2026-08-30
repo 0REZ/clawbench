@@ -1715,7 +1715,7 @@ export default {
       floatingStatusWindow: '桌面悬浮状态窗',
       floatingStatusWindowDesc: '主界面在后台时，桌面显示会话运行状态胶囊（需系统悬浮窗权限）',
       liveUpdate: '灵动岛',
-      liveUpdateDesc: '在锁屏和状态栏持续展示会话状态（执行中/待审批/未读），Android 16+ 生效。需要开启系统的「实时更新」通知权限',
+      liveUpdateDesc: '在锁屏和状态栏持续展示会话状态，Android 16+ 生效。需要开启系统的「实时更新」通知权限',
       pushMode: '推送模式',
       pushModeDesc: '选择接收通知的方式',
       pushModeNative: '原生推送',
