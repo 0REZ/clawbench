@@ -294,7 +294,6 @@ public class LiveUpdateManager {
         }
         visible = true;
         notifyInternal(
-                runningCount,
                 chipText(runningCount, pendingCount, unreadCount,
                         appContext.getString(R.string.live_update_running),
                         appContext.getString(R.string.live_update_pending),
@@ -311,12 +310,8 @@ public class LiveUpdateManager {
      * available this is a promoted ongoing notification (status-bar chip); on
      * older systems or when promotion is denied it degrades to a plain ongoing
      * notification. Main thread only.
-     *
-     * @param running number of running sessions; when &gt; 0 the notification
-     *                shows a looping indeterminate progress bar (the running
-     *                motion effect) on the expanded card.
      */
-    private void notifyInternal(int running, String chip, String summary) {
+    private void notifyInternal(String chip, String summary) {
         if (notificationManager == null) {
             return;
         }
@@ -337,14 +332,6 @@ public class LiveUpdateManager {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(buildTapIntent());
-
-        // Running motion effect: a looping indeterminate progress bar on the
-        // expanded card while any session is running. setProgress(0,0,true)
-        // yields the animated "moving" bar that Live Updates renders as the
-        // in-progress motion (the standard progress style is promotion-eligible).
-        if (running > 0) {
-            builder.setProgress(0, 0, true);
-        }
 
         if (Build.VERSION.SDK_INT >= 36) {
             // Request promotion to a Live Update (status-bar chip). The extra
