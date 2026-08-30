@@ -77,7 +77,7 @@ flowchart LR
 - **SSH 端口映射**：原生层建立 SSH 连接并维持端口映射，前端通过 `usePortForward` composable 控制
 - **硬件返回键代理**：Android `onBackPressed` 委托给 JS 层 `clawbench-back-press` 事件，JS 注册了处理器则拦截（不注册则退出 App）。处理器按显式优先级排序（overlay 级 1000 > page 级 100）
 - **自动登录**：Android 通过 `AndroidNative.getPassword()` Bridge 获取密码自动登录，配合 `setSSHPassword(savedPwd)` 设置 SSH 密码
-- **桌面悬浮状态窗**：`FloatingStatusView`（原生 `FrameLayout` 胶囊 + `TYPE_APPLICATION_OVERLAY`）在 App 进入后台时于系统桌面实时展示会话状态。数据源复用 `BackgroundService` 的原生 WebSocket 通道（`session_update` / `chat_stream` 事件），无需额外连接。状态映射：运行中绿色 / 权限待审黄色呼吸 / 错误红色 / 已完成灰色。`FloatingStatusController` 负责事件→UI 状态映射、自动显隐状态机（前台隐藏、后台有任务出现、完成淡出）、拖动贴边与位置持久化；点击通过深链（`session_id`）返回主界面。需 Manifest 声明 `SYSTEM_ALERT_WINDOW` 权限，Settings 提供开关和权限申请流程
+- **桌面悬浮状态窗**：`FloatingStatusView`（原生 `FrameLayout` 胶囊 + `TYPE_APPLICATION_OVERLAY`）在 App 进入后台时于系统桌面实时展示会话状态。数据源复用 `BackgroundService` 的原生 WebSocket 通道（`session_update` / `chat_stream` 事件），无需额外连接。胶囊展示实时统计（执行中/待审批/未读计数 + 呼吸动画）；**点击胶囊展开为分组会话列表面板**（`FloatingStatusPanelView`，280dp 宽），面板标题栏复用胶囊统计内容，正文从 `GET /api/ai/sessions/overview` 拉取按项目分组的会话列表——每行显示状态点（黄色待审批 > 绿色运行中 > 蓝色未读的固定优先级）、省略标题和红色未读徽章，点击行通过深链（session id + project path）跳转到对应会话。面板高度跟随内容自适应并限幅屏幕。`FloatingStatusController` 负责事件→UI 状态映射、自动显隐状态机（前台隐藏、后台有任务出现、完成淡出）、展开/收起切换、拖动贴边与位置持久化。需 Manifest 声明 `SYSTEM_ALERT_WINDOW` 权限，Settings 提供开关和权限申请流程
 - **APK 单二进制部署**：`build.sh --android` → Gradle assembleRelease → APK 复制到 `internal/frontend/dist/assets/clawbench-android.apk`（`build.sh`）→ Go `//go:embed all:dist` 打包进二进制（`internal/frontend/embed.go`）→ 运行时 `GET /api/apk` 端点读取
 
 ### JS Bridge 关键方法（`AndroidNative`）
@@ -114,13 +114,15 @@ flowchart LR
 | `OemUtils` | 厂商 ROM 适配 |
 | `SharedCacheUtils` | 跨进程缓存 |
 | `ClawBenchApp` | Application 初始化 |
-| `FloatingStatusView` | 桌面悬浮胶囊 View（状态映射 + 呼吸动画 + 拖动贴边） |
-| `FloatingStatusController` | 悬浮窗状态机：事件映射、自动显隐、位置持久化、深链跳转 |
+| `FloatingStatusView` | 桌面悬浮胶囊 View（状态映射 + 呼吸动画 + 拖动贴边 + 收缩正圆动画） |
+| `FloatingStatusContentView` | 胶囊/面板标题栏共享的统计内容行（logo + 执行中/待审批/未读计数，计数为 0 时整组隐藏） |
+| `FloatingStatusPanelView` | 点击胶囊展开的分组会话列表面板：解析 overview JSON、状态点优先级、未读徽章、点击行回调 |
+| `FloatingStatusController` | 悬浮窗状态机：事件映射、自动显隐、展开/收起、位置持久化、overview 拉取调度 |
 
 ### 设计要点
 
 - **后台服务是端口映射的前提**：没有 BackgroundService，Android 杀进程后 SSH 端口映射断开，已映射的端口全部不可达。后台服务保持 SSH 心跳，维持隧道活跃
-- **悬浮窗复用现有事件通道**：悬浮状态窗不建立新连接，直接消费 BackgroundService 原生 WS 的 `session_update` / `chat_stream` 事件——省电且与 App 内状态天然一致。纯展示 + 点击回主界面，刻意不做悬浮窗内交互，保持实现轻量
+- **悬浮窗复用现有事件通道**：悬浮状态窗不建立新连接，直接消费 BackgroundService 原生 WS 的 `session_update` / `chat_stream` 事件——省电且与 App 内状态天然一致。胶囊本身保持轻量（只做展示 + 展开面板），交互集中在展开后的会话面板上：按项目分组浏览各会话状态、一眼看到未读、点击行直达目标会话。overview 拉取有最小间隔节流（2s），避免展开时高频刷新
 - **WS 优先 + Worker 回退**：常驻 WS 链路是主路径（实时通知），PendingEventsWorker 是 WS 不可达时的兜底（轮询拉取）。两条路径相互独立，BackgroundService 监控 WS 健康度触发 Worker
 - **AppLog 双写 + Anti-Recursion**：`AppLog` 写入 logcat，同时 POST 到 `/api/android-log` 实现集中持久化。`AppLog.java` 自身是允许调用裸 `android.util.Log` 的唯一生产代码位置，以避免日志封装递归；通过 `OemUtils` 和 `SharedCacheUtils` 共享多进程状态
 - **单二进制包含 APK**：`//go:embed all:dist` 把 APK 嵌入 Go 二进制，无需外部 APK 文件即可部署。`internal/frontend/embed.go::GetFS()` 优先读磁盘 `public/`（热替换），否则从 embed 读取
