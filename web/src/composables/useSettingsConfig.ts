@@ -70,6 +70,9 @@ const legacyKeys: Record<string, {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- vue-i18n locale type mismatch
       i18n.global.locale.value = value as any
       setLocaleCookie(value)
+      // Persist to native prefs so native UI (splash, login page) follows the
+      // in-app language even before the locale cookie is readable on cold start.
+      getNative()?.setLanguage?.(value)
     },
   },
   autoSpeech: {
@@ -130,6 +133,23 @@ const legacyKeys: Record<string, {
     sideEffect(value: boolean) {
       try {
         getNative()?.setFloatingWindowEnabled?.(!!value)
+      } catch { /* not in app mode */ }
+    },
+  },
+  liveUpdate: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: boolean) {
+      try {
+        const native = getNative()
+        native?.setLiveUpdateEnabled?.(!!value)
+        // Enabling the chip is only meaningful when the system will actually
+        // promote it. If not, guide the user to the Live Updates permission
+        // screen (falls back to the app notification settings on ROMs without
+        // a promotion-specific screen).
+        if (value && native?.canPostPromotedNotifications?.() === false) {
+          native.openLiveUpdateSettings?.()
+        }
       } catch { /* not in app mode */ }
     },
   },
@@ -270,6 +290,7 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   headerShortcutTips: true,
   notificationSound: true,
   floatingStatusWindow: false,
+  liveUpdate: true,
 }
 
 // Build reactive local config from legacy localStorage + defaults
@@ -443,6 +464,13 @@ export function useSettingsConfig() {
     } catch { /* not in app mode */ }
   }
 
+  /** Sync the local Live Updates chip preference to Android native. */
+  function syncLiveUpdateToNative() {
+    try {
+      getNative()?.setLiveUpdateEnabled?.(!!localConfig.liveUpdate)
+    } catch { /* not in app mode */ }
+  }
+
   async function loadConfig() {
     try {
       const data = await apiGet<Record<string, unknown>>('/api/config')
@@ -454,6 +482,8 @@ export function useSettingsConfig() {
     syncPushModeToNative()
     // Sync floating status window preference to Android native
     syncFloatingWindowToNative()
+    // Sync Live Updates chip preference to Android native
+    syncLiveUpdateToNative()
   }
 
   async function patchConfig(changes: Record<string, unknown>): Promise<{ needsRestart: boolean; changedColdFields: string[]; warnings: string[] }> {

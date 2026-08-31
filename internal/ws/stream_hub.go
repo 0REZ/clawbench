@@ -328,17 +328,35 @@ func userMessagePayload(event ai.StreamEvent) any {
 }
 
 func errorPayload(event ai.StreamEvent) any {
-	payload := map[string]string{"error": event.Error}
+	payload := map[string]any{"error": event.Error}
 	if event.Reason != "" {
 		payload["reason"] = event.Reason
+	}
+	if event.ErrorCode != 0 {
+		payload["error_code"] = event.ErrorCode
+	}
+	if event.HTTPStatus != 0 {
+		payload["http_status"] = event.HTTPStatus
+	}
+	if event.ErrorSource != "" {
+		payload["error_source"] = event.ErrorSource
 	}
 	return payload
 }
 
 func warningPayload(event ai.StreamEvent) any {
-	payload := map[string]string{"text": event.Content}
+	payload := map[string]any{"text": event.Content}
 	if event.Reason != "" {
 		payload["reason"] = event.Reason
+	}
+	if event.ErrorCode != 0 {
+		payload["error_code"] = event.ErrorCode
+	}
+	if event.HTTPStatus != 0 {
+		payload["http_status"] = event.HTTPStatus
+	}
+	if event.ErrorSource != "" {
+		payload["error_source"] = event.ErrorSource
 	}
 	return payload
 }

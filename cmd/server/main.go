@@ -1187,6 +1187,14 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// shutdownComplete is closed by the shutdown goroutine AFTER every in-flight
+	// stream has finalized and the AI processes are reaped. main blocks on it
+	// once Serve returns (which only happens after srv.Shutdown, i.e. on the
+	// signal path), so the deferred teardown (StopAll + CloseDB) runs only after
+	// the last Finalize has written streaming=0 — otherwise CloseDB can fire
+	// mid-Finalize and the final content is lost.
+	shutdownComplete := make(chan struct{})
+
 	// shutdown waits for in-flight AI streams to finalize before force-killing
 	// the AI processes. Total worst-case shutdown latency before HTTP drain is
 	// streamFinalizeGrace + acpGracefulExitGrace (8s).
@@ -1201,26 +1209,44 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		// After the finalize wait, give ACP agents a grace period to exit
 		// cleanly after their prompts are cancelled before SIGKILL.
 		acpGracefulExitGrace = 3 * time.Second
+		// secondFinalizeGrace bounds the post-cancel finalize wait. Most streams
+		// finalize near-instantly once their prompt is cancelled; this is a
+		// backstop for stragglers.
+		secondFinalizeGrace = 3 * time.Second
 	)
 
 	go func() {
 		<-ctx.Done()
 		slog.Info("received shutdown signal, draining connections...")
-		// Force a final flush of every actively streaming session BEFORE draining
-		// HTTP connections: a restart mid-stream then keeps all but the last few
-		// hundred ms of AI output (including thinking) instead of losing the tail.
+
+		// 1. Cancel running scheduled tasks and all interactive session contexts
+		//    so their executors can finalize. Must happen before the stream waits,
+		//    or an executor kept alive by a long-running prompt would never reach
+		//    Finalize before the DB closes. CancelAllSessions unblocks CLI streams
+		//    (their process stays alive; ctx.Done() makes the event loop exit and
+		//    Finalize run) and ACP prompts.
+		if service.GlobalScheduler != nil {
+			service.GlobalScheduler.CancelAllRunning()
+		}
+		service.CancelAllSessions()
+
+		// 2. Force a final flush of every actively streaming session BEFORE
+		//    draining HTTP connections: a restart mid-stream then keeps all but
+		//    the last few hundred ms of AI output (including thinking) instead
+		//    of losing the tail.
 		service.FlushStreamingNow()
 
-		// Wait for active streams to finish finalizing. FlushStreamingNow only
-		// snapshots the streaming row; the streaming=0 completion marker and the
-		// last rate-limit-window of output are written by Finalize. Give the AI
-		// goroutines time to run Finalize before we kill the AI processes and
-		// close the DB, otherwise the process exits mid-Finalize and the row is
-		// left as streaming=1 (data loss).
+		// 3. Wait for active streams to finish finalizing. FlushStreamingNow
+		//    only snapshots the streaming row; the streaming=0 completion marker
+		//    and the last rate-limit-window of output are written by Finalize.
+		//    Give the AI goroutines time to run Finalize before we cancel their
+		//    prompts and kill the AI processes.
 		streamCtx, streamCancel := context.WithTimeout(context.Background(), streamFinalizeGrace)
 		service.WaitStreamsDrained(streamCtx)
 		streamCancel()
 
+		// 4. Drain HTTP connections so no new request can create a
+		//    connection/stream after the snapshot below.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -1232,11 +1258,20 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 			}
 		}
 
-		// Stop accepting new work BEFORE reaping the AI processes. Shutdown
-		// HTTP first so no new request can create a connection/stream after the
-		// snapshot taken below; otherwise those would escape both the drain
-		// wait and the graceful stop.
+		// 5. Cancel any remaining in-flight prompts so their executors exit the
+		//    event loop and run Finalize (streaming=0). Do this AFTER the HTTP
+		//    drain so no new prompt can start while we reap.
 		ai.GetACPConnManager().GracefulStopAll(acpGracefulExitGrace)
+
+		// 6. Wait again for the executors unblocked by the prompt cancellations
+		//    to finish Finalize before we proceed to teardown (deferred StopAll
+		//    + CloseDB). This is the wait that actually catches the data.
+		secondCtx, secondCancel := context.WithTimeout(context.Background(), secondFinalizeGrace)
+		service.WaitStreamsDrained(secondCtx)
+		secondCancel()
+
+		slog.Info("shutdown drain complete")
+		close(shutdownComplete)
 	}()
 
 	// Start HTTP server using the pre-bound listener (blocking)
@@ -1251,6 +1286,11 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 			os.Exit(1)
 		}
 	}
+	// The HTTP server has stopped accepting connections, but the shutdown
+	// goroutine may still be waiting on streams to finalize. Block here so the
+	// deferred teardown (StopAll, CloseDB) does not run until Finalize has
+	// written streaming=0 — this is the durability guarantee for graceful stop.
+	<-shutdownComplete
 	slog.Info("server stopped")
 }
 

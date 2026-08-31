@@ -51,12 +51,12 @@ func emitBashToolCall(ch chan<- StreamEvent, id, input, output string, done bool
 			status = "success"
 		}
 	}
-	ch <- StreamEvent{Type: "tool_use", Tool: &ToolCall{
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "tool_use", Tool: &ToolCall{
 		Name:   "Bash",
 		ID:     id,
 		Input:  input,
 		Done:   done,
 		Output: output,
 		Status: status,
-	}}
+	}})
 }

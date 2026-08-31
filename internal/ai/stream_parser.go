@@ -270,7 +270,7 @@ func (p *StreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		}
 		// Codebuddy format: simple text field
 		if msg.Subtype == "text" && msg.Text != "" {
-			ch <- StreamEvent{Type: "content", Content: msg.Text}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "content", Content: msg.Text})
 		}
 
 	case "result":
@@ -323,12 +323,12 @@ func (p *StreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 			// Also emit warning event so error shows as warning block in chat message
 			if errMsg != "" {
 				slog.Warn("stream: CLI returned is_error result", "result", errMsg)
-				ch <- StreamEvent{Type: "warning", Content: errMsg}
+				emitStreamEvent(ch, "cli", StreamEvent{Type: "warning", Content: errMsg})
 			}
 		}
 		slog.Info("stream: emitting done event", "is_error", msg.IsError)
-		ch <- StreamEvent{Type: "metadata", Meta: meta}
-		ch <- StreamEvent{Type: "done"}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "metadata", Meta: meta})
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "done"})
 
 	case "system":
 		// System messages (e.g., init, tool use) - skip

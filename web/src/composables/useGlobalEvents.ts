@@ -101,6 +101,11 @@ if (!clientId) {
 // in-page WS reconnect still recovers events missed while disconnected.
 let lastSeenEventId = ''
 
+// True while fetchPendingEvents() is dispatching caught-up events (the WS was
+// down when they were originally broadcast). Consumers use this to distinguish
+// replayed background events from live foreground ones.
+const isReplayingEvents = ref(false)
+
 // Mirror the in-memory cursor to the host app (Android native background
 // service). The Android cursor is persisted separately in SharedPreferences and
 // survives process kills, so keeping it in sync prevents the background service
@@ -197,23 +202,33 @@ async function fetchPendingEvents() {
         }
 
         let latestId = lastSeenId
-        for (const event of events) {
-            const msg: ServerEvent = JSON.parse(event.payload)
-            if (!msg.event || !msg.data) continue
+        // Flag replayed events so consumers can distinguish a background
+        // completion that is being caught up (WS was down while it happened)
+        // from a live event. Consumers like the chat completion path use this
+        // to avoid auto-marking a session read for a completion the user never
+        // saw happen — the unread badge must survive until the user opens it.
+        isReplayingEvents.value = true
+        try {
+            for (const event of events) {
+                const msg: ServerEvent = JSON.parse(event.payload)
+                if (!msg.event || !msg.data) continue
 
-            // Dedup check
-            if (msg.id && isDuplicate(msg.id)) continue
-            if (msg.id) addProcessedId(msg.id)
+                // Dedup check
+                if (msg.id && isDuplicate(msg.id)) continue
+                if (msg.id) addProcessedId(msg.id)
 
-            // Dispatch to handlers
-            for (const handler of handlers) {
-                handler(msg.event!, msg.data)
+                // Dispatch to handlers
+                for (const handler of handlers) {
+                    handler(msg.event!, msg.data)
+                }
+
+                // Show browser notification
+                showEventBrowserNotification(msg.event!, msg.data)
+
+                if (msg.id) latestId = msg.id
             }
-
-            // Show browser notification
-            showEventBrowserNotification(msg.event!, msg.data)
-
-            if (msg.id) latestId = msg.id
+        } finally {
+            isReplayingEvents.value = false
         }
 
         // Update cursor
@@ -592,6 +607,7 @@ export function useGlobalEvents() {
         connected,
         hasConnectedOnce,
         wsStatus,
+        isReplayingEvents,
         connect,
         disconnect,
         onEvent,

@@ -78,6 +78,17 @@ const (
 	// events saturates the consumer and the 512-slot stream channel fills,
 	// dropping events. Persisting at most once per 500ms keeps the DB fresh
 	// for reload-on-refresh without stalling the event loop.
+	//
+	// The flush aggregates three kinds of writes that used to happen per-event:
+	//   - tool-call upserts (chat_tool_calls) — tracked by pendingToolCalls
+	//   - context-state persistence (chat_sessions.context_state) — tracked by
+	//     pendingContextPatches
+	//   - the streaming row content (chat_history.content) — rewritten only when
+	//     the marshaled content changed (lastWrittenContent comparison)
+	// Consolidating them into the same 500ms window turns thousands of
+	// per-event SQLite writes into a handful of batched ones, so the event-loop
+	// goroutine no longer stalls the consumer on full-block JSON marshal +
+	// SQLite, and the 512-slot stream channel stops dropping events.
 	flushInterval = 500 * time.Millisecond
 	// waitStreamsPollInterval is the polling period for WaitStreamsDrained.
 	// Far below the 500ms flush window and the shutdown deadline, so it adds
@@ -177,6 +188,27 @@ type SessionExecutor struct {
 	// just-persisted thinking with a thinking-less body while chat_thinking
 	// already holds records the frontend would never lazy-load.
 	forceIncludeThinking bool
+
+	// pendingToolCalls tracks tool-call IDs whose DB row (chat_tool_calls)
+	// has not yet been upserted. Per-event upsert calls were moved into the
+	// 500ms flush window. Storing IDs (not pointers into e.blocks) is safe
+	// across append reallocations — the flush re-scans e.blocks for the latest
+	// block state. The set makes the batch idempotent when a tool receives many
+	// incremental updates before the flush runs.
+	pendingToolCalls map[string]struct{}
+
+	// pendingContextPatches accumulates mode/thinking-effort/usage state changes
+	// that need persisting into chat_sessions.context_state. Deduplicated by
+	// field key so a burst of usage_update events writes once per flush window.
+	pendingContextPatches map[string]string
+
+	// lastWrittenContent is the content JSON most recently written to the
+	// streaming row. flushStreamingLocked skips the full-row UPDATE when the
+	// freshly-marshaled content equals this value, so an unchanged stream does
+	// not re-marshal + re-write every 500ms. Comparing marshaled output (rather
+	// than a dirty flag) is robust to direct e.blocks mutations in tests and
+	// keeps the write count proportional to actual changes.
+	lastWrittenContent string
 }
 
 // NewSessionExecutor creates a new executor for the given configuration.
@@ -186,9 +218,11 @@ type SessionExecutor struct {
 // inner context.
 func NewSessionExecutor(ctx context.Context, cfg RunConfig) *SessionExecutor {
 	e := &SessionExecutor{
-		cfg:        cfg,
-		ctx:        ctx,
-		toolStarts: make(map[string]time.Time),
+		cfg:                   cfg,
+		ctx:                   ctx,
+		toolStarts:            make(map[string]time.Time),
+		pendingToolCalls:      make(map[string]struct{}),
+		pendingContextPatches: make(map[string]string),
 	}
 	// Register so graceful shutdown can flush this stream's accumulated blocks.
 	// Removed by unregisterActiveStream once the executor has finished.
@@ -284,6 +318,8 @@ func activeStreamCount() int {
 }
 
 // handleNonTerminalEvent processes a single non-terminal stream event.
+//
+//nolint:gocyclo,gocognit // multiple event-type branches (content_reset, tool, metadata, context-state, flush gate) are inherently branchy
 func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 	// content_reset: clear accumulated blocks from a failed Prompt before retry.
 	// Sent by ACPBackend.ExecuteStream when the first Prompt fails due to peer
@@ -300,6 +336,9 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 		e.responseMetadata = nil
 		e.lastFlush = time.Time{}
 		e.toolStarts = make(map[string]time.Time)
+		e.pendingToolCalls = make(map[string]struct{})
+		e.pendingContextPatches = make(map[string]string)
+		e.lastWrittenContent = ""
 		e.mu.Unlock()
 		// Reset the streaming message in DB to empty so stale partial content
 		// doesn't persist if the retry Prompt fails or the server crashes.
@@ -314,6 +353,16 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 		if e.cfg.StreamingMessageID > 0 {
 			if _, err := WriteExec("DELETE FROM chat_tool_calls WHERE message_id = ?", e.cfg.StreamingMessageID); err != nil {
 				slog.Error("failed to delete stale tool calls after content_reset",
+					slog.Int64("message_id", e.cfg.StreamingMessageID),
+					slog.String("err", err.Error()))
+			}
+			// Also delete thinking rows the periodic flush wrote for the first
+			// (failed) Prompt. Without this, a crash after the retry would leave
+			// the stale thinking behind — the frontend would lazy-load it by the
+			// (unchanged) message_id + think_id and show reasoning from the
+			// failed attempt.
+			if _, err := WriteExec("DELETE FROM chat_thinking WHERE message_id = ?", e.cfg.StreamingMessageID); err != nil {
+				slog.Error("failed to delete stale thinking after content_reset",
 					slog.Int64("message_id", e.cfg.StreamingMessageID),
 					slog.String("err", err.Error()))
 			}
@@ -353,10 +402,15 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 	// read e.blocks concurrently without a data race.
 	e.mu.Lock()
 	ai.AccumulateBlock(&e.blocks, event)
+	// Queue tool-call upserts for the next flush window instead of writing per
+	// event — a burst of incremental tool_use updates would otherwise issue one
+	// SQLite write per event and stall the consumer.
+	if event.Type == eventTypeToolUse || event.Type == eventTypeToolResult {
+		if event.Tool != nil && event.Tool.ID != "" {
+			e.pendingToolCalls[event.Tool.ID] = struct{}{}
+		}
+	}
 	e.mu.Unlock()
-
-	// Upsert tool call metadata to DB (best-effort)
-	e.upsertToolCallToDB(event)
 
 	// metadata capture
 	if event.Type == contentKeyMetadata && event.Meta != nil {
@@ -366,6 +420,14 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 		if event.Meta.SessionID != "" {
 			e.captureExternalSessionID(event.Meta.SessionID)
 		}
+	}
+
+	// Context-state persistence (mode/thinking-effort/usage) is deferred to the
+	// next flush window so a burst of usage_update events writes once instead of
+	// per event. The event is queued into the pending map; the flush writes
+	// chat_sessions.context_state atomically.
+	if event.Type == "mode_update" || event.Type == "thinking_effort_update" || event.Type == "usage_update" {
+		e.persistContextStateToPending(event)
 	}
 
 	// Incremental persistence (rate-limited). Persisting every N events is too
@@ -380,8 +442,9 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 	}
 }
 
-// forwardEvent forwards an event to WS clients via StreamHub
-// and persists context state (mode, thinking effort, usage) to DB.
+// forwardEvent forwards an event to WS clients via StreamHub.
+// Context-state persistence (mode, thinking effort, usage) is deferred to the
+// flush window via persistContextStateToPending — see handleNonTerminalEvent.
 func (e *SessionExecutor) forwardEvent(event ai.StreamEvent) {
 	forwardEvent := event
 	if (event.Type == eventTypeToolUse || event.Type == eventTypeToolResult) && event.Tool != nil {
@@ -390,11 +453,6 @@ func (e *SessionExecutor) forwardEvent(event ai.StreamEvent) {
 	}
 
 	ws.EmitToSession(e.cfg.SessionID, forwardEvent)
-
-	// Persist context state to DB so it survives server restarts.
-	// Called for all event types; PersistContextStateFromEvent only acts on
-	// mode_update/usage_update/thinking_effort_update and ignores others.
-	PersistContextStateFromEvent(e.cfg.SessionID, event)
 }
 
 // RunWithChannel executes the event loop against a pre-built event channel.
@@ -409,10 +467,13 @@ func (e *SessionExecutor) RunWithChannel(eventCh <-chan ai.StreamEvent) RunResul
 	// no event trips the rate-limited flush in handleNonTerminalEvent.
 	flushTicker := time.NewTicker(flushInterval)
 	defer flushTicker.Stop()
-	// Unregister on exit so graceful shutdown does not flush this stream again
-	// after it has already stopped accumulating. Finalize also unregisters; the
-	// second call is a harmless no-op.
-	defer e.unregisterActiveStream()
+	// NOTE: unregistration is deferred to Finalize (after streaming=0 is
+	// written). Registering here in NewSessionExecutor and unregistering only
+	// there keeps the activeStreams registry a faithful "stream not yet fully
+	// persisted" set, so WaitStreamsDrained can reliably wait for finalization
+	// during graceful shutdown. Unregistering on RunWithChannel exit would open
+	// a window where the executor is absent from the registry while its
+	// Finalize (the actual durability point) has not run yet.
 
 	for {
 		select {
@@ -583,6 +644,9 @@ func (e *SessionExecutor) trackToolDuration(event *ai.StreamEvent) {
 
 // upsertToolCallToDB persists tool call data to the chat_tool_calls table.
 // Only runs for tool_use and tool_result events when StreamingMessageID is set.
+// This legacy per-event path is kept for callers that need immediate
+// persistence (drainRemainingEvents). The event-loop path defers upserts to
+// the batched flush (flushPendingToolCalls) instead.
 func (e *SessionExecutor) upsertToolCallToDB(event ai.StreamEvent) {
 	if event.Tool == nil || e.cfg.StreamingMessageID == 0 || e.cfg.SessionID == "" {
 		return
@@ -608,11 +672,120 @@ func (e *SessionExecutor) upsertToolCallToDB(event ai.StreamEvent) {
 	}
 }
 
-// flushStreamingMessage persists the current accumulated blocks to the database.
-// Thinking blocks are excluded: they are process data rendered live over WS and
-// only persisted once at finalization via persistThinkingToDB. Excluding them
-// keeps the per-flush JSON small even when the agent streams tens of KB of
-// thinking, which is the dominant cost that previously stalled the consumer.
+// findToolBlock returns a pointer to the accumulated block for the given tool
+// ID, or nil. The caller must hold e.mu. Used by the batched tool-call flush to
+// read the latest block state at flush time (pendingToolCalls stores IDs, so
+// this re-scan is robust to append reallocations).
+func (e *SessionExecutor) findToolBlock(toolID string) *model.ContentBlock {
+	for i := len(e.blocks) - 1; i >= 0; i-- {
+		if e.blocks[i].Type == eventTypeToolUse && e.blocks[i].ID == toolID {
+			return &e.blocks[i]
+		}
+	}
+	return nil
+}
+
+// persistContextStateToPending extracts a context_state patch from a stream
+// event and queues it for the next batched flush. Mirrors
+// PersistContextStateFromEvent but defers the DB write.
+func (e *SessionExecutor) persistContextStateToPending(event ai.StreamEvent) {
+	patches := buildContextStatePatch(event)
+	if len(patches) == 0 {
+		return
+	}
+	e.mu.Lock()
+	for k, v := range patches {
+		e.pendingContextPatches[k] = v
+	}
+	e.mu.Unlock()
+}
+
+// flushPendingToolCalls upserts every queued tool-call row in one pass and
+// clears the queue. Runs inside the flush window (under e.mu).
+func (e *SessionExecutor) flushPendingToolCalls() {
+	if e.cfg.StreamingMessageID == 0 || e.cfg.SessionID == "" || len(e.pendingToolCalls) == 0 {
+		return
+	}
+	for toolID := range e.pendingToolCalls {
+		block := e.findToolBlock(toolID)
+		if block == nil {
+			continue
+		}
+		inputJSON, _ := json.Marshal(block.Input)
+		if err := UpsertToolCall(
+			e.cfg.StreamingMessageID, e.cfg.SessionID,
+			block.ID, block.Name, inputJSON,
+			block.Output, block.Status, block.Summary, block.Done, block.DurationMs,
+		); err != nil {
+			slog.Warn("flush tool call failed",
+				slog.String("toolID", block.ID),
+				slog.String("err", err.Error()))
+		}
+	}
+	e.pendingToolCalls = make(map[string]struct{})
+}
+
+// flushPendingContextState applies every queued context_state patch in one
+// atomic UPDATE and clears the queue. Runs inside the flush window.
+func (e *SessionExecutor) flushPendingContextState() {
+	if len(e.pendingContextPatches) == 0 {
+		return
+	}
+	PatchContextStateMerge(e.cfg.SessionID, e.pendingContextPatches)
+	e.pendingContextPatches = make(map[string]string)
+}
+
+// flushPendingThinking persists the current thinking-block full text into
+// chat_thinking on every flush window, so a hard crash loses at most the
+// thinking that grew since the last flush instead of the whole block. The
+// chat_history.content row stays slim (thinking text removed) — the full text
+// lives here in chat_thinking, exactly like tool calls live in chat_tool_calls.
+//
+// ThinkID stability: a thinking block gets a stable ID on first flush and
+// reuses it on every subsequent flush (upsert overwrites the row), so the
+// same (message_id, think_id) always refers to the latest text. Finalize
+// reuses these IDs via slimThinkingInContent (blocks that already carry
+// think_id are not regenerated), so no orphan rows and no duplicates.
+func (e *SessionExecutor) flushPendingThinking() {
+	if e.cfg.StreamingMessageID == 0 || e.cfg.SessionID == "" {
+		return
+	}
+	for i := range e.blocks {
+		b := &e.blocks[i]
+		if b.Type != "thinking" {
+			continue
+		}
+		// Stable ID: generate on first appearance, reuse afterwards.
+		if b.ThinkID == "" {
+			b.ThinkID = generateThinkingID()
+		}
+		if b.Text == "" {
+			continue
+		}
+		if err := UpsertThinking(e.cfg.StreamingMessageID, e.cfg.SessionID, b.ThinkID, b.Text); err != nil {
+			slog.Warn("flush thinking failed",
+				slog.String("thinkID", b.ThinkID),
+				slog.String("err", err.Error()))
+		}
+	}
+}
+
+// flushStreamingMessage persists the current accumulated blocks to the database,
+// along with queued tool-call upserts, context-state patches, and the full
+// thinking text.
+//
+// The content row EXCLUDES thinking blocks entirely (they are process data
+// rendered live over WS). The full thinking text is written separately to
+// chat_thinking by flushPendingThinking (stable think_id upsert) on the same
+// flush window — so a hard crash loses at most the thinking that grew since
+// the last flush. Finalization (persistThinkingToDB) is what produces the
+// slim think_id markers in the completed message's content.
+//
+// Batched writes (tool-call upserts + context-state patches + thinking text)
+// are flushed every interval regardless of content changes so a burst of
+// tool/usage events that did not alter the content JSON still reaches the DB
+// promptly. The streaming row itself is only rewritten when the marshaled
+// content actually changed.
 func (e *SessionExecutor) flushStreamingMessage() {
 	// No DB initialized (e.g. a bare executor in an isolated unit test) — there
 	// is nothing to persist to. Guarding here keeps the rate-limited streaming
@@ -624,17 +797,24 @@ func (e *SessionExecutor) flushStreamingMessage() {
 }
 
 // flushStreamingLocked writes the accumulated blocks to the database.
-// includeThinking controls whether thinking blocks are persisted now:
-//   - false (rate-limited flushes): thinking stays in memory, only rendered
-//     live over WS; it is persisted once at finalization via persistThinkingToDB.
-//   - true (graceful-shutdown forced flush): thinking is written immediately
-//     so a restart mid-stream does not lose the reasoning content.
+// includeThinking controls whether thinking blocks are persisted in the content
+// row:
+//   - false (rate-limited flushes): thinking blocks are excluded from content;
+//     the full text is upserted to chat_thinking by flushPendingThinking.
+//   - true (graceful-shutdown forced flush): the full thinking text is embedded
+//     in content, then slimThinkingInContent extracts it into chat_thinking —
+//     the one-shot durability point where the text may not have been flushed yet.
 //
 // The content is written as a non-slimmed JSON body; when includeThinking is
 // true the thinking blocks are also recorded into chat_thinking keyed by
 // message id + think_id (mirroring Finalize's persistThinkingToDB, which is a
 // no-op when there is nothing to slim). Full finalization (streaming=0, RAG
 // index, summarization) still happens in Finalize.
+//
+// The graceful-shutdown forced flush (includeThinking=true) always writes the
+// streaming row: shutdown is a one-shot durability point and the cost of one
+// re-marshal is irrelevant there. Rate-limited flushes skip the row write when
+// nothing changed (marshaled content equals the last written value).
 func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 	// No DB initialized (e.g. a bare executor in an isolated unit test) — there
 	// is nothing to persist to. Guarding here keeps the forced flush safe on the
@@ -645,6 +825,14 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Batched side-writes always run: tool-call upserts and context-state
+	// patches are independent of the content row. Thinking full text is also
+	// flushed here (stably ID'd upserts to chat_thinking), so a hard crash
+	// loses only the thinking that grew since the last flush window.
+	e.flushPendingToolCalls()
+	e.flushPendingContextState()
+	e.flushPendingThinking()
+
 	// Once the graceful-shutdown flush runs, keep thinking in every subsequent
 	// flush. Otherwise a flush(false) racing the process exit would overwrite
 	// the just-persisted thinking with a thinking-less body while chat_thinking
@@ -653,9 +841,30 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 	if includeThinking {
 		e.forceIncludeThinking = true
 	}
+
 	serializedBlocks := make([]model.ContentBlock, 0, len(e.blocks))
 	for _, b := range e.blocks {
-		if b.Type == "thinking" && !e.forceIncludeThinking {
+		if b.Type == "thinking" {
+			// Thinking blocks are EXCLUDED from the rate-limited content row.
+			// The full thinking text is persisted separately to chat_thinking by
+			// flushPendingThinking (stable think_id upsert) so a hard crash loses
+			// at most the thinking that grew since the last flush. Writing even a
+			// slim think_id marker into the streaming content would leak an
+			// "empty thinking block" into the frontend's live placeholder — the
+			// mergeStreamBlocks path (db_load after stream_start) adopts the DB's
+			// non-text blocks into the live stream, and a slim thinking block
+			// there renders as a perpetual loading spinner until the message
+			// finalizes. The completed message's think_id markers are produced
+			// once, at finalization, by persistThinkingToDB.
+			//
+			// Exception: the graceful-shutdown forced flush (forceIncludeThinking)
+			// writes the full thinking text into content too, then
+			// slimThinkingInContent extracts it into chat_thinking below — this
+			// is the one-shot durability point where the text may not have been
+			// flushed yet.
+			if e.forceIncludeThinking {
+				serializedBlocks = append(serializedBlocks, b)
+			}
 			continue
 		}
 		serializedBlocks = append(serializedBlocks, b)
@@ -666,12 +875,21 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 	}
 	blocksJSON, _ := json.Marshal(contentMap)
 	content := string(blocksJSON)
+
+	// Rate-limited flush with no content change: skip the full-row UPDATE. The
+	// content comparison uses the marshaled JSON so any direct mutation of
+	// e.blocks (including from tests) is picked up. The forced shutdown flush
+	// always writes the streaming row.
+	if !includeThinking && content == e.lastWrittenContent {
+		return
+	}
 	if err := UpdateStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, content); err != nil {
 		slog.Error("failed to update streaming message",
 			slog.String("session", e.cfg.SessionID),
 			slog.String("err", err.Error()))
 		return
 	}
+	e.lastWrittenContent = content
 	if e.forceIncludeThinking {
 		// Persist thinking blocks into chat_thinking and slim the persisted
 		// content (remove thinking text, keep think_id) — identical to what
@@ -823,6 +1041,12 @@ func (e *SessionExecutor) Finalize(result RunResult, eventCh <-chan ai.StreamEve
 	blocks := e.blocks
 	e.mu.Unlock()
 	responseMetadata := result.Metadata
+
+	// Flush any batched side-writes that have not hit a flush window yet
+	// (e.g. a tool event that arrived just before the terminal event). Without
+	// this, tool-call rows and context-state patches queued since the last flush
+	// would be lost once the streaming row is finalized and the executor exits.
+	e.flushStreamingMessage()
 
 	// Apply the same post-processing as buildResult.
 	// buildResult runs postProcessBlocks on a local copy of e.blocks,

@@ -2593,3 +2593,52 @@ describe('messageText', () => {
     expect(messageText(m)).toBe('[PWA] Service Worker skipped')
   })
 })
+
+// ── ws_error / ws_warning structured error fields ──
+describe('ws_error / ws_warning structured error fields', () => {
+  it('ws_error attaches error_code/http_status/error_source to streaming assistant', () => {
+    let s: any[] = [{ role: 'assistant', id: 1, content: '', blocks: [], streaming: true }]
+    s = chatMessageReducer(s, {
+      type: 'ws_error',
+      text: 'ACP error -32603: Internal error',
+      reason: 'backend_exit',
+      errorCode: -32603,
+      httpStatus: 500,
+      errorSource: 'agent',
+    })
+    const sm = s[0]
+    expect(sm.blocks).toHaveLength(1)
+    expect(sm.blocks[0].type).toBe('error')
+    expect(sm.blocks[0].error_code).toBe(-32603)
+    expect(sm.blocks[0].http_status).toBe(500)
+    expect(sm.blocks[0].error_source).toBe('agent')
+  })
+
+  it('ws_warning attaches error_code/http_status/error_source to streaming assistant', () => {
+    let s: any[] = [{ role: 'assistant', id: 1, content: '', blocks: [], streaming: true }]
+    s = chatMessageReducer(s, {
+      type: 'ws_warning',
+      text: 'Internal error',
+      reason: 'request_failed',
+      errorCode: -32603,
+      httpStatus: 500,
+      errorSource: 'agent',
+    })
+    const sm = s[0]
+    expect(sm.blocks).toHaveLength(1)
+    expect(sm.blocks[0].type).toBe('warning')
+    expect(sm.blocks[0].error_code).toBe(-32603)
+    expect(sm.blocks[0].http_status).toBe(500)
+    expect(sm.blocks[0].error_source).toBe('agent')
+  })
+
+  it('ws_error without structured fields stays compatible', () => {
+    let s: any[] = [{ role: 'assistant', id: 1, content: '', blocks: [], streaming: true }]
+    s = chatMessageReducer(s, { type: 'ws_error', text: 'oops', reason: 'timeout' })
+    const sm = s[0]
+    expect(sm.blocks).toHaveLength(1)
+    expect(sm.blocks[0].error_code).toBeUndefined()
+    expect(sm.blocks[0].http_status).toBeUndefined()
+    expect(sm.blocks[0].error_source).toBeUndefined()
+  })
+})

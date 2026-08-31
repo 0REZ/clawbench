@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   isSevereWarning,
   getWarningText,
+  formatErrorCode,
+  getErrorSourceLabel,
   statusClass,
   statusLabel,
   statusLabelSimple,
@@ -93,6 +95,90 @@ describe('getWarningText', () => {
   it('returns translated text for request_failed without text', () => {
     const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
     expect(getWarningText({ reason: 'request_failed' }, tFound)).toBe('AI request failed')
+  })
+
+  // ── error code suffix appended to translated text ──
+  it('appends HTTP status suffix to translated text', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.request_failed' ? 'AI request failed' : key
+    expect(getWarningText({ reason: 'request_failed', text: 'Internal error', http_status: 500 }, tFound)).toBe('AI request failed: Internal error [HTTP 500]')
+  })
+
+  it('appends error code suffix when no HTTP status', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.empty' ? 'AI returned no content' : key
+    expect(getWarningText({ reason: 'empty', text: 'AI returned no content', error_code: -32603 }, tFound)).toBe('AI returned no content [code -32603]')
+  })
+
+  it('prefers HTTP status over error code', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.empty' ? 'AI returned no content' : key
+    expect(getWarningText({ reason: 'empty', text: 'x', error_code: -32603, http_status: 500 }, tFound)).toBe('AI returned no content [HTTP 500]')
+  })
+
+  it('appends error code to fallback text when reason unknown', () => {
+    expect(getWarningText({ reason: 'unknown_reason', text: 'raw text', error_code: -1 }, t)).toBe('raw text [code -1]')
+  })
+
+  it('appends no suffix when no structured error info', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.empty' ? 'AI returned no content' : key
+    expect(getWarningText({ reason: 'empty' }, tFound)).toBe('AI returned no content')
+  })
+
+  it('appends suffix to parse_error detail path', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.parse_error' ? 'Parse error' : key
+    expect(getWarningText({ reason: 'parse_error', text: 'parse error: unexpected token', error_code: -32602 }, tFound)).toBe('Parse error: unexpected token [code -32602]')
+  })
+
+  it('appends suffix to backend_exit newline path', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.backend_exit' ? 'Backend exited' : key
+    expect(getWarningText({ reason: 'backend_exit', text: 'exit code 1\nstderr here', http_status: 502 }, tFound)).toBe('Backend exited\nstderr here [HTTP 502]')
+  })
+
+  it('renders refused reason with HTTP status suffix', () => {
+    const tFound = (key: string) => key === 'chat.contentBlocks.warningReasons.refused' ? 'AI request refused' : key
+    expect(getWarningText({ reason: 'refused', text: 'AI request refused by the agent', http_status: 500 }, tFound)).toBe('AI request refused [HTTP 500]')
+  })
+})
+
+// ── formatErrorCode ──
+describe('formatErrorCode', () => {
+  it('returns empty string when no error info', () => {
+    expect(formatErrorCode({})).toBe('')
+  })
+
+  it('returns empty string when error_code is zero', () => {
+    expect(formatErrorCode({ error_code: 0 })).toBe('')
+  })
+
+  it('formats http status', () => {
+    expect(formatErrorCode({ http_status: 500 })).toBe(' [HTTP 500]')
+  })
+
+  it('formats error code', () => {
+    expect(formatErrorCode({ error_code: -32603 })).toBe(' [code -32603]')
+  })
+
+  it('prefers http status over error code', () => {
+    expect(formatErrorCode({ http_status: 500, error_code: -32603 })).toBe(' [HTTP 500]')
+  })
+})
+
+// ── getErrorSourceLabel ──
+describe('getErrorSourceLabel', () => {
+  it('returns empty string when no source', () => {
+    expect(getErrorSourceLabel({}, (k) => k)).toBe('')
+  })
+
+  it('returns translated label for agent', () => {
+    const t = (key: string) => key === 'chat.contentBlocks.errorSources.agent' ? 'Agent error' : key
+    expect(getErrorSourceLabel({ error_source: 'agent' }, t)).toBe('Agent error')
+  })
+
+  it('returns translated label for clawbench', () => {
+    const t = (key: string) => key === 'chat.contentBlocks.errorSources.clawbench' ? 'ClawBench error' : key
+    expect(getErrorSourceLabel({ error_source: 'clawbench' }, t)).toBe('ClawBench error')
+  })
+
+  it('returns empty string when no i18n mapping', () => {
+    expect(getErrorSourceLabel({ error_source: 'unknown_source' }, (k) => k)).toBe('')
   })
 })
 

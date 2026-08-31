@@ -12,6 +12,7 @@
       :currentSessionId="identity.currentSessionId.value"
       :hasMore="session.hasMore.value"
       :loadingMore="session.loadingMore.value"
+      :switching="session.switching.value"
       :totalMessages="session.totalMessages.value"
       :active="props.active"
       @touchstart="swipeSession.onTouchStart"
@@ -24,18 +25,13 @@
       @task-card-click="(taskId) => $emit('task-card-click', taskId)"
       @send-message="handleToolSendMessage"
       @remove-pending="handleRemovePending"
-      @render-flush="scrollBottom()"
+      @render-flush="handleRenderFlush"
       @toggle-summary="handleToggleSummary"
       @ensure-content="(msg) => ensureMessageContent(msg)"
       @resume-session="handleResumeSession"
       @reset-session="handleResetSession"
       @fork-from-message="handleForkFromMessage"
     />
-
-    <!-- Session switching overlay — placed here to cover the entire message area -->
-    <Transition name="loading-fade">
-      <LoadingIndicator v-if="session.switching.value" overlay size="md" />
-    </Transition>
 
     <!-- Session swipe indicator — floats above the message area -->
     <Transition name="session-indicator">
@@ -165,6 +161,7 @@
 import { ref, computed, watch, onUnmounted, onMounted, inject, provide, toRef, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { appLog } from '@/utils/appLog'
+import { NEAR_BOTTOM_PX } from '@/utils/scrollState'
 import { apiGet, apiPost } from '@/utils/api'
 import { gt } from '@/composables/useLocale'
 import { useTabDrawer } from '@/composables/useTabDrawer'
@@ -201,12 +198,12 @@ import { playNotificationSound } from '@/composables/useNotificationSound.ts'
 import { useAutoSpeech, extractSpeakableText } from '@/composables/useAutoSpeech.ts'
 import { useSwipeSession } from '@/composables/useSwipeSession.ts'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
+import { useAppForeground } from '@/composables/useAppForeground'
 import { store } from '@/stores/app.ts'
 
 import { useDialog } from '@/composables/useDialog'
 
 import AgentSelectorDrawer from '@/components/common/AgentSelectorDrawer.vue'
-import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 import { useToolDetailDrawer } from '@/composables/useToolDetailDrawer.ts'
 
@@ -350,6 +347,9 @@ const {
 // Debounce map for onToolUpdate fetches — max one fetch per 3s per tool
 const toolUpdateFetchDebounce = new Map()
 
+// Reliable app foreground/background signal (Android JS bridge + fallback).
+const { appInForeground } = useAppForeground()
+
 const session = useChatSession({
   currentSessionId: identity.currentSessionId,
   messages,
@@ -362,7 +362,7 @@ const session = useChatSession({
   onParseAssistantContent: (content) => render.parseAssistantContent(content),
   onExtractScheduledTasks: (msgs) => render.extractScheduledTasks(msgs),
   onRenderUpdate: (forceFull) => render.updateRenderedContents(forceFull),
-  onScrollBottom: (force, streaming) => scrollBottom(force, streaming),
+  onScrollBottom: (force) => scrollBottom(force),
   onDisconnectStream: () => stream.disconnectStream(),
   onOpen: () => emit('open'),
   onStreamDone: playNotificationSound,
@@ -374,7 +374,7 @@ const session = useChatSession({
 //   useSessionManager's watch(loading) safety net (loading true→false triggers fetchQueue)
 // - 'cancelled': user cancelled → clear locally for immediate UI response
 // - 'error': error occurred → don't touch pending messages; backend preserves queue
-function onStreamEnd(reason) {
+async function onStreamEnd(reason) {
   if (reason === 'done') {
     playNotificationSound()
     if (autoSpeech.enabled.value) {
@@ -394,9 +394,16 @@ function onStreamEnd(reason) {
       // Auto-speech off — restore screen lock since no TTS will play
       autoSpeech.onOutputEndNoSpeech()
     }
-    // Recalculate chatUnread after stream completes — the current session's
-    // unreadCount is now 0 (UpdateLastRead called by loadHistory), so
-    // chatUnread should be false if no other sessions have unread messages.
+    // Recalculate chatUnread after stream completes — mark the current session
+    // read first so the session list reflects the cleared unread state, then
+    // refresh so chatUnread is false if no other sessions have unread messages.
+    // Only mark read while the app is in the foreground: a session that
+    // completes in the background (app paused, floating window showing) must
+    // keep its unread badge so the floating window displays it.
+    const sid = identity.currentSessionId.value
+    if (sid && appInForeground.value) {
+      await session.markSessionRead(sid).catch(() => {})
+    }
     loadSessionsOnce()
     // Refresh git branch — AI agent may have checked out a different branch
     store.loadGitBranch().catch(() => {})
@@ -405,6 +412,13 @@ function onStreamEnd(reason) {
     messageStore.dispatch({ type: 'clear_pending' })
     // Restore screen lock — output was cancelled, no TTS will play
     autoSpeech.onOutputEndNoSpeech()
+    // User was viewing this session while cancelling — clear its unread badge.
+    // Guarded on foreground: a cancellation arriving while the app is paused
+    // must leave the badge intact for the floating window.
+    const sid = identity.currentSessionId.value
+    if (sid && appInForeground.value) {
+      session.markSessionRead(sid).catch(() => {})
+    }
     // Refresh git state — agent may have modified files before cancellation
     store.loadGitBranch().catch(() => {})
   }
@@ -434,7 +448,7 @@ const stream = useChatStream({
   currentBackend: identity.currentBackend,
   loading,
   onRenderNeeded: (forceFull) => render.updateRenderedContents(forceFull),
-  onScrollBottom: (force, streaming) => scrollBottom(force, streaming),
+  onScrollBottom: (force) => scrollBottom(force),
   onLoadHistory: () => session.loadHistory(false),
   onMessage: () => emit('message'),
   onOpen: () => emit('open'),
@@ -649,11 +663,11 @@ watch(() => toolDetailIsOpen.value, (show) => {
 
 async function handleShowAgentSelector() {
   await agentsComposable.loadAgents()
-  // If only one agent exists, skip the selector and create directly
-  if (agentsList.value.length === 1) {
-    manager.createSession(agentsList.value[0].id)
-    return
-  }
+  // Always open the selector, even with a single agent — a direct create
+  // here would be a one-tap action that is easy to mis-tap on mobile,
+  // creating an empty session. Requiring an explicit selection prevents it.
+  // 始终打开选择器（哪怕只有一个智能体）——直接创建是一键动作，
+  // 移动端容易误触生成空会话；强制选择可避免误建。
   identity.openAgentSelector()
 }
 
@@ -946,8 +960,16 @@ async function handleToolSendMessage(text) {
     }
 }
 
-function scrollBottom(force = false, streaming = false) {
-    messageListRef.value?.scrollToBottom(force, streaming)
+function scrollBottom(force = false) {
+    messageListRef.value?.scrollToBottom(force)
+}
+
+// Async render flush (throttled 300ms + rAF) grows the content height AFTER
+// the initial scroll-to-bottom already ran. If the user has not scrolled away
+// (shouldStayPinned — e.g. just switched into this session), force re-pin so
+// the list stays glued to the bottom. If the user scrolled away, nothing happens.
+function handleRenderFlush() {
+    if (messageListRef.value?.shouldStayPinned?.()) scrollBottom(true)
 }
 
 async function handleLoadMore() {
@@ -955,7 +977,7 @@ async function handleLoadMore() {
     if (!el) return
     const oldScrollHeight = el.scrollHeight
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    const wasAtBottom = distFromBottom < 100
+    const wasAtBottom = distFromBottom < NEAR_BOTTOM_PX
     // When not at the bottom, anchor the viewport to the first visible message
     // instead of relying on the pure scrollHeight delta — prepended content plus
     // async growth (Mermaid, lazy original text) can shift the delta and drift
@@ -1104,9 +1126,9 @@ async function ensureMessageContent(msg) {
         // The newly filled blocks grow the container height, but the browser
         // keeps the old scrollTop — so a force-scrolled view (session switch
         // back into this chat) ends up visually stuck mid-list. Re-sync once:
-        // - at bottom (session switch): isAtBottom=true → pinned back to bottom
-        // - user manually toggled original while reading: isAtBottom=false → keep position
-        if (messageListRef.value?.isAtBottom?.()) scrollBottom()
+        // - at bottom (session switch): shouldStayPinned → pinned back to bottom
+        // - user manually toggled original while reading: shouldStayPinned=false → keep position
+        if (messageListRef.value?.shouldStayPinned?.()) scrollBottom(true)
     } catch (err) {
         appLog.w(TAG, 'failed to load original content', err)
     } finally {
@@ -1255,6 +1277,7 @@ onUnmounted(() => {
     document.removeEventListener('keydown', handleJumpUnread)
     document.removeEventListener('keydown', handleOpenSessionList)
     document.removeEventListener('keydown', handleDeleteKey)
+    session.removeForegroundReadListener()
     notification.closeAll()
 })
 </script>
@@ -1267,12 +1290,6 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-}
-
-/* Make panel content a positioning context so the switching overlay covers
-   the message+input area only (not the header above it). */
-:deep(.chat-panel-content) {
-  position: relative;
 }
 
 /* Session swipe indicator — floats at top of message area */

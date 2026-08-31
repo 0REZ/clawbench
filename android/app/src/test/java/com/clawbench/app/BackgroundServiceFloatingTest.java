@@ -145,6 +145,71 @@ public class BackgroundServiceFloatingTest {
     }
 
     // =====================================================
+    // Static enable getter/setter (live_update_enabled)
+    // =====================================================
+
+    @Test
+    public void isLiveUpdateEnabled_existsAndIsStaticPublic() throws Exception {
+        Method m = BackgroundService.class.getDeclaredMethod("isLiveUpdateEnabled", Context.class);
+        assertTrue("isLiveUpdateEnabled should be static",
+                java.lang.reflect.Modifier.isStatic(m.getModifiers()));
+        assertTrue("isLiveUpdateEnabled should be public",
+                java.lang.reflect.Modifier.isPublic(m.getModifiers()));
+        assertEquals(boolean.class, m.getReturnType());
+    }
+
+    @Test
+    public void isLiveUpdateEnabled_defaultsToTrue() {
+        assertTrue("Live Updates should be enabled by default",
+                BackgroundService.isLiveUpdateEnabled(appContext));
+    }
+
+    @Test
+    public void setLiveUpdateEnabled_persistsToPrefs() {
+        BackgroundService.setLiveUpdateEnabled(appContext, false);
+        assertFalse("set(false) should persist live_update_enabled=false",
+                BackgroundService.isLiveUpdateEnabled(appContext));
+
+        BackgroundService.setLiveUpdateEnabled(appContext, true);
+        assertTrue("set(true) should persist live_update_enabled=true",
+                BackgroundService.isLiveUpdateEnabled(appContext));
+    }
+
+    @Test
+    public void setLiveUpdateEnabled_true_whileRunning_createsManager() throws Exception {
+        // Service is "running" (instance + isRunning set in setUp).
+        setField(service, "liveUpdateManager", null);
+
+        BackgroundService.setLiveUpdateEnabled(appContext, true);
+
+        assertNotNull("toggle on while running should create the manager immediately",
+                getField(service, "liveUpdateManager"));
+    }
+
+    @Test
+    public void setLiveUpdateEnabled_false_whileRunning_destroysManager() throws Exception {
+        LiveUpdateManager manager = mock(LiveUpdateManager.class);
+        setField(service, "liveUpdateManager", manager);
+
+        BackgroundService.setLiveUpdateEnabled(appContext, false);
+
+        verify(manager).destroy();
+        assertNull("toggle off while running should destroy and null the manager",
+                getField(service, "liveUpdateManager"));
+    }
+
+    @Test
+    public void setLiveUpdateEnabled_true_whenServiceNotRunning_doesNotCreateManager() throws Exception {
+        setStaticField("instance", null);
+        setStaticField("isRunning", false);
+
+        BackgroundService.setLiveUpdateEnabled(appContext, true);
+
+        assertNull("toggle on with no running service should only persist prefs",
+                getField(service, "liveUpdateManager"));
+    }
+
+    // =====================================================
     // floatingController field
     // =====================================================
 
@@ -358,15 +423,18 @@ public class BackgroundServiceFloatingTest {
 
     // =====================================================
     // setNativePushEnabled keeps the native WS for the floating
-    // window (the floating window consumes the same native WS
-    // event stream, independent of push notifications)
+    // window AND the Live Updates chip (both consume the same
+    // native WS event stream, independent of push notifications)
     // =====================================================
 
     @Test
-    public void setNativePushEnabled_false_floatingDisabled_stopsNativeWs() throws Exception {
-        // Floating window disabled (default) -> disabling push must stop the
-        // native WS by sending the STOP_NATIVE_WS intent.
+    public void setNativePushEnabled_false_bothConsumersDisabled_stopsNativeWs() throws Exception {
+        // Floating window off AND Live Updates off (the latter defaults to on,
+        // so disable it explicitly) -> disabling push must stop the native WS.
+        BackgroundService.setFloatingWindowEnabled(appContext, false);
+        BackgroundService.setLiveUpdateEnabled(appContext, false);
         assertFalse(BackgroundService.isFloatingWindowEnabled(appContext));
+        assertFalse(BackgroundService.isLiveUpdateEnabled(appContext));
 
         BackgroundService.setNativePushEnabled(appContext, false);
 
@@ -374,9 +442,27 @@ public class BackgroundServiceFloatingTest {
                 BackgroundService.isNativePushEnabled(appContext));
         Intent stopIntent = org.robolectric.Shadows.shadowOf(
                 (android.app.Application) appContext).getNextStartedService();
-        assertNotNull("disabling push with floating window off must stop the native WS",
+        assertNotNull("disabling push with no consumers must stop the native WS",
                 stopIntent);
         assertEquals("STOP_NATIVE_WS", stopIntent.getAction());
+    }
+
+    @Test
+    public void setNativePushEnabled_false_liveUpdateEnabled_keepsNativeWs() throws Exception {
+        // Live Updates enabled (default) -> disabling push must NOT stop the
+        // native WS (no STOP_NATIVE_WS intent) because the Live Updates chip
+        // still needs the event stream.
+        BackgroundService.setLiveUpdateEnabled(appContext, true);
+        assertTrue(BackgroundService.isLiveUpdateEnabled(appContext));
+
+        BackgroundService.setNativePushEnabled(appContext, false);
+
+        assertFalse("native_push_enabled pref must be false",
+                BackgroundService.isNativePushEnabled(appContext));
+        Intent stopIntent = org.robolectric.Shadows.shadowOf(
+                (android.app.Application) appContext).getNextStartedService();
+        assertNull("Live Updates must keep the native WS alive when push is disabled",
+                stopIntent);
     }
 
     @Test

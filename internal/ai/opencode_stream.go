@@ -98,7 +98,7 @@ func (p *OpenCodeStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		// Strip the leading \n\n that OpenCode prepends to text responses
 		text := strings.TrimPrefix(part.Text, "\n\n")
 		if text != "" {
-			ch <- StreamEvent{Type: "content", Content: text}
+			emitStreamEvent(ch, "opencode", StreamEvent{Type: "content", Content: text})
 		}
 
 	case "reasoning":
@@ -112,12 +112,12 @@ func (p *OpenCodeStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		}
 		text := strings.TrimPrefix(part.Text, "\n\n")
 		if text != "" {
-			ch <- StreamEvent{Type: "thinking", Content: text}
+			emitStreamEvent(ch, "opencode", StreamEvent{Type: "thinking", Content: text})
 		}
 
 	case "tool_use":
 		if tc := parseOpenCodeToolEvent(&msg, p.ToolNameMap, p.InputRemaps); tc != nil {
-			ch <- StreamEvent{Type: "tool_use", Tool: tc}
+			emitStreamEvent(ch, "opencode", StreamEvent{Type: "tool_use", Tool: tc})
 		}
 
 	case "step_finish":
@@ -136,8 +136,8 @@ func (p *OpenCodeStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 				meta.InputTokens = part.Tokens.Input
 				meta.OutputTokens = part.Tokens.Output
 			}
-			ch <- StreamEvent{Type: "metadata", Meta: meta}
-			ch <- StreamEvent{Type: "done"}
+			emitStreamEvent(ch, "opencode", StreamEvent{Type: "metadata", Meta: meta})
+			emitStreamEvent(ch, "opencode", StreamEvent{Type: "done"})
 		}
 		// reason="tool-calls" means more steps coming — no event
 

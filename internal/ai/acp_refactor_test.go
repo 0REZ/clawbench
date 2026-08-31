@@ -343,6 +343,54 @@ func TestRefactor_ACPErrorText(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// acpErrorDetails — structured error code / HTTP status extraction
+// ---------------------------------------------------------------------------
+
+func TestRefactor_ACPErrorDetails(t *testing.T) {
+	t.Run("non_request_error_yields_zeros", func(t *testing.T) {
+		code, httpStatus := acpErrorDetails(fmt.Errorf("some other failure"))
+		assert.Equal(t, 0, code)
+		assert.Equal(t, 0, httpStatus)
+	})
+
+	t.Run("request_error_without_data_keeps_code", func(t *testing.T) {
+		reqErr := &acp.RequestError{Code: -32603, Message: "Internal error"}
+		code, httpStatus := acpErrorDetails(reqErr)
+		assert.Equal(t, -32603, code)
+		assert.Equal(t, 0, httpStatus)
+	})
+
+	t.Run("request_error_with_httpStatus_map_extracts_status", func(t *testing.T) {
+		reqErr := &acp.RequestError{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    map[string]any{"httpStatus": 500},
+		}
+		code, httpStatus := acpErrorDetails(reqErr)
+		assert.Equal(t, -32603, code)
+		assert.Equal(t, 500, httpStatus)
+	})
+
+	t.Run("request_error_with_httpStatus_json_string_extracts_status", func(t *testing.T) {
+		reqErr := &acp.RequestError{
+			Code:    -32603,
+			Message: "Internal error",
+			Data:    `{"httpStatus":500,"details":"refusal"}`,
+		}
+		code, httpStatus := acpErrorDetails(reqErr)
+		assert.Equal(t, -32603, code)
+		assert.Equal(t, 500, httpStatus)
+	})
+
+	t.Run("wrapped_request_error_still_extracted", func(t *testing.T) {
+		reqErr := &acp.RequestError{Code: -32000, Message: "Auth required"}
+		code, httpStatus := acpErrorDetails(fmt.Errorf("acp: prompt: %w", reqErr))
+		assert.Equal(t, -32000, code)
+		assert.Equal(t, 0, httpStatus)
+	})
+}
+
+// ---------------------------------------------------------------------------
 // configKilledConnectionError
 // ---------------------------------------------------------------------------
 
@@ -3609,4 +3657,48 @@ func TestRefactor_LoadTargetSID_OnlySetByExplicitLoad(t *testing.T) {
 	conn.mu.Lock()
 	assert.Equal(t, "acp-session-for-load", conn.loadTargetSID, "loadTargetSID should be set by explicit acp-load")
 	conn.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// acpHTTPStatusFromMeta — upstream HTTP status extraction from PromptResponse._meta
+// ---------------------------------------------------------------------------
+
+func TestRefactor_ACPHTTPStatusFromMeta(t *testing.T) {
+	t.Run("nil_meta_returns_zero", func(t *testing.T) {
+		assert.Equal(t, 0, acpHTTPStatusFromMeta(nil))
+	})
+
+	t.Run("empty_meta_returns_zero", func(t *testing.T) {
+		assert.Equal(t, 0, acpHTTPStatusFromMeta(map[string]any{}))
+	})
+
+	t.Run("direct_httpStatus_key", func(t *testing.T) {
+		meta := map[string]any{"httpStatus": float64(500)}
+		assert.Equal(t, 500, acpHTTPStatusFromMeta(meta))
+	})
+
+	t.Run("snake_case_http_status_key", func(t *testing.T) {
+		meta := map[string]any{"http_status": float64(429)}
+		assert.Equal(t, 429, acpHTTPStatusFromMeta(meta))
+	})
+
+	t.Run("nested_data_map", func(t *testing.T) {
+		meta := map[string]any{"data": map[string]any{"httpStatus": float64(503)}}
+		assert.Equal(t, 503, acpHTTPStatusFromMeta(meta))
+	})
+
+	t.Run("nested_error_map", func(t *testing.T) {
+		meta := map[string]any{"error": map[string]any{"httpStatus": float64(500)}}
+		assert.Equal(t, 500, acpHTTPStatusFromMeta(meta))
+	})
+
+	t.Run("int_value_accepted", func(t *testing.T) {
+		meta := map[string]any{"httpStatus": 500}
+		assert.Equal(t, 500, acpHTTPStatusFromMeta(meta))
+	})
+
+	t.Run("non_numeric_status_ignored", func(t *testing.T) {
+		meta := map[string]any{"status": "error"}
+		assert.Equal(t, 0, acpHTTPStatusFromMeta(meta))
+	})
 }

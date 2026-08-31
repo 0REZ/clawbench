@@ -3,6 +3,7 @@ import { useAgents, registerIdentityUpdaters } from '@/composables/useAgents'
 import { gt } from '@/composables/useLocale'
 import { appLog } from '@/utils/appLog'
 import { createSelectState } from '@/composables/useSelectState'
+import { getRecentSession, clearRecentSession, registerSessionIdRef } from '@/composables/useRecentSession'
 
 const TAG = 'SessionIdentity'
 
@@ -150,6 +151,11 @@ registerIdentityUpdaters({
 export function getSessionId(): string {
   return currentSessionId.value
 }
+
+// Persist the current session id per project (useRecentSession). Must be
+// registered at module init so the storage watcher is active before any
+// session switching occurs.
+registerSessionIdRef(currentSessionId)
 
 /** Clear session identity refs for a session switch — resets all displayed
  *  state (agent/model/mode/transport/usage) but keeps action callbacks and
@@ -469,16 +475,31 @@ export async function initSessionFromAPI() {
   try {
     const initCtrl = new AbortController()
     const initTimer = setTimeout(() => initCtrl.abort(), 60000)
-    const [chatResp] = await Promise.all([
-      fetch('/api/ai/chat?limit=1', { signal: initCtrl.signal }).catch((e) => {
+
+    const fetchChat = (url: string) =>
+      fetch(url, { signal: initCtrl.signal }).catch((e) => {
         if (initCtrl.signal.aborted) return null as unknown as Response
         throw e
-      }),
-      agentsApi.loadAgents(),
-    ])
+      })
+
+    // Try the last opened session for this project first (per-project
+    // localStorage). If it no longer exists (404/403), drop the stale entry
+    // and fall back to the default "most recently updated session" behavior.
+    const storedSessionId = getRecentSession()
+    const initUrl = storedSessionId
+      ? `/api/ai/chat?limit=1&session_id=${encodeURIComponent(storedSessionId)}`
+      : '/api/ai/chat?limit=1'
+    const [chatResp] = await Promise.all([fetchChat(initUrl), agentsApi.loadAgents()])
+    let finalResp = chatResp
+    if (storedSessionId && chatResp && !chatResp.ok) {
+      // Stored session is gone (404) or no longer in this project (403) —
+      // remove it and retry with the default logic.
+      clearRecentSession()
+      finalResp = await fetchChat('/api/ai/chat?limit=1')
+    }
     clearTimeout(initTimer)
-    if (chatResp && chatResp.ok) {
-      const data = await chatResp.json()
+    if (finalResp && finalResp.ok) {
+      const data = await finalResp.json()
       if (data.sessionId) {
         currentSessionId.value = data.sessionId
         currentSessionTitle.value = data.sessionTitle || ''

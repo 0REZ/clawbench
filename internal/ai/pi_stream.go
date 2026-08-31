@@ -126,11 +126,11 @@ func (p *PiStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 
 	case "tool_execution_end":
 		if tc := parsePiToolExecutionEnd(&msg); tc != nil {
-			ch <- StreamEvent{Type: "tool_result", Tool: tc}
+			emitStreamEvent(ch, "pi", StreamEvent{Type: "tool_result", Tool: tc})
 		}
 
 	case "agent_end":
-		ch <- StreamEvent{Type: "done"}
+		emitStreamEvent(ch, "pi", StreamEvent{Type: "done"})
 
 	default:
 		slog.Debug("pi stream: skipping unknown message type", "type", msg.Type)
@@ -148,12 +148,12 @@ func (p *PiStreamParser) parseMessageUpdate(msg *PiStreamMessage, ch chan<- Stre
 	switch evt.Type {
 	case "thinking_delta":
 		if evt.Delta != "" {
-			ch <- StreamEvent{Type: "thinking", Content: evt.Delta}
+			emitStreamEvent(ch, "pi", StreamEvent{Type: "thinking", Content: evt.Delta})
 		}
 
 	case "text_delta":
 		if evt.Delta != "" {
-			ch <- StreamEvent{Type: "content", Content: evt.Delta}
+			emitStreamEvent(ch, "pi", StreamEvent{Type: "content", Content: evt.Delta})
 		}
 
 	case "toolcall_start", "toolcall_delta":
@@ -163,11 +163,11 @@ func (p *PiStreamParser) parseMessageUpdate(msg *PiStreamMessage, ch chan<- Stre
 
 	case "toolcall_end":
 		if tc := parsePiToolCallEnd(evt, p.InputRemaps); tc != nil {
-			ch <- StreamEvent{Type: "tool_use", Tool: tc}
+			emitStreamEvent(ch, "pi", StreamEvent{Type: "tool_use", Tool: tc})
 		}
 
 	case "thinking_end":
-		ch <- StreamEvent{Type: "thinking_done"}
+		emitStreamEvent(ch, "pi", StreamEvent{Type: "thinking_done"})
 
 	case "thinking_start", "text_start", "text_end":
 		// No additional event needed — deltas already streamed
@@ -188,12 +188,12 @@ func (p *PiStreamParser) parseMessageEnd(msg *PiStreamMessage, ch chan<- StreamE
 		if m.Usage.Cost != nil {
 			costUSD = m.Usage.Cost.Total
 		}
-		ch <- StreamEvent{Type: "metadata", Meta: &Metadata{
+		emitStreamEvent(ch, "pi", StreamEvent{Type: "metadata", Meta: &Metadata{
 			InputTokens:  m.Usage.Input,
 			OutputTokens: m.Usage.Output,
 			CostUSD:      costUSD,
 			StopReason:   m.StopReason,
-		}}
+		}})
 	}
 
 	// Emit error if stopReason is "error"
@@ -202,6 +202,6 @@ func (p *PiStreamParser) parseMessageEnd(msg *PiStreamMessage, ch chan<- StreamE
 		if errMsg == "" {
 			errMsg = "unknown error"
 		}
-		ch <- StreamEvent{Type: "error", Error: errMsg}
+		emitStreamEvent(ch, "pi", StreamEvent{Type: "error", Error: errMsg})
 	}
 }

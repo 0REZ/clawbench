@@ -56,18 +56,52 @@ export const lightTheme: ITheme = {
 }
 
 let cachedThemes: Record<string, ITheme> | null = null
+let cachedThemesPromise: Promise<Record<string, ITheme>> | null = null
 
-/** 动态加载 xterm-theme 全部主题（懒加载，仅在使用时触发）。缓存结果避免重复 import。 */
+/** 动态 import 偶发失败（chunk 网络/缓存）时的最大重试次数。 */
+const THEMES_LOAD_MAX_RETRIES = 3
+/** 重试间隔。 */
+const THEMES_LOAD_RETRY_DELAY_MS = 800
+
+/**
+ * 动态加载 xterm-theme 全部主题（懒加载，仅在使用时触发）。缓存结果避免重复 import。
+ *
+ * 加载失败时自动延迟重试（最多 THEMES_LOAD_MAX_RETRIES 次），让偶发的 chunk
+ * 加载失败自愈——所有调用方（配置面板主题网格、终端调色板菜单）无需各自处理。
+ */
 export async function loadThemesModule(): Promise<Record<string, ITheme>> {
   if (cachedThemes) return cachedThemes
-  const mod = await import('xterm-theme')
-  cachedThemes = (mod.default ?? mod) as Record<string, ITheme>
-  return cachedThemes
+  if (cachedThemesPromise) return cachedThemesPromise
+  cachedThemesPromise = doLoadThemes()
+  try {
+    return await cachedThemesPromise
+  } finally {
+    // 失败时清空 promise，允许下一次调用重新尝试
+    cachedThemesPromise = null
+  }
+}
+
+async function doLoadThemes(): Promise<Record<string, ITheme>> {
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt <= THEMES_LOAD_MAX_RETRIES; attempt++) {
+    try {
+      const mod = await import('xterm-theme')
+      cachedThemes = (mod.default ?? mod) as Record<string, ITheme>
+      return cachedThemes
+    } catch (e) {
+      lastErr = e
+      if (attempt < THEMES_LOAD_MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, THEMES_LOAD_RETRY_DELAY_MS))
+      }
+    }
+  }
+  throw lastErr
 }
 
 /** 清空已加载主题缓存（仅供测试使用）。 */
 export function resetThemesCache(): void {
   cachedThemes = null
+  cachedThemesPromise = null
 }
 
 // ── 背景色匹配（auto 主题跟随 App） ─────────────────────────────────────────
@@ -405,4 +439,21 @@ function backgroundLuminance(hex: string): number {
   const rgb = parseHexColor(hex)
   if (!rgb) return 0
   return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+}
+
+/**
+ * 构造终端主题选择网格的 previews map（含 auto 条目）。
+ * theme 未加载时为 undefined。显式过滤 auto，避免未来 SORTED_THEME_IDS
+ * 加入 'auto' 时循环覆盖掉先插入的 auto 条目。
+ */
+export function buildTerminalThemePreviews(
+  themes: Record<string, ITheme> | null,
+): Record<string, { type: 'terminal'; themeId: string; theme?: ITheme }> {
+  const map: Record<string, { type: 'terminal'; themeId: string; theme?: ITheme }> = {}
+  map[TERMINAL_THEME_AUTO] = { type: 'terminal', themeId: TERMINAL_THEME_AUTO }
+  for (const id of SORTED_THEME_IDS) {
+    if (id === TERMINAL_THEME_AUTO) continue
+    map[id] = { type: 'terminal', themeId: id, theme: themes?.[id] }
+  }
+  return map
 }

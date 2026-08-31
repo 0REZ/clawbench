@@ -111,6 +111,56 @@ describe('chatMessageReducer — optimistic + structural', () => {
     ])
     expect(state.map((m) => m.id)).toEqual([1, 2, 3])
   })
+
+  it('prepend_older dedups rows already present — a raced full-history page cannot double the conversation', () => {
+    // Reported AABBCC duplicate: a loadMore fired while the array was empty
+    // sent an invalid before_id, so the backend returned the FULL already-loaded
+    // history; prepend_older then prepended a copy of every message (AABBCC).
+    // The reducer must drop any incoming row whose id already exists.
+    const state = run(
+      [
+        u({ id: 38954, content: 'A' }),
+        a({ id: 38955, content: 'A reply' }),
+        u({ id: 38960, content: 'B' }),
+        a({ id: 38961, content: 'B reply' }),
+        u({ id: 38966, content: 'C' }),
+        a({ id: 38967, content: 'C reply' }),
+      ],
+      [
+        {
+          type: 'prepend_older',
+          olderMsgs: [
+            u({ id: 38954, content: 'A' }),
+            a({ id: 38955, content: 'A reply' }),
+            u({ id: 38960, content: 'B' }),
+            a({ id: 38961, content: 'B reply' }),
+            u({ id: 38966, content: 'C' }),
+            a({ id: 38967, content: 'C reply' }),
+          ],
+        },
+      ],
+    )
+    expect(state.map((m) => m.id)).toEqual([38954, 38955, 38960, 38961, 38966, 38967])
+    expect(state).toHaveLength(6)
+  })
+
+  it('prepend_older still prepends genuinely older rows when mixed with duplicates', () => {
+    const state = run(
+      [u({ id: 38954, content: 'loaded' }), a({ id: 38955, content: 'reply' })],
+      [
+        {
+          type: 'prepend_older',
+          olderMsgs: [
+            u({ id: 38950, content: 'genuinely older' }),
+            a({ id: 38951, content: 'older reply' }),
+            u({ id: 38954, content: 'already loaded duplicate' }),
+          ],
+        },
+      ],
+    )
+    // Only the genuinely older rows (38950, 38951) are prepended; 38954 skipped.
+    expect(state.map((m) => m.id)).toEqual([38950, 38951, 38954, 38955])
+  })
 })
 
 describe('chatMessageReducer — WS block-level events', () => {

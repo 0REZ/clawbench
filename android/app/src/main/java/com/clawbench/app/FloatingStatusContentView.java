@@ -27,6 +27,11 @@ import android.widget.TextView;
  * entirely when its count is 0; the running group's dot breathes while any
  * session is running. Session titles are intentionally not shown.
  *
+ * When all three counts are 0 the row shows the idle state: {@code logo |
+ * "空闲"} — a gray label without a dot. The idle label is a plain TextView
+ * with the theme's secondary text color, kept permanently in the row and
+ * toggled VISIBLE/GONE by renderStats.
+ *
  * Both the capsule and the panel title bar own their own instance, so the
  * breathing animation is managed independently per instance (a capsule and a
  * panel are never attached at the same time, and the title-bar instance stays
@@ -48,19 +53,24 @@ public class FloatingStatusContentView extends LinearLayout {
     static final int DOT_MARGIN_END_DP = 6;
     static final int TEXT_SIZE_SP = 14;
     static final int LOGO_MARGIN_END_DP = 10;
-    // Breathing animation: the running dot pulses between 30% and full opacity.
-    private static final float BREATH_ALPHA_MIN = 0.3f;
-    private static final float BREATH_ALPHA_MAX = 1.0f;
-    private static final long BREATH_MS = 800;
+    /** Idle-state label shown when every count is 0. */
+    private static final int IDLE_LABEL_RES = R.string.floating_idle;
+    // Spin animation: the running arc rotates 0 → 360° forever while any
+    // session is running.
+    private static final long SPIN_MS = 900;
 
     private final View runningDot;
     private final LinearLayout runningItem;
     private final LinearLayout pendingItem;
     private final LinearLayout unreadItem;
-    private final ObjectAnimator breathAnim;
+    private final ObjectAnimator spinAnim;
     private final float density;
-    /** The app logo (row index 0); its trailing margin is dropped when the row collapses to a logo-only circle. */
-    private final ImageView logoView;
+    /** Idle-state label ("空闲"), gray without a dot; VISIBLE only when every count is 0. */
+    private final TextView idleLabel;
+    /** Last rendered counts, kept so refreshLocaleText() can re-render after a system locale change. */
+    private int lastRunning;
+    private int lastPending;
+    private int lastUnread;
 
     public FloatingStatusContentView(Context context) {
         super(context);
@@ -76,25 +86,38 @@ public class FloatingStatusContentView extends LinearLayout {
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(LOGO_SIZE_DP), dp(LOGO_SIZE_DP));
         logoLp.setMargins(0, 0, dp(LOGO_MARGIN_END_DP), 0);
         addView(logo, logoLp);
-        logoView = logo;
 
+        // Running indicator: a rotating ring-arc (spinner-like) instead of a
+        // static dot. The drawable renders a 270° arc; spinAnim rotates the
+        // view while any session is running.
         runningDot = new View(context);
-        GradientDrawable runningDotDrawable = new GradientDrawable();
-        runningDotDrawable.setShape(GradientDrawable.OVAL);
-        runningDotDrawable.setColor(COLOR_RUNNING);
-        runningDot.setBackground(runningDotDrawable);
-        runningItem = buildStatItem(runningDot, "执行中");
+        runningDot.setBackground(new ArcProgressDrawable(COLOR_RUNNING, density));
+        runningItem = buildStatItem(runningDot, R.string.floating_stat_running);
 
-        pendingItem = buildStatItem(dot(COLOR_PERMISSION_PENDING), "待审批");
-        unreadItem = buildStatItem(dot(COLOR_UNREAD), "未读");
+        pendingItem = buildStatItem(dot(COLOR_PERMISSION_PENDING), R.string.floating_stat_pending);
+        unreadItem = buildStatItem(dot(COLOR_UNREAD), R.string.floating_stat_unread);
 
-        // Breathing alpha animation on the running dot. Loops forever while any
-        // session is running; renderStats starts/stops it with the running count.
-        breathAnim = ObjectAnimator.ofFloat(runningDot, "alpha",
-                BREATH_ALPHA_MIN, BREATH_ALPHA_MAX);
-        breathAnim.setDuration(BREATH_MS);
-        breathAnim.setRepeatCount(ObjectAnimator.INFINITE);
-        breathAnim.setRepeatMode(ObjectAnimator.REVERSE);
+        // Idle label: gray text without a dot, shown only while every count
+        // is 0. Plain TextView with the theme's secondary color, so it reads
+        // clearly fainter than the live stat labels.
+        idleLabel = new TextView(context);
+        idleLabel.setText(UserLanguage.resolve(context, IDLE_LABEL_RES));
+        idleLabel.setTextSize(TEXT_SIZE_SP);
+        idleLabel.setSingleLine(true);
+        idleLabel.setIncludeFontPadding(false);
+        idleLabel.setTextColor(FloatingThemeColors.get(getContext())[2]);
+        addView(idleLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // Spin animation on the running arc. Loops forever while any session
+        // is running; renderStats starts/stops it with the running count.
+        // A linear interpolator keeps the rotation perfectly constant-speed —
+        // the default AccelerateDecelerateInterpolator makes each lap start
+        // slow and end slow, which reads as a visible hiccup per revolution.
+        spinAnim = ObjectAnimator.ofFloat(runningDot, "rotation", 0f, 360f);
+        spinAnim.setDuration(SPIN_MS);
+        spinAnim.setRepeatCount(ObjectAnimator.INFINITE);
+        spinAnim.setInterpolator(new android.view.animation.LinearInterpolator());
 
         // Initial state: all groups hidden until the first renderStats.
         renderStats(0, 0, 0);
@@ -102,42 +125,59 @@ public class FloatingStatusContentView extends LinearLayout {
 
     /**
      * Render the three stats into the row. Groups with a count of 0 are
-     * hidden entirely (dot + label). UI thread only.
+     * hidden entirely (dot + label); when every count is 0 the idle "空闲"
+     * label is shown instead. UI thread only.
      *
-     * The running dot breathes (alpha 0.3 ↔ 1.0 loop) while the running count
-     * is above 0; on zero it stops and the dot returns to full opacity. The
-     * pending and unread dots never breathe.
+     * The running arc spins (rotation 0 → 360° loop) while the running count
+     * is above 0; on zero it stops and the rotation resets. The pending and
+     * unread dots never spin.
      */
     public void renderStats(int running, int pending, int unread) {
         AppLog.d("FloatingStatusContent", "renderStats running=" + running
                 + " pending=" + pending + " unread=" + unread);
-        setStat(runningItem, running, "执行中");
-        setStat(pendingItem, pending, "待审批");
-        setStat(unreadItem, unread, "未读");
+        lastRunning = running;
+        lastPending = pending;
+        lastUnread = unread;
+        setStat(runningItem, running, R.string.floating_stat_running);
+        setStat(pendingItem, pending, R.string.floating_stat_pending);
+        setStat(unreadItem, unread, R.string.floating_stat_unread);
+        idleLabel.setVisibility(running == 0 && pending == 0 && unread == 0
+                ? VISIBLE : GONE);
         if (running > 0) {
-            if (!breathAnim.isRunning()) {
-                breathAnim.start();
+            if (!spinAnim.isRunning()) {
+                spinAnim.start();
             }
-        } else if (breathAnim.isRunning()) {
-            breathAnim.cancel();
-            runningDot.setAlpha(BREATH_ALPHA_MAX);
+        } else if (spinAnim.isRunning()) {
+            spinAnim.cancel();
+            runningDot.setRotation(0f);
         }
     }
 
     /**
-     * Stop the breathing animation and restore the running dot to full opacity.
+     * Re-resolve strings after a language change (in-app switch or system
+     * locale change) and re-render the last counts. Stat labels and the idle
+     * label are re-read from resources so the floating capsule follows the
+     * language immediately. UI thread only.
+     */
+    public void refreshLocaleText() {
+        idleLabel.setText(UserLanguage.resolve(getContext(), IDLE_LABEL_RES));
+        renderStats(lastRunning, lastPending, lastUnread);
+    }
+
+    /**
+     * Stop the spin animation and reset the running arc's rotation.
      * Called on host teardown so an infinite animator cannot keep posting
      * frame callbacks after the window is removed. UI thread only.
      */
     public void stopBreathing() {
-        if (breathAnim.isRunning()) {
-            breathAnim.cancel();
+        if (spinAnim.isRunning()) {
+            spinAnim.cancel();
         }
-        runningDot.setAlpha(BREATH_ALPHA_MAX);
+        runningDot.setRotation(0f);
     }
 
     /** Build one dot+label item, added to the row with dot leading the label. */
-    private LinearLayout buildStatItem(View dot, String label) {
+    private LinearLayout buildStatItem(View dot, int labelResId) {
         LinearLayout item = new LinearLayout(getContext());
         item.setOrientation(LinearLayout.HORIZONTAL);
         item.setGravity(Gravity.CENTER_VERTICAL);
@@ -152,7 +192,7 @@ public class FloatingStatusContentView extends LinearLayout {
         text.setSingleLine(true);
         text.setIncludeFontPadding(false);
         text.setTextColor(FloatingThemeColors.get(getContext())[1]);
-        text.setText(label);
+        text.setText(UserLanguage.resolve(getContext(), labelResId));
         item.addView(text, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -174,54 +214,14 @@ public class FloatingStatusContentView extends LinearLayout {
     }
 
     /** Apply a count to a stat item: show dot+label, or hide the whole group. */
-    private void setStat(LinearLayout item, int count, String prefix) {
+    private void setStat(LinearLayout item, int count, int labelResId) {
         if (count > 0) {
             item.setVisibility(VISIBLE);
-            ((TextView) item.getChildAt(1)).setText(prefix + " " + count);
+            ((TextView) item.getChildAt(1)).setText(
+                    UserLanguage.resolve(getContext(), labelResId, count));
         } else {
             item.setVisibility(GONE);
         }
-    }
-
-    /**
-     * Collapse the row to a logo-only layout: every stat group (dot + label) is
-     * set GONE and the logo's trailing margin is removed, so the row's natural
-     * width becomes exactly the logo size. The host (FloatingStatusView /
-     * controller) shrinks the window to the logo diameter in parallel; this
-     * keeps the logo centered inside the resulting circle. The logo itself is
-     * left untouched (still VISIBLE, full alpha). UI thread only.
-     */
-    public void collapseStats() {
-        AppLog.d("FloatingStatusContent", "collapseStats");
-        if (breathAnim.isRunning()) {
-            breathAnim.cancel();
-            runningDot.setAlpha(BREATH_ALPHA_MAX);
-        }
-        for (LinearLayout item : new LinearLayout[]{runningItem, pendingItem, unreadItem}) {
-            item.setVisibility(GONE);
-        }
-        android.widget.LinearLayout.LayoutParams lp =
-                (android.widget.LinearLayout.LayoutParams) logoView.getLayoutParams();
-        lp.setMargins(0, 0, 0, 0);
-        logoView.setLayoutParams(lp);
-    }
-
-    /**
-     * Restore the row from a previous collapseStats: all stat groups become
-     * VISIBLE again (GONE groups from a zero count stay hidden — renderStats
-     * re-applies the correct visibility on the next render) and the logo's
-     * trailing margin comes back. Called when the host is re-attached so a
-     * re-shown capsule never keeps the collapsed layout. UI thread only.
-     */
-    public void restoreStats() {
-        AppLog.d("FloatingStatusContent", "restoreStats");
-        for (LinearLayout item : new LinearLayout[]{runningItem, pendingItem, unreadItem}) {
-            item.setVisibility(VISIBLE);
-        }
-        android.widget.LinearLayout.LayoutParams lp =
-                (android.widget.LinearLayout.LayoutParams) logoView.getLayoutParams();
-        lp.setMargins(0, 0, dp(LOGO_MARGIN_END_DP), 0);
-        logoView.setLayoutParams(lp);
     }
 
     /**

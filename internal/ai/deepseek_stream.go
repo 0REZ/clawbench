@@ -68,48 +68,48 @@ func (p *DeepSeekStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 	switch msg.Type {
 	case "content":
 		if msg.Content != "" {
-			ch <- StreamEvent{Type: "content", Content: msg.Content}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "content", Content: msg.Content})
 		}
 
 	case "thinking":
 		if msg.Content != "" {
-			ch <- StreamEvent{Type: "thinking", Content: msg.Content}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "thinking", Content: msg.Content})
 		}
 
 	case "tool_use":
 		if tc := parseDeepSeekToolUse(&msg, p.InputRemaps); tc != nil {
-			ch <- StreamEvent{Type: "tool_use", Tool: tc}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "tool_use", Tool: tc})
 		}
 
 	case "tool_result":
 		if tc := parseDeepSeekToolResult(&msg); tc != nil {
-			ch <- StreamEvent{Type: "tool_result", Tool: tc}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "tool_result", Tool: tc})
 		}
 
 	case "session_capture":
 		if msg.Content != "" {
 			p.sessionID = msg.Content
 			slog.Debug("deepseek stream: captured session ID", "session_id", msg.Content)
-			ch <- StreamEvent{Type: "session_capture", Content: msg.Content}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "session_capture", Content: msg.Content})
 		}
 
 	case "metadata":
 		if msg.Meta != nil {
 			p.model = msg.Meta.Model
-			ch <- StreamEvent{Type: "metadata", Meta: &Metadata{
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "metadata", Meta: &Metadata{
 				Model:        msg.Meta.Model,
 				InputTokens:  msg.Meta.InputTokens,
 				OutputTokens: msg.Meta.OutputTokens,
 				SessionID:    msg.Meta.SessionID,
-			}}
+			}})
 		}
 
 	case "done":
-		ch <- StreamEvent{Type: "done"}
+		emitStreamEvent(ch, "deepseek", StreamEvent{Type: "done"})
 
 	case "error":
 		if msg.Error != "" {
-			ch <- StreamEvent{Type: "error", Error: msg.Error}
+			emitStreamEvent(ch, "deepseek", StreamEvent{Type: "error", Error: msg.Error})
 		}
 
 	default:

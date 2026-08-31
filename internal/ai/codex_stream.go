@@ -79,7 +79,7 @@ func (p *CodexStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		// Structural event — no content
 	case "error":
 		if msg.Message != "" {
-			ch <- StreamEvent{Type: "warning", Content: msg.Message, Reason: ReasonRequestFailed}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "warning", Content: msg.Message, Reason: ReasonRequestFailed})
 		}
 	case "turn.failed":
 		p.handleTurnFailed(&msg, ch)
@@ -101,14 +101,14 @@ func (p *CodexStreamParser) handleItemCompleted(msg *CodexStreamMessage, ch chan
 		}
 		thinking, content := codexSplitThinking(text)
 		if thinking != "" {
-			ch <- StreamEvent{Type: "thinking", Content: thinking}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "thinking", Content: thinking})
 		}
 		if content != "" {
-			ch <- StreamEvent{Type: "content", Content: content}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "content", Content: content})
 		}
 	case "command_execution":
 		if tc := parseCodexToolComplete(msg); tc != nil {
-			ch <- StreamEvent{Type: "tool_use", Tool: tc}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "tool_use", Tool: tc})
 		}
 	}
 }
@@ -120,7 +120,7 @@ func (p *CodexStreamParser) handleItemStarted(msg *CodexStreamMessage, ch chan<-
 	}
 	if msg.Item.Type == "command_execution" {
 		if tc := parseCodexToolStart(msg); tc != nil {
-			ch <- StreamEvent{Type: "tool_use", Tool: tc}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "tool_use", Tool: tc})
 		}
 	}
 }
@@ -134,8 +134,8 @@ func (p *CodexStreamParser) handleTurnCompleted(msg *CodexStreamMessage, ch chan
 		meta.InputTokens = msg.Usage.InputTokens
 		meta.OutputTokens = msg.Usage.OutputTokens
 	}
-	ch <- StreamEvent{Type: "metadata", Meta: meta}
-	ch <- StreamEvent{Type: "done"}
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "metadata", Meta: meta})
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "done"})
 }
 
 // handleTurnFailed processes turn.failed events.
@@ -144,8 +144,8 @@ func (p *CodexStreamParser) handleTurnFailed(msg *CodexStreamMessage, ch chan<- 
 	if msg.Error != nil && msg.Error.Message != "" {
 		errMsg = msg.Error.Message
 	}
-	ch <- StreamEvent{Type: "error", Error: errMsg, Reason: ReasonRequestFailed}
-	ch <- StreamEvent{Type: "done"}
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "error", Error: errMsg, Reason: ReasonRequestFailed})
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "done"})
 }
 
 // buildCodexStreamArgs constructs the CLI arguments for Codex streaming.
@@ -226,10 +226,10 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 
 		// Handle ERROR lines from codex resume output
 		if errMsg, ok := strings.CutPrefix(line, "ERROR:"); ok && errMsg != "" {
-			ch <- StreamEvent{Type: "error", Error: errMsg}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "error", Error: errMsg})
 			// ISS-079: must emit done so the stream consumer can finalize;
 			// without this, the SSE stream hangs indefinitely.
-			ch <- StreamEvent{Type: "done"}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "done"})
 			return
 		}
 
@@ -279,12 +279,12 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 				// Check if closing tag is on the same line
 				if before, afterClose, ok := strings.Cut(rest, codexThinkClose); ok {
 					if before != "" {
-						ch <- StreamEvent{Type: "thinking", Content: before}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "thinking", Content: before})
 					}
 					inThinking = false
 					afterClose = strings.TrimSpace(afterClose)
 					if afterClose != "" {
-						ch <- StreamEvent{Type: "content", Content: afterClose + "\n"}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "content", Content: afterClose + "\n"})
 					}
 				} else if rest != "" {
 					thinkingBuf.WriteString(rest)
@@ -295,7 +295,7 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 				if inThinking {
 					inThinking = false
 					if thinking := thinkingBuf.String(); thinking != "" {
-						ch <- StreamEvent{Type: "thinking", Content: thinking}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "thinking", Content: thinking})
 					}
 					thinkingBuf.Reset()
 				}
@@ -303,7 +303,7 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 				afterClose := strings.TrimPrefix(line, codexThinkClose)
 				afterClose = strings.TrimSpace(afterClose)
 				if afterClose != "" {
-					ch <- StreamEvent{Type: "content", Content: afterClose + "\n"}
+					emitStreamEvent(ch, "codex", StreamEvent{Type: "content", Content: afterClose + "\n"})
 				}
 				continue
 			}
@@ -318,12 +318,12 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 					}
 					inThinking = false
 					if thinking := thinkingBuf.String(); thinking != "" {
-						ch <- StreamEvent{Type: "thinking", Content: thinking}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "thinking", Content: thinking})
 					}
 					thinkingBuf.Reset()
 					afterClose = strings.TrimSpace(afterClose)
 					if afterClose != "" {
-						ch <- StreamEvent{Type: "content", Content: afterClose + "\n"}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "content", Content: afterClose + "\n"})
 					}
 				} else {
 					if thinkingBuf.Len() > 0 {
@@ -334,7 +334,7 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 				continue
 			}
 			if line != "" {
-				ch <- StreamEvent{Type: "content", Content: line + "\n"}
+				emitStreamEvent(ch, "codex", StreamEvent{Type: "content", Content: line + "\n"})
 			}
 			continue
 		}
@@ -369,19 +369,19 @@ func parseCodexResumeOutput(scanner *bufio.Scanner, ch chan<- StreamEvent, sessi
 
 	// Flush remaining thinking
 	if inThinking && thinkingBuf.Len() > 0 {
-		ch <- StreamEvent{Type: "thinking", Content: thinkingBuf.String()}
+		emitStreamEvent(ch, "codex", StreamEvent{Type: "thinking", Content: thinkingBuf.String()})
 	}
 
 	// ISS-080: check scanner.Err() after the loop — truncated output due to
 	// a read error must not be silently accepted as complete.
 	if err := scanner.Err(); err != nil {
-		ch <- StreamEvent{Type: "warning", Content: fmt.Sprintf("resume output read error: %v", err), Reason: ReasonParseError}
+		emitStreamEvent(ch, "codex", StreamEvent{Type: "warning", Content: fmt.Sprintf("resume output read error: %v", err), Reason: ReasonParseError})
 		// Fall through to emit done so the consumer can finalize.
 	}
 
 	// Send metadata and done events
-	ch <- StreamEvent{Type: "metadata", Meta: &Metadata{SessionID: sessionID}}
-	ch <- StreamEvent{Type: "done"}
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "metadata", Meta: &Metadata{SessionID: sessionID}})
+	emitStreamEvent(ch, "codex", StreamEvent{Type: "done"})
 }
 
 // emitBashToolCall has been moved to codex_tool.go
@@ -570,10 +570,7 @@ func (c *CodexBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 				// is cancelled before turn.completed emits the metadata event.
 				if capturedID := parser.GetCapturedSessionID(); capturedID != "" && capturedID != lastCapturedSessionID {
 					lastCapturedSessionID = capturedID
-					select {
-					case ch <- StreamEvent{Type: "session_capture", Content: capturedID}:
-					default:
-					}
+					emitStreamEvent(ch, "codex", StreamEvent{Type: "session_capture", Content: capturedID})
 				}
 
 				// Check context after parsing
@@ -585,10 +582,7 @@ func (c *CodexBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 					)
 					// Send raw output before returning so it's available for debugging
 					if rawLines.Len() > 0 {
-						select {
-						case ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}:
-						default:
-						}
+						emitStreamEvent(ch, "codex", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 					}
 					return
 				default:
@@ -612,10 +606,7 @@ func (c *CodexBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 				)
 				// Send raw output before returning
 				if rawLines.Len() > 0 {
-					select {
-					case ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}:
-					default:
-					}
+					emitStreamEvent(ch, "codex", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 				}
 				return
 			}
@@ -632,10 +623,7 @@ func (c *CodexBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-ch
 
 		// Send raw output event after all other events (same as CLIBackend)
 		if rawLines.Len() > 0 {
-			select {
-			case ch <- StreamEvent{Type: "raw_output", RawOutput: rawLines.String()}:
-			default:
-			}
+			emitStreamEvent(ch, "codex", StreamEvent{Type: "raw_output", RawOutput: rawLines.String()})
 		}
 	}()
 

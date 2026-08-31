@@ -149,7 +149,7 @@ async function archiveSession(sessionId) {
   const isRunning = props.runningSessionIds.has(sessionId)
   const confirmMsg = isRunning ? t('session.confirmArchiveRunning') : t('session.confirmArchive')
   const confirmed = await dialog.confirm(confirmMsg, {
-    dangerous: true,
+    confirmText: t('chat.actions.archiveSession'),
     extraText: t('chat.archive.destroyBtn'),
     extraPrimedText: t('chat.archive.destroyBtnPrimed'),
     onExtraAction: () => emit('destroy', sessionId),
@@ -295,6 +295,44 @@ onUnmounted(() => {
 
 .session-row.running {
   background: rgba(34, 197, 94, 0.05);
+  overflow: hidden;
+}
+
+.session-row.running::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(34, 197, 94, 0.14), transparent);
+  animation: scan-bg 2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Bottom guide line — dimmed green, sweeps in sync with the full-row light (same
+   keyframes/duration/easing so both bands move together). */
+.session-running-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.session-running-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(34, 197, 94, 0.5), transparent);
+  animation: scan-bg 2s ease-in-out infinite;
 }
 
 .session-row.active.running {
@@ -358,30 +396,16 @@ onUnmounted(() => {
   height: 8px;
   border-radius: 50%;
   background: var(--accent-color, #0066cc);
+  animation: badge-breathe 1.2s ease-in-out infinite;
 }
 
-.session-running-line {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  overflow: hidden;
+@keyframes badge-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
 }
 
-.session-running-line::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -40%;
-  width: 40%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--color-green, #22c55e), transparent);
-  animation: scan-line 2s ease-in-out infinite;
-}
-
-@keyframes scan-line {
-  0% { left: -40%; }
+@keyframes scan-bg {
+  0% { left: -60%; }
   100% { left: 100%; }
 }
 

@@ -270,7 +270,7 @@ import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsync
 import { useI18n } from 'vue-i18n'
 import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
-import { computeRecentReferencedFiles } from '@/utils/chatInputUtils.ts'
+import { computeRecentReferencedFiles, isImeCompositionEvent } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
@@ -776,6 +776,10 @@ function handleSlashSelect(cmd) {
 
 // ── Menu keyboard navigation (PC: ArrowUp/Down + Enter/Tab + Escape) ──
 function handleMenuKeydown(e) {
+  // IME composition (e.g. Chinese pinyin candidate selection): let the IME own
+  // the keystroke — Enter commits the candidate, never selects a menu item.
+  if (isImeCompositionEvent(e)) return false
+
   // Determine which menu is active (slash takes priority if both open)
   const isSlash = showSlashMenu.value
   const isAt = showAtMenu.value
@@ -989,6 +993,10 @@ function onTextareaTouchCancel() {
 }
 
 function onTextareaKeydown(e) {
+  // IME composition (e.g. Chinese pinyin candidate selection): the browser/IME
+  // owns the keystroke — Enter commits the candidate to the input instead of
+  // submitting the message.
+  if (isImeCompositionEvent(e)) return
   // Menu keyboard navigation takes priority
   if (handleMenuKeydown(e)) return
   // Input history navigation (ArrowUp/ArrowDown), only when the input is active
@@ -1076,16 +1084,19 @@ const recentReferencedFiles = computed(() => {
   return computeRecentReferencedFiles(props.messages, props.attachedFiles, props.currentFile?.path)
 })
 
-function handleCreateClick(e) {
-  // On desktop, click = show agent selector (short tap equivalent)
-  if (e.detail === 0) return
+function handleCreateClick() {
+  // Always open the agent selector, even with a single agent — a one-tap
+  // "create" here is easy to mis-tap on mobile and would create an empty
+  // session. Requiring an explicit agent selection prevents accidental
+  // session creation. 始终弹智能体选择器（哪怕只有一个智能体）——
+  // 一次误触即建空会话在移动端很容易发生，强制选择智能体可避免误建。
   emit('show-agent-selector')
 }
 
 async function handleArchive() {
   if (!props.currentSessionId) return
   const confirmed = await dialog.confirm(t('chat.archive.confirm'), {
-    dangerous: true,
+    confirmText: t('chat.actions.archiveSession'),
     extraText: t('chat.archive.destroyBtn'),
     extraPrimedText: t('chat.archive.destroyBtnPrimed'),
     onExtraAction: () => emit('destroy-session'),
@@ -1740,26 +1751,23 @@ defineExpose({
     content: '';
     position: absolute;
     top: 0;
-    left: 0;
-    width: 40%;
+    left: -60%;
+    width: 60%;
     height: 100%;
-    transform: translateX(-140%);
     background: linear-gradient(
         90deg,
-        transparent 0%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 12%, rgba(255,255,255,0.08)) 25%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 30%, rgba(255,255,255,0.22)) 50%,
-        color-mix(in srgb, var(--accent-color, #0066cc) 12%, rgba(255,255,255,0.08)) 75%,
-        transparent 100%
+        transparent,
+        color-mix(in srgb, var(--accent-color, #0066cc) 14%, transparent),
+        transparent
     );
-    animation: sweep-light 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    animation: sweep-light 2s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
 }
 
 @keyframes sweep-light {
-    0% { transform: translateX(-40%); opacity: 0; }
-    10% { opacity: 1; }
-    90% { opacity: 1; }
-    100% { transform: translateX(200%); opacity: 0; }
+    0% { left: -60%; }
+    100% { left: 100%; }
 }
 
 .chat-action-btn svg {

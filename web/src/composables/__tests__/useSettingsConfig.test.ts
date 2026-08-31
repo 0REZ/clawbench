@@ -549,6 +549,103 @@ describe('useSettingsConfig', () => {
     })
   })
 
+  describe('liveUpdate sync', () => {
+    function installNativeMock() {
+      const mockSetLiveUpdateEnabled = vi.fn()
+      const original = (window as any).ClawBenchNative
+      ;(window as any).ClawBenchNative = { setLiveUpdateEnabled: mockSetLiveUpdateEnabled }
+      return { mockSetLiveUpdateEnabled, original }
+    }
+    function restoreNativeMock(original: unknown) {
+      if (original) {
+        ;(window as any).ClawBenchNative = original
+      } else {
+        delete (window as any).ClawBenchNative
+      }
+    }
+
+    it('calls ClawBenchNative.setLiveUpdateEnabled(true) when setLocalConfig enables it', () => {
+      const { mockSetLiveUpdateEnabled, original } = installNativeMock()
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', true)
+
+      expect(mockSetLiveUpdateEnabled).toHaveBeenCalledWith(true)
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      restoreNativeMock(original)
+    })
+
+    it('calls ClawBenchNative.setLiveUpdateEnabled(false) when setLocalConfig disables it', () => {
+      const { mockSetLiveUpdateEnabled, original } = installNativeMock()
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', false)
+
+      expect(mockSetLiveUpdateEnabled).toHaveBeenCalledWith(false)
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      restoreNativeMock(original)
+    })
+
+    it('syncs the local value to ClawBenchNative on loadConfig', async () => {
+      const { mockSetLiveUpdateEnabled, original } = installNativeMock()
+      localStorage.setItem('clawbench-settings-liveUpdate', 'true')
+      vi.resetModules()
+      const { apiGet: freshApiGet } = await import('@/utils/api')
+      vi.mocked(freshApiGet).mockResolvedValueOnce({})
+      const { useSettingsConfig: freshUseSettingsConfig } = await import('@/composables/useSettingsConfig')
+
+      const { loadConfig } = freshUseSettingsConfig()
+      await loadConfig()
+
+      expect(mockSetLiveUpdateEnabled).toHaveBeenCalledWith(true)
+
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      restoreNativeMock(original)
+    })
+
+    it('opens the Live Updates settings when enabling without promotion permission', () => {
+      const mockOpenSettings = vi.fn()
+      const original = (window as any).ClawBenchNative
+      ;(window as any).ClawBenchNative = {
+        setLiveUpdateEnabled: vi.fn(),
+        canPostPromotedNotifications: () => false,
+        openLiveUpdateSettings: mockOpenSettings,
+      }
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', true)
+
+      expect(mockOpenSettings).toHaveBeenCalledTimes(1)
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      if (original) {
+        ;(window as any).ClawBenchNative = original
+      } else {
+        delete (window as any).ClawBenchNative
+      }
+    })
+
+    it('does not open settings when promotion permission is already available', () => {
+      const mockOpenSettings = vi.fn()
+      const original = (window as any).ClawBenchNative
+      ;(window as any).ClawBenchNative = {
+        setLiveUpdateEnabled: vi.fn(),
+        canPostPromotedNotifications: () => true,
+        openLiveUpdateSettings: mockOpenSettings,
+      }
+      const { setLocalConfig } = useSettingsConfig()
+
+      setLocalConfig('liveUpdate', true)
+
+      expect(mockOpenSettings).not.toHaveBeenCalled()
+      localStorage.removeItem('clawbench-settings-liveUpdate')
+      if (original) {
+        ;(window as any).ClawBenchNative = original
+      } else {
+        delete (window as any).ClawBenchNative
+      }
+    })
+  })
+
   // ── applyUIScale / getUIScale ──
 
   describe('applyUIScale', () => {

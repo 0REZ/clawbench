@@ -787,9 +787,11 @@ func mapACPError(code int, message string) StreamEvent {
 		reason = ReasonContextCancel // request cancelled
 	}
 	return StreamEvent{
-		Type:   "error",
-		Error:  fmt.Sprintf("ACP error %d: %s", code, message),
-		Reason: reason,
+		Type:        "error",
+		Error:       fmt.Sprintf("ACP error %d: %s", code, message),
+		Reason:      reason,
+		ErrorCode:   code,
+		ErrorSource: "agent",
 	}
 }
 
@@ -799,17 +801,7 @@ func mapACPError(code int, message string) StreamEvent {
 // outlive the channel close in ExecuteStream (e.g., on context cancellation),
 // so a panic from sending to a closed channel is safe to ignore.
 func forwardACPEvent(ch chan<- StreamEvent, event StreamEvent) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Debug("acp: send on closed stream channel, ignoring", "type", event.Type)
-		}
-	}()
-	select {
-	case ch <- event:
-	default:
-		// Channel full, drop event (same as CLIBackend pattern)
-		slog.Warn("acp: stream channel full, dropping event", "type", event.Type)
-	}
+	emitStreamEvent(ch, "acp", event)
 }
 
 // MapACPSessionUpdateForTest exports mapACPSessionUpdate for use in handler-level

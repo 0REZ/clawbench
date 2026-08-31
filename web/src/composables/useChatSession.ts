@@ -2,17 +2,19 @@ import { ref, computed, type Ref } from 'vue'
 import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast.ts'
 import { useSessionIdentity } from '@/composables/useSessionIdentity.ts'
+import { useAppForeground, onAppForeground } from '@/composables/useAppForeground'
+import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { appLog } from '@/utils/appLog'
 
 const TAG = 'ChatSession'
 import { updateAvailableModes, updateCommandState, updateAvailableThinkingEfforts, clearUsageStateById, updateUsageState, currentAgentId as _currentAgentId, clearSessionIdentity, reconcileRunningSessions } from '@/composables/useSessionIdentity.ts'
+import { getRecentSession, clearRecentSession } from '@/composables/useRecentSession'
 import { clearPlanState, updatePlanEntries } from '@/composables/usePlanProgress'
 import { useAgents, restoreOriginalModels, getAgentThinkingEffortLevels, populateACPStateFromCache } from '@/composables/useAgents'
 import { store } from '@/stores/app.ts'
 import { buildMessageSnapshot, parseMessages } from '@/utils/chatSessionUtils.ts'
 import { forceCleanupStreamingState, type ChatMessage, type ChatMessageAction } from '@/utils/chatStreamUtils.ts'
 import { warmWorktreeCache } from '@/composables/useWorktreeAnnotation.ts'
-import { hasChatScrollPosition, clearChatScrollPosition } from '@/utils/chatScrollMemory'
 
 // Module-level one-time session list load (replaces continuous polling)
 // Accessible from App.vue without instantiating useChatSession
@@ -73,7 +75,7 @@ export interface UseChatSessionOptions {
   onParseAssistantContent: (content: string) => Record<string, unknown>
   onExtractScheduledTasks: (msgs: Array<Record<string, unknown>>) => void
   onRenderUpdate: (forceFull: boolean) => void
-  onScrollBottom: (force?: boolean, streaming?: boolean) => void
+  onScrollBottom: (force?: boolean) => void
   onDisconnectStream: () => void
   onOpen: () => void
   onStreamDone?: () => void
@@ -102,6 +104,17 @@ export function useChatSession(options: UseChatSessionOptions) {
   } = options
 
   const toast = useToast()
+
+  // Reliable app foreground/background signal. Completion events must only
+  // auto-mark a session read while the user is actually looking at the app —
+  // otherwise a session finishing in the background (e.g. Android app paused,
+  // floating window active) would clear its unread badge before the floating
+  // window ever showed it.
+  const { appInForeground } = useAppForeground()
+  // True while the global WS is replaying events missed while disconnected.
+  // Replayed completions (session finished while the app was backgrounded and
+  // the WS was down) must NOT be auto-marked read — the user never saw them.
+  const { isReplayingEvents } = useGlobalEvents()
 
   // ── Session state sync helper ──
   // Shared logic for syncing session identity, available modes/commands/plan,
@@ -171,6 +184,13 @@ export function useChatSession(options: UseChatSessionOptions) {
     // bubbles and adopted _remote rows — so every loadHistory converges to what
     // an app restart would show (the ActionBar refresh behaves like a restart).
     dispatch({ type: 'db_load', dbMessages: parsed as ChatMessage[] })
+    // The loaded-window cursor follows the authoritative DB snapshot: after a
+    // db_load the oldest loaded row IS the snapshot's oldest DB row. This
+    // update is idempotent for repeated loads of the same window, and a new
+    // window (different session / grew) always lands on the correct oldest id.
+    // While the snapshot holds no DB rows, the cursor is cleared (nothing
+    // loaded to paginate from).
+    oldestLoadedId.value = oldestDbId(parsed)
     const prevTotal = totalMessages.value
     totalMessages.value = (sessionData.total as number) || messages.value.length
     queuedCount.value = (sessionData.queuedCount as number) || 0
@@ -235,12 +255,12 @@ export function useChatSession(options: UseChatSessionOptions) {
     let keepInputDisabled = false
     if (isRunning) {
       loading.value = true
-      onScrollBottom(forceScrollBottom, true)
+      onScrollBottom(forceScrollBottom)
     } else if (isReplayPending) {
       loading.value = true
       if (immediate) keepInputDisabled = true
       else inputDisabled.value = true
-      onScrollBottom(forceScrollBottom, true)
+      onScrollBottom(forceScrollBottom)
     } else {
       loading.value = false
       onScrollBottom(forceScrollBottom)
@@ -346,13 +366,46 @@ export function useChatSession(options: UseChatSessionOptions) {
   // or when a loadHistory reports the session grew (total increased) — a
   // routine refresh of an already-exhausted history keeps the flag set.
   const noMoreHistory = ref(false)
+  // ── Loaded-window state (authoritative pagination cursor) ──
+  // The numeric DB id of the OLDEST message currently loaded in the messages
+  // array. This is the single source of truth for "how far back have we
+  // loaded" — it is explicitly maintained by the loading actions and does NOT
+  // derive from the messages array. The array is a view; it can be cleared
+  // (session switch), rebuilt (db_load), or mutated by stream events without
+  // ever corrupting the pagination cursor.
+  //
+  // null means no DB history is loaded yet (the array is empty or holds only
+  // transient pending/streaming bubbles). While null, loadMore must not fire —
+  // an empty array has nothing to paginate from, and sending an empty
+  // before_id would make the backend return the most-recent window (a full
+  // copy of the history), producing the reported "every message doubled"
+  // (AABBCC) bug.
+  const oldestLoadedId = ref<number | null>(null)
+  // ── Window helpers ──
+  // Extract the oldest numeric DB id from a parsed messages snapshot.
+  // Ignores transient string-id bubbles (pending/_remote/streaming placeholders)
+  // and returns null when there is no DB-backed row.
+  function oldestDbId(msgs: Array<{ id?: unknown }>): number | null {
+    let oldest: number | null = null
+    for (const m of msgs) {
+      if (typeof m.id !== 'number') continue
+      if (oldest === null || m.id < oldest) oldest = m.id
+    }
+    return oldest
+  }
   // Plan C: compare non-queued loaded messages against non-queued total.
   // The queued messages in the messages array are pending bubbles, not loaded
   // history. Using filter(!m.queueId) instead of `length - queuedCount` keeps
   // the loaded count accurate even when queuedCount (a server snapshot) drifts
   // from the rows actually present in the messages array.
+  //
+  // Root-cause fix: hasMore is gated on oldestLoadedId != null. While no DB
+  // history is loaded (session switch just cleared the array, or a brand-new
+  // session still holding only transient bubbles), hasMore is false — the top
+  // scroll can never fire a loadMore against an empty window.
   const hasMore = computed(() => {
     if (noMoreHistory.value) return false
+    if (oldestLoadedId.value === null) return false
     const loaded = messages.value.filter((m) => !(m as ChatMessage).queueId).length
     return loaded < totalMessages.value - queuedCount.value
   })
@@ -431,24 +484,44 @@ export function useChatSession(options: UseChatSessionOptions) {
         // AbortController timeout is a safety net only; the backend itself has
         // ACP RPC timeouts (60s) so 60s gives ample room even for slow remote
         // connections. On abort, we catch and bail gracefully (no toast error).
+        //
+        // Prefer the last opened session for this project (per-project
+        // localStorage). If that session no longer exists (404) or belongs to
+        // another project (403), drop the stale entry and fall back to the
+        // default recovery (GetLatestSessionID by updated_at).
+        const storedSessionId = getRecentSession()
         const recoverCtrl = new AbortController()
         const recoverTimer = setTimeout(() => recoverCtrl.abort(), 60000)
-        let recoverResp: Response
         // Load agents in parallel with recovery fetch
         const agentsPromise = agents.value.length === 0 ? loadAgents() : Promise.resolve()
-        try {
-          recoverResp = await fetch(`/api/ai/chat?limit=${limit}&view=summary`, { signal: recoverCtrl.signal })
-        } catch (e) {
-          clearTimeout(recoverTimer)
-          if (recoverCtrl.signal.aborted) {
-            // Timeout — bail without error toast, let retry handle it
-            return
+        const doRecover = async (withStored: boolean): Promise<Response | null> => {
+          const url = withStored && storedSessionId
+            ? `/api/ai/chat?limit=${limit}&view=summary&session_id=${encodeURIComponent(storedSessionId)}`
+            : `/api/ai/chat?limit=${limit}&view=summary`
+          try {
+            return await fetch(url, { signal: recoverCtrl.signal })
+          } catch (e) {
+            if (recoverCtrl.signal.aborted) {
+              // Timeout — bail without error toast, let retry handle it
+              return null
+            }
+            throw e
           }
-          throw e
+        }
+        let recoverResp = await doRecover(true)
+        if (storedSessionId && recoverResp && !recoverResp.ok) {
+          // Stored session is gone (404) or no longer in this project (403) —
+          // remove it and retry with default logic.
+          clearRecentSession()
+          recoverResp = await doRecover(false)
         }
         clearTimeout(recoverTimer)
         await agentsPromise
         if (loadHistorySeq !== mySeq) { return }
+        if (!recoverResp) {
+          // Aborted / timeout — bail, let retry handle it
+          return
+        }
         if (recoverResp.ok) {
           const recoverData = await recoverResp.json()
           if (loadHistorySeq !== mySeq) { return }
@@ -605,15 +678,29 @@ export function useChatSession(options: UseChatSessionOptions) {
     loadingMore.value = true
     try {
       const pageSize = store.state.chatPageSize
-      // Use cursor-based pagination: pass the id of the oldest loaded message
-      const oldestMsg = messages.value[0]
-      const beforeId = (oldestMsg?.id as string) || ''
-      const resp = await fetch(`/api/ai/chat?session_id=${encodeURIComponent(currentSessionId.value)}&limit=${pageSize}&before_id=${encodeURIComponent(beforeId)}&view=summary`)
+      // Cursor-based pagination: the before_id is the oldest loaded DB row id,
+      // tracked independently of the messages array (oldestLoadedId). The
+      // cursor is never derived from the array, so a cleared/rebuilt array can
+      // never yield an empty/string before_id — the exact cause of the
+      // reported "every message doubled" (AABBCC) bug (empty before_id made
+      // the backend return the most-recent window again).
+      const beforeId = oldestLoadedId.value
+      if (beforeId === null) {
+        return
+      }
+      const resp = await fetch(`/api/ai/chat?session_id=${encodeURIComponent(currentSessionId.value)}&limit=${pageSize}&before_id=${beforeId}&view=summary`)
       if (!resp.ok) return
       const data = await resp.json()
       const olderMsgs = parseMessages(data.messages || [], onParseAssistantContent, undefined, data.running)
       if (olderMsgs.length > 0) {
         dispatch({ type: 'prepend_older', olderMsgs: olderMsgs as ChatMessage[] })
+        // Advance the loaded-window cursor to the oldest newly-loaded row.
+        // After a successful loadMore the window's bottom edge is the oldest
+        // DB id among the prepended rows — again independent of the array.
+        const newestOldest = oldestDbId(olderMsgs)
+        if (newestOldest !== null) {
+          oldestLoadedId.value = newestOldest
+        }
         totalMessages.value = data.total || totalMessages.value
         // Refresh queuedCount from the latest response (plan C) — it may have
         // changed since the initial load (e.g. messages drained meanwhile).
@@ -643,18 +730,53 @@ export function useChatSession(options: UseChatSessionOptions) {
     }
   }
 
+  /**
+   * Explicitly mark a session as read via POST /api/ai/chat/read.
+   * Loading history (GET /api/ai/chat) does NOT mark read anymore — that
+   * happens only when the user actively opens the session (switchSession),
+   * so automatic reloads never clear an unread badge the user hasn't seen.
+   */
+  async function markSessionRead(sessionId: string): Promise<void> {
+    if (!sessionId) return
+    const params = new URLSearchParams({ session_id: sessionId })
+    // No project_path: MarkChatRead falls back to the cookie project for
+    // ownership verification. Passing the current projectRoot would 403 when
+    // the session belongs to a different project (e.g. a notification deep
+    // link into another project's session). Same-project switches work via
+    // the cookie; cross-project opens degrade gracefully (read not marked,
+    // session still opens).
+    const resp = await fetch(`/api/ai/chat/read?${params.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!resp.ok) {
+      appLog.w(TAG, `markSessionRead failed for ${sessionId.slice(0, 12)}: ${resp.status}`)
+    }
+  }
+
+  // Returning to foreground: if the currently-active session has unread
+  // messages, mark it read immediately — the user is looking at it now. This
+  // covers the case where the session completed while the app was backgrounded
+  // (the completion paths skip mark-read there so the floating window can show
+  // the unread badge) and the user returns to it.
+  // markSessionRead is idempotent: the backend anchors last_read_at to the
+  // newest finalized assistant message, so a session with nothing new just
+  // refreshes the anchor harmlessly. loadSessionsOnce (deduped) re-reads the
+  // unread state so the session list badge clears without waiting for a WS
+  // event round-trip.
+  const removeForegroundReadListener = onAppForeground((fg) => {
+    if (!fg) return
+    const sid = currentSessionId.value
+    if (!sid) return
+    markSessionRead(sid).catch(() => {})
+    loadSessionsOnce()
+  })
+
   async function switchSession(sessionId: string) {
     // Bump loadHistorySeq so any in-flight loadHistory results are discarded
     // (switchSession takes priority over stale loadHistory responses).
     // loadHistory's own mySeq check handles the actual guard.
     ++loadHistorySeq
-
-    // Session scroll memory: if the target session was left scrolled away from
-    // the bottom, do NOT force-scroll to the bottom — ChatMessageList restores
-    // the remembered position after the new messages render. Sessions left at
-    // the bottom (or never visited) have no memory → force-scroll to bottom.
-    const hasSavedPos = hasChatScrollPosition(sessionId)
-    appLog.d(TAG, `switchSession: target ${sessionId.slice(0, 12)} hasSavedPos=${hasSavedPos}`)
 
     // Disconnect stream and invalidate snapshot before switching identity.
     onDisconnectStream()
@@ -666,6 +788,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     dispatch({ type: 'clear' })
     // New session — history existence must be re-evaluated on load.
     noMoreHistory.value = false
+    // The loaded-window cursor is part of session identity: clearing the
+    // message array must also clear "how far back we loaded". While null,
+    // hasMore is false and loadMore cannot fire against the empty window.
+    oldestLoadedId.value = null
     // Clear stale blockAskQuestions from previous session
     Object.keys(blockTasks).forEach(k => delete blockTasks[k])
     Object.keys(blockAskQuestions).forEach(k => delete blockAskQuestions[k])
@@ -687,7 +813,19 @@ export function useChatSession(options: UseChatSessionOptions) {
     // - Placeholder restoration for running sessions (rebuildFromDb)
     // immediate=true skips the loadHistoryInProgress queue and
     // handles switching/inputDisabled in its finally block.
-    await loadHistory(!hasSavedPos, true, false, true)
+    // Session switches always land at the bottom: forceScrollBottom=true.
+    await loadHistory(true, true, false, true)
+
+    // Mark the session as read. Loading history (loadHistory → GET /api/ai/chat)
+    // no longer marks a session read on the backend — only an explicit user
+    // action of opening the session should clear its unread badge. Automatic
+    // reloads (WS reconnect refresh, completion-event refresh) hit loadHistory
+    // too, so marking read must happen HERE, at the user-intent switch point,
+    // and not inside loadHistory itself.
+    // Await before loadSessionsOnce so the session list reflects the cleared
+    // unread state (chatUnread) — the backend's UpdateLastRead must complete
+    // first or loadSessionsOnce reads a stale unread badge.
+    await markSessionRead(sessionId).catch(() => {})
 
     // Recalculate global chatUnread after switching — the backend has already
     // marked this session as read (UpdateLastRead), so the session list will
@@ -734,6 +872,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     // the gap between clearSessionIdentity('') and switchSession is the
     // window where the recovery path can load old messages.
     dispatch({ type: 'clear' })
+    // The loaded-window cursor belongs to the cleared session; reset it so
+    // hasMore/loadMore can't act on the stale window during the async gap.
+    noMoreHistory.value = false
+    oldestLoadedId.value = null
     try {
       const body = agentId ? { agentId } : {}
       const resp = await fetch('/api/ai/sessions', {
@@ -808,9 +950,6 @@ export function useChatSession(options: UseChatSessionOptions) {
       if (data.ok) {
         // Evict usage cache for the deleted session
         clearUsageStateById(sessionId)
-        // Evict scroll-position memory so archived/destroyed sessions don't
-        // leak entries in chatScrollMemory
-        clearChatScrollPosition(sessionId)
         // If deleted current session, switch to another
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')
@@ -855,8 +994,6 @@ export function useChatSession(options: UseChatSessionOptions) {
       const data = await resp.json()
       if (data.ok) {
         clearUsageStateById(sessionId)
-        // Evict scroll-position memory for the destroyed session
-        clearChatScrollPosition(sessionId)
         // After destroying current session, switch to another or create new
         if (sessionId === currentSessionId.value) {
           const sessionsResp = await fetch('/api/ai/sessions')
@@ -949,6 +1086,21 @@ export function useChatSession(options: UseChatSessionOptions) {
       // dedup (loadHistoryInProgress) so has_new_messages + completed don't double-call.
       if (sid === currentSessionId.value && !loading.value && (data.has_new_messages || data.status === 'completed' || data.status === 'cancelled')) {
         loadHistory(false, false, true)
+        // The user is actively viewing this session, so its execution finishing
+        // must clear its unread badge. This is the reliable completion signal
+        // even when the chat_stream 'done' event was missed (e.g. WS reconnect
+        // delivers a fresh session_update). Loading history (GET /api/ai/chat)
+        // no longer marks read — only an explicit mark-as-read call does.
+        // Guarded on app foreground + not a replayed event: a completion
+        // delivered while the app is paused (Android) must NOT clear the badge
+        // — the floating window shows unread sessions only in the background,
+        // and a session finishing there is exactly what should surface as
+        // unread. Same for events replayed after a reconnect: the user was not
+        // watching when it finished, so the badge must survive until opened.
+        if ((data.status === 'completed' || data.status === 'cancelled')
+            && appInForeground.value && !isReplayingEvents.value) {
+          markSessionRead(sid).catch(() => {})
+        }
       }
       // Recalculate chatUnread from backend instead of optimistically setting true.
       // The old code unconditionally set chatUnread=true here, which caused phantom
@@ -1223,11 +1375,13 @@ export function useChatSession(options: UseChatSessionOptions) {
     queuedCount,
     hasMore,
     loadingMore,
+    oldestLoadedId,
     switching,
     // Operations
     loadHistory,
     loadMoreMessages,
     switchSession,
+    markSessionRead,
     createSession,
     archiveSession,
     destroySession,
@@ -1238,6 +1392,10 @@ export function useChatSession(options: UseChatSessionOptions) {
     continueFromExecution,
     forkSession,
     checkContinueSession,
+    // Unsubscribes the foreground-transition mark-read listener. Must be
+    // called when the hosting component unmounts (SPA project switch) so the
+    // module-level foregroundListeners array does not grow stale closures.
+    removeForegroundReadListener,
     // Agent helpers — delegate to singleton
     getAgentBackend,
     getAgentName,

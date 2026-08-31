@@ -162,6 +162,9 @@ export interface QueueEventData {
 export interface ErrorEventData {
   reason?: string
   error?: string
+  error_code?: number
+  http_status?: number
+  error_source?: string
 }
 
 /**
@@ -715,7 +718,7 @@ export type ChatMessageAction =
   | { type: 'ws_user_message'; data: { messageId?: number; content?: string; files?: FileEntry[]; senderClientId?: string; queueId?: string; backend?: string } }
   | { type: 'ws_queue_drain'; queueId: string; text: string; files: FileEntry[]; dbMessageId?: number; backend?: string }
   | { type: 'ws_queue_cancel'; queueIds: string[] }
-  | { type: 'ws_error'; text: string; reason?: string }
+  | { type: 'ws_error'; text: string; reason?: string; errorCode?: number; httpStatus?: number; errorSource?: string }
   | { type: 'stream_finalize' }
   // ── WS block-level (in-place blocks mutation, same array reference) ──
   | { type: 'ws_content'; text: string }
@@ -725,7 +728,7 @@ export type ChatMessageAction =
   | { type: 'ws_tool_use'; data: ToolUseEventData }
   | { type: 'ws_tool_result'; data: ToolUseEventData }
   | { type: 'ws_metadata'; metadata: Record<string, unknown> }
-  | { type: 'ws_warning'; text: string; reason?: string }
+  | { type: 'ws_warning'; text: string; reason?: string; errorCode?: number; httpStatus?: number; errorSource?: string }
   // ── DB rebuild (loadHistory) ──
   | { type: 'db_load'; dbMessages: ChatMessage[] }
 
@@ -1130,7 +1133,17 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
     case 'clear':
       return []
     case 'prepend_older': {
-      state.unshift(...action.olderMsgs)
+      // Defensive dedup: the "older" page must never contain rows already in
+      // the array. A raced loadMore with an empty/string before_id cursor makes
+      // the backend return the most recent window again (instead of strictly
+      // older rows), which would otherwise prepend a full copy of the loaded
+      // history — the reported AABBCC "every message doubled" bug that only a
+      // forced db_load (refresh) could heal. Skip any incoming row whose id
+      // already exists in the array (string or numeric, same identity).
+      const existing = new Set(state.map((m) => String(m.id)))
+      const fresh = action.olderMsgs.filter((m) => !existing.has(String(m.id)))
+      if (fresh.length === 0) return state
+      state.unshift(...fresh)
       sortMessages(state)
       return state
     }
@@ -1213,6 +1226,9 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
       // so the user sees it immediately instead of only after a reload.
       const errorBlock: ContentBlock = { type: 'error', text: action.text || 'Unknown error' }
       if (action.reason) errorBlock.reason = action.reason
+      if (action.errorCode) errorBlock.error_code = action.errorCode
+      if (action.httpStatus) errorBlock.http_status = action.httpStatus
+      if (action.errorSource) errorBlock.error_source = action.errorSource
       const sm = state.find((m) => m.role === 'assistant' && m.streaming)
       if (sm) {
         sm.blocks = [errorBlock]
@@ -1303,7 +1319,12 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
     case 'ws_warning': {
       const sm = state.find((m) => m.role === 'assistant' && m.streaming)
       if (!sm) return state
-      sm.blocks!.push({ type: 'warning', text: action.text, ...(action.reason ? { reason: action.reason } : {}) })
+      const warningBlock: ContentBlock = { type: 'warning', text: action.text }
+      if (action.reason) warningBlock.reason = action.reason
+      if (action.errorCode) warningBlock.error_code = action.errorCode
+      if (action.httpStatus) warningBlock.http_status = action.httpStatus
+      if (action.errorSource) warningBlock.error_source = action.errorSource
+      sm.blocks!.push(warningBlock)
       return state
     }
     case 'db_load': {

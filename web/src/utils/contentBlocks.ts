@@ -15,15 +15,36 @@ export function isSevereWarning(block: { reason?: string }): boolean {
 }
 
 /**
+ * Format the structured error code suffix for a warning/error block.
+ * Returns "" when no structured error info is present.
+ * Prefers the upstream HTTP status when both are present (more actionable
+ * for provider errors, e.g. "500"), otherwise falls back to the JSON-RPC /
+ * internal error code (e.g. "-32603").
+ */
+export function formatErrorCode(
+  block: { error_code?: number; http_status?: number }
+): string {
+  if (block.http_status && block.http_status > 0) {
+    return ` [HTTP ${block.http_status}]`
+  }
+  if (block.error_code && block.error_code !== 0) {
+    return ` [code ${block.error_code}]`
+  }
+  return ''
+}
+
+/**
  * Get localized warning/error text.
  * Uses reason code to look up i18n key, falls back to block.text.
  * For parse_error and backend_exit, appends detail after colon/newline.
  * For request_failed, appends the human-readable error detail.
+ * Appends a structured error-code suffix (e.g. " [HTTP 500]") when present.
  */
 export function getWarningText(
-  block: { reason?: string; text?: string },
+  block: { reason?: string; text?: string; error_code?: number; http_status?: number },
   t: (key: string) => string
 ): string {
+  const codeSuffix = formatErrorCode(block)
   if (block.reason) {
     const key = `chat.contentBlocks.warningReasons.${block.reason}`
     const translated = t(key)
@@ -35,21 +56,36 @@ export function getWarningText(
       if ((block.reason === 'parse_error' || block.reason === 'backend_exit') && block.text) {
         const newlineIdx = block.text.indexOf('\n')
         if (newlineIdx >= 0) {
-          return translated + block.text.substring(newlineIdx)
+          return translated + block.text.substring(newlineIdx) + codeSuffix
         }
         const colonIdx = block.text.indexOf(': ')
         if (colonIdx >= 0) {
-          return translated + ': ' + block.text.substring(colonIdx + 2)
+          return translated + ': ' + block.text.substring(colonIdx + 2) + codeSuffix
         }
       }
       if (block.reason === 'request_failed' && block.text) {
-        return translated + ': ' + block.text
+        return translated + ': ' + block.text + codeSuffix
       }
-      return translated
+      return translated + codeSuffix
     }
   }
   // Fallback: no reason code or no matching i18n key
-  return block.text || ''
+  return (block.text || '') + codeSuffix
+}
+
+/**
+ * Get the localized source label for a warning/error block.
+ * Distinguishes errors originating from the AI agent vs ClawBench itself
+ * vs network/transport issues. Returns "" when no source is tagged.
+ */
+export function getErrorSourceLabel(
+  block: { error_source?: string },
+  t: (key: string) => string
+): string {
+  if (!block.error_source) return ''
+  const key = `chat.contentBlocks.errorSources.${block.error_source}`
+  const translated = t(key)
+  return translated === key ? '' : translated
 }
 
 /**

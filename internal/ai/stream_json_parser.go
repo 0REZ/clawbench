@@ -109,7 +109,7 @@ func (p *StreamJSONParser) ParseLine(line string, ch chan<- StreamEvent) {
 
 	case "message":
 		if msg.Role == "assistant" && msg.Content != "" {
-			ch <- StreamEvent{Type: "content", Content: msg.Content}
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "content", Content: msg.Content})
 		}
 		// Skip user messages — they echo back the input prompt
 
@@ -134,30 +134,30 @@ func (p *StreamJSONParser) ParseLine(line string, ch chan<- StreamEvent) {
 		} else {
 			toolName = normalizeToolName(toolName)
 		}
-		ch <- StreamEvent{Type: "tool_use", Tool: &ToolCall{
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_use", Tool: &ToolCall{
 			Name:  toolName,
 			ID:    msg.ToolID,
 			Input: inputStr,
 			Done:  true, // stream-json format sends full tool input in one event
-		}}
+		}})
 
 	case "tool_result":
 		// Emit tool_result event so the frontend can display tool output
 		if msg.ToolID != "" {
-			ch <- StreamEvent{Type: "tool_result", Tool: &ToolCall{
+			emitStreamEvent(ch, "cli", StreamEvent{Type: "tool_result", Tool: &ToolCall{
 				ID:     msg.ToolID,
 				Output: truncateToolOutput(msg.ToolOutput),
 				Status: msg.Status, // "success" or "error"
-			}}
+			}})
 		}
 
 	case "error":
 		// Emit as warning for severity="warning", error for "error"
 		if msg.Message != "" {
 			if msg.Severity == "error" {
-				ch <- StreamEvent{Type: "error", Error: msg.Message}
+				emitStreamEvent(ch, "cli", StreamEvent{Type: "error", Error: msg.Message})
 			} else {
-				ch <- StreamEvent{Type: "warning", Content: msg.Message}
+				emitStreamEvent(ch, "cli", StreamEvent{Type: "warning", Content: msg.Message})
 			}
 		}
 
@@ -177,13 +177,13 @@ func (p *StreamJSONParser) ParseLine(line string, ch chan<- StreamEvent) {
 				meta.ErrorMessage = msg.Error.Message
 			}
 			if meta.ErrorMessage != "" {
-				ch <- StreamEvent{Type: "warning", Content: meta.ErrorMessage}
+				emitStreamEvent(ch, "cli", StreamEvent{Type: "warning", Content: meta.ErrorMessage})
 			}
 		} else {
 			meta.StopReason = "stop"
 		}
-		ch <- StreamEvent{Type: "metadata", Meta: meta}
-		ch <- StreamEvent{Type: "done"}
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "metadata", Meta: meta})
+		emitStreamEvent(ch, "cli", StreamEvent{Type: "done"})
 
 	default:
 		slog.Debug("stream-json parser: skipping unknown message type", "type", msg.Type)

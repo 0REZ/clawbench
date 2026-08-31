@@ -10,14 +10,20 @@ const mockState = {
     active: ref(null),
     queue: ref([]),
     dismiss: vi.fn(),
+    dismissOnBackdrop: vi.fn(),
 }
 
-const { mockGetAgentBackend } = vi.hoisted(() => ({
+const { mockGetAgentBackend, mockToastShow } = vi.hoisted(() => ({
     mockGetAgentBackend: vi.fn(() => ''),
+    mockToastShow: vi.fn(),
 }))
 
 vi.mock('@/composables/useCompletionPopover', () => ({
     useCompletionPopover: () => mockState,
+}))
+
+vi.mock('@/composables/useToast', () => ({
+    useToast: () => ({ show: mockToastShow }),
 }))
 
 vi.mock('@/composables/useAgents', async (importOriginal) => {
@@ -47,7 +53,6 @@ describe('CompletionPopover', () => {
         mockState.queue = ref([])
         mockGetAgentBackend.mockReturnValue('')
     })
-
     function mountPopover() {
         return mount(CompletionPopover, { attachTo: document.body })
     }
@@ -65,61 +70,103 @@ describe('CompletionPopover', () => {
         expect(el.textContent).toContain('修复登录 bug')
     })
 
-    it('renders the last user message as a single line', () => {
+    it('renders the last user message as a single line quote block', () => {
         mockState.active = ref(makeItem({ userMessage: '请帮我修复登录 bug' }))
         mountPopover()
 
-        const el = document.querySelector('.completion-popover-user-msg')!
-        const text = el.querySelector('.completion-popover-user-msg-text')!
+        const el = document.querySelector('.completion-popover-user-quote')!
+        const text = el.querySelector('.completion-popover-user-quote-text')!
+        // 左侧消息图标（lucide 组件直接渲染为 svg，class 即元素本身）
+        const icon = el.querySelector('.completion-popover-user-quote-icon')
+        expect(icon).toBeTruthy()
+        expect(icon!.tagName.toLowerCase()).toBe('svg')
         expect(text.textContent).toContain('请帮我修复登录 bug')
-        // 省略逻辑在内层文本 span（flex 容器内 text-overflow 不生效）
+        // 折叠态单行省略逻辑在内层文本 span（flex 容器内 text-overflow 不生效）
         const styles = window.getComputedStyle(text)
         expect(styles.textOverflow).toBe('ellipsis')
         expect(styles.overflow).toBe('hidden')
         expect(styles.whiteSpace).toBe('nowrap')
     })
 
-    it('styles the user message as a mini chat bubble (left-aligned, solid color, capsule, leading icon)', () => {
+    it('styles the user message as a quote block (left accent border, no radius, tinted bg)', () => {
         mockState.active = ref(makeItem({ userMessage: '请帮我修复登录 bug' }))
         mountPopover()
 
         const row = document.querySelector('.completion-popover-meta-user')!
-        const el = document.querySelector('.completion-popover-user-msg')!
+        const el = document.querySelector('.completion-popover-user-quote')!
         const rowStyles = window.getComputedStyle(row)
         // 行容器靠左对齐
         expect(rowStyles.justifyContent).toBe('flex-start')
-        // 气泡：袖珍尺寸、白字（jsdom 可解析字面量计算值，
-        // 能证明专属块胜出公共块的 11px 灰字）
+        // 引用块：inline-flex 布局容纳图标 + 文本，宽度随内容自适应（max-width: 100% 仅作上限）
         const styles = window.getComputedStyle(el)
-        expect(styles.fontSize).toBe('12px')
-        expect(styles.padding).toBe('3px 10px')
-        expect(styles.color).toBe('rgb(255, 255, 255)')
-        // 气泡 inline-flex 布局容纳图标+文本，宽度不超过容器
         expect(styles.display).toBe('inline-flex')
         expect(styles.maxWidth).toBe('100%')
-        // 左侧消息图标
-        const icon = el.querySelector('svg')
-        expect(icon).toBeTruthy()
-        expect(el.querySelector('.completion-popover-user-msg-text')).toBeTruthy()
+        expect(styles.fontSize).toBe('12px')
 
-        // jsdom 无法解析 var() 引用与 border-radius 计算值，
-        // 这两项改为断言组件注入的 CSS 规则文本（其余走计算值）
+        // 元信息行无负 margin（引用块不铺满卡片宽度）
+        const cssRow = Array.from(document.styleSheets)
+            .map((s) => {
+                try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n') }
+                catch { return '' }
+            })
+            .join('\n')
+        const metaRule = cssRow.split('\n').filter((line) => line.includes('.completion-popover-meta-user')).join('\n')
+        expect(metaRule).not.toContain('margin-left: -10px')
+        expect(metaRule).not.toContain('margin-right: -10px')
+
+        // jsdom 无法解析 color-mix()/var() 与 border-radius 计算值，
+        // 这些改为断言组件注入的 CSS 规则文本（其余走计算值）
         const cssText = Array.from(document.styleSheets)
             .map((s) => {
                 try { return Array.from(s.cssRules).map((r) => r.cssText).join('\n') }
                 catch { return '' }
             })
             .join('\n')
-        const bubbleRule = cssText.split('\n').filter((line) => line.includes('.completion-popover-user-msg')).join('\n')
-        expect(bubbleRule).toContain('background: var(--user-msg-color)')
-        expect(bubbleRule).toContain('border-radius: 999px')
+        const quoteRule = cssText.split('\n').filter((line) => line.includes('.completion-popover-user-quote')).join('\n')
+        // 左侧 accent 竖线描边、无圆角、淡色底
+        expect(quoteRule).toContain('border-left: 2px solid var(--accent-color)')
+        expect(quoteRule).toContain('border-radius: 0')
+        expect(quoteRule).toContain('background: color-mix(in srgb, var(--accent-color) 10%')
+        // 折叠态不应保留胶囊气泡样式
+        expect(quoteRule).not.toContain('999px')
+        expect(quoteRule).not.toContain('var(--user-msg-color)')
     })
 
-    it('removes the divider between the user message bubble and the assistant summary', () => {
+    it('expands the user message quote block on click and collapses on second click', async () => {
         mockState.active = ref(makeItem({ userMessage: '请帮我修复登录 bug' }))
         mountPopover()
 
-        // 用户消息行自身不应有 border（气泡靠实底底色分层）
+        const el = document.querySelector('.completion-popover-user-quote')!
+        const text = el.querySelector('.completion-popover-user-quote-text')!
+
+        // 初始折叠：单行省略、未展开态
+        expect(el.classList.contains('is-expanded')).toBe(false)
+        expect(el.getAttribute('aria-expanded')).toBe('false')
+        expect(window.getComputedStyle(text).whiteSpace).toBe('nowrap')
+
+        // 无展开提示图标（用户点击即可展开，不展示额外提示）
+        expect(el.querySelector('.completion-popover-user-quote-chevron')).toBeFalsy()
+
+        // 点击展开：文本换行显示完整内容
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await nextTick()
+        expect(el.classList.contains('is-expanded')).toBe(true)
+        expect(el.getAttribute('aria-expanded')).toBe('true')
+        expect(window.getComputedStyle(text).whiteSpace).toBe('pre-wrap')
+
+        // 再次点击收起
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await nextTick()
+        expect(el.classList.contains('is-expanded')).toBe(false)
+        expect(el.getAttribute('aria-expanded')).toBe('false')
+        expect(window.getComputedStyle(text).whiteSpace).toBe('nowrap')
+    })
+
+    it('removes the divider between the user message quote block and the assistant summary', () => {
+        mockState.active = ref(makeItem({ userMessage: '请帮我修复登录 bug' }))
+        mountPopover()
+
+        // 用户消息行自身不应有 border（引用块自身已带左侧描边分层）
         const metaRow = document.querySelector('.completion-popover-meta-user')!
         const rowStyles = window.getComputedStyle(metaRow)
         expect(rowStyles.borderTopStyle).toBe('none')
@@ -158,26 +205,29 @@ describe('CompletionPopover', () => {
         mockState.active = ref(makeItem({ userMessage: '' }))
         mountPopover()
 
-        expect(document.querySelector('.completion-popover-user-msg')).toBeFalsy()
+        expect(document.querySelector('.completion-popover-user-quote')).toBeFalsy()
     })
 
-    it('keeps a long user message on a single line and preserves the full text via title', () => {
-        const longMessage = '这是一个非常非常非常非常非常非常非常非常非常非常非常非常长的用户消息，用来验证气泡内的文本超出宽度时保持单行并显示省略号'
+    it('keeps a long user message on a single line and expands to full content on click', async () => {
+        const longMessage = '这是一个非常非常非常非常非常非常非常非常非常非常非常非常长的用户消息，用来验证引用块内的文本超出宽度时保持单行并显示省略号'
         mockState.active = ref(makeItem({ userMessage: longMessage }))
         mountPopover()
 
-        const el = document.querySelector('.completion-popover-user-msg')!
-        const text = el.querySelector('.completion-popover-user-msg-text')!
-        // 完整文本仍在 DOM（省略号只是视觉裁剪，title 兜底完整内容）
+        const el = document.querySelector('.completion-popover-user-quote')!
+        const text = el.querySelector('.completion-popover-user-quote-text')!
+        // 完整文本仍在 DOM（省略号只是视觉裁剪，点击可展开查看完整内容）
         expect(text.textContent).toBe(longMessage)
-        expect(el.getAttribute('title')).toBe(longMessage)
+        // 折叠态：单行不换行 + 溢出隐藏 + 省略号
         const styles = window.getComputedStyle(text)
-        // 单行不换行 + 溢出隐藏 + 省略号
         expect(styles.whiteSpace).toBe('nowrap')
         expect(styles.overflow).toBe('hidden')
         expect(styles.textOverflow).toBe('ellipsis')
-        // 文本 span 可收缩（min-width: 0），否则长文本会撑破气泡容器
+        // 文本 span 可收缩（min-width: 0），否则长文本会撑破引用块容器
         expect(styles.minWidth).toBe('0px')
+        // 点击后展开为完整可读内容
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await nextTick()
+        expect(window.getComputedStyle(text).whiteSpace).toBe('pre-wrap')
     })
 
     it('renders the project name and path when provided', () => {
@@ -373,8 +423,9 @@ describe('CompletionPopover', () => {
         expect(mockState.dismiss).not.toHaveBeenCalled()
     })
 
-    it('clicking outside the card (on the backdrop) hides without navigating', () => {
+    it('clicking outside the card (on the backdrop) goes through the guarded dismiss', () => {
         mockState.active = ref(makeItem())
+        mockState.dismissOnBackdrop.mockReturnValue(true)
         mountPopover()
 
         const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
@@ -384,7 +435,9 @@ describe('CompletionPopover', () => {
         backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
         expect(dispatchSpy).not.toHaveBeenCalled()
-        expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        // backdrop 关闭走带防误触保护的 dismissOnBackdrop（最小停留时长在 composable 层拦截）
+        expect(mockState.dismissOnBackdrop).toHaveBeenCalledTimes(1)
+        expect(mockState.dismiss).not.toHaveBeenCalled()
     })
 
     it('clicking a code-block copy button inside the summary does not navigate', () => {
@@ -518,6 +571,31 @@ describe('CompletionPopover', () => {
             expect.stringContaining('/api/ai/chat/read?session_id=s42'),
             expect.objectContaining({ method: 'POST' })
         )
+        // 发送成功弹出确认气泡（文案随当前语言环境，这里只断言调用发生与类型）
+        expect(mockToastShow).toHaveBeenCalledTimes(1)
+        expect(mockToastShow).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'success' }))
+    })
+
+    it('does not show a sent toast when sending fails (keeps popover open)', async () => {
+        mockState.active = ref(makeItem({ sessionId: 's42' }))
+        mountPopover()
+
+        const fetchMock = vi.fn().mockResolvedValue({ ok: false })
+        globalThis.fetch = fetchMock
+
+        const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
+        textarea.value = '会失败的回复'
+        textarea.dispatchEvent(new Event('input'))
+        await nextTick()
+
+        const sendBtn = document.querySelector('.completion-popover-send')!
+        sendBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        await vi.waitFor(() => {
+            // 失败时不得弹出"已发送"气泡，也不关闭弹窗
+            expect(mockToastShow).not.toHaveBeenCalled()
+            expect(mockState.dismiss).not.toHaveBeenCalled()
+        })
     })
 
     it('does not send when input is empty', () => {
@@ -555,5 +633,8 @@ describe('CompletionPopover', () => {
             )
             expect(mockState.dismiss).toHaveBeenCalledTimes(1)
         })
+        // 标记已读成功弹出确认气泡（文案随当前语言环境，这里只断言调用发生与类型）
+        expect(mockToastShow).toHaveBeenCalledTimes(1)
+        expect(mockToastShow).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'success' }))
     })
 })

@@ -50,7 +50,12 @@ public class MainActivityConnectionRecoveryTest {
 
     @Before
     public void setUp() throws Exception {
-        activity = allocate(MainActivity.class);
+        activity = allocateAndSpy(MainActivity.class);
+
+        // The spy activity has no attached Context (Unsafe.allocateInstance),
+        // so getString() would return null. Stub it with the Chinese resource
+        // texts the assertions expect.
+        stubGetString();
 
         // Set the static instance field
         Field instanceField = MainActivity.class.getDeclaredField("instance");
@@ -824,6 +829,24 @@ public class MainActivityConnectionRecoveryTest {
             allocate.setAccessible(true);
             return (T) allocate.invoke(unsafe, clazz);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T allocateAndSpy(Class<T> clazz) throws Exception {
+        return org.mockito.Mockito.spy(allocate(clazz));
+    }
+
+    /**
+     * Stub getString on the spy activity so it returns the Chinese resource
+     * texts the assertions expect (the spy has no attached Context and would
+     * otherwise return null). Called in setUp.
+     */
+    private void stubGetString() {
+        doAnswer(inv -> {
+            int resId = inv.getArgument(0);
+            String v = MainActivityZhText.get(resId);
+            return v != null ? v : "";
+        }).when(activity).getString(org.mockito.ArgumentMatchers.anyInt());
     }
 
     private static void setField(Object target, String fieldName, Object value) throws Exception {

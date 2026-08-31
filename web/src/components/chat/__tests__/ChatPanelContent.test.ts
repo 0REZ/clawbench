@@ -451,25 +451,27 @@ describe('ensureMessageContent behavioral contract', () => {
  * are filled.
  */
 describe('ChatPanelContent — ensureMessageContent scroll re-sync', () => {
-  it('source calls scrollBottom() after populating msg.blocks', async () => {
+  it('source calls scrollBottom(true) after populating msg.blocks', async () => {
     const mod = await import('@/components/chat/ChatPanelContent.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
-    // The lazy fetch must re-sync scroll right after blocks are assigned,
-    // so a force-scrolled view is pinned back to the bottom (isAtBottom=true)
-    // while a manual toggle keeps the current reading position.
+    // The lazy fetch must re-sync scroll right after blocks are assigned:
+    // a force-scrolled view (switch-back, isAtBottom=true) is pinned back to
+    // the bottom; a manual toggle while reading (isAtBottom=false) keeps the
+    // current reading position. Force is needed so content growth after the
+    // initial pin is not rejected by the follow decision.
     const region = source.slice(source.indexOf('async function ensureMessageContent'), source.indexOf('async function handleRefreshSession'))
     expect(region).toContain('msg.blocks = blocks')
-    expect(region).toMatch(/msg\.blocks = blocks[\s\S]*?scrollBottom\(\)/)
+    expect(region).toMatch(/msg\.blocks = blocks[\s\S]*?scrollBottom\(true\)/)
   })
 
-  it('source calls scrollBottom() without force to respect user scroll position', async () => {
+  it('source guards re-sync with shouldStayPinned to respect user scroll position', async () => {
     const mod = await import('@/components/chat/ChatPanelContent.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     const region = source.slice(source.indexOf('async function ensureMessageContent'), source.indexOf('async function handleRefreshSession'))
-    // Non-force scrollBottom keeps isAtBottom guard in ChatMessageList:
-    // user at bottom (switch-back) → pinned; user reading earlier → position kept.
-    expect(region).toMatch(/scrollBottom\(\)/)
-    expect(region).not.toMatch(/scrollBottom\(true\)/)
+    // The shouldStayPinned guard in ChatMessageList keeps the force pin from
+    // firing when the user scrolled away: user at bottom (switch-back) →
+    // pinned; user reading earlier → position kept.
+    expect(region).toMatch(/shouldStayPinned\?\.\(\).*scrollBottom\(true\)/)
   })
 })
 

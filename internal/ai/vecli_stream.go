@@ -13,7 +13,7 @@ type VeCLIStreamParser struct{}
 // ParseLine emits a content event for each line of VeCLI output.
 // Every line is treated as plain text content.
 func (p *VeCLIStreamParser) ParseLine(line string, ch chan<- StreamEvent) {
-	ch <- StreamEvent{Type: "content", Content: line + "\n"}
+	emitStreamEvent(ch, "vecli", StreamEvent{Type: "content", Content: line + "\n"})
 }
 
 // GetCapturedSessionID returns empty string — VeCLI has no session resume support.

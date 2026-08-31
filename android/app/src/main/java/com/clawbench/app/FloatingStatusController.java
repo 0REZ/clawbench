@@ -26,8 +26,15 @@ import java.util.function.BiConsumer;
  * task_update events, app foreground state, and user dismissal. Handles
  * drag-to-snap positioning (persisted to SharedPreferences) and tap-to-open.
  *
- * Capsule taps always expand the grouped panel (the panel's session rows are
- * the single tap-to-open entry point, carrying session id + project path).
+ * While the app is in the background the window is always shown: the capsule
+ * renders live stats while a session is active / unread items remain, and an
+ * idle "空闲" state when nothing is worth drawing attention to. It is only
+ * hidden when the app returns to the foreground or the user dismisses it.
+ *
+ * Capsule taps with content expand the grouped panel (the panel's session rows
+ * are the single tap-to-open entry point, carrying session id + project path);
+ * an idle capsule tap brings the app back to the foreground instead (via
+ * onIdleCapsuleTap).
  *
  * The panel's height follows its content: after each render the panel is
  * measured and the window height is updated to min(content, screen), so a few
@@ -50,16 +57,11 @@ public class FloatingStatusController {
     private static final String KEY_RATIO_X = "floating_window_ratio_x";
     private static final String KEY_RATIO_Y = "floating_window_ratio_y";
 
-    /** How long the "done" terminal state stays visible before fading out. */
-    private static final long TERMINAL_SHOW_MS = 3000;
+    /** Fade-in duration when the window first appears. */
     private static final long FADE_MS = 300;
-    /** Duration of the collapse-to-circle stage of the hide animation. */
-    private static final long COLLAPSE_MS = 200;
     private static final int EDGE_MARGIN_DP = 8;
     /** Fallback capsule width estimate (dp) used before the view is measured. */
     private static final int DEFAULT_CAPSULE_WIDTH_DP = 120;
-    /** Capsule height = logo diameter + 2 * 7dp vertical padding (38dp). */
-    private static final int CAPSULE_HEIGHT_DP = 38;
     /** Drag opacity while moving. */
     private static final float DRAG_ALPHA = 0.85f;
 
@@ -86,10 +88,10 @@ public class FloatingStatusController {
     private volatile boolean appForeground;
     private volatile boolean userDismissed;
     private volatile boolean expanded;
-    private Runnable fadeHideRunnable;
-    private android.animation.ValueAnimator collapseAnimator;
     private BiConsumer<String, String> onSessionClick;
     private OverviewRequestListener overviewRequestListener;
+    /** Invoked when an idle capsule (no active / unread content) is tapped. */
+    private Runnable onIdleCapsuleTap;
     /** Last time an event-triggered overview refresh was requested (throttle). */
     private volatile long lastOverviewRequestMs;
 
@@ -136,13 +138,24 @@ public class FloatingStatusController {
 
     /**
      * Whether the floating window should be shown right now. Pure: no framework
-     * deps. The window is only meaningful while the app is in the background,
-     * there is an active task or an unread session (either is worth drawing
-     * the user's attention to), and the user has not dismissed it.
+     * deps. While the app is in the background the window is always shown —
+     * with live stats when a session is active or unread items remain, and an
+     * idle "空闲" capsule otherwise — unless the user has dismissed it. Only
+     * returning to the foreground (or an explicit user dismissal) hides it.
      */
     public static boolean shouldShow(boolean appForeground, boolean hasActive,
                                      boolean hasUnread, boolean userDismissed) {
-        return !appForeground && (hasActive || hasUnread) && !userDismissed;
+        return !appForeground && !userDismissed;
+    }
+
+    /**
+     * Whether any session is active (running / pending approval) or has unread
+     * messages — i.e. the window has content worth drawing attention to. Pure:
+     * no framework deps. The capsule renders live stats when this is true and
+     * an idle "空闲" state when it is false.
+     */
+    public static boolean hasContent(boolean hasActive, boolean hasUnread) {
+        return hasActive || hasUnread;
     }
 
     /**
@@ -229,12 +242,28 @@ public class FloatingStatusController {
     }
 
     /**
-     * Public entry point for a capsule tap: always expand the grouped panel.
-     * Session-specific open actions happen through the panel's session rows
-     * (which carry the tapped session id + project path). Any thread.
+     * Public entry point for a capsule tap. With active or unread content the
+     * tap always expands the grouped panel; an idle capsule (no content worth
+     * showing) instead fires onIdleCapsuleTap so the service can bring the app
+     * back to the foreground. Session-specific open actions happen through the
+     * panel's session rows (which carry the tapped session id + project path).
+     * Any thread.
      */
     public void onCapsuleTap() {
-        setExpanded(true);
+        if (hasContent(hasActive, lastUnreadCount > 0)) {
+            setExpanded(true);
+        } else if (onIdleCapsuleTap != null) {
+            onIdleCapsuleTap.run();
+        }
+    }
+
+    /**
+     * Callback invoked when an idle capsule (no active session, no unread
+     * messages) is tapped. The service wires this to bring the app back to the
+     * foreground; the controller only fires it and stays hidden.
+     */
+    public void setOnIdleCapsuleTap(Runnable listener) {
+        this.onIdleCapsuleTap = listener;
     }
 
     /**
@@ -271,10 +300,13 @@ public class FloatingStatusController {
                 // streaming event fired moments before the expand.
                 requestOverviewRefresh(true);
             } else {
-                // Collapse: back to the capsule if a session is still active,
-                // otherwise hide the window entirely.
+                // Collapse: back to the capsule (live stats if content remains,
+                // the idle "空闲" state otherwise). The window stays up while
+                // the app is in the background; only the foreground or a user
+                // dismissal hides it.
                 if (shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed)) {
                     attachView(view != null ? view : buildCapsuleView());
+                    renderCapsuleStats();
                 } else {
                     hideWindow();
                 }
@@ -322,16 +354,18 @@ public class FloatingStatusController {
                 resizePanelIfNeeded();
                 // A session list that emptied out (the last running session
                 // finished and nothing is left worth showing) must not leave a
-                // hollow panel behind: collapse it, which hides the window
-                // because shouldShow is false.
-                if (!shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed)) {
+                // hollow panel behind: collapse it. The window itself stays up
+                // as the idle capsule (shouldShow only gates on foreground and
+                // user dismissal, never on content).
+                if (!hasContent(hasActive, lastUnreadCount > 0)) {
                     setExpanded(false);
                 }
             } else if (shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed) && !windowShowing) {
-                // WS-connect fallback: a running session discovered via the
-                // overview (whose start event was missed while the WS was down)
-                // must bring up the capsule even though no event triggered it.
-                cancelPendingHide();
+                // Background + not dismissed: the window is always up. On WS
+                // connect the overview is the first reliable state signal — a
+                // running session discovered here (whose start event was missed
+                // while the WS was down) must bring up the capsule, and an
+                // empty overview brings up the idle capsule.
                 ensureWindow();
             }
             // The stats capsule always reflects the latest overview so its
@@ -391,16 +425,10 @@ public class FloatingStatusController {
         } else if (hasActive && overview.optInt("total", 0) == 0) {
             // No running session anywhere in the overview and nothing left
             // worth showing (total counts unread / pending-approval items too):
-            // every session ended while the WS was down, so reset hasActive and
-            // hide the lingering window. total > 0 means unread or pending
-            // items remain — keep the window.
+            // every session ended while the WS was down, so reset hasActive.
+            // The window stays up — the next render shows the idle capsule —
+            // because shouldShow only gates on foreground and user dismissal.
             hasActive = false;
-            postToUi(() -> {
-                if (!expanded) {
-                    cancelPendingHide();
-                    hideWindow();
-                }
-            });
         }
     }
 
@@ -484,7 +512,6 @@ public class FloatingStatusController {
                 + " sessionId=" + sessionId + " active=" + active);
 
         postToUi(() -> {
-            cancelPendingHide();
             if (active) {
                 if (shouldShow(appForeground, true, lastUnreadCount > 0, userDismissed)) {
                     ensureWindow();
@@ -496,32 +523,12 @@ public class FloatingStatusController {
                     requestOverviewRefresh();
                 }
             } else {
-                // Terminal state: show the "done" capsule briefly, then fade out.
-                // While the panel is expanded the user is looking at the list,
-                // so never auto-hide it; the overview refresh keeps it current.
+                // Terminal state: reflect the updated counts on the capsule.
+                // The window never auto-hides — with no active session or
+                // unread items left it simply shows the idle "空闲" state.
                 if (windowShowing && !expanded) {
-                    if (!runningSessions.isEmpty()) {
-                        // Other sessions are still running: keep the capsule up
-                        // with the updated counts (terminal event may have
-                        // dropped this session's running/pending state).
-                        renderCapsuleStats();
-                        // The overview refresh re-seeds the running set and the
-                        // fresh overview drives the capsule's stats.
-                        requestOverviewRefresh();
-                    } else if (lastUnreadCount > 0) {
-                        // Last session ended but unread sessions remain: keep
-                        // the capsule up (showing the unread count) instead of
-                        // auto-hiding, so the user is reminded to read them.
-                        renderCapsuleStats();
-                        requestOverviewRefresh();
-                    } else {
-                        // Last session ended with nothing left worth showing:
-                        // reflect the empty counts instantly (breathing stops,
-                        // groups hide) before the fade-out.
-                        renderCapsuleStats();
-                        requestOverviewRefresh();
-                        scheduleTerminalHide();
-                    }
+                    renderCapsuleStats();
+                    requestOverviewRefresh();
                 }
             }
         });
@@ -544,6 +551,23 @@ public class FloatingStatusController {
         });
     }
 
+    /**
+     * Re-render text after a system locale change. The capsule re-resolves its
+     * resource strings; an expanded panel re-fetches the overview and re-renders
+     * so the (Untitled) fallback follows the new locale. Any thread; UI
+     * mutations are marshalled.
+     */
+    public void onLocaleChanged() {
+        postToUi(() -> {
+            if (view != null) {
+                view.refreshLocaleText();
+            }
+        });
+        if (expanded) {
+            requestOverviewRefresh(true);
+        }
+    }
+
     /** App foreground state changes drive visibility directly. Any thread. */
     public void setAppForeground(boolean foreground) {
         appForeground = foreground;
@@ -559,7 +583,6 @@ public class FloatingStatusController {
             if (foreground) {
                 hideWindow();
             } else if (shouldShow(false, hasActive, lastUnreadCount > 0, userDismissed)) {
-                cancelPendingHide();
                 ensureWindow();
                 renderCapsuleStats();
             }
@@ -571,11 +594,9 @@ public class FloatingStatusController {
         userDismissed = dismissed;
         postToUi(() -> {
             if (dismissed) {
-                cancelPendingHide();
                 hideWindow();
             } else if (shouldShow(appForeground, hasActive, lastUnreadCount > 0, false)) {
                 // Re-evaluate: un-dismissing should restore the window if conditions hold.
-                cancelPendingHide();
                 ensureWindow();
                 renderCapsuleStats();
             }
@@ -595,8 +616,6 @@ public class FloatingStatusController {
         // runnables, but it must NOT drop our own teardown, otherwise the
         // window is never removed from the WindowManager.
         Runnable cleanup = () -> {
-            cancelPendingHide();
-            cancelCollapse();
             if (view != null) {
                 view.animate().cancel();
                 view.stopBreathing();
@@ -672,20 +691,15 @@ public class FloatingStatusController {
 
     private void ensureWindow() {
         if (windowShowing) {
-            // A hide may be in flight (alpha < 1 or a collapse-to-circle width
-            // animation); cancel it and restore the full view state so a fresh
-            // active event makes the window reappear. cancel() does not run the
-            // hide's end action, so everything is restored here.
+            // A hide may be in flight (alpha < 1); cancel it and restore the
+            // full alpha so a fresh active event makes the window reappear.
+            // cancel() does not run the hide's end action, so everything is
+            // restored here.
             if (attachedView != null) {
                 attachedView.animate().cancel();
                 attachedView.setAlpha(1f);
-                cancelCollapse();
-                if (attachedView instanceof FloatingStatusView) {
-                    ((FloatingStatusView) attachedView).expandFromCircle();
-                }
                 // Re-apply role sizing: an expanded panel must keep its fixed
-                // 280dp width, a capsule its wrap-content — never a leftover
-                // collapse animation width.
+                // 280dp width, a capsule its wrap-content.
                 applyViewSizing();
             }
             return;
@@ -850,143 +864,6 @@ public class FloatingStatusController {
         // Panel content is dark/translucent; keep the drag alpha subtle.
         attachTouchListener(panelView);
         return panelView;
-    }
-
-    private void hideWithFade() {
-        if (!windowShowing || attachedView == null) {
-            return;
-        }
-        final View fadeView = attachedView;
-        if (fadeView instanceof FloatingStatusView && params != null) {
-            // Two-stage hide for the capsule:
-            //   1. collapse — stat groups are removed and the window width
-            //      animates down to the capsule height (38dp). With symmetric
-            //      padding the frame becomes a true circle holding only the
-            //      centered logo.
-            //   2. fade — the whole window fades out, then is removed.
-            final FloatingStatusView capsule = (FloatingStatusView) fadeView;
-            collapseToCircle(capsule, () -> {
-                if (destroyed) {
-                    return;
-                }
-                fadeView.animate()
-                        .alpha(0f)
-                        .setDuration(FADE_MS)
-                        .withEndAction(() -> {
-                            if (destroyed) {
-                                return;
-                            }
-                            hideWindow();
-                            fadeView.setAlpha(1f);
-                            if (attachedView instanceof FloatingStatusView) {
-                                ((FloatingStatusView) attachedView).expandFromCircle();
-                            }
-                        })
-                        .start();
-            });
-        } else {
-            fadeView.animate()
-                    .alpha(0f)
-                    .setDuration(FADE_MS)
-                    .withEndAction(() -> {
-                        if (destroyed) {
-                            return;
-                        }
-                        hideWindow();
-                        fadeView.setAlpha(1f);
-                    })
-                    .start();
-        }
-    }
-
-    /**
-     * Collapse a FloatingStatusView capsule to a logo-only circle: the stat
-     * groups are removed and the window width animates from its current width
-     * down to the capsule height, so the pill becomes a true circle holding
-     * only the centered logo (the capsule's horizontal padding is made
-     * symmetric by prepareCircleCollapse first). Width is a WindowManager
-     * layout property, so each animation frame re-issues updateViewLayout.
-     * UI thread only.
-     */
-    private void collapseToCircle(final FloatingStatusView capsule, final Runnable onDone) {
-        int startWidth = capsule.getMeasuredWidth();
-        if (startWidth <= 0) {
-            startWidth = capsuleWidthPx;
-        }
-        int targetWidth = Math.round(CAPSULE_HEIGHT_DP * context.getResources().getDisplayMetrics().density);
-        capsule.prepareCircleCollapse(targetWidth);
-        android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofInt(startWidth, targetWidth);
-        anim.setDuration(COLLAPSE_MS);
-        anim.setInterpolator(new android.view.animation.DecelerateInterpolator());
-        anim.addUpdateListener(a -> {
-            params.width = (Integer) a.getAnimatedValue();
-            try {
-                windowManager.updateViewLayout(capsule, params);
-            } catch (IllegalArgumentException e) {
-                AppLog.w(TAG, "collapseToCircle updateViewLayout failed", e);
-            }
-        });
-        anim.addListener(new android.animation.AnimatorListenerAdapter() {
-            @Override
-            public void onAnimationEnd(android.animation.Animator animation) {
-                // cancel() (from cancelCollapse / ensureWindow) also fires
-                // onAnimationEnd; only a natural completion may start the fade.
-                if (collapseAnimator != animation) {
-                    return;
-                }
-                collapseAnimator = null;
-                if (onDone != null && !destroyed) {
-                    onDone.run();
-                }
-            }
-        });
-        collapseAnimator = anim;
-        anim.start();
-    }
-
-    /**
-     * Cancel the collapse-to-circle width animation and restore the window to
-     * its normal layout, so a re-shown capsule sizes itself normally. The
-     * capsule's width goes back to wrap-content; an expanded panel keeps its
-     * fixed 280dp width (never the capsule's wrap-content — that would let the
-     * panel measure at full screen width and stretch across the whole screen).
-     * UI thread only.
-     */
-    private void cancelCollapse() {
-        if (collapseAnimator != null) {
-            // Null first so the animator's onAnimationEnd (fired by cancel)
-            // does not chain into the fade-out stage.
-            android.animation.ValueAnimator anim = collapseAnimator;
-            collapseAnimator = null;
-            anim.cancel();
-        }
-        if (params != null) {
-            if (expanded) {
-                params.width = Math.round(PANEL_WIDTH_DP * context.getResources().getDisplayMetrics().density);
-            } else {
-                params.width = WindowManager.LayoutParams.WRAP_CONTENT;
-            }
-        }
-    }
-
-    private void cancelPendingHide() {
-        if (fadeHideRunnable != null) {
-            handler.removeCallbacks(fadeHideRunnable);
-            fadeHideRunnable = null;
-        }
-    }
-
-    private void scheduleTerminalHide() {
-        fadeHideRunnable = () -> {
-            fadeHideRunnable = null;
-            if (shouldShow(appForeground, hasActive, lastUnreadCount > 0, userDismissed)) {
-                // A newer active event superseded the terminal display, or
-                // unread sessions remain (worth keeping the window up).
-                return;
-            }
-            hideWithFade();
-        };
-        handler.postDelayed(fadeHideRunnable, TERMINAL_SHOW_MS);
     }
 
     private boolean canDrawOverlays() {

@@ -45,6 +45,9 @@
         :type="entry.field.type"
         :model-value="getLocalValue(entry.field)"
         :options="resolveFieldOptions(entry.field)"
+        :option-previews="entry.field.key === 'terminalTheme' ? terminalThemePreviews : undefined"
+        :terminal-theme-load-error="entry.field.key === 'terminalTheme' ? (terminalThemeLoadState === 'error' && terminalThemeRetriesExhausted) : false"
+        :on-retry-terminal-themes="entry.field.key === 'terminalTheme' ? retryTerminalThemes : undefined"
         :min="entry.field.min"
         :max="entry.field.max"
         :step="entry.field.step"
@@ -168,7 +171,8 @@ import { useFrp } from '@/composables/useFrp'
 import { useRagStatus } from '@/composables/useRagStatus'
 import { useDialog } from '@/composables/useDialog'
 import { apiPost } from '@/utils/api'
-import { SORTED_THEME_IDS, formatThemeName } from '@/utils/terminalThemes'
+import { SORTED_THEME_IDS, buildTerminalThemePreviews, formatThemeName, loadThemesModule } from '@/utils/terminalThemes'
+import type { TerminalPreview } from './SettingsItem.vue'
 
 // ── Props & Emits ──
 
@@ -206,6 +210,75 @@ const {
 
 const activeKey = ref<string | null>(null)
 const entryPicker = useTabDrawer('settings', { autoRestore: false })
+
+// ── Terminal theme lazy loading ──
+
+const loadedTerminalThemes = ref<Record<string, import('@xterm/xterm').ITheme> | null>(null)
+const terminalThemeLoadState = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+const terminalThemeLoadAttempts = ref(0)
+/** 自动重试是否已耗尽（此后失败需要用户手动重试）。 */
+const terminalThemeRetriesExhausted = ref(false)
+
+/** 自动重试次数上限（首次加载 + 最多 3 次自动重试，之后才需要手动）。 */
+const TERMINAL_THEME_MAX_AUTO_RETRIES = 3
+const TERMINAL_THEME_RETRY_DELAY_MS = 1500
+let terminalThemeRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 懒加载终端主题配色（首次打开终端主题网格时触发）。失败后自动延迟重试
+ * （最多 TERMINAL_THEME_MAX_AUTO_RETRIES 次），耗尽后才显示手动重试横幅。
+ * 偶发的 chunk 加载失败会在重试中自愈，无需重启页面。
+ */
+async function ensureTerminalThemesLoaded() {
+  if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
+  terminalThemeLoadState.value = 'loading'
+  terminalThemeLoadAttempts.value++
+  try {
+    loadedTerminalThemes.value = await loadThemesModule()
+    terminalThemeLoadState.value = 'loaded'
+    terminalThemeRetriesExhausted.value = false
+  } catch {
+    terminalThemeLoadState.value = 'error'
+    if (terminalThemeLoadAttempts.value <= TERMINAL_THEME_MAX_AUTO_RETRIES) {
+      scheduleTerminalThemeRetry()
+    } else {
+      terminalThemeRetriesExhausted.value = true
+    }
+  }
+}
+
+/** 延迟后自动重试（幂等：已加载/加载中时跳过）。 */
+function scheduleTerminalThemeRetry() {
+  if (terminalThemeRetryTimer) return
+  terminalThemeRetryTimer = setTimeout(() => {
+    terminalThemeRetryTimer = null
+    void ensureTerminalThemesLoaded()
+  }, TERMINAL_THEME_RETRY_DELAY_MS)
+}
+
+/** 终端主题加载失败后的手动重试（自动重试耗尽后兜底）。重置计数开启新一轮自动重试。 */
+function retryTerminalThemes() {
+  if (terminalThemeLoadState.value === 'loaded' || terminalThemeLoadState.value === 'loading') return
+  terminalThemeRetriesExhausted.value = false
+  terminalThemeLoadAttempts.value = 0
+  void ensureTerminalThemesLoaded()
+}
+
+onUnmounted(() => {
+  if (terminalThemeRetryTimer) {
+    clearTimeout(terminalThemeRetryTimer)
+    terminalThemeRetryTimer = null
+  }
+})
+
+const isTerminalThemeField = computed(() =>
+  props.config.commonFields.some(f => f.key === 'terminalTheme')
+)
+
+const terminalThemePreviews = computed<Record<string, TerminalPreview> | undefined>(() => {
+  if (!isTerminalThemeField.value) return undefined
+  return buildTerminalThemePreviews(loadedTerminalThemes.value)
+})
 
 // ── Lifecycle ──
 
@@ -413,6 +486,7 @@ function resolveFieldOptions(field: ItemSpec): { label: string; value: unknown }
 function handleEditToggle(key: string, open: boolean) {
   if (open) {
     activeKey.value = key
+    if (key === 'terminalTheme') void ensureTerminalThemesLoaded()
   } else if (activeKey.value === key) {
     activeKey.value = null
   }

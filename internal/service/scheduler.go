@@ -199,6 +199,31 @@ func (s *Scheduler) CancelAllExecutions(taskID int64) {
 	})
 }
 
+// CancelAllRunning cancels every running execution across all tasks. Called by
+// the graceful-shutdown path so scheduled-task executors can run Finalize
+// (streaming=0 + final content) before the DB closes — without it, a long-
+// running CLI task would keep streaming into a DB that is about to close.
+func (s *Scheduler) CancelAllRunning() {
+	if s == nil {
+		return
+	}
+	s.runningExecutions.Range(func(key, value any) bool {
+		exec, ok := value.(*RunningExecution)
+		if !ok || exec == nil {
+			slog.Warn("unexpected type in runningExecutions, deleting entry", slog.Any("key", key))
+			s.runningExecutions.Delete(key)
+			return true
+		}
+		exec.CancelFunc()
+		slog.Info(
+			"shutdown: cancelled running execution",
+			slog.String("exec_id", exec.ID),
+			slog.Int64("task_id", exec.TaskID),
+		)
+		return true
+	})
+}
+
 // LoadTasksFromDB loads active tasks from the database and registers them.
 // If projectPath is empty, loads tasks from all projects.
 func (s *Scheduler) LoadTasksFromDB(projectPath string) error {
@@ -792,8 +817,18 @@ func (s *Scheduler) executeTask(task *model.ScheduledTask, projectPath string, t
 		emitTaskEvent(fmt.Sprintf("%d", task.ID), "cancelled", fmt.Sprintf("%d", executionID), sessionID, projectPath, task.Name)
 		// Only update stats, not status — don't overwrite user-initiated pauses (ISS-013)
 		UpdateTaskStats(task)
-		// Finalize orphaned streaming messages since executor.Finalize() was skipped
-		FinalizeOrphanedMessages(sessionID, "")
+		// Persist any batched tool-call/context-state writes accumulated since
+		// the last flush window, so the cancelled task's final content survives.
+		executor.flushStreamingMessage()
+		// Finalize orphaned streaming messages since executor.Finalize() was skipped.
+		// cancelReason="user": this is a user-initiated/graceful cancel — suppress
+		// the misleading "Finalization failed, AI response may be incomplete"
+		// warning block (the stream is truncated by intent, not by a DB failure).
+		FinalizeOrphanedMessages(sessionID, "user")
+		// executor.Finalize() was skipped, so unregister here — otherwise the
+		// active-streams registry (used by graceful shutdown) would keep waiting
+		// on an executor that will never finalize.
+		executor.unregisterActiveStream()
 		// Drain the event channel in the background until the producer closes it.
 		// Without this the producer goroutine can block forever on a full channel
 		// (parser sends are not ctx-aware), leaking the goroutine.
@@ -820,8 +855,14 @@ func (s *Scheduler) executeTask(task *model.ScheduledTask, projectPath string, t
 		emitTaskEvent(fmt.Sprintf("%d", task.ID), "failed", fmt.Sprintf("%d", executionID), sessionID, projectPath, task.Name)
 		// Only update stats, not status — don't overwrite user-initiated pauses (ISS-013)
 		UpdateTaskStats(task)
+		// Persist any batched tool-call/context-state writes accumulated since
+		// the last flush window, so the failed task's partial content survives.
+		executor.flushStreamingMessage()
 		// Finalize orphaned streaming messages since executor.Finalize() was skipped
 		FinalizeOrphanedMessages(sessionID, "")
+		// executor.Finalize() was skipped, so unregister here — see the cancel
+		// path above.
+		executor.unregisterActiveStream()
 		// Drain the event channel in the background until the producer closes it.
 		// See comment on the cancel path above.
 		go func() {

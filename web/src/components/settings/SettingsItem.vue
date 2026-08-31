@@ -173,7 +173,16 @@
       <Palette :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ label }}</span>
     </template>
-    <div class="theme-picker-grid">
+    <div class="theme-picker-grid" :class="{ 'theme-picker-grid--wide': isTerminalThemeSelect }">
+      <div
+        v-if="terminalThemeLoadError"
+        class="theme-picker-error"
+      >
+        <span class="theme-picker-error-text">{{ t('settings.items.terminalThemeLoadFailed') }}</span>
+        <button class="theme-picker-error-retry" @click.stop="onRetryTerminalThemes?.()">
+          {{ t('common.retry') }}
+        </button>
+      </div>
       <div
         v-for="opt in options"
         :key="opt.value as PropertyKey"
@@ -182,13 +191,30 @@
         @click="selectOption(opt.value)"
       >
         <div
+          v-if="terminalPreviewFor(opt)"
+          class="theme-picker-swatch theme-picker-swatch--terminal"
+        >
+          <TerminalPreviewCard
+            :theme="terminalPreviewFor(opt)?.theme"
+            :auto="opt.value === 'auto'"
+          />
+        </div>
+        <div
+          v-else
           class="theme-picker-swatch"
-          :class="{ 'theme-picker-swatch--auto': opt.value === 'auto' }"
+          :class="{ 'theme-picker-swatch--auto': opt.value === 'auto', 'theme-picker-swatch--label': previewFor(opt)?.type === 'color' }"
           :style="previewStyleFor(opt)"
         >
-          <span class="theme-picker-swatch-accent"></span>
+          <span class="theme-picker-swatch-label">
+            <span class="theme-picker-swatch-label-text">{{ opt.label }}</span>
+          </span>
+          <component
+            :is="themeBaseIconFor(opt)"
+            :size="12"
+            class="theme-picker-swatch-base-icon"
+          />
         </div>
-        <span class="theme-picker-cell-label">{{ opt.label }}</span>
+        <span v-if="terminalPreviewFor(opt)" class="theme-picker-cell-label">{{ opt.label }}</span>
         <span v-if="modelValue === opt.value" class="theme-picker-cell-check">✓</span>
       </div>
     </div>
@@ -198,12 +224,20 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown } from 'lucide-vue-next'
+import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown, Sun, Moon } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'
+import TerminalPreviewCard from '@/components/common/TerminalPreviewCard.vue'
+import { isDarkTheme, resolveThemeId } from '@/utils/themeMeta'
 
 const { t } = useI18n()
+
+/** App 主题卡片预览（三色色块 + 主题名样例文字）。 */
+export interface ColorPreview { type: 'color'; bg: string; text: string; accent: string; themeId: string }
+/** 终端主题卡片预览（迷你终端）。theme 懒加载完成前可为 undefined（渲染骨架占位）。 */
+export interface TerminalPreview { type: 'terminal'; themeId: string; theme?: import('@xterm/xterm').ITheme }
+export type OptionPreview = ColorPreview | TerminalPreview
 
 interface Props {
   label: string
@@ -211,9 +245,10 @@ interface Props {
   type: 'switch' | 'select' | 'number' | 'text' | 'slider' | 'action' | 'info' | 'header' | 'password' | 'textarea'
   modelValue?: unknown
   options?: { label: string; value: unknown; modelName?: string }[]
-  /** Optional per-option color previews (bg/text/accent) — when provided, the
-   *  select renders as a theme grid picker instead of a plain option list. */
-  optionPreviews?: Record<string, { bg: string; text: string; accent: string }>
+  /** Optional per-option previews — when provided, the select renders as a
+   *  theme grid picker instead of a plain option list. Two kinds supported:
+   *  color (bg/text/accent swatch) and terminal (mini terminal preview). */
+  optionPreviews?: Record<string, OptionPreview>
   min?: number
   max?: number
   step?: number
@@ -238,6 +273,10 @@ interface Props {
   rebuilding?: boolean
   /** Tooltip text for rebuild icon */
   rebuildTitle?: string
+  /** Terminal theme lazy-load failed — show a retry banner in the terminal grid. */
+  terminalThemeLoadError?: boolean
+  /** Retry handler for a failed terminal theme lazy-load. */
+  onRetryTerminalThemes?: () => void
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -277,7 +316,24 @@ const themePicker = useTabDrawer('settings', { autoRestore: false })
 /** Whether this select should render the theme grid picker (has per-option previews). */
 const isThemeSelect = computed(() => !!props.optionPreviews)
 
-/** Build the inline style for a theme swatch. Auto option gets a light/dark split. */
+/** Whether this theme select uses terminal preview cards (any option is terminal-typed). */
+const isTerminalThemeSelect = computed(() =>
+  !!props.optionPreviews &&
+  Object.values(props.optionPreviews).some(p => p.type === 'terminal')
+)
+
+/** Look up the preview payload for an option value. */
+function previewFor(opt: { label: string; value: unknown }): OptionPreview | undefined {
+  return props.optionPreviews?.[String(opt.value)]
+}
+
+/** Narrow an option's preview to a terminal preview (undefined for color/absent). */
+function terminalPreviewFor(opt: { label: string; value: unknown }): TerminalPreview | undefined {
+  const p = previewFor(opt)
+  return p?.type === 'terminal' ? p : undefined
+}
+
+/** Build the inline style for a color swatch. Auto option gets a light/dark split. */
 function previewStyleFor(opt: { label: string; value: unknown }): Record<string, string> {
   if (opt.value === 'auto') {
     return {
@@ -286,12 +342,21 @@ function previewStyleFor(opt: { label: string; value: unknown }): Record<string,
     }
   }
   const p = props.optionPreviews?.[String(opt.value)]
-  if (!p) return {}
+  if (!p || p.type !== 'color') return {}
   return {
     background: p.bg,
     color: p.text,
     '--swatch-accent': p.accent,
   }
+}
+
+/**
+ * Light/dark indicator icon for a color swatch (sun for light, moon for dark).
+ * Auto follows the resolved system theme, mirroring the AppHeader theme menu.
+ */
+function themeBaseIconFor(opt: { label: string; value: unknown }) {
+  const themeId = opt.value === 'auto' ? resolveThemeId('auto') : String(opt.value)
+  return isDarkTheme(themeId) ? Moon : Sun
 }
 
 // Slider debounce: only emit final value after 300ms of inactivity
@@ -881,6 +946,53 @@ function confirmEdit() {
   padding: 12px 16px 20px;
 }
 
+.theme-picker-grid--wide {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+/* Terminal theme lazy-load failure banner (spans full grid width) */
+.theme-picker-error {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, #ef4444 30%, transparent);
+}
+
+.theme-picker-error-text {
+  font-size: 12px;
+  color: #ef4444;
+  line-height: 1.4;
+}
+
+.theme-picker-error-retry {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .theme-picker-error-retry:hover {
+    background: var(--accent-hover);
+  }
+}
+
+.theme-picker-swatch--terminal {
+  height: 88px;
+  border: none;
+  background: transparent;
+}
+
 .theme-picker-cell {
   display: flex;
   flex-direction: column;
@@ -891,7 +1003,7 @@ function confirmEdit() {
 }
 
 .theme-picker-swatch {
-  height: 52px;
+  height: 64px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   position: relative;
@@ -904,15 +1016,39 @@ function confirmEdit() {
   border: 2px dashed var(--border-color);
 }
 
-.theme-picker-swatch-accent {
+/* Light/dark indicator icon in the top-right corner of a color swatch */
+.theme-picker-swatch-base-icon {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--swatch-accent, var(--accent-color));
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.15);
+  top: 5px;
+  right: 5px;
+  color: var(--swatch-accent, var(--text-muted));
+  flex-shrink: 0;
+}
+
+.theme-picker-swatch-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4px 6px;
+}
+
+.theme-picker-swatch-label-text {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: inherit;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.theme-picker-swatch--auto .theme-picker-swatch-label-text {
+  color: #666666;
 }
 
 .theme-picker-cell--active .theme-picker-swatch {

@@ -97,6 +97,7 @@ public class BackgroundService extends Service {
     private static final String KEY_LAST_SEEN_EVENT_ID = "last_seen_event_id";
     private static final String KEY_NATIVE_PUSH_ENABLED = "native_push_enabled";
     private static final String KEY_FLOATING_WINDOW_ENABLED = "floating_window_enabled";
+    private static final String KEY_LIVE_UPDATE_ENABLED = "live_update_enabled";
 
     // Reconnect parameters: exponential backoff delays in milliseconds
     private static final int[] RECONNECT_DELAYS_MS = {5000, 10000, 30000, 60000, 120000};
@@ -217,6 +218,10 @@ public class BackgroundService extends Service {
     // Service instance's lifecycle. Created in onCreate() when the floating
     // window feature is enabled, destroyed in onDestroy(). Null otherwise.
     private FloatingStatusController floatingController;
+    // Android 16 Live Updates (promoted ongoing notification). Always present
+    // while the service runs; it mirrors the floating window's overview + event
+    // data source so the status-bar chip and the floating capsule agree.
+    private LiveUpdateManager liveUpdateManager;
     // Most recently seen session_id from session_update/task_update events,
     // tracked so the panel's session rows can deep-link into the right session.
     private volatile String floatingSessionId = "";
@@ -311,9 +316,10 @@ public class BackgroundService extends Service {
                 .apply();
         if (!enabled) {
             // Stop native WS and cancel WorkManager polling — but only when the
-            // floating window is also disabled: the floating window consumes the
-            // same native WS event stream, so it must keep the connection alive.
-            if (!isFloatingWindowEnabled(context)) {
+            // floating window and the Live Updates chip are also disabled: both
+            // consume the same native WS event stream, so either one keeps the
+            // connection alive.
+            if (!isFloatingWindowEnabled(context) && !isLiveUpdateEnabled(context)) {
                 stopNativeEventWs(context);
             }
             cancelPendingEventsWork(context);
@@ -349,6 +355,34 @@ public class BackgroundService extends Service {
     }
 
     /**
+     * Check whether the Android 16 Live Updates (promoted ongoing notification)
+     * feature is enabled. Defaults to true — it is a core background status
+     * surface, unlike the opt-in floating window.
+     */
+    public static boolean isLiveUpdateEnabled(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_LIVE_UPDATE_ENABLED, true);
+    }
+
+    /**
+     * Enable or disable the Android 16 Live Updates status chip.
+     * Takes effect immediately when the service is running: enabling creates
+     * the manager, disabling destroys it (which removes any visible chip).
+     * Otherwise the change applies on the next service creation.
+     */
+    public static void setLiveUpdateEnabled(Context context, boolean enabled) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_LIVE_UPDATE_ENABLED, enabled)
+                .apply();
+        AppLog.i(TAG, "LiveUpdate: set enabled=" + enabled);
+        BackgroundService svc = instance;
+        if (svc != null && isRunning) {
+            svc.syncLiveUpdateController();
+        }
+    }
+
+    /**
      * Align the floating controller with the persisted enable flag.
      * Creates the controller when the feature is enabled (hidden while the
      * main activity is foreground), destroys it when disabled. Called from
@@ -362,6 +396,10 @@ public class BackgroundService extends Service {
             // its project path (capsule taps always expand the panel).
             floatingController.setOnSessionClick((sid, projectPath) ->
                     MainActivity.launchFromFloatingWindow(sid, projectPath));
+            // An idle capsule tap (no active / unread content) brings the app
+            // back to the foreground; a bare launch without a session deep link.
+            floatingController.setOnIdleCapsuleTap(() ->
+                    MainActivity.launchFromFloatingWindow(null));
             // Every panel expand / event-while-expanded pulls a fresh overview.
             floatingController.setOverviewRequestListener(() -> {
                 String serverUrl = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -379,6 +417,34 @@ public class BackgroundService extends Service {
             floatingController.destroy();
             floatingController = null;
             AppLog.i(TAG, "FloatingWindow: controller destroyed (toggle off)");
+        }
+    }
+
+    /**
+     * Align the Live Updates manager with the persisted enable flag.
+     * Creates the manager when the feature is enabled, destroys it (removing
+     * any visible chip) when disabled. Called from onCreate() and whenever the
+     * toggle changes while the service is running. Independent of the floating
+     * window — either can be on while the other is off.
+     */
+    private void syncLiveUpdateController() {
+        boolean enabled = isLiveUpdateEnabled(this);
+        if (enabled && liveUpdateManager == null) {
+            liveUpdateManager = new LiveUpdateManager(this);
+            // Events alone cannot update unread; pull a fresh overview on each
+            // session event so the chip stays current while backgrounded.
+            liveUpdateManager.setOverviewRequestListener(() -> {
+                String serverUrl = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                        .getString(KEY_SERVER_URL, "");
+                if (!serverUrl.isEmpty()) {
+                    networkExecutor.execute(() -> fetchOverviewSessions(serverUrl));
+                }
+            });
+            AppLog.i(TAG, "LiveUpdate: manager initialized");
+        } else if (!enabled && liveUpdateManager != null) {
+            liveUpdateManager.destroy();
+            liveUpdateManager = null;
+            AppLog.i(TAG, "LiveUpdate: manager destroyed (toggle off)");
         }
     }
 
@@ -710,6 +776,12 @@ public class BackgroundService extends Service {
         // Created here so it lives exactly as long as this Service instance.
         syncFloatingController();
 
+        // Android 16 Live Updates: a promoted ongoing notification summarizing
+        // running / pending-approval / unread session counts. Independent of
+        // the floating window (separate opt-in toggle, on by default). Created
+        // here so it lives exactly as long as this Service instance.
+        syncLiveUpdateController();
+
         // NOTE: Do NOT call stopSelf() here even if forwardedPorts is empty!
         // The Service may have been started by startForegroundService(ADD_PORT)
         // and the ADD_PORT intent hasn't been delivered yet (onStartCommand comes
@@ -835,6 +907,10 @@ public class BackgroundService extends Service {
             floatingController.destroy();
             floatingController = null;
         }
+        if (liveUpdateManager != null) {
+            liveUpdateManager.destroy();
+            liveUpdateManager = null;
+        }
         stopConnectionMonitor();
         releaseWifiLock();
         releaseWakeLock();
@@ -872,6 +948,25 @@ public class BackgroundService extends Service {
                     SystemClock.elapsedRealtime() + 1000, pendingIntent);
         }
         super.onTaskRemoved(rootIntent);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // The system locale changed: re-resolve floating-window strings so the
+        // capsule/panel follow the system language immediately.
+        refreshFloatingLocale();
+    }
+
+    /**
+     * Re-render floating-window text after a language change (in-app switch via
+     * setLanguage or a system locale change). Safe to call when the controller
+     * is not running.
+     */
+    public void refreshFloatingLocale() {
+        if (floatingController != null) {
+            floatingController.onLocaleChanged();
+        }
     }
 
     @Nullable
@@ -1013,7 +1108,8 @@ public class BackgroundService extends Service {
                     AppLog.w(TAG, "SSH: session disconnected, starting auto-reconnect");
                     isReconnecting = true;
                     reconnectAttempt = 0;
-                    updateNotification(forwardedPorts.size(), "SSH 隧道断开，正在重连…");
+                    updateNotification(forwardedPorts.size(),
+                            getString(R.string.ssh_notification_reconnecting));
 
                     while (monitorActive && !intentionalDisconnect && !Thread.currentThread().isInterrupted()) {
                         reconnectAttempt++;
@@ -1024,7 +1120,7 @@ public class BackgroundService extends Service {
                         if (reconnectAttempt > 1) {
                             int displayAttempt = Math.min(reconnectAttempt, 999);
                             updateNotification(forwardedPorts.size(),
-                                    "SSH 隧道断开，第 " + displayAttempt + " 次重连…");
+                                    getString(R.string.notif_ssh_reconnecting_attempt, displayAttempt));
                             try {
                                 Thread.sleep(delay);
                             } catch (InterruptedException e) {
@@ -1041,7 +1137,8 @@ public class BackgroundService extends Service {
                             AppLog.i(TAG, "SSH: auto-reconnect succeeded on attempt #" + reconnectAttempt);
                             isReconnecting = false;
                             reconnectAttempt = 0;
-                            updateNotification(forwardedPorts.size(), "SSH 隧道已恢复");
+                            updateNotification(forwardedPorts.size(),
+                                    getString(R.string.ssh_notification_recovering));
                             // Clear the "recovered" status after 3 seconds
                             try {
                                 Thread.sleep(3000);
@@ -1661,19 +1758,19 @@ public class BackgroundService extends Service {
                 // Background connectivity channel (low priority, no sound)
                 android.app.NotificationChannel channel = new android.app.NotificationChannel(
                         CHANNEL_ID,
-                        "后台连接服务",
+                        getString(R.string.notif_channel_bg_service),
                         android.app.NotificationManager.IMPORTANCE_LOW
                 );
-                channel.setDescription("SSH 端口映射与后台事件监听");
+                channel.setDescription(getString(R.string.notif_channel_bg_service_desc));
                 nm.createNotificationChannel(channel);
 
                 // AI events channel (high priority, sound + vibration)
                 android.app.NotificationChannel eventsChannel = new android.app.NotificationChannel(
                         EVENTS_CHANNEL_ID,
-                        "AI 事件通知",
+                        getString(R.string.notif_channel_ai_events),
                         android.app.NotificationManager.IMPORTANCE_HIGH
                 );
-                eventsChannel.setDescription("AI会话和任务完成通知");
+                eventsChannel.setDescription(getString(R.string.notif_channel_ai_events_desc));
                 eventsChannel.enableLights(true);
                 eventsChannel.setVibrationPattern(new long[]{0, 300, 200, 300});
                 nm.createNotificationChannel(eventsChannel);
@@ -1693,7 +1790,7 @@ public class BackgroundService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        String title = "ClawBench";
+        String title = getString(R.string.app_name);
         String text;
         if (statusText != null) {
             text = statusText;
@@ -1701,19 +1798,19 @@ public class BackgroundService extends Service {
             // Build combined status text showing port forwards and terminal sessions
             StringBuilder sb = new StringBuilder();
             if (portCount > 0) {
-                sb.append(portCount).append(" 个端口映射");
+                sb.append(getString(R.string.notif_ports_mapped, portCount));
             }
             int terms = terminalSessionCount;
             if (terms > 0) {
-                if (sb.length() > 0) sb.append("，");
-                sb.append(terms).append(" 个终端");
+                if (sb.length() > 0) sb.append(getString(R.string.notif_status_separator));
+                sb.append(getString(R.string.notif_terminals_open, terms));
             }
             if (nativeWsNeeded || nativeWsActive) {
                 if (sb.length() == 0) {
-                    sb.append("消息监听中");
+                    sb.append(getString(R.string.notif_listening));
                 }
             }
-            text = sb.length() > 0 ? sb.toString() : "后台服务即将停止";
+            text = sb.length() > 0 ? sb.toString() : getString(R.string.notif_service_stopping);
         }
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -1738,7 +1835,7 @@ public class BackgroundService extends Service {
         }
         // If SSH is down but native WS is active, show that instead of zombie port count
         if (activePortCount == 0 && (nativeWsNeeded || nativeWsActive)) {
-            return buildNotification(0, "消息监听中");
+            return buildNotification(0, getString(R.string.notif_listening));
         }
         return buildNotification(activePortCount, null);
     }
@@ -1758,7 +1855,7 @@ public class BackgroundService extends Service {
         AppLog.i(TAG, "SSH: cleaning up " + stale + " stale port entries (SSH disconnected, no reconnect possible)");
         forwardedPorts.clear();
         saveForwardedPorts();
-        updateNotification(0, nativeWsNeeded || nativeWsActive ? "消息监听中" : null);
+        updateNotification(0, nativeWsNeeded || nativeWsActive ? getString(R.string.notif_listening) : null);
     }
 
     // --- Foreground service compat ---
@@ -2418,6 +2515,19 @@ public class BackgroundService extends Service {
                     AppLog.w(TAG, "FloatingWindow: handleEvent failed", e);
                 }
 
+                // Feed the Live Updates status chip from the same event stream.
+                // Isolated so a manager exception cannot break the notification
+                // / cursor logic below.
+                try {
+                    if (liveUpdateManager != null
+                            && ("session_update".equals(event) || "task_update".equals(event))) {
+                        liveUpdateManager.onEvent(event, data.optString("status", ""),
+                                data.optString("session_id", ""));
+                    }
+                } catch (Exception e) {
+                    AppLog.w(TAG, "LiveUpdate: onEvent failed", e);
+                }
+
                 // Only notify for terminal states and permission pending
                 String status = data.optString("status", "");
                 boolean shouldNotify = false;
@@ -2763,7 +2873,9 @@ public class BackgroundService extends Service {
      * (network I/O).
      */
     private void fetchOverviewSessions(String serverUrl) {
-        if (floatingController == null) {
+        // The overview feeds both the floating window and the Live Updates
+        // chip; pull it whenever either consumer is alive.
+        if (floatingController == null && liveUpdateManager == null) {
             return;
         }
         try {
@@ -2804,7 +2916,12 @@ public class BackgroundService extends Service {
                     return;
                 }
                 JSONObject data = new JSONObject(body);
-                floatingController.onOverviewLoaded(data);
+                if (floatingController != null) {
+                    floatingController.onOverviewLoaded(data);
+                }
+                if (liveUpdateManager != null) {
+                    liveUpdateManager.onOverviewLoaded(data);
+                }
             }
         } catch (Exception e) {
             AppLog.w(TAG, "FloatingWindow: overview poll failed", e);
@@ -2886,6 +3003,20 @@ public class BackgroundService extends Service {
             String sessionTitle = data.optString("session_title", "");
             String toolName = data.optString("tool_name", "");
 
+            // Sync the Live Updates status chip from the same event when the
+            // service instance is alive (WS may be down — this is exactly the
+            // Worker fallback the chip relies on). Isolated so a failure here
+            // cannot break the regular event notification below.
+            try {
+                BackgroundService svc = getInstance();
+                if (svc != null && svc.liveUpdateManager != null
+                        && ("session_update".equals(eventType) || "task_update".equals(eventType))) {
+                    svc.liveUpdateManager.onEvent(eventType, status, sessionId);
+                }
+            } catch (Exception e) {
+                AppLog.w(TAG, "LiveUpdate: Worker onEvent failed", e);
+            }
+
             // Ensure notification channel exists
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 android.app.NotificationManager nm = context.getSystemService(android.app.NotificationManager.class);
@@ -2893,9 +3024,9 @@ public class BackgroundService extends Service {
                     android.app.NotificationChannel channel = nm.getNotificationChannel(EVENTS_CHANNEL_ID);
                     if (channel == null) {
                         channel = new android.app.NotificationChannel(
-                                EVENTS_CHANNEL_ID, "AI 事件通知",
+                                EVENTS_CHANNEL_ID, context.getString(R.string.notif_channel_ai_events),
                                 android.app.NotificationManager.IMPORTANCE_HIGH);
-                        channel.setDescription("AI会话和任务完成通知");
+                        channel.setDescription(context.getString(R.string.notif_channel_ai_events_desc));
                         channel.enableLights(true);
                         channel.setVibrationPattern(new long[]{0, 300, 200, 300});
                         nm.createNotificationChannel(channel);

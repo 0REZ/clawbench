@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -29,14 +30,14 @@ import java.util.function.BiConsumer;
  * Renders the /api/ai/sessions/overview response as a scrollable list grouped
  * by project. UI is built in code (no XML): a header row with the shared
  * capsule content (logo + live stat counts, see FloatingStatusContentView)
- * and a collapse ("×") button, followed by per-project group headers and
+ * and a collapse (chevron-up) button, followed by per-project group headers and
  * session rows. Each session row shows a tri-color status indicator, a
  * single-line ellipsized title, and a red circular unread badge when
  * unreadCount > 0. Tapping a row invokes the onSessionClick callback.
  *
  * Status dots follow a fixed priority (yellow > green > blue):
  *   - PENDING  (yellow): pendingApproval, regardless of running/unread
- *   - RUNNING  (green):  running && !pendingApproval — the dot breathes
+ *   - RUNNING  (green):  running && !pendingApproval — the ring-arc spins
  *   - UNREAD   (blue):   !running && !pendingApproval && unreadCount > 0
  *   - NONE:     no dot
  * The decision is the static pure function statusDotKind(SessionItem) so it
@@ -72,19 +73,23 @@ public class FloatingStatusPanelView extends FrameLayout {
     private static final int PADDING_H_DP = 14;
     private static final int PADDING_V_DP = 10;
     private static final int COLLAPSE_BTN_SIZE_DP = 22;
-    private static final int COLLAPSE_BTN_TEXT_SIZE_SP = 16;
+    /** Icon size inside the collapse button (the touch target stays larger). */
+    private static final int COLLAPSE_BTN_ICON_SIZE_DP = 16;
     private static final int PROJECT_HEADER_SIZE_SP = 11;
     private static final int PROJECT_HEADER_PADDING_TOP_DP = 10;
+    /** Gap between the bold project name and the following path in a group header. */
+    private static final int PROJECT_HEADER_NAME_PATH_GAP_DP = 6;
     private static final int SESSION_ROW_PADDING_TOP_DP = 10;
     private static final int SESSION_TITLE_SIZE_SP = 13;
     private static final int DOT_SIZE_DP = 8;
     private static final int DOT_MARGIN_END_DP = 8;
 
-    // Breathing animation for a running session's green dot (same rhythm as
-    // the capsule's running dot in FloatingStatusView).
-    private static final float BREATH_ALPHA_MIN = 0.3f;
-    private static final float BREATH_ALPHA_MAX = 1.0f;
-    private static final long BREATH_MS = 800;
+    // Spin animation for a running session's green ring-arc (same rhythm as
+    // the capsule's running indicator in FloatingStatusView).
+    private static final long SPIN_MS = 900;
+    // Skeleton placeholder rows breathe (alpha pulse) while loading.
+    private static final float SKELETON_ALPHA_MAX = 1.0f;
+    private static final long SKELETON_BREATH_MS = 800;
 
     // Skeleton loading row layout.
     private static final int SKELETON_ROWS = 4;
@@ -126,8 +131,8 @@ public class FloatingStatusPanelView extends FrameLayout {
     /** Theme-derived gray used for skeleton placeholder rows (mix of textSecondary with the panel bg). */
     private final int skeletonGray;
     private Runnable onCollapseClick;
-    /** Views currently breathing; stopped when rows are rebuilt. */
-    private final List<View> breathingDots = new ArrayList<>();
+    /** Running ring-arc views currently spinning; stopped when rows are rebuilt. */
+    private final List<View> spinningDots = new ArrayList<>();
 
     /**
      * A single session as it appears in the overview list.
@@ -269,11 +274,18 @@ public class FloatingStatusPanelView extends FrameLayout {
         header.addView(headerContentView, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView collapseBtn = new TextView(context);
-        collapseBtn.setText("×");
-        collapseBtn.setTextSize(COLLAPSE_BTN_TEXT_SIZE_SP);
-        collapseBtn.setTextColor(colorTextSecondary);
-        collapseBtn.setGravity(Gravity.CENTER);
+        // Collapse button: a chevron-up icon (Web's ChevronUp) that collapses
+        // the expanded panel back to the capsule. Tinted with the theme's
+        // secondary text color so it matches the rest of the header on both
+        // light and dark themes.
+        ImageView collapseBtn = new ImageView(context);
+        collapseBtn.setImageResource(R.drawable.ic_panel_collapse);
+        collapseBtn.setColorFilter(colorTextSecondary);
+        collapseBtn.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        // Keep the 24dp icon visually smaller (16dp) inside the 22dp touch
+        // target via symmetric padding.
+        int iconPad = dp((COLLAPSE_BTN_SIZE_DP - COLLAPSE_BTN_ICON_SIZE_DP) / 2);
+        collapseBtn.setPadding(iconPad, iconPad, iconPad, iconPad);
         collapseBtn.setClickable(true);
         collapseBtn.setOnClickListener(v -> {
             if (onCollapseClick != null) {
@@ -347,11 +359,16 @@ public class FloatingStatusPanelView extends FrameLayout {
                 }
             }
         }
+        // Stop stale row/header animations BEFORE re-rendering so the header's
+        // spin restarts below (renderHeaderStats starts it again). Ordering
+        // matters: stopBreathing() cancels the header animator, so it must run
+        // before renderHeaderStats re-arms it — otherwise the title-bar ring
+        // never spins.
+        stopBreathing();
         renderHeaderStats(runningCount, pendingCount, unreadCount);
 
-        stopBreathing();
         listContainer.removeAllViews();
-        breathingDots.clear();
+        spinningDots.clear();
         for (ProjectGroup group : groups) {
             listContainer.addView(buildProjectHeader(group.name));
             for (SessionItem session : group.sessions) {
@@ -373,7 +390,7 @@ public class FloatingStatusPanelView extends FrameLayout {
     public void showSkeleton() {
         stopBreathing();
         listContainer.removeAllViews();
-        breathingDots.clear();
+        spinningDots.clear();
 
         for (int i = 0; i < SKELETON_ROWS; i++) {
             listContainer.addView(buildSkeletonRow());
@@ -443,8 +460,8 @@ public class FloatingStatusPanelView extends FrameLayout {
      */
     private void breatheSkeleton(ViewGroup container, long seq) {
         ObjectAnimator anim = ObjectAnimator.ofFloat(container, "alpha",
-                SKELETON_BAR_ALPHA, BREATH_ALPHA_MAX);
-        anim.setDuration(BREATH_MS * 2);
+                SKELETON_BAR_ALPHA, SKELETON_ALPHA_MAX);
+        anim.setDuration(SKELETON_BREATH_MS * 2);
         anim.setRepeatCount(ObjectAnimator.INFINITE);
         anim.setRepeatMode(ObjectAnimator.REVERSE);
         anim.addUpdateListener(a -> {
@@ -533,17 +550,68 @@ public class FloatingStatusPanelView extends FrameLayout {
     }
 
     private View buildProjectHeader(String name) {
-        TextView header = new TextView(getContext());
-        header.setText(name);
-        header.setTextSize(PROJECT_HEADER_SIZE_SP);
-        header.setTextColor(colorTextSecondary);
-        header.setTypeface(Typeface.DEFAULT_BOLD);
-        header.setIncludeFontPadding(false);
+        // Project group header: the short project name (last path segment) in
+        // bold primary text leads, followed by the full path in regular
+        // secondary text. The path is given the remaining width and ellipsizes
+        // on one line, so a long path never pushes the name off-screen.
+        LinearLayout header = new LinearLayout(getContext());
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView nameView = new TextView(getContext());
+        nameView.setText(baseName(name));
+        nameView.setTextSize(PROJECT_HEADER_SIZE_SP);
+        nameView.setTextColor(colorTextPrimary);
+        nameView.setTypeface(Typeface.DEFAULT_BOLD);
+        nameView.setIncludeFontPadding(false);
+        nameView.setSingleLine(true);
+        header.addView(nameView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        TextView pathView = new TextView(getContext());
+        pathView.setText(name);
+        pathView.setTextSize(PROJECT_HEADER_SIZE_SP);
+        pathView.setTextColor(colorTextSecondary);
+        pathView.setTypeface(Typeface.DEFAULT);
+        pathView.setIncludeFontPadding(false);
+        pathView.setSingleLine(true);
+        pathView.setMaxLines(1);
+        pathView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams pathLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pathLp.setMargins(dp(PROJECT_HEADER_NAME_PATH_GAP_DP), 0, 0, 0);
+        header.addView(pathView, pathLp);
+
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(PROJECT_HEADER_PADDING_TOP_DP);
         header.setLayoutParams(lp);
         return header;
+    }
+
+    /**
+     * Extract the last path segment (project name) from a project path, e.g.
+     * "/home/user/proj" -> "proj". Pure: handles both '/' and '\' separators
+     * and trailing slashes, with no Android framework dependency.
+     */
+    static String baseName(String path) {
+        if (path == null || path.isEmpty()) {
+            return path == null ? "" : path;
+        }
+        int end = path.length();
+        while (end > 0 && (path.charAt(end - 1) == '/' || path.charAt(end - 1) == '\\')) {
+            end--;
+        }
+        int start = end;
+        while (start > 0) {
+            char c = path.charAt(start - 1);
+            if (c == '/' || c == '\\') {
+                break;
+            }
+            start--;
+        }
+        String base = path.substring(start, end);
+        return base.isEmpty() ? path : base;
     }
 
     private View buildSessionRow(SessionItem session, String projectPath,
@@ -552,17 +620,21 @@ public class FloatingStatusPanelView extends FrameLayout {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
-        // Tri-color status dot: yellow (pending) > green (running, breathing)
-        // > blue (unread), else none.
+        // Tri-color status dot: yellow (pending) > green (running, spinning
+        // ring-arc) > blue (unread), else none.
         StatusDotKind kind = statusDotKind(session);
         if (kind != StatusDotKind.NONE) {
             View dot = new View(getContext());
-            GradientDrawable dotDrawable = new GradientDrawable();
-            dotDrawable.setShape(GradientDrawable.OVAL);
-            dotDrawable.setColor(colorFor(kind));
-            dot.setBackground(dotDrawable);
             if (kind == StatusDotKind.RUNNING) {
-                breathingDots.add(dot);
+                // Running: the same ring-arc spinner as the capsule/header —
+                // a faint full ring plus a short foreground arc that rotates.
+                dot.setBackground(new ArcProgressDrawable(COLOR_RUNNING, dp(DOT_SIZE_DP)));
+                spinningDots.add(dot);
+            } else {
+                GradientDrawable dotDrawable = new GradientDrawable();
+                dotDrawable.setShape(GradientDrawable.OVAL);
+                dotDrawable.setColor(colorFor(kind));
+                dot.setBackground(dotDrawable);
             }
             LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(
                     dp(DOT_SIZE_DP), dp(DOT_SIZE_DP));
@@ -571,7 +643,8 @@ public class FloatingStatusPanelView extends FrameLayout {
         }
 
         TextView title = new TextView(getContext());
-        title.setText(session.title == null || session.title.isEmpty() ? "(无标题)" : session.title);
+        title.setText(session.title == null || session.title.isEmpty()
+                ? UserLanguage.resolve(getContext(), R.string.session_untitled) : session.title);
         title.setTextSize(SESSION_TITLE_SIZE_SP);
         title.setTextColor(colorTextPrimary);
         title.setSingleLine(true);
@@ -608,26 +681,26 @@ public class FloatingStatusPanelView extends FrameLayout {
     }
 
     /**
-     * Start the breathing alpha loop on every running session's dot. Each dot
+     * Start the rotation loop on every running session's ring-arc. Each dot
      * animates independently so one session finishing does not stall the others;
      * the animators are cancelled in stopBreathing() (called at the top of the
-     * next render and on teardown).
+     * next render and on teardown). A linear interpolator keeps the rotation
+     * constant-speed — the default AccelerateDecelerate reads as a hiccup per lap.
      */
     private void startBreathing() {
-        for (View dot : breathingDots) {
-            ObjectAnimator anim = ObjectAnimator.ofFloat(dot, "alpha",
-                    BREATH_ALPHA_MIN, BREATH_ALPHA_MAX);
-            anim.setDuration(BREATH_MS);
+        for (View dot : spinningDots) {
+            ObjectAnimator anim = ObjectAnimator.ofFloat(dot, "rotation", 0f, 360f);
+            anim.setDuration(SPIN_MS);
             anim.setRepeatCount(ObjectAnimator.INFINITE);
-            anim.setRepeatMode(ObjectAnimator.REVERSE);
+            anim.setInterpolator(new android.view.animation.LinearInterpolator());
             anim.start();
             dot.setTag(anim);
         }
     }
 
     /**
-     * Stop all running-dot breathing animations and restore full opacity.
-     * Covers the title bar's shared content row (which owns its own breathing
+     * Stop all running-dot spin animations and reset rotation.
+     * Covers the title bar's shared content row (which owns its own spin
      * animation) and the session rows. Called before every list rebuild so
      * stale rows never keep animating, and by the controller on teardown so
      * infinite animators cannot keep posting frame callbacks after the window
@@ -636,14 +709,14 @@ public class FloatingStatusPanelView extends FrameLayout {
     public void stopBreathing() {
         cancelSkeletonBreath();
         headerContentView.stopBreathing();
-        for (View dot : breathingDots) {
+        for (View dot : spinningDots) {
             Object tag = dot.getTag();
             if (tag instanceof ObjectAnimator) {
                 ((ObjectAnimator) tag).cancel();
             }
-            dot.setAlpha(BREATH_ALPHA_MAX);
+            dot.setRotation(0f);
         }
-        breathingDots.clear();
+        spinningDots.clear();
     }
 
     /**

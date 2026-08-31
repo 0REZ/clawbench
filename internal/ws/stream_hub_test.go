@@ -346,7 +346,7 @@ func TestStreamEventToPayload_Metadata(t *testing.T) {
 
 func TestStreamEventToPayload_Error(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{Type: "error", Error: "oops", Reason: "timeout"})
-	m, ok := payload.(map[string]string)
+	m, ok := payload.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "oops", m["error"])
 	assert.Equal(t, "timeout", m["reason"])
@@ -354,7 +354,7 @@ func TestStreamEventToPayload_Error(t *testing.T) {
 
 func TestStreamEventToPayload_ErrorNoReason(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{Type: "error", Error: "oops"})
-	m, ok := payload.(map[string]string)
+	m, ok := payload.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "oops", m["error"])
 	_, hasReason := m["reason"]
@@ -363,7 +363,7 @@ func TestStreamEventToPayload_ErrorNoReason(t *testing.T) {
 
 func TestStreamEventToPayload_Warning(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{Type: "warning", Content: "slow response", Reason: "timeout"})
-	m, ok := payload.(map[string]string)
+	m, ok := payload.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "slow response", m["text"])
 	assert.Equal(t, "timeout", m["reason"])
@@ -371,11 +371,45 @@ func TestStreamEventToPayload_Warning(t *testing.T) {
 
 func TestStreamEventToPayload_WarningNoReason(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{Type: "warning", Content: "slow"})
-	m, ok := payload.(map[string]string)
+	m, ok := payload.(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t, "slow", m["text"])
 	_, hasReason := m["reason"]
 	assert.False(t, hasReason, "reason should be omitted when empty")
+}
+
+func TestStreamEventToPayload_ErrorCarriesStructuredFields(t *testing.T) {
+	payload := StreamEventToPayload(ai.StreamEvent{
+		Type:        "error",
+		Error:       "ACP error -32603: Internal error",
+		Reason:      "backend_exit",
+		ErrorCode:   -32603,
+		HTTPStatus:  500,
+		ErrorSource: "agent",
+	})
+	m, ok := payload.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "ACP error -32603: Internal error", m["error"])
+	assert.Equal(t, -32603, m["error_code"])
+	assert.Equal(t, 500, m["http_status"])
+	assert.Equal(t, "agent", m["error_source"])
+}
+
+func TestStreamEventToPayload_WarningCarriesStructuredFields(t *testing.T) {
+	payload := StreamEventToPayload(ai.StreamEvent{
+		Type:        "warning",
+		Content:     "Internal error",
+		Reason:      "request_failed",
+		ErrorCode:   -32603,
+		HTTPStatus:  500,
+		ErrorSource: "agent",
+	})
+	m, ok := payload.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "Internal error", m["text"])
+	assert.Equal(t, -32603, m["error_code"])
+	assert.Equal(t, 500, m["http_status"])
+	assert.Equal(t, "agent", m["error_source"])
 }
 
 // --- acpStatePayload ---

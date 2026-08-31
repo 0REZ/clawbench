@@ -109,6 +109,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_THEME_TEXT = "theme_text";
     private static final String KEY_THEME_TEXT_SECONDARY = "theme_text_secondary";
     private static final String KEY_THEME_ACCENT = "theme_accent";
+    /** User-selected app language ("zh"/"en"), synced from the Web frontend via the bridge. */
+    private static final String KEY_LANGUAGE = "user_language";
     private static final String TAG = "ClawBench";
     private static final String LOGIN_HTML_URL = "file:///android_asset/login.html";
 
@@ -145,6 +147,13 @@ public class MainActivity extends AppCompatActivity {
     // Pending error message to deliver to the login page once it finishes loading.
     // Replaces the old fixed 300ms delay — see showLoginPage() and onPageFinished().
     private String pendingLoginErrorMessage = null;
+    /** Error code for the pending login error, delivered to onConnectError(msg, code). */
+    private String pendingLoginErrorCode = null;
+
+    // Error codes passed to the login page's onConnectError(msg, code) so the
+    // page can classify auth errors without matching localized message text.
+    private static final String ERROR_CODE_PASSWORD = "password";
+    private static final String ERROR_CODE_RATE_LIMIT = "rate_limit";
 
     // Set to true when the user has confirmed a self-signed SSL certificate at the OkHttp level.
     // When true, onReceivedSslError will auto-accept SSL errors for the current server,
@@ -275,6 +284,11 @@ public class MainActivity extends AppCompatActivity {
         splashProgress = findViewById(R.id.splashProgress);
         splashCancelButton = findViewById(R.id.splashCancelButton);
         if (splashCancelButton != null) {
+            // Follow the in-app language choice rather than only the system
+            // locale (the layout's @string/splash_cancel is system-locale based).
+            if (splashCancelButton instanceof TextView) {
+                ((TextView) splashCancelButton).setText(userLangString(R.string.splash_cancel));
+            }
             splashCancelButton.setOnClickListener(v -> {
                 AppLog.i(TAG, "User cancelled connection — returning to login page");
                 webView.stopLoading();
@@ -540,9 +554,15 @@ public class MainActivity extends AppCompatActivity {
         splashScreen.setVisibility(View.VISIBLE);
         if (splashProgress != null) {
             splashProgress.setVisibility(View.VISIBLE);
-            splashProgress.setText(getString(R.string.splash_status_connecting));
+            splashProgress.setText(userLangString(R.string.splash_status_connecting));
         }
         if (splashCancelButton != null) {
+            // Refresh the cancel label each time the splash shows so a
+            // language change inside the app takes effect on the next
+            // connect (onCreate's initial set only covers cold start).
+            if (splashCancelButton instanceof TextView) {
+                ((TextView) splashCancelButton).setText(userLangString(R.string.splash_cancel));
+            }
             splashCancelButton.setVisibility(View.VISIBLE);
         }
         if (splashSweep != null && sweepAnimator == null) {
@@ -585,13 +605,109 @@ public class MainActivity extends AppCompatActivity {
      */
     private String getSplashStatusText(int progress) {
         if (progress < 30) {
-            return getString(R.string.splash_status_connecting);
+            return userLangString(R.string.splash_status_connecting);
         } else if (progress < 60) {
-            return getString(R.string.splash_status_loading);
+            return userLangString(R.string.splash_status_loading);
         } else if (progress < 90) {
-            return getString(R.string.splash_status_rendering);
+            return userLangString(R.string.splash_status_rendering);
         } else {
-            return getString(R.string.splash_status_finishing);
+            return userLangString(R.string.splash_status_finishing);
+        }
+    }
+
+    /**
+     * Resolve the user's selected language: "zh", "en", or the system locale
+     * language as a fallback. Preference order:
+     *   1. KEY_LANGUAGE prefs — persisted via the setLanguage bridge when the
+     *      Web frontend switches language (most reliable, survives cookie
+     *      domain/WebView-timing issues).
+     *   2. clawbench-locale cookie (port-scoped cb{port}_clawbench-locale on
+     *      non-default ports), which the Web frontend also writes.
+     *   3. System locale.
+     */
+    String resolveUserLanguage() {
+        try {
+            String saved = prefs.getString(KEY_LANGUAGE, "");
+            if ("zh".equals(saved) || "en".equals(saved)) {
+                return saved;
+            }
+            String serverUrl = prefs.getString(KEY_SERVER_URL, "");
+            if (!serverUrl.isEmpty()) {
+                String cookies = CookieManager.getInstance().getCookie(serverUrl);
+                if (cookies != null) {
+                    int port = Uri.parse(serverUrl).getPort();
+                    String plainKey = "clawbench-locale=";
+                    String scopedKey = (port > 0 && port != 20000)
+                            ? "cb" + port + "_clawbench-locale=" : null;
+                    // Prefer the port-scoped cookie on non-default ports so a
+                    // per-port language choice wins over the default cookie.
+                    if (scopedKey != null) {
+                        String lang = localeFromCookies(cookies, scopedKey);
+                        if (lang != null) {
+                            return lang;
+                        }
+                    }
+                    String lang = localeFromCookies(cookies, plainKey);
+                    if (lang != null) {
+                        return lang;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            AppLog.w(TAG, "resolveUserLanguage cookie read failed", e);
+        }
+        return Locale.getDefault().getLanguage();
+    }
+
+    /** Extract a valid zh/en locale value for a cookie key prefix, or null. */
+    private static String localeFromCookies(String cookies, String keyPrefix) {
+        for (String part : cookies.split(";")) {
+            String c = part.trim();
+            if (c.startsWith(keyPrefix)) {
+                String lang = c.substring(c.indexOf('=') + 1);
+                if ("zh".equals(lang) || "en".equals(lang)) {
+                    return lang;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Resolve a string resource in the user's selected language (see
+     * resolveUserLanguage). Android resources normally follow the system
+     * locale; this forces the zh/en resource set that matches the in-app
+     * language choice so native UI (splash page, SSL dialog) follows the
+     * user's setting.
+     */
+    String userLangString(int resId) {
+        try {
+            String lang = resolveUserLanguage();
+            Locale target = "zh".equals(lang)
+                    ? Locale.SIMPLIFIED_CHINESE : Locale.ENGLISH;
+            android.content.res.Configuration config = new android.content.res.Configuration(
+                    getResources().getConfiguration());
+            config.setLocale(target);
+            android.content.Context localized = createConfigurationContext(config);
+            return localized.getString(resId);
+        } catch (Exception e) {
+            return getString(resId);
+        }
+    }
+
+    /** userLangString with format args, e.g. userLangString(resId, statusCode). */
+    String userLangString(int resId, Object... formatArgs) {
+        try {
+            String lang = resolveUserLanguage();
+            Locale target = "zh".equals(lang)
+                    ? Locale.SIMPLIFIED_CHINESE : Locale.ENGLISH;
+            android.content.res.Configuration config = new android.content.res.Configuration(
+                    getResources().getConfiguration());
+            config.setLocale(target);
+            android.content.Context localized = createConfigurationContext(config);
+            return localized.getString(resId, formatArgs);
+        } catch (Exception e) {
+            return getString(resId, formatArgs);
         }
     }
 
@@ -677,7 +793,7 @@ public class MainActivity extends AppCompatActivity {
                     progressBar.setVisibility(View.GONE);
                     if (splashProgress != null) {
                         splashProgress.setVisibility(View.VISIBLE);
-                        splashProgress.setText(getString(R.string.splash_status_initializing));
+                        splashProgress.setText(userLangString(R.string.splash_status_initializing));
                     }
                 }
             }
@@ -1022,7 +1138,8 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (cameraIntent != null) {
                 // Show chooser with both file picker and camera options
-                chooserIntent = Intent.createChooser(chooserIntent, "选择文件");
+                chooserIntent = Intent.createChooser(chooserIntent,
+                        userLangString(R.string.conn_file_picker_title));
                 chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{ cameraIntent });
             }
             fileChooserLauncher.launch(chooserIntent);
@@ -1055,6 +1172,18 @@ public class MainActivity extends AppCompatActivity {
      * @param errorMessage error message to show, or null for a fresh login.
      */
     private void showLoginPage(String errorMessage) {
+        showLoginPage(errorMessage, null);
+    }
+
+    /**
+     * Show the static login page with a classification error code. The code is
+     * forwarded to onConnectError(msg, code) so the login page can decide
+     * whether to reveal the password field (auth errors only) without matching
+     * localized message text.
+     * @param errorMessage error message to show, or null for a fresh login.
+     * @param errorCode one of ERROR_CODE_*, or null for a generic error.
+     */
+    private void showLoginPage(String errorMessage, String errorCode) {
         webViewConnected = false;
         loadErrorPending = false;
         sslCertTrustedByUser = false;
@@ -1062,6 +1191,7 @@ public class MainActivity extends AppCompatActivity {
         // Store error message for delivery after login page finishes loading.
         // See onPageFinished() where pendingLoginErrorMessage is consumed.
         pendingLoginErrorMessage = errorMessage;
+        pendingLoginErrorCode = errorCode;
         // Note: don't set View.INVISIBLE here — onPageStarted will set VISIBLE
         // for the login page URL, which is the correct time to show it.
         webView.loadUrl(LOGIN_HTML_URL);
@@ -1076,7 +1206,7 @@ public class MainActivity extends AppCompatActivity {
         connectionTimeoutRunnable = () -> {
             if (!isFinishing() && !isDestroyed() && !webViewConnected) {
                 AppLog.w(TAG, "Connection timeout — returning to login page");
-                showLoginPage("连接超时，请检查服务器地址和网络连接。");
+                showLoginPage(userLangString(R.string.conn_timeout));
             }
         };
         webView.postDelayed(connectionTimeoutRunnable, CONNECTION_TIMEOUT_MS);
@@ -1106,13 +1236,16 @@ public class MainActivity extends AppCompatActivity {
         loadErrorPending = false;
         sslCertTrustedByUser = false;
         webView.setVisibility(View.GONE);
-        showSplash();
 
-        // Save URL and password
+        // Save URL before showing the splash: the splash resolves the user's
+        // language from a cookie scoped to this server URL, so KEY_SERVER_URL
+        // must already be set for splash text to follow the in-app language.
         prefs.edit().putString(KEY_SERVER_URL, url).apply();
         if (password != null && !password.isEmpty()) {
             BackgroundService.setPassword(this, password);
         }
+
+        showSplash();
 
         if (isNetworkAvailable()) {
             if (password != null && !password.isEmpty()) {
@@ -1124,7 +1257,7 @@ public class MainActivity extends AppCompatActivity {
             }
         } else {
             // No network — go back to login page with error
-            showLoginPage("网络不可用，请检查网络连接。");
+            showLoginPage(userLangString(R.string.conn_no_network));
         }
     }
 
@@ -1178,16 +1311,16 @@ public class MainActivity extends AppCompatActivity {
      */
     private void showSslConfirmationDialog(Runnable onTrustAction) {
         new AlertDialog.Builder(this)
-                .setTitle("SSL 证书验证失败")
-                .setMessage("服务器使用了自签名证书，连接可能不安全。\n\n仅当您信任该服务器时才继续。")
-                .setPositiveButton("信任并继续", (dialog, which) -> {
+                .setTitle(userLangString(R.string.conn_ssl_title))
+                .setMessage(userLangString(R.string.conn_ssl_message))
+                .setPositiveButton(userLangString(R.string.conn_ssl_positive), (dialog, which) -> {
                     // Mark that the user has trusted this certificate.
                     // This allows onReceivedSslError to auto-accept when the WebView
                     // loads the same URL (since WebView doesn't share OkHttp's trust store).
                     sslCertTrustedByUser = true;
                     new Thread(onTrustAction).start();
                 })
-                .setNegativeButton("取消连接", (dialog, which) -> {
+                .setNegativeButton(userLangString(R.string.conn_ssl_negative), (dialog, which) -> {
                     showLoginPage(null);
                 })
                 .setCancelable(false)
@@ -1225,15 +1358,15 @@ public class MainActivity extends AppCompatActivity {
      */
     private String getNetworkErrorMessage(Exception e) {
         if (e instanceof java.net.UnknownHostException) {
-            return "无法解析服务器地址，请检查域名是否正确。";
+            return userLangString(R.string.conn_err_dns);
         } else if (e instanceof java.net.ConnectException) {
-            return "无法连接到服务器，请检查地址和端口。";
+            return userLangString(R.string.conn_err_unreachable);
         } else if (e instanceof java.net.SocketTimeoutException) {
-            return "连接超时，请检查服务器地址和网络连接。";
+            return userLangString(R.string.conn_err_timeout);
         } else if (e instanceof IOException) {
-            return "网络错误，请检查网络连接。";
+            return userLangString(R.string.conn_err_network);
         } else {
-            return "无法连接到服务器，请检查地址和网络连接。";
+            return userLangString(R.string.conn_err_connect);
         }
     }
 
@@ -1295,12 +1428,12 @@ public class MainActivity extends AppCompatActivity {
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful()) {
                 AppLog.w(TAG, "Health check failed: HTTP " + response.code());
-                return HealthCheckResult.fail("该地址不是 ClawBench 服务器。");
+                return HealthCheckResult.fail(userLangString(R.string.conn_err_not_clawbench));
             }
             String body = response.body() != null ? response.body().string() : "";
             if (!body.contains("\"app\"") || !body.contains("\"clawbench\"")) {
                 AppLog.w(TAG, "Health check failed: response does not identify as clawbench: " + body);
-                return HealthCheckResult.fail("该地址不是 ClawBench 服务器。");
+                return HealthCheckResult.fail(userLangString(R.string.conn_err_not_clawbench));
             }
             // Extract server version
             String serverVersion = null;
@@ -1435,16 +1568,18 @@ public class MainActivity extends AppCompatActivity {
             });
         } else if (statusCode == 401) {
             // Wrong password — go back to login page with error
-            runOnUiThread(() -> showLoginPage("密码错误，请检查登录密码。"));
+            runOnUiThread(() -> showLoginPage(
+                    userLangString(R.string.conn_err_password), ERROR_CODE_PASSWORD));
         } else if (statusCode == 429) {
-            runOnUiThread(() -> showLoginPage("尝试次数过多，请稍后再试。"));
+            runOnUiThread(() -> showLoginPage(
+                    userLangString(R.string.conn_err_rate_limited), ERROR_CODE_RATE_LIMIT));
         } else {
             // Unexpected status — do not navigate WebView, return to login page
             String msg;
             if (statusCode >= 500) {
-                msg = "服务器错误 (" + statusCode + ")，请稍后重试。";
+                msg = userLangString(R.string.conn_err_server, statusCode);
             } else {
-                msg = "连接失败 (" + statusCode + ")，请检查服务器地址。";
+                msg = userLangString(R.string.conn_err_bad_status, statusCode);
             }
             final String errorMsg = msg;
             runOnUiThread(() -> showLoginPage(errorMsg));
@@ -1693,13 +1828,23 @@ public class MainActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         isForeground = false;
+        // Notify the frontend BEFORE pausing the WebView so the JS engine is
+        // fully active when the foreground signal is processed. This is the
+        // reliable foreground signal the completion paths use to decide whether
+        // marking a session read is a user action or a background auto-refresh.
+        // document.visibilityState is unreliable in Android WebView (onPause
+        // doesn't reliably flip it to 'hidden'), so the frontend cannot depend
+        // on it. The floating window's unread badge depends on this: a session
+        // that completes in the background must NOT be auto-marked read.
+        notifyFrontendAppForeground(false);
         pauseWebView();
         // App going to background — start native WS so we still get
         // notifications when Android kills the WebView process. Also needed
-        // when only the floating window is enabled (its events come over the
-        // same native WS, independent of push notifications).
+        // when only the floating window or the Live Updates chip is enabled
+        // (both consume events over the same native WS, independent of push).
         if (webViewConnected && (BackgroundService.isNativePushEnabled(this)
-                || BackgroundService.isFloatingWindowEnabled(this))) {
+                || BackgroundService.isFloatingWindowEnabled(this)
+                || BackgroundService.isLiveUpdateEnabled(this))) {
             BackgroundService.startNativeEventWs(this);
         }
     }
@@ -1709,6 +1854,7 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         isForeground = true;
         resumeWebView();
+        notifyFrontendAppForeground(true);
         // App returning to foreground — always stop native WS (WebView WS handles events)
         BackgroundService.stopNativeEventWs(this);
         // Handle notification tap intent + re-dispatch pending navigation
@@ -1733,6 +1879,29 @@ public class MainActivity extends AppCompatActivity {
     void resumeWebView() {
         webView.onResume();
         // No webView.resumeTimers() needed — pauseTimers() is no longer called.
+    }
+
+    /**
+     * Push the app's foreground state into the WebView's JS. The frontend uses
+     * this as its authoritative foreground signal for "user is looking at the
+     * app" decisions (e.g. auto-marking a just-completed session read).
+     * document.visibilityState is unreliable in Android WebView (onPause()
+     * does not reliably flip it to 'hidden'), so the bridge is the trusted
+     * signal; on non-Android hosts the frontend falls back to
+     * document.visibilityState. Best-effort: no-op when the WebView isn't
+     * ready or JS is unavailable.
+     */
+    void notifyFrontendAppForeground(boolean foreground) {
+        if (webView == null || !webViewConnected) {
+            return;
+        }
+        try {
+            webView.evaluateJavascript(
+                    "if (typeof window.__setAppForeground === 'function') window.__setAppForeground(" + foreground + ")",
+                    null);
+        } catch (Exception e) {
+            AppLog.w(TAG, "MainActivity: notifyFrontendAppForeground failed", e);
+        }
     }
 
     /**
@@ -1893,7 +2062,7 @@ public class MainActivity extends AppCompatActivity {
             final int count = successCount;
             runOnUiThread(() -> {
                 if (count > 0) {
-                    Toast.makeText(this, getString(R.string.share_in_success, count), Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, userLangString(R.string.share_in_success, count), Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(this, R.string.share_in_failed, Toast.LENGTH_SHORT).show();
                 }
@@ -2089,9 +2258,13 @@ public class MainActivity extends AppCompatActivity {
                 cancelConnectionTimeout();
                 if (pendingLoginErrorMessage != null) {
                     String msg = pendingLoginErrorMessage;
+                    String code = pendingLoginErrorCode;
                     pendingLoginErrorMessage = null;
+                    pendingLoginErrorCode = null;
                     String escaped = msg.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n");
-                    view.evaluateJavascript("if(typeof onConnectError==='function'){onConnectError('" + escaped + "')}", null);
+                    String codeJs = code != null ? ",'" + code + "'" : "";
+                    view.evaluateJavascript("if(typeof onConnectError==='function'){onConnectError('"
+                            + escaped + "'" + codeJs + ")}", null);
                 }
             } else if (loadErrorPending) {
                 // Error was received during this page load — don't show the WebView.
@@ -2159,7 +2332,7 @@ public class MainActivity extends AppCompatActivity {
             view.setVisibility(View.GONE);
             view.postDelayed(() -> {
                 if (!isFinishing() && !isDestroyed() && !webViewConnected && loadErrorPending) {
-                    showLoginPage("SSL 连接异常，请重新连接。");
+                    showLoginPage(userLangString(R.string.conn_ssl_exception));
                 }
             }, 600);
         }
@@ -2182,7 +2355,7 @@ public class MainActivity extends AppCompatActivity {
                 // won't flash the error page even if it fires in the meantime.
                 view.postDelayed(() -> {
                     if (!isFinishing() && !isDestroyed() && !webViewConnected && loadErrorPending) {
-                        showLoginPage("无法连接到服务器，请检查地址和网络连接。");
+                        showLoginPage(userLangString(R.string.conn_err_load));
                     }
                 }, 600);
             }
@@ -2199,19 +2372,24 @@ public class MainActivity extends AppCompatActivity {
                 AppLog.w(TAG, "Main frame HTTP error during connection: " + statusCode);
                 loadErrorPending = true;
                 view.setVisibility(View.GONE);
-                String msg;
+                final String msg;
+                final String errorCode;
                 if (statusCode == 401 || statusCode == 403) {
-                    msg = "认证失败，请检查密码是否正确。";
+                    msg = userLangString(R.string.conn_err_auth);
+                    errorCode = ERROR_CODE_PASSWORD;
                 } else if (statusCode >= 500) {
-                    msg = "服务器错误 (" + statusCode + ")，请稍后重试。";
+                    msg = userLangString(R.string.conn_err_server, statusCode);
+                    errorCode = null;
                 } else if (statusCode >= 400) {
-                    msg = "请求错误 (" + statusCode + ")，请检查服务器地址。";
+                    msg = userLangString(R.string.conn_err_request, statusCode);
+                    errorCode = null;
                 } else {
-                    msg = "连接失败，请检查服务器地址和网络连接。";
+                    msg = userLangString(R.string.conn_err_http_failed);
+                    errorCode = null;
                 }
                 view.postDelayed(() -> {
                     if (!isFinishing() && !isDestroyed() && !webViewConnected && loadErrorPending) {
-                        showLoginPage(msg);
+                        showLoginPage(msg, errorCode);
                     }
                 }, 600);
             }
@@ -2247,7 +2425,7 @@ public class MainActivity extends AppCompatActivity {
             parent.addView(newView, index);
             webView = newView;
             setupWebView();
-            showLoginPage("页面渲染异常，请重新连接。");
+            showLoginPage(userLangString(R.string.conn_render_crash));
         } catch (Exception e) {
             AppLog.e(TAG, "Failed to recreate WebView after crash", e);
             finish();
@@ -2302,7 +2480,30 @@ public class MainActivity extends AppCompatActivity {
 
         @JavascriptInterface
         public String getLanguage() {
-            return Locale.getDefault().getLanguage();
+            // Native UI follows the in-app language choice (clawbench-locale
+            // cookie) with a system-locale fallback — see resolveUserLanguage().
+            return activity.resolveUserLanguage();
+        }
+
+        /**
+         * Persist the language selected in the Web frontend so native UI (splash,
+         * SSL dialog, login page) follows it even before the locale cookie is
+         * readable (e.g. during cold-start splash).
+         * @param lang "zh" or "en".
+         */
+        @JavascriptInterface
+        public void setLanguage(String lang) {
+            if (lang == null || (!"zh".equals(lang) && !"en".equals(lang))) {
+                return;
+            }
+            activity.prefs.edit().putString(KEY_LANGUAGE, lang).apply();
+            // The floating window (owned by BackgroundService) reads the same
+            // pref; refresh it immediately so capsule/panel follow the in-app
+            // language switch without waiting for a system locale change.
+            BackgroundService bg = BackgroundService.getInstance();
+            if (bg != null) {
+                bg.refreshFloatingLocale();
+            }
         }
 
         /**
@@ -3181,7 +3382,7 @@ public class MainActivity extends AppCompatActivity {
 
                     activity.runOnUiThread(() -> {
                         try {
-                            activity.startActivity(Intent.createChooser(shareIntent, activity.getString(R.string.share_multiple_files)));
+                            activity.startActivity(Intent.createChooser(shareIntent, activity.userLangString(R.string.share_multiple_files)));
                         } catch (Exception e) {
                             AppLog.w(TAG, "shareFiles: chooser failed", e);
                             Toast.makeText(activity, R.string.share_file_failed, Toast.LENGTH_SHORT).show();
@@ -3334,6 +3535,49 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean isFloatingWindowEnabled() {
             return BackgroundService.isFloatingWindowEnabled(activity);
+        }
+
+        /**
+         * Enable or disable the Android 16 Live Updates status chip from the
+         * WebView settings UI. Persisted through BackgroundService; takes
+         * effect on the running service immediately when it is alive.
+         * Independent of the floating window toggle.
+         */
+        @JavascriptInterface
+        public void setLiveUpdateEnabled(boolean enabled) {
+            AppLog.i(TAG, "JSBridge: setLiveUpdateEnabled=" + enabled);
+            BackgroundService.setLiveUpdateEnabled(activity, enabled);
+        }
+
+        /**
+         * Check whether the Android 16 Live Updates status chip is currently
+         * enabled. Used by the WebView to read the initial state on settings
+         * page load.
+         */
+        @JavascriptInterface
+        public boolean isLiveUpdateEnabled() {
+            return BackgroundService.isLiveUpdateEnabled(activity);
+        }
+
+        /**
+         * Whether the system is currently able to promote Live Updates for
+         * this app (Android 16+ and the user's Live Updates permission granted).
+         * The WebView uses this to decide whether to guide the user to settings.
+         */
+        @JavascriptInterface
+        public boolean canPostPromotedNotifications() {
+            return LiveUpdateManager.canPostPromoted(activity);
+        }
+
+        /**
+         * Open the system screen where the user can enable Live Updates for
+         * this app (falls back to the app notification settings when no
+         * promotion-specific screen exists on this device/ROM).
+         */
+        @JavascriptInterface
+        public void openLiveUpdateSettings() {
+            AppLog.i(TAG, "JSBridge: openLiveUpdateSettings");
+            LiveUpdateManager.openPromotedSettings(activity);
         }
 
         /**

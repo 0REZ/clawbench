@@ -18,9 +18,17 @@
     </Transition>
   </div>
 
-  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onTableMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @scroll="handleScroll">
+  <div class="chat-messages" id="aiChatMessages" ref="messagesRef" @click="handleChatClick" @mousedown="onContainerMouseDown" @touchstart="onScrollAndTableTouchStart" @touchend="onScrollTouchEnd" @touchcancel="onScrollTouchEnd" @wheel="onWheelScroll" @scroll="handleScroll">
     <div class="chat-messages-list" :key="listKey">
-      <div v-if="messages.length === 0" class="chat-empty">
+      <!-- Session switching in progress: the old messages were cleared but the
+           new session's history is still loading — show a centered spinner in
+           place of the empty state instead of a full-area overlay mask. -->
+      <LoadingIndicator
+        v-if="props.switching && messages.length === 0"
+        class="chat-switching-indicator"
+        size="md"
+      />
+      <div v-else-if="messages.length === 0" class="chat-empty">
       <template v-if="agents && agents.length === 0">
         <Bot :size="40" class="no-agents-icon" />
         <span class="no-agents-title">{{ t('chat.messageList.noAgentsTitle') }}</span>
@@ -150,8 +158,8 @@ import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import { store } from '@/stores/app.ts'
 import { computeRemainingCount } from '@/utils/messageListUtils.ts'
 import { StreamFrameScheduler } from '@/utils/streamFrameScheduler'
-import { isUserScrolling, shouldFollowStream, SCROLL_STOP_MS } from '@/utils/scrollState'
-import { saveChatScrollPosition, clearChatScrollPosition, getChatScrollPosition } from '@/utils/chatScrollMemory'
+import { isUserScrolling, shouldPin, SCROLL_STOP_MS, NEAR_BOTTOM_PX, RESUME_FOLLOW_PX, updateUserLeftBottom } from '@/utils/scrollState'
+import { appLog } from '@/utils/appLog'
 
 const { t } = useI18n()
 
@@ -169,6 +177,8 @@ const props = defineProps({
   currentSessionId: String,
   hasMore: Boolean,
   loadingMore: Boolean,
+  /** True while a session switch is in flight (old messages cleared, new history loading). */
+  switching: { type: Boolean, default: false },
   totalMessages: { type: Number, default: 0 },
   staticBlockCache: Object,
   active: { type: Boolean, default: true },
@@ -213,6 +223,13 @@ const listKey = computed(() => {
   const first = msgs[0]?.id ?? ''
   const last = msgs[msgs.length - 1]?.id ?? ''
   return `${props.currentSessionId || 'no-session'}|${msgs.length}|${first}|${last}`
+})
+
+// Re-observe the content-growth target when listKey rebuilds the DOM
+// (.chat-messages-list is recreated). The watcher fires pre-flush; the new
+// element exists after the next tick.
+watch(listKey, () => {
+  nextTick(() => observeContentGrowth())
 })
 
 // "More older messages" transient hint: whenever older messages remain, the
@@ -402,7 +419,15 @@ let scrollDownTimer = null
 let lastScrollTop = 0
 const SCROLL_BUTTON_HIDE_DELAY = 3000
 
-const NEAR_EDGE_THRESHOLD = 100
+// "At the bottom" threshold — shared single source of truth with
+// scrollState.ts (NEAR_BOTTOM_PX). The top-edge threshold stays separate:
+// it only decides when the scroll-up FAB hides, which should not grow with
+// the (deliberately generous) bottom threshold.
+const NEAR_TOP_THRESHOLD = 100
+// How far the user must scroll away from an edge before a FAB appears.
+// Independently equal to NEAR_BOTTOM_PX (both 200) — keep in sync if the
+// bottom threshold changes materially, but they serve different purposes:
+// NEAR_BOTTOM_PX gates stream-follow, SCROLL_BUTTON_TRIGGER gates FAB display.
 const SCROLL_BUTTON_TRIGGER = 200
 const SCROLL_DELTA_THRESHOLD = 10
 
@@ -426,8 +451,10 @@ function handleScroll() {
   const el = messagesRef.value
 
   const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  const nearBottom = distFromBottom < NEAR_EDGE_THRESHOLD
-  const nearTop = el.scrollTop < NEAR_EDGE_THRESHOLD
+  // `<=` so the boundary (exactly NEAR_BOTTOM_PX) is "at the bottom", matching
+  // the userLeftBottom latch below (`> NEAR_BOTTOM_PX` = left) with no gap.
+  const nearBottom = distFromBottom <= NEAR_BOTTOM_PX
+  const nearTop = el.scrollTop < NEAR_TOP_THRESHOLD
   isAtBottom.value = nearBottom
 
   // Scroll-stop detection: any scroll event restarts the window. After
@@ -437,20 +464,43 @@ function handleScroll() {
   // whole duration (replacing the old fixed 150ms touchend window).
   clearTimeout(scrollStopTimer)
   scrollStopTimer = setTimeout(onScrollStopped, SCROLL_STOP_MS)
-  // Only a user-initiated scroll (not programmatic smooth scroll) claims
-  // ownership — otherwise a scrollIntoView jump would be mistaken for the
-  // user actively scrolling and suppress stream follow.
-  if (!programmaticScrolling) {
+  // ONLY a deliberate user scroll claims ownership: a touch drag
+  // (touchstart…touchend), a mouse-wheel scroll, or a scrollbar drag on PC.
+  // Content-growth scroll events (async render pushing the viewport,
+  // programmatic pins) fire with none of these flags set and must NOT be
+  // misread as the user scrolling — otherwise `isUserScrolling` stays true
+  // forever (lastScrollAt keeps refreshing on every growth scroll) and every
+  // force pin is deferred into a pendingFollow that onScrollStopped never
+  // flushes (the growth scroll stream never stops). That is the "fixed session
+  // never scrolls to bottom" bug.
+  // A fling continues via lastScrollAt: ownership was claimed during the touch
+  // and stays 'user' until the scroll-stop window elapses.
+  // NOTE: the latch block does NOT gate on `!programmaticScrolling`. During a
+  // stream, followToBottom re-arms setProgrammatic(true) on every frame, so
+  // programmaticScrolling stays true for the whole stream — gating on it would
+  // block user-scroll detection entirely and the user could never escape the
+  // stream's pin (the "scrolled far away but still dragged back" bug). User
+  // drags are distinguished by the input flags (userTouching / wheelActive /
+  // mouseDownActive) which programmatic pins never set.
+  if (userTouching || wheelActive || mouseDownActive) {
     scrollOwner.value = 'user'
     lastScrollAt = Date.now()
-    // Track whether the user deliberately left the bottom. ANY scroll away past
-    // the near-bottom threshold marks a deliberate leave — a user reading older
-    // content must never be yanked back, regardless of how much new content
-    // arrives. Clearing happens when they scroll back to the bottom below.
-    if (distFromBottom > NEAR_EDGE_THRESHOLD) {
-      userLeftBottom = true
-    } else {
-      userLeftBottom = false
+    // Track whether the user deliberately left the bottom. The latch is
+    // direction-driven, NOT distance-driven: any upward drag immediately marks
+    // a deliberate leave — the user is trying to read older content and a
+    // streamed pin must never fight them. The old distance-only check let a
+    // user resting inside the near-bottom band (distFromBottom <= NEAR_BOTTOM_PX)
+    // stay "at the bottom", so the next streamed pin yanked them back — the
+    // "很难拖上去、抽搐" (snap-back jitter) bug. Clearing happens only when
+    // they scroll back to within RESUME_FOLLOW_PX of the bottom (an explicit
+    // return), via updateUserLeftBottom.
+    const prevUserLeftBottom = userLeftBottom
+    userLeftBottom = updateUserLeftBottom(userLeftBottom, {
+      scrollingUp: el.scrollTop < lastScrollTop,
+      distFromBottom,
+    })
+    if (userLeftBottom && !prevUserLeftBottom) {
+      appLog.d('ChatScroll', `userLeftBottom latched: dist=${distFromBottom.toFixed(0)} top=${el.scrollTop.toFixed(0)} h=${el.scrollHeight} prog=${programmaticScrolling}`)
     }
   }
 
@@ -463,6 +513,16 @@ function handleScroll() {
     if (nearBottom && scrolledDown.value) {
       scrolledDown.value = false
       clearTimeout(scrollDownTimer)
+    }
+    // A programmatic jump to the top (FAB scroll-to-top) reaches scrollTop=0
+    // just like a manual scroll — load older history the same way. This check
+    // must run BEFORE the programmatic return below, otherwise the top-FAB
+    // scroll never triggers load-more (only a subsequent manual scroll does).
+    if (loadMorePending) return
+    if (!props.hasMore || props.loadingMore) return
+    if (el.scrollTop < 50) {
+      loadMorePending = true
+      emit('load-more')
     }
     return
   }
@@ -505,6 +565,9 @@ function handleScroll() {
 
   if (loadMorePending) return
   if (!props.hasMore || props.loadingMore) return
+  // Load-more fires only when truly pinned to the top (< 50px), tighter than
+  // NEAR_TOP_THRESHOLD (FAB hide) — near the top the user is still reading,
+  // fetching history must not trigger on a casual swipe.
   if (el.scrollTop < 50) {
     loadMorePending = true
     emit('load-more')
@@ -517,6 +580,30 @@ function onScrollAndTableTouchStart(e) {
   userTouching = true
   scrollOwner.value = 'user'
   onTableTouchStart(e)  // preserve table-row-expand handling
+}
+
+// PC: a mouse-wheel scroll is a deliberate user scroll just like a touch drag.
+// Wheel has no explicit "end" event, so we mark it active and let the scroll-
+// stop window (onScrollStopped, SCROLL_STOP_MS) clear it — the wheel's scroll
+// events keep refreshing lastScrollAt until the wheel stops.
+let wheelActive = false
+
+function onWheelScroll() {
+  wheelActive = true
+  scrollOwner.value = 'user'
+  lastScrollAt = Date.now()
+}
+
+// PC: mouse press inside the list may start a scrollbar drag — another
+// deliberate user scroll with no touch/wheel event. Mark the input active;
+// cleared by the scroll-stop window like wheel.
+let mouseDownActive = false
+
+function onContainerMouseDown(e) {
+  mouseDownActive = true
+  scrollOwner.value = 'user'
+  lastScrollAt = Date.now()
+  onTableMouseDown(e)  // preserve table-row-expand handling
 }
 
 function onScrollTouchEnd() {
@@ -536,23 +623,39 @@ function onScrollTouchEnd() {
  * to the bottom.
  */
 function onScrollStopped() {
-  // A programmatic smooth scroll (FAB jump, message index) stops producing
-  // scroll events here too — end its ownership so subsequent events are read
-  // as user scrolls again (replaces the old fixed 600ms programmatic timeout).
-  if (programmaticScrolling) {
-    setProgrammatic(false)
-    return
-  }
+  // Any scroll stream stopped (user drag/wheel OR programmatic smooth scroll):
+  // release programmatic ownership first so the next scroll events are read as
+  // user scrolls again. The input flags and ownership are reset below.
+  if (programmaticScrolling) setProgrammatic(false)
+  // The scroll has stopped: clear the wheel/mouse-drag active flags (no
+  // explicit "end" event exists for them) so later content-growth scrolls are
+  // not misread as user input.
+  wheelActive = false
+  mouseDownActive = false
   scrollOwner.value = 'idle'
   const el = messagesRef.value
   if (!el) return
   const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-  if (dist <= NEAR_EDGE_THRESHOLD) isAtBottom.value = true
+  // Returning to the bottom is an explicit gesture — clear the latch only when
+  // the user actually came back (within RESUME_FOLLOW_PX), not merely inside
+  // the generous NEAR_BOTTOM_PX band (which would re-enable snap-back while
+  // they rest inside it mid-stream).
+  if (dist <= RESUME_FOLLOW_PX) {
+    isAtBottom.value = true
+    userLeftBottom = false
+  }
   if (pendingFollow) {
     pendingFollow = false
-    if (dist <= NEAR_EDGE_THRESHOLD) {
-      scrollToBottom(true)
-    }
+    // A deferred force pin is always flushed here. pendingFollow is ONLY set
+    // by explicit user-intent pins (sending a message, answering a question
+    // card, switching sessions) — the user took an action and expects to see
+    // the bottom of the conversation. Delaying it must not drop it: the user
+    // may have answered a card while sitting far above the bottom (reading
+    // earlier context), and after their scroll stops the pin must still pull
+    // them down so they can see their answer land and the AI continue. This is
+    // NOT the stream-follow path — stream pins are non-force and never set
+    // pendingFollow, so a user reading history is still never yanked.
+    scrollToBottom(true)
   }
 }
 
@@ -588,11 +691,63 @@ function handleCtrlArrowMsgJump(e) {
   }
 }
 
-onMounted(() => document.addEventListener('click', onDocumentClick, true))
-onMounted(() => document.addEventListener('keydown', handleCtrlArrowMsgJump))
+// ── Content-growth observer ──
+// The chat list height can grow asynchronously from MANY sources: throttled
+// render flush (300ms + rAF), deferred Mermaid rendering, lazy-loaded original
+// text, task-card data fills. Any of these can push the viewport away from the
+// bottom AFTER the initial scroll-to-bottom ran, and no single code path emits
+// a follow-up scroll. This observer is the universal backstop: whenever the
+// content height grows while the user has NOT deliberately scrolled away, we
+// re-pin to the bottom. Guards mirror followToBottom (never fight an active
+// user scroll, never pull back a user who scrolled away).
+let contentResizeObserver = null
+let contentGrownRaf = 0
+
+function onContentGrown() {
+  if (!messagesRef.value) return
+  // Coalesce bursts (multiple blocks flushing in one frame) into one pass.
+  cancelAnimationFrame(contentGrownRaf)
+  contentGrownRaf = requestAnimationFrame(() => {
+    const el = messagesRef.value
+    if (!el) return
+    // Unified pin decision: never fight an active user scroll, never pull
+    // back a user who deliberately scrolled away (non-force).
+    if (!shouldPin(buildScrollState(), false)) return
+    // Skip when the content growth already kept the view glued to the bottom
+    // (gap <= 0) — writing the same scrollTop would emit an unnecessary scroll
+    // event that restarts the 250ms user-scroll window during streaming.
+    if (el.scrollHeight - el.scrollTop - el.clientHeight <= 0) return
+    el.scrollTop = el.scrollHeight
+    isAtBottom.value = true
+  })
+}
+
+function observeContentGrowth() {
+  contentResizeObserver?.disconnect()
+  contentResizeObserver = null
+  const el = messagesRef.value
+  if (!el || typeof ResizeObserver === 'undefined') return
+  // Observe the content wrapper (.chat-messages-list) — its box size IS the
+  // content height and grows when async content renders. It is recreated on
+  // listKey change, so re-observe via the listKey watcher below.
+  const inner = el.firstElementChild
+  if (inner) {
+    contentResizeObserver = new ResizeObserver(() => onContentGrown())
+    contentResizeObserver.observe(inner)
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick, true)
+  document.addEventListener('keydown', handleCtrlArrowMsgJump)
+  observeContentGrowth()
+})
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick, true)
   document.removeEventListener('keydown', handleCtrlArrowMsgJump)
+  contentResizeObserver?.disconnect()
+  contentResizeObserver = null
+  cancelAnimationFrame(contentGrownRaf)
   scrollFrameScheduler.cancelAll()
   clearTimeout(scrollStopTimer)
   scrollStopTimer = null
@@ -600,40 +755,40 @@ onBeforeUnmount(() => {
   programmaticFallbackTimer = null
 })
 
-function scrollToBottom(force = false, streaming = false) {
+function scrollToBottom(force = false) {
   nextTick(() => {
     if (!messagesRef.value) return
-    const el = messagesRef.value
-    // Live geometry — never trust the cached isAtBottom ref, which lags the
-    // actual scroll position (scroll events are async).
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    const state = () => ({
-      owner: scrollOwner.value,
-      userTouching,
-      lastScrollAt,
-      now: Date.now(),
-      nearBottomDist: dist,
-      streaming,
-      userLeftBottom,
-    })
-
     // User is actively scrolling/flinging → never yank the view. A force pin
     // is deferred and flushed once by onScrollStopped (if still near bottom).
-    if (isUserScrolling(state())) {
+    if (isUserScrolling(buildScrollState())) {
       if (force) pendingFollow = true
+      appLog.d('ChatScroll', `scrollToBottom deferred (user scrolling) force=${force}`)
       return
     }
     // Mark the write as programmatic so the scroll event it emits is not
     // misread as a user scroll (which would make the rAF correction below
     // suppress itself via isUserScrolling). Ownership is released by
     // onScrollStopped ~SCROLL_STOP_MS after the emitted scroll event.
-    if (shouldFollowStream(state(), force)) {
-      followToBottom(streaming, force)
+    if (shouldPin(buildScrollState(), force)) {
+      followToBottom(force)
+    } else {
+      appLog.d('ChatScroll', `scrollToBottom REJECTED force=${force} userLeftBottom=${userLeftBottom}`)
     }
   })
 }
 
-function followToBottom(streaming, force) {
+/** Current scroll-ownership snapshot fed into the follow decision. */
+function buildScrollState() {
+  return {
+    owner: scrollOwner.value,
+    userTouching,
+    lastScrollAt,
+    now: Date.now(),
+    userLeftBottom,
+  }
+}
+
+function followToBottom(force) {
   setProgrammatic(true)
   const el = messagesRef.value
   el.scrollTop = el.scrollHeight
@@ -651,27 +806,24 @@ function followToBottom(streaming, force) {
     const gap = el2.scrollHeight - el2.scrollTop - el2.clientHeight
     // Sync the externally-consumed isAtBottom flag: a pin with zero gap
     // emits no scroll event, so handleScroll never runs.
-    isAtBottom.value = gap <= NEAR_EDGE_THRESHOLD
+    isAtBottom.value = gap <= NEAR_BOTTOM_PX
+    // Already glued to the bottom → nothing to correct. Skipping the write
+    // avoids the unconditional scroll event that re-triggers handleScroll's
+    // 250ms user-scroll window on every streamed frame (the "sticky jitter"
+    // felt when dragging up against a stream).
     if (gap <= 0) return
-    const state2 = {
-      owner: scrollOwner.value,
-      userTouching,
-      lastScrollAt,
-      now: Date.now(),
-      nearBottomDist: gap,
-      streaming,
-      userLeftBottom,
-    }
-    if (isUserScrolling(state2)) return
-    if (shouldFollowStream(state2, force)) {
+    if (isUserScrolling(buildScrollState())) return
+    if (shouldPin(buildScrollState(), force)) {
       el2.scrollTop = el2.scrollHeight
       isAtBottom.value = true
     }
   })
   // NOTE: the old unconditional force pin timer (300ms) is gone. Async
   // content growth (Mermaid, KaTeX, lazy original fetch, thinking collapse)
-  // is handled by the rAF correction above; if the user started scrolling in
-  // between, pendingFollow + onScrollStopped take over instead of fighting.
+  // is handled by the rAF correction above AND the content-growth observer
+  // (onContentGrown) — the observer catches growth that arrives after the
+  // correction frame; if the user started scrolling in between, pendingFollow
+  // + onScrollStopped take over instead of fighting.
 }
 
 function scrollToTop() {
@@ -697,7 +849,7 @@ const PROGRAMMATIC_MAX_MS = 1500
 /**
  * Unified programmatic-scroll flag setter. Keeps scrollOwner in sync so a
  * programmatic smooth scroll (FAB, message index jump) is never mistaken for
- * a user scroll, and so shouldFollowStream treats programmatic jumps correctly.
+ * a user scroll, and so shouldPin treats programmatic jumps correctly.
  *
  * Ownership is normally released by onScrollStopped (SCROLL_STOP_MS after the
  * last scroll event of the smooth scroll), replacing the old fixed 600ms
@@ -774,6 +926,13 @@ function scrollToBottomSmooth() {
   scrollDownTimer = setTimeout(() => { scrolledDown.value = false }, SCROLL_BUTTON_HIDE_DELAY)
   setProgrammatic(true)
   const el = messagesRef.value
+  // The user explicitly asked to return to the bottom — clear the
+  // "user left the bottom" latch so follow resumes once the smooth
+  // scroll settles. Without this, a user who scrolled up earlier and then
+  // tapped the bottom FAB would stay "latched" (userLeftBottom=true) and the
+  // next streamed content would be rejected — the list would appear to stop
+  // auto-scrolling despite the user being at the bottom.
+  userLeftBottom = false
   el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   // Ownership released by onScrollStopped when the smooth scroll settles.
 }
@@ -798,7 +957,13 @@ const {
   getMessagesRef: () => messagesRef.value,
   hideScrollFab,
   setProgrammaticScrolling: (val) => { setProgrammatic(val) },
-  setAtBottom: (val) => { isAtBottom.value = val },
+  setAtBottom: (val) => {
+    isAtBottom.value = val
+    // Jumping to a mid-list message means the user deliberately left the
+    // bottom — latch userLeftBottom so shouldStayPinned() turns false and
+    // stream follow / render-flush re-pin do NOT yank them back.
+    if (!val) userLeftBottom = true
+  },
 })
 
 // Nearest user message to viewport center — used for activeId highlight in index
@@ -850,41 +1015,14 @@ const nearestMessageId = computed(() => {
   return props.messages[nearestIdx].id
 })
 
-// Watch session switch to reset scroll state and user msg index
-//
-// Session scroll memory: when the user leaves a session while scrolled away
-// from the bottom, remember its scrollTop so switching back restores the
-// reading position. A session left at the bottom is NOT remembered — switching
-// back falls back to the default scroll-to-bottom behavior (new content view).
-// The old session's DOM is still present at this watcher's pre-flush trigger,
-// so we can read its live scrollTop here.
-//
-// The target session's restore is flagged here (pendingRestoreSessionId) and
-// executed by the messages watcher once the history fetch lands — NOT by a
-// listKey watcher comparing oldKey segments. Vue's watcher oldValue is "the
-// value at the previous flush", so during a session switch the listKey's
-// session segment is already the target by the time db_load lands; comparing
-// it against currentSessionId would silently suppress the restore. An explicit
-// flag sidesteps that entirely.
-let pendingRestoreSessionId = null
-
-watch(() => props.currentSessionId, (newSid, oldSid) => {
-  // 1. Save the old session's position before its DOM is torn down (if the
-  //    user had scrolled away from the bottom). At the bottom → forget.
-  if (oldSid && messagesRef.value) {
-    const el = messagesRef.value
-    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    if (dist > NEAR_EDGE_THRESHOLD) {
-      saveChatScrollPosition(oldSid, el.scrollTop)
-    } else {
-      clearChatScrollPosition(oldSid)
-    }
-  }
-  // 2. Flag the target session for scroll restore if it has a remembered
-  //    position. The actual restore waits for the messages watcher (history
-  //    fetch landed, messages non-empty). A session with no memory → default
-  //    scroll-to-bottom applies instead.
-  pendingRestoreSessionId = newSid && getChatScrollPosition(newSid) != null ? newSid : null
+// Watch session switch to reset scroll state and user msg index.
+// Session switches always land at the bottom (switchSession force-scrolls), so
+// no position save/restore — only a full state-machine reset for the freshly
+// rebuilt list.
+watch(() => props.currentSessionId, () => {
+  // Session switch always lands at the bottom (switchSession force-scrolls),
+  // so no position save/restore here — just reset the scroll state machine for
+  // the freshly rebuilt list.
   isAtBottom.value = true
   scrolledUp.value = false
   scrolledDown.value = false
@@ -896,6 +1034,10 @@ watch(() => props.currentSessionId, (newSid, oldSid) => {
   clearTimeout(scrollStopTimer)
   scrollStopTimer = null
   userTouching = false
+  // Clear all user-input scroll markers (touch / wheel / mouse-drag) so the
+  // freshly rebuilt list starts from a clean ownership state.
+  wheelActive = false
+  mouseDownActive = false
   clearTimeout(scrollUpTimer)
   clearTimeout(scrollDownTimer)
   scrollFrameScheduler.cancelAll()
@@ -956,52 +1098,12 @@ watch(() => props.messages, (newMsgs, oldMsgs) => {
   const el = messagesRef.value
   if (!el || !newMsgs || newMsgs.length === 0) return
 
-  // Session scroll memory restore: switching back to a session that was left
-  // scrolled away from the bottom restores its remembered position. The flag
-  // is set by the currentSessionId watcher (pendingRestoreSessionId) and only
-  // for a real session switch — same-session message growth (send, stream,
-  // queue drain) never sets it, so force-scroll-to-bottom after send is never
-  // overridden. The restore runs after the listKey DOM rebuild plus one rAF
-  // so scrollHeight is settled (lazy blocks: Mermaid, original text).
-  if (pendingRestoreSessionId === props.currentSessionId) {
-    pendingRestoreSessionId = null
-    const restoredSid = props.currentSessionId
-    const savedPos = getChatScrollPosition(restoredSid)
-    if (savedPos != null) {
-      nextTick(() => {
-        requestAnimationFrame(() => {
-          const el2 = messagesRef.value
-          // Guard against an ultra-fast B→C switch where C's db_load lands
-          // before B's restore rAF fires: never apply B's saved position to
-          // C's freshly built DOM. The restore is skipped and C's own
-          // restore / force-scroll-to-bottom takes over.
-          if (!el2 || props.currentSessionId !== restoredSid) return
-          const maxTop = el2.scrollHeight - el2.clientHeight
-          el2.scrollTop = Math.min(savedPos, maxTop)
-          const dist = el2.scrollHeight - el2.scrollTop - el2.clientHeight
-          isAtBottom.value = dist <= NEAR_EDGE_THRESHOLD
-          setProgrammatic(false)
-          // A restored position away from the bottom means the user is reading
-          // earlier content — keep the follow latch on so streaming never yanks
-          // them back to the bottom. Only a restore that lands at the bottom
-          // clears the latch (stream may then follow as usual).
-          userLeftBottom = dist > NEAR_EDGE_THRESHOLD
-          lastScrollAt = 0
-          // Show the scroll-up FAB so the user can jump back to the top of a
-          // long session they resumed mid-way (matches manual scroll behavior).
-          if (dist > NEAR_EDGE_THRESHOLD) {
-            scrolledUp.value = true
-            clearTimeout(scrollUpTimer)
-            scrollUpTimer = setTimeout(() => { scrolledUp.value = false }, SCROLL_BUTTON_HIDE_DELAY)
-          }
-        })
-      })
-      return
-    }
-  }
-
+  // Session switches always force-scroll to the bottom; this watcher only
+  // anchors the viewport when the message array is replaced (loadHistory /
+  // prepend) while the user is NOT at the bottom — keep the first visible
+  // message in place instead of letting the browser's scrollTop clamping jump.
   if (!oldMsgs || oldMsgs.length === 0) return
-  if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_EDGE_THRESHOLD) return // at bottom → let scrollToBottom pin
+  if (el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX) return // at bottom → let scrollToBottom pin
   el.__prevScrollHeight = el.scrollHeight
   el.__prevScrollTop = el.scrollTop
   scrollAnchor = captureAnchor(el)
@@ -1021,6 +1123,12 @@ defineExpose({
   scrollToMessage: scrollToMessageUserMsg,
   messagesRef,
   isAtBottom: () => isAtBottom.value,
+  // Whether the view should stay pinned to the bottom: the user has NOT
+  // deliberately scrolled away (userLeftBottom). Unlike isAtBottom — which is
+  // a live-geometry flag that can briefly read false while content is still
+  // rendering after a pin — this only reflects user intent, so async render
+  // flush / lazy-load growth must keep re-pinning when it is true.
+  shouldStayPinned: () => !userLeftBottom,
   scrolledUp,
   scrolledDown,
   closeUserMsgIndex,

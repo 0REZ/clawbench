@@ -168,10 +168,11 @@
     </template>
 
     <!-- Quick commands popup -->
-    <PopupMenu v-model:show="showCommands" :target-element="isPC ? cmdBtnTopRef : cmdBtnRef" :max-width="220" :max-height="280" :menu-items-count="visibleCommands.length + 1">
+    <PopupMenu v-model:show="showCommands" :target-element="isPC ? cmdBtnTopRef : cmdBtnRef" :max-width="260" :max-height="280" :menu-items-count="visibleCommands.length + 1">
       <div class="quick-send-title">{{ t('terminal.quickCommands') }}</div>
       <button v-for="cmd in visibleCommands" :key="cmd.id" class="quick-send-item" @click="executeCommand(cmd)">
-        {{ cmd.label }}
+        <span class="qs-label">{{ cmd.label }}</span>
+        <span class="qs-cmd" :title="cmd.command">{{ cmd.command }}</span>
       </button>
       <div class="quick-send-divider" />
       <button class="quick-send-item" @click="openEditDialog">
@@ -1796,6 +1797,27 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   height: 1px;
   background: var(--border-color);
   margin: 4px 0;
+}
+
+/* Quick commands item: label (flex-shrink 0) + command (ellipsis), no trailing inject button */
+.quick-send-item .qs-label {
+  flex-shrink: 0;
+  font-weight: 500;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-send-item .qs-cmd {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Terminal theme picker (unscoped because PopupMenu teleports to body) */

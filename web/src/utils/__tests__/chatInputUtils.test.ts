@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeRecentReferencedFiles, computeHasFileGroups, computeAttachMenuItemCount } from '@/utils/chatInputUtils.ts'
+import { computeRecentReferencedFiles, computeHasFileGroups, computeAttachMenuItemCount, isImeCompositionEvent } from '@/utils/chatInputUtils.ts'
 
 describe('computeRecentReferencedFiles', () => {
   it('returns empty for null messages', () => {
@@ -102,6 +102,21 @@ describe('computeHasFileGroups', () => {
   })
   it('returns true when recent shares exist', () => {
     expect(computeHasFileGroups(null, null, [], [], 2)).toBe(true)
+  })
+})
+
+describe('isImeCompositionEvent', () => {
+  it('returns true when isComposing is set', () => {
+    expect(isImeCompositionEvent({ isComposing: true })).toBe(true)
+  })
+  it('returns true when keyCode is 229 (WebKit fallback)', () => {
+    expect(isImeCompositionEvent({ isComposing: false, keyCode: 229 })).toBe(true)
+    expect(isImeCompositionEvent({ keyCode: 229 })).toBe(true)
+  })
+  it('returns false for a normal Enter keystroke', () => {
+    expect(isImeCompositionEvent({ isComposing: false, keyCode: 13 })).toBe(false)
+    expect(isImeCompositionEvent({})).toBe(false)
+    expect(isImeCompositionEvent({ isComposing: false })).toBe(false)
   })
 })
 

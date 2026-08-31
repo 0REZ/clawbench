@@ -3,7 +3,7 @@
     <div
       v-if="active"
       class="completion-popover-backdrop"
-      @click.self="safeDismiss"
+      @click.self="handleBackdropClick"
     >
       <Transition name="completion-popover-card" mode="out-in" appear>
         <div :key="active.sessionId + active.kind" class="completion-popover">
@@ -18,10 +18,16 @@
             </span>
           </div>
           <div v-if="active.userMessage" class="completion-popover-meta completion-popover-meta-user">
-            <span class="completion-popover-user-msg" :title="active.userMessage">
-              <MessageSquare :size="12" />
-              <span class="completion-popover-user-msg-text">{{ active.userMessage }}</span>
-            </span>
+            <div
+              class="completion-popover-user-quote"
+              :class="{ 'is-expanded': userMessageExpanded }"
+              role="button"
+              :aria-expanded="userMessageExpanded"
+              @click="toggleUserMessage"
+            >
+              <MessageSquare :size="12" class="completion-popover-user-quote-icon" />
+              <span class="completion-popover-user-quote-text">{{ active.userMessage }}</span>
+            </div>
           </div>
           <div class="completion-popover-summary markdown-body" v-html="summaryHtml" @click="handleSummaryClick"></div>
           <div class="completion-popover-input">
@@ -56,17 +62,19 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Search, Send, MessageSquare, Check, ExternalLink } from 'lucide-vue-next'
+import { Search, Send, Check, ExternalLink, MessageSquare } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import { useCompletionPopover } from '@/composables/useCompletionPopover'
 import { useAgents } from '@/composables/useAgents'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader'
 import { gt } from '@/composables/useLocale'
+import { useToast } from '@/composables/useToast'
 import { canSendInput } from '@/utils/quoteQuestionUtils'
 
-const { active, dismiss } = useCompletionPopover()
+const { active, dismiss, dismissOnBackdrop } = useCompletionPopover()
 const { getAgentBackend } = useAgents()
+const toast = useToast()
 
 const agentBackend = computed(() => {
     const agentId = active.value?.agentId
@@ -96,15 +104,22 @@ const sending = ref(false)
 
 const canSend = computed(() => canSendInput(inputText.value) && !sending.value)
 
+// 用户消息引用块：折叠时单行省略，点击展开完整内容
+const userMessageExpanded = ref(false)
+function toggleUserMessage(): void {
+    userMessageExpanded.value = !userMessageExpanded.value
+}
+
 // 弹窗切换时重置输入框（immediate：mount 时也重置一次）
 watch(active, () => {
     inputText.value = ''
     sending.value = false
+    userMessageExpanded.value = false
 }, { immediate: true })
 
-// 点击 backdrop 空白处关闭
-function safeDismiss(): void {
-    dismiss()
+// 点击 backdrop 空白处关闭（带最小停留时长防误触保护）
+function handleBackdropClick(): void {
+    dismissOnBackdrop()
 }
 
 function autoResizeTextarea(): void {
@@ -142,6 +157,8 @@ async function handleSend(): Promise<void> {
         }
         // 发送成功后清空该会话未读（独立 /read 端点，不影响其他会话未读）
         await markRead(item)
+        // 气泡提示发送成功，给用户确认感
+        toast.show(gt('chat.popover.sentToast'), { type: 'success', duration: 2000 })
         dismiss()
     } catch {
         sending.value = false
@@ -169,6 +186,8 @@ async function handleMarkRead(): Promise<void> {
     sending.value = true
     try {
         await markRead(item)
+        // 气泡提示标记成功，给用户确认感
+        toast.show(gt('chat.popover.markedReadToast'), { type: 'success', duration: 2000 })
         dismiss()
     } catch {
         sending.value = false
@@ -304,8 +323,7 @@ function handleSummaryClick(event: MouseEvent): void {
     color: var(--text-secondary, var(--text-primary));
 }
 
-.completion-popover-project,
-.completion-popover-user-msg {
+.completion-popover-project {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -353,37 +371,54 @@ function handleSummaryClick(event: MouseEvent): void {
     flex-shrink: 0;
 }
 
-/* 用户消息：袖珍版聊天用户气泡 — 靠左、胶囊半圆、左侧消息图标、单行省略。
-   省略号逻辑放在内层文本 span（flex 容器内 text-overflow 不生效），
-   外层气泡 inline-flex 布局图标 + 文本 */
+/* 用户消息：引用式样块 — 无圆角、左侧 accent 竖线描边、淡色底，
+   与 QuoteQuestionBar 的引用片段视觉一致。点击可展开/收起完整内容。
+   宽度随内容自适应，超出卡片时单行省略 */
 .completion-popover-meta-user {
     justify-content: flex-start;
     padding-left: 0;
 }
 
-.completion-popover-user-msg {
+.completion-popover-user-quote {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     min-width: 0;
     max-width: 100%;
-    padding: 3px 10px;
+    padding: 3px 8px;
     font-size: 12px;
-    line-height: 1.4;
-    color: #fff;
-    background: var(--user-msg-color);
-    border-radius: 999px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--accent-color) 10%, var(--bg-tertiary));
+    border-left: 2px solid var(--accent-color);
+    border-radius: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s;
 }
 
-.completion-popover-user-msg svg {
-    flex-shrink: 0;
+.completion-popover-user-quote:active {
+    background: color-mix(in srgb, var(--accent-color) 16%, var(--bg-tertiary));
 }
 
-.completion-popover-user-msg-text {
+.completion-popover-user-quote-text {
+    flex: 1;
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.completion-popover-user-quote-icon {
+    flex-shrink: 0;
+    color: var(--accent-color);
+}
+
+.completion-popover-user-quote.is-expanded .completion-popover-user-quote-text {
+    white-space: pre-wrap;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
 }
 
 .completion-popover-project-name {

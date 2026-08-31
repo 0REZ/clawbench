@@ -1378,6 +1378,53 @@ func TestUpdateLastRead_BroadcastsReadEvent(t *testing.T) {
 	assert.False(t, data.HasNewMessages)
 }
 
+func TestUpdateLastRead_AnchorsToNewestAssistantMessage(t *testing.T) {
+	// Regression: the unread query compares h.created_at > s2.last_read_at with
+	// second-precision SQLite DATETIME. If a message finalized in the same second
+	// as the mark-read call, a plain CURRENT_TIMESTAMP would still leave it
+	// "unread". UpdateLastRead must anchor last_read_at to at least the newest
+	// finalized assistant message's created_at so the comparison is robust.
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Anchor")
+
+	// Insert an assistant message with a fixed created_at so the comparison is
+	// deterministic regardless of second boundaries.
+	const msgCreated = "2025-01-01 10:00:00"
+	_, err := service.UnsafeDBForTest().Exec(
+		"INSERT INTO chat_history (project_path, backend, session_id, role, content, streaming, created_at) VALUES (?, ?, ?, 'assistant', 'final', 0, ?)",
+		"/project", "claude", sid, msgCreated)
+	assert.NoError(t, err)
+
+	service.UpdateLastRead(sid)
+
+	// The driver reads DATETIME as ISO 8601 UTC — compare semantically via time.
+	var lastRead sql.NullTime
+	err = service.UnsafeDBForTest().QueryRow("SELECT last_read_at FROM chat_sessions WHERE id = ?", sid).Scan(&lastRead)
+	assert.NoError(t, err)
+	require.True(t, lastRead.Valid)
+	msgTime, err := time.Parse("2006-01-02 15:04:05", msgCreated)
+	assert.NoError(t, err)
+	assert.False(t, lastRead.Time.Before(msgTime), "last_read_at must anchor to the newest finalized assistant message created_at")
+
+	// After marking read, the session must no longer be unread.
+	sessions, err := service.GetSessions("/project", "")
+	assert.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, 0, sessions[0].UnreadCount)
+}
+
+func TestUpdateLastRead_FallsBackToNowWithoutMessages(t *testing.T) {
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "No Messages")
+
+	service.UpdateLastRead(sid)
+
+	var lastRead sql.NullString
+	err := service.UnsafeDBForTest().QueryRow("SELECT last_read_at FROM chat_sessions WHERE id = ?", sid).Scan(&lastRead)
+	assert.NoError(t, err)
+	assert.True(t, lastRead.Valid, "last_read_at should still be set via CURRENT_TIMESTAMP fallback")
+}
+
 // ---------- GetSessionAgentID ----------
 
 func TestGetSessionAgentID(t *testing.T) {

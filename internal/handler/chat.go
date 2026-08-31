@@ -120,8 +120,14 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 
 		// Always update cookie with current session ID
 		setSessionID(w, r, sessionID)
-		// Mark session as read
-		service.UpdateLastRead(sessionID)
+
+		// Note: loading message history must NOT mark the session as read.
+		// Automatic reloads (WS reconnect refresh, completion-event refresh,
+		// pagination) hit this GET and would otherwise clear the unread badge
+		// before the user actually views the session — the Android floating
+		// window then never shows an unread state for a background-finished
+		// session. "Mark as read" is an explicit user action and goes through
+		// POST /api/ai/chat/read (MarkChatRead).
 
 		// Parse pagination params
 		// Supports both before_id (preferred, integer cursor) and before (legacy, timestamp cursor).

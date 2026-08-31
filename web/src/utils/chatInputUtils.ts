@@ -5,6 +5,19 @@
 import type { FileEntry } from '@/utils/fileAttachmentUtils'
 
 /**
+ * Detect whether a keydown event belongs to an active IME composition session
+ * (e.g. Chinese pinyin candidate selection). During composition the browser
+ * fires keydown events with `isComposing === true`, and some WebKit-based
+ * engines (macOS Safari, Android WebView) additionally pin `keyCode` to 229.
+ *
+ * Return true to let the IME own the keystroke (Enter commits the candidate to
+ * the input instead of submitting the message), false for a normal keystroke.
+ */
+export function isImeCompositionEvent(e: { isComposing?: boolean; keyCode?: number }): boolean {
+  return !!e.isComposing || e.keyCode === 229
+}
+
+/**
  * Extract recently referenced files from message history.
  * Counts occurrences, excludes current file and already-attached files,
  * returns top 5 by frequency.

@@ -2332,7 +2332,7 @@ describe('useChatStream', () => {
       simulateWsEvent('done', {})
 
       await vi.waitFor(() => {
-        expect(options.onScrollBottom).toHaveBeenCalledWith(false, true)
+        expect(options.onScrollBottom).toHaveBeenCalledWith(false)
       })
     })
   })

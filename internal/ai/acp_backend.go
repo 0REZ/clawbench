@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -215,7 +216,15 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 			// RequestError.Error() returns the full JSON blob which is not
 			// useful to the end user — we want the code and just the .Message
 			// field (e.g. "Internal error: Upstream request failed: [invalid_request_error] Insufficient Balance").
-			forwardACPEvent(ch, StreamEvent{Type: "warning", Content: acpErrorText(err), Reason: ReasonRequestFailed})
+			acpErrCode, acpHTTPStatus := acpErrorDetails(err)
+			forwardACPEvent(ch, StreamEvent{
+				Type:        "warning",
+				Content:     acpErrorText(err),
+				Reason:      ReasonRequestFailed,
+				ErrorCode:   acpErrCode,
+				HTTPStatus:  acpHTTPStatus,
+				ErrorSource: "agent",
+			})
 			forwardACPEvent(ch, StreamEvent{Type: "done"})
 			return
 		}
@@ -282,6 +291,42 @@ func acpErrorText(err error) string {
 		return fmt.Sprintf("ACP error %d: %s", reqErr.Code, reqErr.Message)
 	}
 	return err.Error()
+}
+
+// acpErrorDetails extracts the structured JSON-RPC error code and any upstream
+// HTTP status from an ACP error. Returns (code, httpStatus) with zero values
+// when the error carries no such information. The HTTP status is parsed from
+// the RequestError.Data blob (e.g. CodeBuddy refusal payloads embed
+// {"httpStatus":500} there); when absent, code is still surfaced so the
+// frontend can display "ACP error -32603" even without an HTTP status.
+func acpErrorDetails(err error) (code int, httpStatus int) {
+	var reqErr *acp.RequestError
+	if !errors.As(err, &reqErr) {
+		return 0, 0
+	}
+	if reqErr.Data == nil {
+		return reqErr.Code, 0
+	}
+	// Data may be a string (JSON-encoded) or an already-parsed map.
+	var raw string
+	switch v := reqErr.Data.(type) {
+	case string:
+		raw = v
+	default:
+		b, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			return reqErr.Code, 0
+		}
+		raw = string(b)
+	}
+	// Try known shapes: {"httpStatus":500} or {"details":"... httpStatus=500 ..."}.
+	var dataMap map[string]any
+	if err := json.Unmarshal([]byte(raw), &dataMap); err == nil {
+		if hs, ok := dataMap["httpStatus"].(float64); ok {
+			httpStatus = int(hs)
+		}
+	}
+	return reqErr.Code, httpStatus
 }
 
 // Ensure compile-time interface compliance

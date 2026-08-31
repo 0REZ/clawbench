@@ -1027,7 +1027,9 @@ func TestSessionExecutor_TrackToolDuration(t *testing.T) {
 	assert.True(t, block.Done)
 	assert.GreaterOrEqual(t, block.DurationMs, 25, "block duration should reflect elapsed wall-clock time")
 
-	// The persisted tool call record should carry the duration
+	// The persisted tool call record should carry the duration. Tool-call
+	// upserts are batched into the flush window, so flush before reading.
+	executor.flushStreamingMessage()
 	record, err := GetToolCall("tool-dur-1", msgID)
 	require.NoError(t, err)
 	require.NotNil(t, record)
@@ -1114,6 +1116,8 @@ func TestSessionExecutor_TrackToolDuration_InterimThenFinal(t *testing.T) {
 	block := executor.blocks[0]
 	assert.GreaterOrEqual(t, block.DurationMs, 40, "final duration should reflect full elapsed time")
 
+	// Tool-call upserts are batched into the flush window, so flush before reading.
+	executor.flushStreamingMessage()
 	record, err := GetToolCall("tool-dur-3", msgID)
 	require.NoError(t, err)
 	require.NotNil(t, record)

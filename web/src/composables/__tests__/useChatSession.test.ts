@@ -60,7 +60,7 @@ const { mockState, resetMockState } = vi.hoisted(() => {
   return { mockState, resetMockState }
 })
 
-const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, mockForceCleanupStreamingState, resetAdditionalMocks } = vi.hoisted(() => {
+const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, mockForceCleanupStreamingState, mockOnAppForeground, resetAdditionalMocks } = vi.hoisted(() => {
   const mockIdentity: Record<string, string | boolean> = {
     currentSessionTitle: '',
     currentBackend: '',
@@ -97,6 +97,16 @@ const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, 
     parseMessages: vi.fn().mockReturnValue([]),
   }
   const mockForceCleanupStreamingState = vi.fn().mockReturnValue(undefined)
+  // Captures callbacks registered via onAppForeground by useChatSession —
+  // tests fire these to simulate app background/foreground transitions.
+  const foregroundHandlers: Array<(fg: boolean) => void> = []
+  const mockOnAppForeground = vi.fn((cb: (fg: boolean) => void) => {
+    foregroundHandlers.push(cb)
+    return () => {
+      const idx = foregroundHandlers.indexOf(cb)
+      if (idx !== -1) foregroundHandlers.splice(idx, 1)
+    }
+  })
   function resetAdditionalMocks() {
     Object.keys(mockIdentity).forEach(k => { mockIdentity[k] = k === 'autoApprove' ? false : '' })
     mockToastFn.mockReset()
@@ -117,8 +127,11 @@ const { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockIdentityFns, 
     mockUtilsFns.buildMessageSnapshot.mockReset().mockReturnValue('')
     mockUtilsFns.parseMessages.mockReset().mockReturnValue([])
     mockForceCleanupStreamingState.mockReset().mockReturnValue(undefined)
+    mockAppInForeground.value = true
+    mockIsReplayingEvents.value = false
+    foregroundHandlers.length = 0
   }
-  return { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockForceCleanupStreamingState, mockIdentityFns, resetAdditionalMocks }
+  return { mockIdentity, mockToastFn, mockAgentFns, mockUtilsFns, mockForceCleanupStreamingState, mockIdentityFns, mockOnAppForeground, resetAdditionalMocks }
 })
 
 // ── Mocks ──
@@ -303,6 +316,13 @@ vi.mock('@/composables/useSessionIdentity.ts', () => ({
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ show: mockToastFn }),
 }))
+vi.mock('@/composables/useAppForeground', () => ({
+  useAppForeground: () => ({ appInForeground: mockAppInForeground }),
+  onAppForeground: mockOnAppForeground,
+}))
+vi.mock('@/composables/useGlobalEvents', () => ({
+  useGlobalEvents: () => ({ isReplayingEvents: mockIsReplayingEvents }),
+}))
 vi.mock('@/composables/useNotification', () => ({
   useNotification: () => ({ play: vi.fn() }),
 }))
@@ -352,11 +372,19 @@ vi.mock('@/utils/chatStreamUtils', async (importOriginal) => {
 // ── Import after mocks ──
 
 import { useChatSession, loadSessionsOnce, resetChatSessionState } from '@/composables/useChatSession'
+import { recordRecentSession } from '@/composables/useRecentSession'
+import { store } from '@/stores/app.ts'
 import { chatMessageReducer } from '@/utils/chatStreamUtils.ts'
 
 // Get direct references to the mocked functions from useSessionIdentity
 const mockUpdateUsageState = vi.hoisted(() => vi.fn())
 const mockClearUsageState = vi.hoisted(() => vi.fn())
+// App foreground signal for useAppForeground mock — tests flip this to
+// simulate the app being backgrounded (Android onPause) vs foregrounded.
+const mockAppInForeground = vi.hoisted(() => ({ value: true }))
+// WS replay signal for useGlobalEvents mock — tests flip this to simulate
+// fetchPendingEvents replaying events missed while the WS was down.
+const mockIsReplayingEvents = vi.hoisted(() => ({ value: false }))
 
 // ── Helpers ──
 
@@ -792,6 +820,75 @@ describe('onSessionEvent', () => {
     })
   })
 
+  // ── Current-session completion marks the session read ──
+  // Bug: when the user is viewing a session and its execution finishes, the
+  // frontend never called POST /api/ai/chat/read, so the session list kept
+  // showing an unread badge even for the currently-viewed session.
+
+  it('marks current session read when it completes while being viewed', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('marks current session read when it is cancelled while being viewed', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'current-s1', status: 'cancelled' })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('does NOT mark read when a non-current session completes', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({ session_id: 'other-s2', status: 'completed' })
+
+    // Allow the debounced loadSessionsOnce (500ms) and any pending loadHistory
+    // calls to run, then assert no mark-read POST was issued.
+    await new Promise((r) => setTimeout(r, 600))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
+    )
+    expect(readCalls).toHaveLength(0)
+  })
+
   // ── Safety net: loading stuck when session completes ──
   // Bug: chat_stream 'done' event was missed (e.g. WS disconnect), so
   // loading.value stays true. The session_update 'completed' event should
@@ -1160,6 +1257,183 @@ describe('onSessionEvent', () => {
     // onConnectStream should NOT be called (placeholder is data-driven).
     expect(onConnectStream).not.toHaveBeenCalled()
   })
+
+  it('does NOT mark the current session read on completion while the app is backgrounded', async () => {
+    // Backgrounded app (Android onPause) — a session finishing here must keep
+    // its unread badge so the floating window can show it. The completion
+    // still reloads history, but must not POST /api/ai/chat/read.
+    mockAppInForeground.value = false
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    // Wait for the async loadHistory to complete
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url]) => typeof url === 'string' && url.startsWith('/api/ai/chat/read')
+    )
+    expect(readCalls.length).toBe(0)
+  })
+
+  it('marks the current session read on completion while the app is foregrounded', async () => {
+    mockAppInForeground.value = true
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    // Wait for the async loadHistory + markSessionRead to complete
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+    await new Promise(r => setTimeout(r, 50))
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does NOT mark read for a completion replayed after WS reconnect', async () => {
+    // fetchPendingEvents() is replaying a completion that was broadcast while
+    // the WS was down (app was backgrounded). The user never saw it finish, so
+    // the unread badge must survive — even though the app is now foreground.
+    mockAppInForeground.value = true
+    mockIsReplayingEvents.value = true
+    mockState.currentSessionId = 'current-s1'
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [],
+        total: 0,
+        running: false,
+      }),
+    })
+    globalThis.fetch = fetchSpy as any
+
+    const session = createSession()
+    session.onSessionEvent({ session_id: 'current-s1', status: 'completed' })
+
+    await vi.waitFor(() => fetchSpy.mock.calls.length > 0)
+    await new Promise(r => setTimeout(r, 50))
+
+    const readCalls = fetchSpy.mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBe(0)
+  })
+})
+
+// ── Returning to foreground marks the current session read ──
+// Bug: a session that completed while the app was backgrounded kept its unread
+// badge after the user returned to the app, even though they were now actively
+// viewing it. The completion paths deliberately skip mark-read while
+// backgrounded (so the floating window can show the badge); the foreground
+// transition is where the badge must finally be cleared.
+
+describe('foreground return marks current session read', () => {
+  beforeEach(() => {
+    resetMockState()
+    resetChatSessionState()
+    resetAdditionalMocks()
+    mockOnAppForeground.mockClear()
+  })
+
+  // Helper: capture the onAppForeground callback registered by useChatSession.
+  function captureForegroundHandlers() {
+    const calls = mockOnAppForeground.mock.calls
+    return calls.map(c => c[0]) as Array<(fg: boolean) => void>
+  }
+
+  function createForegroundTestSession() {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+    return session
+  }
+
+  it('marks the current session read when the app returns to the foreground', async () => {
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+    expect(handlers.length).toBeGreaterThan(0)
+
+    // Simulate the app returning to the foreground (Android onResume).
+    handlers[handlers.length - 1](true)
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
+  it('does NOT mark read when the app transitions to the background', async () => {
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+
+    // Simulate the app going to the background (Android onPause).
+    handlers[handlers.length - 1](false)
+
+    await new Promise(r => setTimeout(r, 50))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
+    )
+    expect(readCalls.length).toBe(0)
+  })
+
+  it('does nothing when returning to foreground with no active session', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    })
+    const { session, options } = createSessionInternal()
+    options.currentSessionId.value = ''
+    const handlers = captureForegroundHandlers()
+
+    handlers[handlers.length - 1](true)
+
+    await new Promise(r => setTimeout(r, 50))
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
+    )
+    expect(readCalls.length).toBe(0)
+  })
 })
 
 // ── loadSessionsOnce tests ──
@@ -1484,7 +1758,8 @@ describe('switchSession', () => {
 
   it('calls loadSessionsOnce after successful switch to recalculate chatUnread', async () => {
     // First call: GET /api/ai/chat?session_id=s2 (switchSession fetch)
-    // Second call: GET /api/ai/sessions (loadSessionsOnce fetch)
+    // Second call: POST /api/ai/chat/read (switchSession marks read)
+    // Third call: GET /api/ai/sessions (loadSessionsOnce fetch)
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -1501,6 +1776,10 @@ describe('switchSession', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: () => Promise.resolve({
           sessions: [
             { id: 's2', unreadCount: 0, running: false },
@@ -1513,12 +1792,56 @@ describe('switchSession', () => {
 
     // loadSessionsOnce is fire-and-forget — wait for it to complete
     await vi.waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3)
     })
 
     // After switching to s2 and recalculating, no unread sessions remain
     expect(mockState.chatUnreadCount).toBe(0)
-    // fetch called twice: once for chat history, once for sessions list
+    // fetch called 3 times: chat history, mark-read, sessions list
+  })
+
+  it('marks the switched session read via POST /api/ai/chat/read', async () => {
+    // switchSession must explicitly mark the session read: loading history
+    // (GET /api/ai/chat) no longer does it server-side, so user-intent opens
+    // must call the dedicated /chat/read endpoint.
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's2',
+          messages: [],
+          total: 0,
+          backend: 'claude',
+          agentId: 'agent1',
+          modelId: '',
+          thinkingEffort: '',
+          running: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [
+            { id: 's2', unreadCount: 0, running: false },
+          ],
+        }),
+      })
+
+    const session = createSession()
+    await session.switchSession('s2')
+
+    const readCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCall).toBeDefined()
+    expect(String(readCall![0])).toContain(`session_id=s2`)
   })
 
   it('clears chatUnread after switching when all sessions are read', async () => {
@@ -1537,6 +1860,10 @@ describe('switchSession', () => {
           thinkingEffort: '',
           running: false,
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -1577,6 +1904,10 @@ describe('switchSession', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: () => Promise.resolve({ ok: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: () => Promise.resolve({
           sessions: [
             { id: 's2', unreadCount: 0, running: false },
@@ -1588,8 +1919,12 @@ describe('switchSession', () => {
     const session = createSession()
     await session.switchSession('s2')
 
-    // s3 is still unread — flashing should continue
-    expect(mockState.chatUnreadCount).toBeGreaterThan(0)
+    // loadSessionsOnce is fire-and-forget inside switchSession,
+    // wait for it to complete before checking state
+    await vi.waitFor(() => {
+      // s3 is still unread — flashing should continue
+      expect(mockState.chatUnreadCount).toBeGreaterThan(0)
+    })
   })
 
   it('sets inputDisabled=false even when switchSession fetch fails', async () => {
@@ -2299,6 +2634,10 @@ describe('chatUnread integration', () => {
           thinkingEffort: '',
           running: false,
         }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -3917,6 +4256,61 @@ describe('handleWsReconnect', () => {
 
     vi.restoreAllMocks()
   })
+
+  it('does NOT mark the session read (no /chat/read call) on WS reconnect refresh', async () => {
+    // Automatic reloads (WS reconnect) only refresh message history — they
+    // must NOT clear the unread badge. Marking read is reserved for explicit
+    // user intent (switchSession).
+    const loading = ref(false)
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        // First call: loadSessionsOnce — s1 idle.
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [{ id: 's1', running: false }],
+          totalCount: 1,
+        }),
+      })
+      .mockResolvedValueOnce({
+        // Second call: loadHistory.
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 's1', messages: [], total: 0, running: false,
+        }),
+      })
+
+    await session.handleWsReconnect()
+
+    const readCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([url, init]) =>
+        typeof url === 'string' &&
+        url.startsWith('/api/ai/chat/read') &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    )
+    expect(readCalls.length).toBe(0)
+
+    vi.restoreAllMocks()
+  })
 })
 
 describe('handleManualRefresh', () => {
@@ -4452,6 +4846,105 @@ describe('loadMoreMessages', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
+  it('hasMore stays false while no DB history is loaded (cursor null) — the AABBCC trigger is structurally impossible', async () => {
+    // Reported AABBCC duplicate root cause: during a session switch the array
+    // is cleared (dispatch clear), the old hasMore (computed from array length)
+    // momentarily flipped true, and a top scroll fired loadMoreMessages with an
+    // empty before_id → the backend returned the full history → prepend_older
+    // doubled everything. With the loaded-window state, clear() also resets the
+    // cursor to null and hasMore is gated on it — so the trigger cannot exist.
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([] as any[]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    // Even with total > 0, a null cursor (no DB history loaded) forces hasMore false.
+    session.totalMessages.value = 6
+    session.queuedCount.value = 0
+    expect(session.oldestLoadedId.value).toBeNull()
+    expect(session.hasMore.value).toBe(false)
+
+    // A db_load that returns DB rows establishes the cursor and re-enables hasMore.
+    mockUtilsFns.parseMessages.mockReturnValueOnce([
+      { id: 38954, role: 'user', content: 'A' },
+      { id: 38955, role: 'assistant', content: 'A reply' },
+    ])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1',
+        messages: [{ id: 38954 }, { id: 38955 }],
+        total: 6,
+        queuedCount: 0,
+        running: false,
+      }),
+    })
+    await session.loadHistory(true, false, false)
+    expect(session.oldestLoadedId.value).toBe(38954)
+    expect(session.hasMore.value).toBe(true)
+  })
+
+  it('clears the cursor on switchSession (dispatch clear) so the next session starts from a clean window', async () => {
+    const options = {
+      currentSessionId: ref('current-s1'),
+      messages: ref([{ id: 38954, role: 'user' }, { id: 38955, role: 'assistant' }] as any[]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    // Establish a loaded window, then switch session (clear resets the cursor).
+    session.oldestLoadedId.value = 38954
+    session.totalMessages.value = 6
+
+    const sid2 = 'target-session'
+    mockUtilsFns.parseMessages.mockReturnValueOnce([])
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: sid2,
+        messages: [],
+        total: 0,
+        queuedCount: 0,
+        running: false,
+      }),
+    })
+    await session.switchSession(sid2)
+
+    expect(session.oldestLoadedId.value).toBeNull()
+    expect(session.hasMore.value).toBe(false)
+    // loadMoreMessages must not fire against the null cursor.
+    const fetchCallsBefore = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length
+    await session.loadMoreMessages()
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(fetchCallsBefore)
+  })
+
   it('refreshes queuedCount from the loadMore response (plan C)', async () => {
     // First: loadHistory returns 2 normal messages + 5 queued → queuedCount=5.
     mockUtilsFns.parseMessages
@@ -4824,6 +5317,8 @@ describe('loadMoreMessages', () => {
     const session = useChatSession(options)
     session.totalMessages.value = 55
     session.queuedCount.value = 15
+    // Establish a real loaded window (normal rows start at id 1).
+    session.oldestLoadedId.value = 1
 
     // Non-queued loaded (40) == non-queued total (55-15=40) → no more history.
     expect(session.hasMore.value).toBe(false)
@@ -5468,6 +5963,109 @@ describe('loadHistory session_id recovery', () => {
     expect(mockIdentity.currentSessionTitle).toBe('Recovered Session')
     expect(mockIdentity.currentBackend).toBe('claude')
     expect(mockIdentity.currentAgentId).toBe('agent1')
+  })
+
+  it('recovers the last opened session (stored session_id) when currentSessionId is empty', async () => {
+    store.state.projectRoot = '/test/proj'
+    localStorage.setItem('clawbench-recent-session:/test/proj', JSON.stringify({ sessionId: 'stored-s1', accessedAt: Date.now() }))
+    globalThis.fetch = vi.fn()
+      // Recovery call with stored session_id
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'stored-s1',
+          sessionTitle: 'Stored Session',
+          backend: 'claude',
+          agentId: 'agent1',
+          messages: [{ id: 'm1' }],
+          total: 1,
+          running: false,
+        }),
+      })
+
+    const currentSessionId = ref('') // empty — triggers recovery
+    const messages = ref([])
+    const options = {
+      currentSessionId,
+      messages,
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    await session.loadHistory(true, false, false)
+
+    // First call: recovery with stored session_id (single call since it returns messages)
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('session_id=stored-s1'), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(currentSessionId.value).toBe('stored-s1')
+  })
+
+  it('clears stale stored session (404) and falls back to default recovery', async () => {
+    store.state.projectRoot = '/test/proj'
+    localStorage.setItem('clawbench-recent-session:/test/proj', JSON.stringify({ sessionId: 'gone-s1', accessedAt: Date.now() }))
+    globalThis.fetch = vi.fn()
+      // First call: stored session_id → 404
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: '会话不存在', msgKey: 'SessionNotFound' }),
+      })
+      // Second call: fallback without session_id → valid session
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          sessionId: 'fallback-s1',
+          sessionTitle: 'Fallback Session',
+          backend: 'claude',
+          agentId: 'agent1',
+          messages: [{ id: 'm1' }],
+          total: 1,
+          running: false,
+        }),
+      })
+
+    const currentSessionId = ref('') // empty — triggers recovery
+    const messages = ref([])
+    const options = {
+      currentSessionId,
+      messages,
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading: ref(false),
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate: vi.fn(),
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+    await session.loadHistory(true, false, false)
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2)
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(1, expect.stringContaining('session_id=gone-s1'), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // Fallback request must NOT carry session_id
+    expect(globalThis.fetch).toHaveBeenNthCalledWith(2, expect.not.stringContaining('session_id='), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // Stale entry removed
+    expect(localStorage.getItem('clawbench-recent-session:/test/proj')).toBeNull()
+    expect(currentSessionId.value).toBe('fallback-s1')
   })
 
   it('returns early when recovery yields no session', async () => {

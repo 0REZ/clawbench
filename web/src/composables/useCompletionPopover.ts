@@ -27,6 +27,12 @@ export interface CompletionPopoverItem {
 const queue = ref<CompletionPopoverItem[]>([])
 const active = ref<CompletionPopoverItem | null>(null)
 
+// 当前展示项的展示开始时间戳（毫秒）——点击空白处关闭时的防误触保护依据
+let activeShownAt = 0
+
+/** 通知面板最小展示时长：期间点击空白处不关闭，避免刚弹出被误点 */
+const MIN_DISMISS_MS = 1000
+
 function showNext(): void {
     const next = queue.value.shift()
     if (!next) {
@@ -34,6 +40,7 @@ function showNext(): void {
         return
     }
     active.value = next
+    activeShownAt = Date.now()
 }
 
 /**
@@ -56,6 +63,16 @@ function dismiss(): void {
     showNext()
 }
 
+/**
+ * 点击空白处关闭当前项。带防误触保护：展示不足 MIN_DISMISS_MS 时忽略，
+ * 避免通知刚弹出就被误点关掉。返回是否真正关闭。
+ */
+function dismissOnBackdrop(): boolean {
+    if (Date.now() - activeShownAt < MIN_DISMISS_MS) return false
+    dismiss()
+    return true
+}
+
 /** 测试用：清空队列与当前展示项。 */
 function reset(): void {
     queue.value = []
@@ -68,6 +85,7 @@ export function useCompletionPopover() {
         active,
         push,
         dismiss,
+        dismissOnBackdrop,
         reset,
     }
 }

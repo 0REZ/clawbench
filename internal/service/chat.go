@@ -1154,7 +1154,21 @@ func GetSessionsPaged(projectPath, backend string, limit int, cursor string, cur
 // Previously ran asynchronously (goroutine), which caused a race: the session
 // list still showed unread messages after the user opened the session.
 func UpdateLastRead(sessionID string) {
-	WriteExec("UPDATE chat_sessions SET last_read_at = CURRENT_TIMESTAMP WHERE id = ?", sessionID)
+	// Set last_read_at to at least the newest finalized assistant message's
+	// created_at. The unread query compares h.created_at > s2.last_read_at with
+	// second-precision SQLite DATETIME — if a message finalized in the same
+	// second as the mark-read call, CURRENT_TIMESTAMP would still leave it
+	// "unread". Anchoring last_read_at to the newest message created_at makes
+	// the comparison robust (last_read_at >= created_at ⇒ not unread).
+	// Falls back to CURRENT_TIMESTAMP when no finalized assistant message exists.
+	WriteExec(`
+		UPDATE chat_sessions
+		SET last_read_at = COALESCE(
+			(SELECT MAX(created_at) FROM chat_history
+			 WHERE session_id = ? AND role = 'assistant' AND streaming = 0),
+			CURRENT_TIMESTAMP
+		)
+		WHERE id = ?`, sessionID, sessionID)
 	// Broadcast a status change so connected clients (e.g. the Android floating
 	// window) can refresh their unread counts. WS-only: no push notification and
 	// no pending event — reading a session must not create a notification.
@@ -1629,38 +1643,49 @@ func PersistContextStateFromEvent(sessionID string, event ai.StreamEvent) {
 	if sessionID == "" {
 		return
 	}
+	if patches := buildContextStatePatch(event); len(patches) > 0 {
+		PatchContextStateMerge(sessionID, patches)
+	}
+}
+
+// buildContextStatePatch extracts a chat_sessions.context_state patch map from
+// a stream event, or nil if the event carries no persistent context state.
+// Shared by the immediate persistence path (PersistContextStateFromEvent) and
+// the batched flush path (SessionExecutor.pendingContextPatches) so the
+// marshaling stays identical.
+func buildContextStatePatch(event ai.StreamEvent) map[string]string {
 	switch event.Type {
 	case "mode_update":
 		if event.Mode == nil {
-			return
+			return nil
 		}
 		modeJSON, err := json.Marshal(ModeStatePersist{
 			CurrentModeID:  event.Mode.CurrentModeID,
 			AvailableModes: convertModeDefsFromAI(event.Mode.AvailableModes),
 		})
 		if err != nil {
-			slog.Warn("persist context state: marshal mode", "session", sessionID, "error", err)
-			return
+			slog.Warn("persist context state: marshal mode", "session", event.Mode.CurrentModeID, "error", err)
+			return nil
 		}
-		PatchContextStateMerge(sessionID, map[string]string{"mode": string(modeJSON)})
+		return map[string]string{"mode": string(modeJSON)}
 
 	case "thinking_effort_update":
 		if event.ThinkingEffort == nil {
-			return
+			return nil
 		}
 		effortJSON, err := json.Marshal(ThinkingEffortPersist{
 			CurrentID:       event.ThinkingEffort.CurrentID,
 			AvailableLevels: convertThinkingEffortDefsFromAI(event.ThinkingEffort.AvailableLevels),
 		})
 		if err != nil {
-			slog.Warn("persist context state: marshal thinking effort", "session", sessionID, "error", err)
-			return
+			slog.Warn("persist context state: marshal thinking effort", "session", event.ThinkingEffort.CurrentID, "error", err)
+			return nil
 		}
-		PatchContextStateMerge(sessionID, map[string]string{"thinkingEffort": string(effortJSON)})
+		return map[string]string{"thinkingEffort": string(effortJSON)}
 
 	case "usage_update":
 		if event.Usage == nil {
-			return
+			return nil
 		}
 		usageJSON, err := json.Marshal(UsageStatePersist{
 			Used:              event.Usage.Used,
@@ -1675,11 +1700,12 @@ func PersistContextStateFromEvent(sessionID string, event ai.StreamEvent) {
 			Currency:          event.Usage.Currency,
 		})
 		if err != nil {
-			slog.Warn("persist context state: marshal usage", "session", sessionID, "error", err)
-			return
+			slog.Warn("persist context state: marshal usage", "session", event.Usage.TotalTokens, "error", err)
+			return nil
 		}
-		PatchContextStateMerge(sessionID, map[string]string{"usage": string(usageJSON)})
+		return map[string]string{"usage": string(usageJSON)}
 	}
+	return nil
 }
 
 // convertModeDefsFromAI converts ai.ModeDef slices to service.ModeDef for DB persistence.
