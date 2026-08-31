@@ -279,9 +279,13 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+/* Accent border lives on the row so it encloses the archive button too. */
 .session-item.active {
-  border-left: 4px solid var(--accent-color, #0066cc);
   padding-left: 8px;
+}
+
+.session-row.active .session-item {
+  border-top-color: transparent;
 }
 
 .session-row.session-row-active {
@@ -291,6 +295,10 @@ onUnmounted(() => {
 
 .session-row.active {
   background: var(--accent-bg, rgba(0, 102, 204, 0.1));
+  border-left: 4px solid var(--accent-color, #0066cc);
+  border-right: 1px solid var(--accent-color, #0066cc);
+  border-top: 1px solid var(--accent-color, #0066cc);
+  border-bottom: 1px solid var(--accent-color, #0066cc);
 }
 
 .session-row.running {
