@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import {
   buildExportPayload,
   downloadJson,
@@ -147,6 +147,13 @@ describe('createJsonImporter.importFromText', () => {
     expect(onError).toHaveBeenCalledWith('kindMismatch')
   })
 
+  it('reports invalidFile for a non-object payload', async () => {
+    const { importer, onError, onSummary } = makeImporter()
+    await importer.importFromText(JSON.stringify('plain string'))
+    expect(onError).toHaveBeenCalledWith('invalidFile')
+    expect(onSummary).not.toHaveBeenCalled()
+  })
+
   it('reports kind mismatch for an array payload (no version/kind meta)', async () => {
     const { importer, onError } = makeImporter()
     await importer.importFromText(JSON.stringify([{ label: 'a', command: 'b' }]))
@@ -171,5 +178,116 @@ describe('createJsonImporter.importFromText', () => {
     ]))
     expect(addItem).toHaveBeenCalledTimes(1)
     expect(onSummary).toHaveBeenCalledWith({ imported: 1, skipped: 1 })
+  })
+})
+
+// ── DOM interaction paths (trigger → hidden input → FileReader) ──
+
+function simulateFileSelected(file: File) {
+  const input = document.querySelector<HTMLInputElement>('input[type="file"]')
+  expect(input).toBeTruthy()
+  // Simulate the browser picking a file: dispatch the change event with
+  // files set, like the real <input type="file"> does.
+  Object.defineProperty(input!, 'files', { value: [file], configurable: true })
+  input!.dispatchEvent(new Event('change'))
+}
+
+describe('createJsonImporter DOM interaction', () => {
+  let clickSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+    // The module keeps a singleton hidden input across tests; re-attach it to
+    // the DOM if a previous test left it detached, so querySelector finds it.
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')
+    if (input && !input.isConnected) document.body.appendChild(input)
+  })
+
+  afterEach(() => {
+    clickSpy.mockRestore()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('trigger opens the hidden file picker and records the active importer', () => {
+    const { importer } = makeImporter()
+    importer.trigger()
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(input).toBeTruthy()
+    expect(input!.accept).toBe('application/json,.json')
+    expect(input!.style.display).toBe('none')
+  })
+
+  it('reuses the singleton hidden input instead of creating duplicates', () => {
+    const { importer: a } = makeImporter()
+    const { importer: b } = makeImporter()
+    a.trigger()
+    b.trigger()
+    const inputs = document.querySelectorAll('input[type="file"]')
+    expect(inputs.length).toBe(1)
+  })
+
+  it('reads a selected file and imports its contents', async () => {
+    const { importer, addItem, onSummary } = makeImporter()
+    importer.trigger()
+
+    // Replace FileReader with a stub that fires onload with the file text.
+    class FakeFileReader {
+      static instances: FakeFileReader[] = []
+      result = payloadJson('chat_quick_send', [{ label: '从文件导入', command: 'cmd' }])
+      onload: any = null
+      onerror: any = null
+      readAsText = vi.fn()
+      constructor() {
+        FakeFileReader.instances.push(this)
+        // jsdom fires the read asynchronously; simulate onload on next tick.
+        queueMicrotask(() => this.onload?.())
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader)
+
+    simulateFileSelected(new File(['ignored'], 'config.json', { type: 'application/json' }))
+    await vi.waitFor(() => expect(addItem).toHaveBeenCalled())
+
+    expect(FakeFileReader.instances[0].readAsText).toHaveBeenCalled()
+    expect(onSummary).toHaveBeenCalledWith({ imported: 1, skipped: 0 })
+  })
+
+  it('reports readError when FileReader fails', async () => {
+    const { importer, onError } = makeImporter()
+    importer.trigger()
+
+    class FakeFileReader {
+      static instances: FakeFileReader[] = []
+      result = ''
+      onload: any = null
+      onerror: any = null
+      readAsText = vi.fn()
+      constructor() {
+        FakeFileReader.instances.push(this)
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader)
+
+    simulateFileSelected(new File(['x'], 'bad.json', { type: 'application/json' }))
+    await vi.waitFor(() => expect(FakeFileReader.instances.length).toBeGreaterThan(0))
+    FakeFileReader.instances[0].onerror()
+
+    expect(onError).toHaveBeenCalledWith('readError')
+  })
+
+  it('ignores change events when no file was picked', () => {
+    const { importer, addItem, onError, onSummary } = makeImporter()
+    importer.trigger()
+
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    Object.defineProperty(input, 'files', { value: [], configurable: true })
+    input.dispatchEvent(new Event('change'))
+
+    expect(addItem).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    expect(onSummary).not.toHaveBeenCalled()
   })
 })
