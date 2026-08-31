@@ -116,7 +116,6 @@ defineExpose({ loadSessions: () => listRef.value?.loadSessions(), addSessionLoca
   height: 100%;
   display: flex;
   background: var(--bg-secondary, #fff);
-  border-left: 1px solid var(--border-color, #e5e5e5);
 }
 .sidebar-inner {
   flex: 1;
