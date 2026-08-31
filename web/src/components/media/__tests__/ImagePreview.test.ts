@@ -42,6 +42,7 @@ vi.mock('@/utils/path.ts', () => ({
     return parts[parts.length - 1]
   },
   joinPath: (...parts: string[]) => parts.filter(Boolean).join('/'),
+  isAbsolutePath: (path: string) => path.startsWith('/'),
 }))
 
 vi.mock('@/utils/fileType.ts', () => ({

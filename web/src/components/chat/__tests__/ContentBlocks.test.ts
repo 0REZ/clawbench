@@ -48,6 +48,13 @@ vi.mock('@/stores/app.ts', () => ({
 vi.mock('@/utils/contentBlocks.ts', () => ({
   isSevereWarning: (block: any) => block.reason === 'disconnect',
   getWarningText: (block: any) => block.text || block.reason || '',
+  formatErrorCode: (code: any) => (code ? `ERR-${code}` : ''),
+  getErrorSourceLabel: (block: any, t: any) => {
+    if (!block?.error_source) return ''
+    const key = `chat.contentBlocks.errorSources.${block.error_source}`
+    const translated = t(key)
+    return translated === key ? '' : translated
+  },
   statusClass: (task: any) => `status-${task.status}`,
   statusLabel: (task: any, t: any) => task.status,
   statusLabelSimple: (task: any, t: any) => task.status,
