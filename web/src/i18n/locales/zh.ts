@@ -41,6 +41,11 @@ export default {
     label: '表格',
     wrapOn: '自动换行已开启',
     wrapOff: '自动换行已关闭',
+    copy: '复制',
+    copyMarkdown: '复制 Markdown',
+    copyHtml: '复制 HTML',
+    copyTsv: '复制 TSV',
+    copied: '已复制',
   },
   nav: {
     prevFile: '上一个文件',

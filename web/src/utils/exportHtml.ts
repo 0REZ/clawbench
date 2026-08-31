@@ -220,6 +220,9 @@ function serializeCss(_markdownBodyEl: HTMLElement): string {
                     sel.includes('.table-block-header') ||
                     sel.includes('.table-block-label') ||
                     sel.includes('.table-block-copy-btn') ||
+                    sel.includes('.table-block-copy-dropdown') ||
+                    sel.includes('.table-block-copy-menu') ||
+                    sel.includes('.table-block-copy-menu-item') ||
                     sel.includes('.table-block-wrap-btn') ||
                     sel.includes('.table-block-header-actions') ||
                     sel.includes('.table-block-copied-text') ||
@@ -427,7 +430,22 @@ function buildCodeBlockJs(locale: string): string {
     const wrapOffText = isZh ? '自动换行已关闭' : 'Word wrap off'
     return `
 (function() {
+    function closeAllTableMenus(except) {
+        var menus = document.querySelectorAll('.table-block-copy-menu.is-open');
+        for (var i = 0; i < menus.length; i++) {
+            if (menus[i] === except) continue;
+            menus[i].classList.remove('is-open');
+            menus[i].style.display = 'none';
+            var trigger = menus[i].previousElementSibling;
+            if (trigger) trigger.setAttribute('aria-expanded', 'false');
+        }
+    }
     document.addEventListener('click', function(e) {
+        // Close table copy menus when clicking outside
+        if (!e.target.closest('.table-block-copy-menu') && !e.target.closest('.table-block-copy-btn')) {
+            closeAllTableMenus();
+        }
+
         // ─── Code block buttons ───
         var codeBtn = e.target.closest('.code-block-copy-btn, .code-block-wrap-btn');
         if (codeBtn) {
@@ -453,19 +471,47 @@ function buildCodeBlockJs(locale: string): string {
         }
 
         // ─── Table block buttons ───
-        var tableBtn = e.target.closest('.table-block-copy-btn, .table-block-wrap-btn');
+        var tableBtn = e.target.closest('.table-block-copy-btn, .table-block-wrap-btn, .table-block-copy-menu-item');
         if (tableBtn) {
             e.preventDefault();
             e.stopPropagation();
             var wrapper = tableBtn.closest('.table-block-wrapper');
             if (!wrapper) return;
             var action = tableBtn.getAttribute('data-action');
-            if (action === 'copy') {
-                if (tableBtn.classList.contains('is-copied')) return;
+            if (action === 'open-copy-menu') {
+                var menu = tableBtn.nextElementSibling;
+                closeAllTableMenus(menu);
+                var isOpen = menu && menu.classList.contains('is-open');
+                if (menu) {
+                    if (isOpen) {
+                        menu.classList.remove('is-open');
+                        menu.style.display = 'none';
+                        tableBtn.setAttribute('aria-expanded', 'false');
+                    } else {
+                        menu.classList.add('is-open');
+                        menu.style.display = 'block';
+                        tableBtn.setAttribute('aria-expanded', 'true');
+                    }
+                }
+            } else if (action === 'copy-md' || action === 'copy-html' || action === 'copy-tsv') {
                 var table = wrapper.querySelector('table');
                 if (!table) return;
-                var text = tableToText(table);
+                var text;
+                if (action === 'copy-md') {
+                    text = tableToMarkdown(table);
+                } else if (action === 'copy-html') {
+                    text = tableToCleanHtml(table);
+                } else {
+                    text = tableToText(table);
+                }
                 copyText(text, tableBtn);
+                var menu = tableBtn.closest('.table-block-copy-menu');
+                if (menu) {
+                    menu.classList.remove('is-open');
+                    menu.style.display = 'none';
+                    var trigger = menu.previousElementSibling;
+                    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+                }
             } else if (action === 'wrap') {
                 wrapper.classList.toggle('word-wrap');
                 tableBtn.classList.toggle('is-wrapped');
@@ -500,18 +546,125 @@ function buildCodeBlockJs(locale: string): string {
         }, 1500);
     }
 
-    function tableToText(table) {
-        var rows = table.querySelectorAll('tr');
-        var lines = [];
-        for (var i = 0; i < rows.length; i++) {
-            var cells = rows[i].querySelectorAll('th, td');
+    function tableRows(table) {
+        var rows = [];
+        var trs = table.querySelectorAll('tr');
+        for (var i = 0; i < trs.length; i++) {
+            var cells = trs[i].querySelectorAll('th, td');
             var vals = [];
             for (var j = 0; j < cells.length; j++) {
                 vals.push(cells[j].textContent.trim());
             }
-            lines.push(vals.join('\\t'));
+            rows.push(vals);
+        }
+        return rows;
+    }
+
+    function tableToText(table) {
+        var rows = tableRows(table);
+        var lines = [];
+        for (var i = 0; i < rows.length; i++) lines.push(rows[i].join('\\t'));
+        return lines.join('\\n');
+    }
+
+    function escapeMdCell(s) {
+        return s.replace(/\\|/g, '\\\\|').replace(/\\r?\\n/g, '<br>');
+    }
+
+    function cellAlign(cell) {
+        var align = (cell.style && cell.style.textAlign) || '';
+        if (align === 'left') return ':---';
+        if (align === 'right') return '---:';
+        if (align === 'center') return ':---:';
+        return '---';
+    }
+
+    function tableToMarkdown(table) {
+        var lines = [];
+        var thead = table.querySelector('thead');
+        var headers = [];
+        var aligns = [];
+        if (thead) {
+            var ths = thead.querySelectorAll('th');
+            for (var i = 0; i < ths.length; i++) {
+                headers.push(escapeMdCell(ths[i].textContent.trim()));
+                aligns.push(cellAlign(ths[i]));
+            }
+        } else {
+            var first = table.querySelector('tr');
+            if (first) {
+                var firstCells = first.querySelectorAll('th, td');
+                for (var j = 0; j < firstCells.length; j++) {
+                    headers.push(escapeMdCell(firstCells[j].textContent.trim()));
+                    aligns.push(cellAlign(firstCells[j]));
+                }
+            }
+        }
+        if (headers.length > 0) {
+            lines.push('| ' + headers.join(' | ') + ' |');
+            lines.push('| ' + aligns.join(' | ') + ' |');
+        }
+        var rows = tableRows(table);
+        // First row in the table is the header row when headers were extracted from it
+        var start = headers.length > 0 ? 1 : 0;
+        for (var r = start; r < rows.length; r++) {
+            var cells = [];
+            for (var c = 0; c < rows[r].length; c++) cells.push(escapeMdCell(rows[r][c]));
+            lines.push('| ' + cells.join(' | ') + ' |');
         }
         return lines.join('\\n');
+    }
+
+    function escapeHtmlCell(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function tableToCleanHtml(table) {
+        var out = ['<table>'];
+        var thead = table.querySelector('thead');
+        if (thead) {
+            out.push('<thead>');
+            var trs1 = thead.querySelectorAll('tr');
+            for (var i = 0; i < trs1.length; i++) {
+                out.push('<tr>');
+                var cells1 = trs1[i].querySelectorAll('th, td');
+                for (var j = 0; j < cells1.length; j++) {
+                    var tag1 = cells1[j].tagName === 'TH' ? 'th' : 'td';
+                    out.push('<' + tag1 + '>' + escapeHtmlCell(cells1[j].textContent) + '</' + tag1 + '>');
+                }
+                out.push('</tr>');
+            }
+            out.push('</thead>');
+        }
+        var tbody = table.querySelector('tbody');
+        if (tbody) {
+            out.push('<tbody>');
+            var trs2 = tbody.querySelectorAll('tr');
+            for (var k = 0; k < trs2.length; k++) {
+                out.push('<tr>');
+                var cells2 = trs2[k].querySelectorAll('td, th');
+                for (var m = 0; m < cells2.length; m++) {
+                    var tag2 = cells2[m].tagName === 'TH' ? 'th' : 'td';
+                    out.push('<' + tag2 + '>' + escapeHtmlCell(cells2[m].textContent) + '</' + tag2 + '>');
+                }
+                out.push('</tr>');
+            }
+            out.push('</tbody>');
+        }
+        if (!thead && !tbody) {
+            var trs3 = table.querySelectorAll('tr');
+            for (var n = 0; n < trs3.length; n++) {
+                out.push('<tr>');
+                var cells3 = trs3[n].querySelectorAll('td, th');
+                for (var p = 0; p < cells3.length; p++) {
+                    var tag3 = cells3[p].tagName === 'TH' ? 'th' : 'td';
+                    out.push('<' + tag3 + '>' + escapeHtmlCell(cells3[p].textContent) + '</' + tag3 + '>');
+                }
+                out.push('</tr>');
+            }
+        }
+        out.push('</table>');
+        return out.join('');
     }
 })();`
 }

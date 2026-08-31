@@ -405,6 +405,7 @@ import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { resolveThemeId, applyThemeAttributes, buildThemePalette } from '@/utils/themeMeta'
 import { useDockOverflow } from '@/composables/useDockOverflow'
+import { closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
 import { MessageSquare, MessageSquareOff, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
@@ -1952,6 +1953,10 @@ function handleOverflowSelect(tab) {
 function handleOverflowOutsideClick(e) {
   if (overflowMenuOpen.value && !e.target.closest('.dock-overflow-popup') && !e.target.closest('.dock-overflow-btn')) {
     overflowMenuOpen.value = false
+  }
+  // Close any open table block copy menus (dropdowns injected into markdown)
+  if (!e.target.closest('.table-block-copy-menu') && !e.target.closest('.table-block-copy-btn')) {
+    closeAllTableBlockMenus()
   }
 }
 

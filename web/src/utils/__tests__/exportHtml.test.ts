@@ -916,6 +916,9 @@ describe('exportRenderedHtml', () => {
     el.remove()
 
     expect(result.html).toContain('table-block-copy-btn')
+    expect(result.html).toContain('open-copy-menu')
+    expect(result.html).toContain('tableToMarkdown')
+    expect(result.html).toContain('tableToCleanHtml')
     expect(result.html).toContain('tableToText')
   })
 

@@ -41,6 +41,11 @@ export default {
     label: 'Table',
     wrapOn: 'Word wrap on',
     wrapOff: 'Word wrap off',
+    copy: 'Copy',
+    copyMarkdown: 'Copy Markdown',
+    copyHtml: 'Copy HTML',
+    copyTsv: 'Copy TSV',
+    copied: 'Copied',
   },
   nav: {
     prevFile: 'Previous file',
