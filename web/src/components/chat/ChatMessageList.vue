@@ -646,9 +646,16 @@ function onScrollStopped() {
   }
   if (pendingFollow) {
     pendingFollow = false
-    if (dist <= RESUME_FOLLOW_PX) {
-      scrollToBottom(true)
-    }
+    // A deferred force pin is always flushed here. pendingFollow is ONLY set
+    // by explicit user-intent pins (sending a message, answering a question
+    // card, switching sessions) — the user took an action and expects to see
+    // the bottom of the conversation. Delaying it must not drop it: the user
+    // may have answered a card while sitting far above the bottom (reading
+    // earlier context), and after their scroll stops the pin must still pull
+    // them down so they can see their answer land and the AI continue. This is
+    // NOT the stream-follow path — stream pins are non-force and never set
+    // pendingFollow, so a user reading history is still never yanked.
+    scrollToBottom(true)
   }
 }
 

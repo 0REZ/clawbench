@@ -124,16 +124,21 @@ describe('ChatMessageList — force pin is guarded by user scrolling', () => {
     expect(source).toMatch(/if \(isUserScrolling\(buildScrollState\(\)\)\) \{\s*if \(force\) pendingFollow = true[\s\S]*?return\s*\}/)
   })
 
-  it('onScrollStopped clears pendingFollow unconditionally and flushes only near the bottom', async () => {
+  it('onScrollStopped clears pendingFollow unconditionally and always flushes a deferred force pin', async () => {
     const mod = await import('@/components/chat/ChatMessageList.vue?raw')
     const source = typeof mod.default === 'string' ? mod.default : ''
     // onScrollStopped resets ownership and clears the deferred flag no matter what
     expect(source).toContain('function onScrollStopped()')
     // pendingFollow is always cleared here — stale pins never fire later.
-    // The flush gate is the tighter RESUME_FOLLOW_PX band (returning to the
-    // bottom is an explicit gesture; the generous NEAR_BOTTOM_PX band would
-    // re-enable snap-back while the user rests inside it mid-stream).
-    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false\s*if \(dist <= RESUME_FOLLOW_PX\) \{\s*scrollToBottom\(true\)/)
+    // A deferred force pin is ALWAYS flushed: pendingFollow is only ever set by
+    // explicit user-intent pins (sending a message, answering a question card,
+    // switching sessions), and the user took an action expecting to see the
+    // bottom. The old RESUME_FOLLOW_PX gate dropped the pin when the user had
+    // scrolled far up (e.g. answered a card while reading earlier context), so
+    // their answer appeared out of view — exactly the "AskUserQuestion answer
+    // doesn't scroll to bottom" bug.
+    expect(source).toMatch(/if \(pendingFollow\) \{\s*pendingFollow = false[\s\S]*?scrollToBottom\(true\)/)
+    expect(source).not.toMatch(/if \(dist <= RESUME_FOLLOW_PX\) \{\s*scrollToBottom\(true\)/)
     expect(source).toContain('setProgrammatic(false)')
   })
 
