@@ -301,6 +301,17 @@ export default {
       acpSyncRunning: '会话运行中，暂不可同步',
       acpSyncEmpty: '空会话无法同步',
       acpSyncSyncing: '正在同步...',
+      // 宽屏模式下的短标签（聊天 actionbar 按钮文字）
+      wideLabels: {
+        session: '列表',
+        create: '创建',
+        search: '搜索',
+        jump: '跳转',
+        sync: '同步',
+        archive: '归档',
+        speak: '朗读',
+        refresh: '刷新',
+      },
     },
     sessionInfo: {
       default: '默认',

@@ -58,6 +58,11 @@ vi.mock('@/utils/stopButtonMachine', () => ({
   }),
 }))
 
+// Wide-screen detection: the real singleton module exposes a test hook that
+// forces isWideScreen directly (jsdom's innerWidth 1024 would otherwise init
+// to wide-screen). Same pattern as useTabDrawer.test.ts / DirBreadcrumb.test.ts.
+import { _setWideScreenForTest } from '@/composables/useWideScreenLayout'
+
 // ── i18n ─────────────────────────────────────────────────────
 const i18n = createI18n({
   legacy: false,
@@ -75,6 +80,19 @@ const i18n = createI18n({
           noSessionToArchive: '无可归档会话',
           forkSession: '派生会话',
           userMsgIndex: '消息索引',
+          sessionSearch: '搜索会话',
+          acpSync: 'ACP 同步',
+          reloadSession: '重新打开会话',
+          wideLabels: {
+            session: '列表',
+            create: '创建',
+            search: '搜索',
+            jump: '跳转',
+            sync: '同步',
+            archive: '归档',
+            speak: '朗读',
+            refresh: '刷新',
+          },
         },
         create: { selectAgentOrLongPress: '选择Agent' },
         delete: { confirm: '确认删除？' },
@@ -133,6 +151,9 @@ afterEach(() => {
 
 beforeEach(() => {
   mockFetchItems.mockReset()
+  // Force narrow (icons-only) default — jsdom's innerWidth (1024) would
+  // otherwise init the wide-screen layout as active.
+  _setWideScreenForTest(false)
 })
 
 const TeleportStub = { template: '<div><slot /></div>' }
@@ -558,5 +579,86 @@ describe('ChatInputBar — user message index button', () => {
 
     await indexBtn!.trigger('click')
     expect(wrapper.emitted('open-user-msg-index')).toBeTruthy()
+  })
+})
+
+describe('ChatInputBar — wide-screen action labels', () => {
+  function actionBar(wrapper: ReturnType<typeof mount>) {
+    return wrapper.find('.chat-top-actions')
+  }
+  function labelTexts(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAll('.chat-action-label').map(el => el.text())
+  }
+
+  it('hides action text labels in narrow mode (icons only)', async () => {
+    _setWideScreenForTest(false)
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    // Labels are always in the DOM but hidden by CSS; the container must not
+    // carry the show-labels class and the group label stays visible.
+    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
+  })
+
+  it('shows short Chinese labels for every action button in wide mode', async () => {
+    _setWideScreenForTest(true)
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    const texts = labelTexts(wrapper)
+    // 列表、创建、搜索、跳转、归档、朗读、刷新 always render; 同步 only when
+    // the current session uses ACP transport (isACPTransport computed).
+    expect(texts).toContain('列表')
+    expect(texts).toContain('创建')
+    expect(texts).toContain('搜索')
+    expect(texts).toContain('跳转')
+    expect(texts).toContain('归档')
+    expect(texts).toContain('朗读')
+    expect(texts).toContain('刷新')
+    expect(texts).not.toContain('同步')
+  })
+
+  it('shows the sync label in wide mode for ACP transport sessions', async () => {
+    _setWideScreenForTest(true)
+    const wrapper = mountInputBar({ currentTransport: 'acp-stdio' }, { deep: true })
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    const texts = labelTexts(wrapper)
+    expect(texts).toContain('同步')
+    expect(texts).toContain('跳转')
+  })
+
+  it('keeps the group label hidden when labels are shown', async () => {
+    _setWideScreenForTest(true)
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(false)
+  })
+
+  it('shows the group label in narrow mode', async () => {
+    _setWideScreenForTest(false)
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
+  })
+
+  it('keeps labels hidden in wide mode when the action bar has no room (overflow)', async () => {
+    _setWideScreenForTest(true)
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    // Simulate insufficient width: the labelled action bar overflows its
+    // container → labels must stay hidden and the group label must return.
+    const bar = actionBar(wrapper).element as HTMLElement
+    Object.defineProperty(bar, 'scrollWidth', { configurable: true, value: 600 })
+    Object.defineProperty(bar, 'clientWidth', { configurable: true, value: 400 })
+    wrapper.vm.measureActionLabels()
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
   })
 })

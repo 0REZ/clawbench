@@ -301,6 +301,17 @@ export default {
       acpSyncRunning: 'Session running, cannot sync',
       acpSyncEmpty: 'Empty session, nothing to sync',
       acpSyncSyncing: 'Syncing...',
+      // Wide-screen short labels (actionbar button text)
+      wideLabels: {
+        session: 'List',
+        create: 'Create',
+        search: 'Search',
+        jump: 'Jump',
+        sync: 'Sync',
+        archive: 'Archive',
+        speak: 'Speak',
+        refresh: 'Refresh',
+      },
     },
     sessionInfo: {
       default: 'Default',
