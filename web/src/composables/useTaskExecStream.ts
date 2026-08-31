@@ -168,6 +168,7 @@ export function useTaskExecStream(options: UseTaskExecStreamOptions) {
           toolUseWatchdog.clear(data.id)
         } else {
           if (existing) {
+            if (data.input && Object.keys(data.input).length > 0) existing.input = data.input
             if (data.name) existing.name = data.name
             if (data.status !== undefined) existing.status = data.status
             if (data.summary !== undefined) existing.summary = data.summary
@@ -189,6 +190,7 @@ export function useTaskExecStream(options: UseTaskExecStreamOptions) {
               type: 'tool_use', name: data.name, id: data.id, done: false,
               status: data.status || '',
             }
+            if (data.input && Object.keys(data.input).length > 0) newBlock.input = data.input
             if (data.summary) newBlock.summary = data.summary
             if (data.display_name) newBlock.display_name = data.display_name
             if (data.file_path) newBlock.file_path = data.file_path

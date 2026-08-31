@@ -176,6 +176,46 @@ describe('useTaskExecStream', () => {
       stream.stopPreview()
     })
 
+    it('copies input onto a new tool_use block so interactive cards (PermissionApproval) can render', () => {
+      const { stream } = createStream()
+      stream.startPreview()
+
+      const input = {
+        session_id: 'test-session-123',
+        toolCallId: 'tool-call-1',
+        permissionId: 'perm_tool-call-1',
+        toolName: 'ReadFile',
+        toolInput: '{"file_path":"/tmp/x"}',
+        options: [{ name: '允许一次', kind: 'allow_once', optionId: 'opt-1' }],
+      }
+      simulateWsEvent('tool_use', { name: 'PermissionApproval', id: 'perm_tool-call-1', done: false, input })
+
+      const msg = stream.streamingMsg.value
+      const toolBlock = msg!.blocks.find((b: any) => b.id === 'perm_tool-call-1')
+      expect(toolBlock).toBeTruthy()
+      expect(toolBlock.input).toEqual(input)
+
+      stream.stopPreview()
+    })
+
+    it('updates input on an existing tool_use block when a later event carries it', () => {
+      const { stream } = createStream()
+      stream.startPreview()
+
+      // First event without input (e.g. an early tool_use notification)
+      simulateWsEvent('tool_use', { name: 'PermissionApproval', id: 'perm_1', done: false })
+
+      // Follow-up event with the full input
+      const input = { toolName: 'Bash', options: [{ name: '允许', kind: 'allow_once', optionId: 'opt-1' }] }
+      simulateWsEvent('tool_use', { name: 'PermissionApproval', id: 'perm_1', done: false, input })
+
+      const msg = stream.streamingMsg.value
+      const toolBlock = msg!.blocks.find((b: any) => b.id === 'perm_1')
+      expect(toolBlock.input).toEqual(input)
+
+      stream.stopPreview()
+    })
+
     it('handles tool_result events', () => {
       const { stream } = createStream()
       stream.startPreview()
