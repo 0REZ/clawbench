@@ -768,12 +768,23 @@ export function useChatSession(options: UseChatSessionOptions) {
   // refreshes the anchor harmlessly. loadSessionsOnce (deduped) re-reads the
   // unread state so the session list badge clears without waiting for a WS
   // event round-trip.
+  //
+  // handleWsReconnect() resyncs the current session's messages. This is the
+  // belt-and-suspenders path for Android: document.visibilityState is
+  // unreliable in the WebView (onPause doesn't reliably flip it to 'hidden'),
+  // so the WS may NOT have been disconnected while backgrounded and no
+  // clawbench-reconnect event fires on return. Messages produced in the
+  // background would then never appear. The native __setAppForeground bridge
+  // (authoritative on Android) drives this callback regardless, so the session
+  // is always re-synced here. skipIfUnchanged inside loadHistory makes the
+  // refresh a no-op when nothing changed.
   const removeForegroundReadListener = onAppForeground((fg) => {
     if (!fg) return
     const sid = currentSessionId.value
     if (!sid) return
     markSessionRead(sid).catch(() => {})
     loadSessionsOnce()
+    handleWsReconnect().catch(() => {})
   })
 
   async function switchSession(sessionId: string) {

@@ -1464,6 +1464,27 @@ describe('foreground return marks current session read', () => {
     )
     expect(readCalls.length).toBe(0)
   })
+
+  it('re-syncs the current session messages when the app returns to the foreground', async () => {
+    // Regression: on Android, document.visibilityState is unreliable in the
+    // WebView, so the WS may NOT have been disconnected while backgrounded —
+    // no clawbench-reconnect event fires on return, and background messages
+    // never appear. The native __setAppForeground bridge drives this callback
+    // regardless, so the current session must be re-synced (loadHistory) here.
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+
+    handlers[handlers.length - 1](true)
+
+    // handleWsReconnect → syncSessionOnReconnect(false) → loadHistory, which
+    // fetches /api/ai/chat?session_id=current-s1 with view=summary.
+    await vi.waitFor(() => {
+      const chatFetches = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => String(c[0]).includes('/api/ai/chat?session_id=current-s1')
+      )
+      expect(chatFetches.length).toBeGreaterThan(0)
+    })
+  })
 })
 
 // ── loadSessionsOnce tests ──
