@@ -1127,7 +1127,7 @@ function autoResizeTextarea() {
   const lineHeight = parseFloat(computed.lineHeight) || 20
   const paddingTop = parseFloat(computed.paddingTop) || 0
   const paddingBottom = parseFloat(computed.paddingBottom) || 0
-  const maxContentHeight = lineHeight * 3
+  const maxContentHeight = lineHeight * 10
   const maxHeight = maxContentHeight + paddingTop + paddingBottom
   el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
 }
@@ -2092,7 +2092,7 @@ defineExpose({
   resize: none;
   overflow-y: auto;
   min-height: 28px;
-  max-height: calc(20px * 3 + 4px + 4px); /* 3 lines + padding-top + padding-bottom */
+  max-height: calc(20px * 10 + 4px + 4px); /* 10 lines + padding-top + padding-bottom */
   font-family: inherit;
 }
 
