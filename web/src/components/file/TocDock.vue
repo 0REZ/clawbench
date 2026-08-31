@@ -102,6 +102,9 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
+  /* Separate the dock from the FileHeader above it so they don't stick
+     together — the dock starts below the header's bottom edge. */
+  border-top: 1px solid var(--border-color);
   overflow: hidden;
 }
 
