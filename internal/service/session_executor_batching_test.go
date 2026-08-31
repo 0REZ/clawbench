@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -306,6 +307,23 @@ func TestExecutor_ThinkingFlush_FinalizeReusesID(t *testing.T) {
 	count := 0
 	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = ?", firstID).Scan(&count)
 	assert.Equal(t, 1, count)
+
+	// The finalized content's slim thinking block must reference the SAME
+	// periodic-flush think_id, so the frontend's lazy-load (think_id +
+	// message_id) resolves to the row that the periodic flush kept warm.
+	var content string
+	err = dbRead.QueryRow("SELECT content FROM chat_history WHERE id = ?", finalized.MsgID).Scan(&content)
+	require.NoError(t, err)
+	var contentMap map[string]any
+	require.NoError(t, json.Unmarshal([]byte(content), &contentMap))
+	blocksRaw, ok := contentMap["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocksRaw, 1)
+	thinkingBlock, ok := blocksRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "thinking", thinkingBlock["type"])
+	assert.Equal(t, firstID, thinkingBlock["think_id"], "finalized slim block must reuse the periodic-flush think_id")
+	assert.NotContains(t, thinkingBlock, "text", "finalized content must not carry the thinking text")
 }
 
 // TestExecutor_ThinkingFlush_MergeUpdatesText verifies that when
@@ -397,4 +415,57 @@ func TestExecutor_ContentReset_ClearsThinkingAndLastWritten(t *testing.T) {
 	var cntAfter int
 	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&cntAfter)
 	assert.Zero(t, cntAfter, "no thinking rows must reappear after the retry flush with empty blocks")
+}
+
+// TestExecutor_ForceFlush_ThenRateLimitedFlush_KeepsSlimThinking locks the
+// forceIncludeThinking sticky semantics: once the graceful-shutdown forced
+// flush runs (includeThinking=true), every subsequent rate-limited flush keeps
+// writing the thinking blocks (slimmed) into content. This prevents a flush
+// racing the process exit from overwriting the just-persisted thinking with a
+// thinking-less body while chat_thinking already holds records the frontend
+// would lazy-load by think_id.
+func TestExecutor_ForceFlush_ThenRateLimitedFlush_KeepsSlimThinking(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "sticky reasoning"})
+
+	// Force flush: full thinking text embedded in content, then slimmed into
+	// chat_thinking; forceIncludeThinking becomes sticky.
+	executor.flushStreamingLocked(true)
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID)
+
+	rec, err := GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec, "force flush must persist thinking full text")
+	assert.Equal(t, "sticky reasoning", rec.Text)
+
+	// Rate-limited flush afterwards: forceIncludeThinking is sticky, so the
+	// thinking block stays in content (slimmed — think_id, no text).
+	executor.flushStreamingMessage()
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocksRaw, 1)
+	thinkingBlock, ok := blocksRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "thinking", thinkingBlock["type"])
+	assert.Equal(t, firstID, thinkingBlock["think_id"], "sticky force flush must keep the slim think_id in content")
+	assert.NotContains(t, thinkingBlock, "text", "rate-limited flush after force flush must slim the text")
 }
