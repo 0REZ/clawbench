@@ -201,6 +201,7 @@ vi.mock('@/utils/fileManager', () => ({
     return {
       state,
       enterMultiSelect: () => { state.active = true; state.selected.clear() },
+      enterMultiSelectKeepSelection: () => { state.active = true },
       exitMultiSelect: () => { state.active = false; state.selected.clear() },
       toggleSelect: (path: string) => { if (state.selected.has(path)) state.selected.delete(path); else state.selected.add(path) },
     }
@@ -521,6 +522,25 @@ describe('FileManagerContent — handleItemClick', () => {
     const sel = wrapper.vm.multiSelectState.selected
     expect(sel.has('src')).toBe(true)
     expect(sel.has('test.ts')).toBe(true)
+    expect(sel.size).toBe(2)
+  })
+
+  it('PC: Ctrl+click after a normal selection keeps the previously selected file', async () => {
+    mockIsPC.value = true
+    const wrapper = mountContent()
+    // First: normal single click selects test.ts (PC: single click only selects)
+    await wrapper.find('.file-item[data-path="test.ts"]').trigger('click')
+    await nextTick()
+    expect(wrapper.vm.selectedPath).toBe('test.ts')
+
+    // Then Ctrl+click another file — the first selection must be preserved
+    await wrapper.find('.file-item[data-path="readme.md"]').trigger('click', { ctrlKey: true })
+    await nextTick()
+
+    const sel = wrapper.vm.multiSelectState.selected
+    expect(wrapper.vm.multiSelectState.active).toBe(true)
+    expect(sel.has('test.ts')).toBe(true)
+    expect(sel.has('readme.md')).toBe(true)
     expect(sel.size).toBe(2)
   })
 
@@ -1034,6 +1054,44 @@ describe('FileManagerContent — keyboard shortcuts', () => {
 
     expect(wrapper.emitted('delete')).toBeTruthy()
     expect(wrapper.emitted('delete')![0]).toEqual(['test.ts'])
+  })
+
+  it('Delete emits delete for the highlighted selection before falling back to the current file', async () => {
+    const wrapper = mountContent({ currentFile: { path: 'other.ts', name: 'other.ts' } })
+    await nextTick()
+    wrapper.vm._setSelectedPath('test.ts')
+    await nextTick()
+
+    const event = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })
+    document.dispatchEvent(event)
+    await nextTick()
+
+    expect(wrapper.emitted('delete')).toBeTruthy()
+    expect(wrapper.emitted('delete')![0]).toEqual(['test.ts'])
+  })
+
+  it('Delete after Ctrl+click accumulation emits batchDelete for the multi-selection', async () => {
+    mockIsPC.value = true
+    mockDialogConfirm.mockResolvedValue(true)
+    const wrapper = mountContent()
+    await nextTick()
+
+    // Ctrl+click two entries to accumulate a multi-selection
+    await wrapper.find('.dir-item').trigger('click', { ctrlKey: true })
+    await wrapper.find('.file-item[data-path="test.ts"]').trigger('click', { ctrlKey: true })
+    await nextTick()
+    expect(wrapper.vm.multiSelectState.selected.size).toBe(2)
+
+    // Press Delete → batch delete flow (with confirm)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    await nextTick()
+
+    expect(mockDialogConfirm).toHaveBeenCalled()
+    expect(wrapper.emitted('batchDelete')).toBeTruthy()
+    const paths = wrapper.emitted('batchDelete')![0][0] as string[]
+    expect(paths.sort()).toEqual(['src', 'test.ts'])
+    expect(wrapper.emitted('delete')).toBeFalsy()
+    expect(wrapper.vm.multiSelectState.active).toBe(false)
   })
 
   it('Ctrl+A enters multi-select and selects all', async () => {
@@ -1890,6 +1948,60 @@ describe('FileManagerContent — context menu actions', () => {
     expect(wrapper.emitted('delete')).toBeTruthy()
     expect(wrapper.emitted('delete')![0]).toEqual(['test.ts'])
     expect(wrapper.vm.ctxMenu.visible).toBe(false)
+  })
+
+  it('doDelete with an active multi-selection confirms then emits batchDelete for all selected paths', async () => {
+    mockDialogConfirm.mockResolvedValue(true)
+    const wrapper = mountContent()
+    wrapper.vm.multiSelectState.active = true
+    wrapper.vm.multiSelectState.selected.add('test.ts')
+    wrapper.vm.multiSelectState.selected.add('readme.md')
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await nextTick()
+
+    wrapper.vm.doDelete()
+    await nextTick()
+
+    expect(mockDialogConfirm).toHaveBeenCalled()
+    expect(wrapper.emitted('batchDelete')).toBeTruthy()
+    const paths = wrapper.emitted('batchDelete')![0][0] as string[]
+    expect(paths.sort()).toEqual(['readme.md', 'test.ts'])
+    // Single delete must not fire when a multi-selection is deleted
+    expect(wrapper.emitted('delete')).toBeFalsy()
+    // Multi-select exits after the batch delete
+    expect(wrapper.vm.multiSelectState.active).toBe(false)
+  })
+
+  it('doDelete with an active multi-selection does not emit when confirmation is declined', async () => {
+    mockDialogConfirm.mockResolvedValue(false)
+    const wrapper = mountContent()
+    wrapper.vm.multiSelectState.active = true
+    wrapper.vm.multiSelectState.selected.add('test.ts')
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await nextTick()
+
+    wrapper.vm.doDelete()
+    await nextTick()
+
+    expect(wrapper.emitted('batchDelete')).toBeFalsy()
+    expect(wrapper.emitted('delete')).toBeFalsy()
+    // Still in multi-select mode when the user declines
+    expect(wrapper.vm.multiSelectState.active).toBe(true)
+  })
+
+  it('doDelete in multi-select mode with empty selection still deletes the single entry', async () => {
+    const wrapper = mountContent()
+    wrapper.vm.multiSelectState.active = true
+    wrapper.vm.ctxMenu.visible = true
+    wrapper.vm.ctxMenu.entry = { type: 'file', name: 'test.ts', path: 'test.ts' }
+    await nextTick()
+    await wrapper.vm.doDelete()
+
+    expect(wrapper.emitted('delete')).toBeTruthy()
+    expect(wrapper.emitted('delete')![0]).toEqual(['test.ts'])
+    expect(wrapper.emitted('batchDelete')).toBeFalsy()
   })
 
   it('doOpenTerminal emits openTerminal with currentDir for a file entry', async () => {

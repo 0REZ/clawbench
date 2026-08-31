@@ -112,6 +112,15 @@ export function createMultiSelect() {
     state.selected.clear()
   }
 
+  /**
+   * Activate multi-select while preserving any existing selection.
+   * Used by PC Ctrl/Cmd+click: entering multi-select from a single-selected
+   * item must keep the previously selected files in the batch.
+   */
+  function enterMultiSelectKeepSelection() {
+    state.active = true
+  }
+
   function exitMultiSelect() {
     state.active = false
     state.selected.clear()
@@ -125,7 +134,7 @@ export function createMultiSelect() {
     }
   }
 
-  return { state, enterMultiSelect, exitMultiSelect, toggleSelect }
+  return { state, enterMultiSelect, enterMultiSelectKeepSelection, exitMultiSelect, toggleSelect }
 }
 
 // ── Clipboard state factory ──
