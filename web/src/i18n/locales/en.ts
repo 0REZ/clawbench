@@ -1136,6 +1136,7 @@ export default {
     noMatch: 'No matches',
     noHeadings: 'No headings',
     loading: 'Loading headings...',
+    dragResize: 'Drag to resize',
   },
   quoteBar: {
     clear: 'Clear',

@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import FileOverlay from '@/components/file/FileOverlay.vue'
+import { _resetForTest as _resetWideForTest } from '@/composables/useWideScreenLayout'
+
+// jsdom's default innerWidth (1024) is ≥ the wide-screen threshold, which
+// forces docked mode and hides the bottom drawer. This test file asserts the
+// narrow-screen (drawer) path, so force a narrow viewport. (The wide-screen
+// dock path is covered in FileOverlay.test.ts.) Resetting the wide-screen
+// module forces the next getWideScreenState() to recompute from the stub.
+function setNarrowViewport() {
+  Object.defineProperty(window, 'innerWidth', { value: 800, configurable: true, writable: true })
+  Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true, writable: true })
+  Object.defineProperty(window.screen, 'width', { value: 800, configurable: true, writable: true })
+  Object.defineProperty(window.screen, 'height', { value: 1280, configurable: true, writable: true })
+  _resetWideForTest()
+}
 
 const FileViewerStub = defineComponent({
   name: 'FileViewer',
@@ -34,6 +48,7 @@ const GitHistoryDrawerStub = defineComponent({
 const stubs = {
   FileViewer: FileViewerStub,
   TocDrawer: TocDrawerStub,
+  TocDock: true,
   SearchDrawer: SearchDrawerStub,
   GitHistoryDrawer: GitHistoryDrawerStub,
   LoadingIndicator: true,
@@ -41,6 +56,8 @@ const stubs = {
 }
 
 describe('FileOverlay', () => {
+  setNarrowViewport()
+
   function mountOverlay(props: Record<string, unknown> = {}) {
     return mount(FileOverlay, {
       props: {
