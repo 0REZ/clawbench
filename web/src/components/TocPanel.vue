@@ -1,0 +1,380 @@
+<template>
+  <div class="toc-body">
+    <SearchInput v-model="searchQuery" :placeholder="t('toc.searchPlaceholder')" @enter="listNav.confirm" @down="listNav.down" @up="listNav.up" @dblclick="clearSearch" />
+    <div class="toc-list">
+      <LoadingIndicator v-if="loading" :label="t('toc.loading')" size="md" />
+      <div v-else-if="filteredToc.length === 0" class="toc-empty">{{ searchQuery ? t('toc.noMatch') : t('toc.noHeadings') }}</div>
+      <a
+        v-for="(item, idx) in filteredToc"
+        :key="item.id"
+        class="toc-item"
+        :class="{ active: activeId === item.id, 'toc-item-active': listNav.activeIndex.value === idx }"
+        :data-level="item.level"
+        @click.prevent="scrollTo(item)"
+      >
+        <component
+          v-if="item.kind"
+          :is="kindIcon(item.kind).icon"
+          :size="13"
+          class="toc-kind-icon"
+          :class="kindIcon(item.kind).cls"
+        />
+        <span v-if="isPdfOutline" class="toc-page-badge">P{{ item.line }}</span>
+        {{ item.text }}
+      </a>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { Braces, Box, Boxes, FileCode2, SquareAsterisk, ListOrdered, Variable, Hash, Package, FolderTree, CircleDot, Settings2, Hammer, Layers, Puzzle, Zap, Code2, Heading } from 'lucide-vue-next'
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
+import SearchInput from '@/components/common/SearchInput.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
+import { useListNav } from '@/composables/useListNav'
+import { useListKeys } from '@/composables/useListKeys'
+import { extractToc, slugify } from '@/utils/toc.ts'
+import { getFileType } from '@/utils/fileType.ts'
+import { fetchCodeSymbols } from '@/composables/useCodeSymbols'
+import { useFileEditor } from '@/composables/useFileEditor'
+
+const { t } = useI18n()
+const { isEditorDirty } = useFileEditor()
+
+/** Map symbol kind → { icon component, CSS class } */
+const KIND_ICON_MAP = {
+  function:     { icon: Braces,        cls: 'kind-function' },
+  method:       { icon: Braces,        cls: 'kind-method' },
+  constructor:  { icon: Hammer,        cls: 'kind-constructor' },
+  class:        { icon: Box,           cls: 'kind-class' },
+  struct:       { icon: Boxes,         cls: 'kind-struct' },
+  interface:    { icon: FileCode2,     cls: 'kind-interface' },
+  type:         { icon: SquareAsterisk, cls: 'kind-type' },
+  enum:         { icon: ListOrdered,   cls: 'kind-enum' },
+  variable:     { icon: Variable,      cls: 'kind-variable' },
+  constant:     { icon: Hash,          cls: 'kind-constant' },
+  module:       { icon: Package,       cls: 'kind-module' },
+  namespace:    { icon: FolderTree,    cls: 'kind-namespace' },
+  field:        { icon: CircleDot,     cls: 'kind-field' },
+  property:     { icon: Settings2,     cls: 'kind-property' },
+  trait:        { icon: Layers,        cls: 'kind-trait' },
+  impl:         { icon: Puzzle,        cls: 'kind-impl' },
+  macro:        { icon: Zap,           cls: 'kind-macro' },
+  heading:      { icon: Heading,       cls: 'kind-heading' },
+}
+const KIND_FALLBACK = { icon: Code2, cls: 'kind-other' }
+
+const props = defineProps({
+    file: Object,
+    pdfOutline: { type: Array, default: () => [] },
+    /** Whether the panel is visible. Drives the document-level keyboard nav. */
+    open: { type: Boolean, default: true },
+})
+const emit = defineEmits(['jump', 'jumpPage'])
+
+const toc = ref([])
+const activeId = ref('')
+const isCode = ref(false)
+const isPdfOutline = ref(false)
+const searchQuery = ref('')
+const filteredToc = ref([])
+const loading = ref(false)
+
+watch([() => props.file, () => props.file?.content, () => props.pdfOutline], ([file, content, pdfOut], _, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+
+    // PDF outline
+    if (file && pdfOut && pdfOut.length > 0) {
+        isPdfOutline.value = true
+        isCode.value = false
+        toc.value = pdfOut
+        activeId.value = toc.value[0]?.id || ''
+        searchQuery.value = ''
+        filteredToc.value = toc.value
+        loading.value = false
+        return
+    }
+    isPdfOutline.value = false
+
+    // Text-based TOC
+    if (!content) {
+        toc.value = []
+        filteredToc.value = []
+        isCode.value = false
+        loading.value = false
+        return
+    }
+    const lang = getFileType(file.name)?.lang || 'plaintext'
+    isCode.value = lang !== 'markdown'
+
+    // When editor has unsaved changes, fetchCodeSymbols reads from disk (stale),
+    // so use client-side regex extraction with the live content instead.
+    const editorDirty = isEditorDirty()
+
+    // For code files and markdown, try backend tree-sitter API first, then fallback to regex
+    if (file?.path && !editorDirty) {
+        loading.value = true
+        fetchCodeSymbols(file.path).then(result => {
+            if (cancelled) return
+            if (result && result.symbols.length > 0) {
+                // Convert backend symbols to TocItem format
+                // Deduplicate heading IDs to match markedConfig.ts logic
+                const headingIdCounts = {}
+                toc.value = result.symbols.map(s => {
+                    let id
+                    if (s.kind === 'heading') {
+                        const baseId = slugify(s.name)
+                        const count = (headingIdCounts[baseId] || 0) + 1
+                        headingIdCounts[baseId] = count
+                        id = count > 1 ? `${baseId}-${count}` : baseId
+                    } else {
+                        id = 'toc-l' + s.line
+                    }
+                    return {
+                        level: s.level,
+                        text: s.name,
+                        kind: s.kind,
+                        id,
+                        line: s.line,
+                    }
+                })
+            } else {
+                // Fallback to regex-based extraction
+                toc.value = extractToc(content, lang)
+            }
+            activeId.value = toc.value[0]?.id || ''
+            searchQuery.value = ''
+            filteredToc.value = toc.value
+            loading.value = false
+        }).catch(() => {
+            if (cancelled) return
+            // Fallback to regex-based extraction on error
+            toc.value = extractToc(content, lang)
+            activeId.value = toc.value[0]?.id || ''
+            searchQuery.value = ''
+            filteredToc.value = toc.value
+            loading.value = false
+        })
+    } else {
+        loading.value = false
+        toc.value = extractToc(content, lang)
+        activeId.value = toc.value[0]?.id || ''
+        searchQuery.value = ''
+        filteredToc.value = toc.value
+    }
+}, { immediate: true })
+
+watch(searchQuery, () => handleSearch())
+
+// ── Keyboard ↑/↓ + Enter navigation over TOC ──
+const listNav = useListNav({
+  getCount: () => filteredToc.value.length,
+  onConfirm: (idx) => scrollTo(filteredToc.value[idx]),
+  onActiveChange: scrollActiveIntoView,
+})
+// Document-level keys so navigation also works when focus leaves the search box
+useListKeys({ isOpen: () => props.open, nav: listNav })
+
+function scrollActiveIntoView(index) {
+  const items = document.querySelectorAll('.toc-item')
+  const el = items[index]
+  if (el && typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+  }
+}
+
+watch(filteredToc, () => listNav.reset())
+
+function handleSearch() {
+    const query = searchQuery.value.toLowerCase().trim()
+    if (!query) {
+        filteredToc.value = toc.value
+        return
+    }
+    filteredToc.value = toc.value.filter(item =>
+        item.text.toLowerCase().includes(query)
+    )
+}
+
+function clearSearch() {
+    searchQuery.value = ''
+    filteredToc.value = toc.value
+}
+
+function kindIcon(kind) {
+    return KIND_ICON_MAP[kind] || KIND_FALLBACK
+}
+
+function scrollTo(item) {
+    // PDF: jump to page number
+    if (isPdfOutline.value && item.line > 0) {
+        emit('jumpPage', item.line)
+        activeId.value = item.id
+        return
+    }
+
+    const elById = document.getElementById(item.id)
+    if (elById) {
+        elById.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        elById.classList.add('line-flash')
+        elById.addEventListener('animationend', () => elById.classList.remove('line-flash'), { once: true })
+        activeId.value = item.id
+        return
+    }
+    if (item.line) {
+        emit('jump', item.line)
+    }
+}
+
+let observer = null
+
+/** Set up IntersectionObserver to track the currently visible TOC item */
+function setupObserver() {
+    const prevObserver = observer
+    observer = null
+    prevObserver?.disconnect()
+    if (isPdfOutline.value) return
+
+    nextTick(() => {
+        // If another setupObserver() was called before this nextTick fired,
+        // observer will be non-null — skip creating a duplicate.
+        if (observer) return
+        if (isCode.value) {
+            observer = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        const line = entry.target.getAttribute('data-line')
+                        const match = toc.value.find(t => t.line == line)
+                        if (match) activeId.value = match.id
+                        break
+                    }
+                }
+            }, { rootMargin: '-60px 0px -70% 0px' })
+            toc.value.forEach(item => {
+                const el = document.querySelector(`[data-line="${item.line}"]`)
+                if (el) observer.observe(el)
+            })
+        } else {
+            observer = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        activeId.value = entry.target.id
+                        break
+                    }
+                }
+            }, { rootMargin: '-60px 0px -70% 0px' })
+            toc.value.forEach(item => {
+                const el = document.getElementById(item.id)
+                if (el) observer.observe(el)
+            })
+        }
+    })
+}
+
+// Re-setup observer when TOC items change (e.g., after content update)
+watch(toc, () => {
+    setupObserver()
+})
+
+onBeforeUnmount(() => {
+    observer?.disconnect()
+    observer = null
+})
+</script>
+
+<style scoped>
+.toc-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 8px 6px 0;
+}
+
+.toc-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 8px;
+}
+
+.toc-empty {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.toc-item {
+    display: block;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    transition: background 0.15s, color 0.15s;
+    border-left: 2px solid transparent;
+    white-space: nowrap;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .toc-item:hover { background: var(--bg-tertiary); color: var(--accent-color); }
+}
+.toc-item.active { color: var(--accent-color); border-left-color: var(--accent-color); background: var(--bg-tertiary); border-radius: 0; }
+.toc-item-active { color: var(--accent-color); background: var(--bg-tertiary); border-radius: 0; }
+.toc-item[data-level="2"] { padding-left: 20px; }
+.toc-item[data-level="3"] { padding-left: 32px; }
+.toc-item[data-level="4"] { padding-left: 44px; }
+.toc-item[data-level="5"] { padding-left: 56px; }
+.toc-item[data-level="6"] { padding-left: 68px; }
+
+.toc-page-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 4px;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+.toc-item.active .toc-page-badge {
+    background: rgba(255,255,255,0.15);
+    color: var(--accent-color);
+}
+
+.toc-kind-icon {
+    flex-shrink: 0;
+    margin-right: 5px;
+    vertical-align: middle;
+    opacity: 0.75;
+}
+.toc-item.active .toc-kind-icon { opacity: 1; }
+
+.kind-function, .kind-method     { color: #c586c0; }
+.kind-constructor                { color: #dcdcaa; }
+.kind-class                      { color: #e06c75; }
+.kind-struct                     { color: #e5a54a; }
+.kind-interface                  { color: #4ec9b0; }
+.kind-type                       { color: #2ec4b6; }
+.kind-enum                       { color: #d4a017; }
+.kind-variable                   { color: #75aadb; }
+.kind-constant                   { color: #8899aa; }
+.kind-module, .kind-namespace    { color: #569cd6; }
+.kind-field, .kind-property      { color: #9cdcfe; }
+.kind-trait                      { color: #6a9955; }
+.kind-impl                       { color: #4fb3bf; }
+.kind-macro                      { color: #e5c07b; }
+.kind-heading                    { color: #56b6c2; }
+.kind-other                      { color: var(--text-muted); }
+
+</style>

@@ -856,7 +856,6 @@ function closeOverlayAndSync() {
   fileNav.closeOverlay()
   store.closeCurrentFile()
   tocDrawer.close()
-  tocDockPref.close()
   detailsDrawer.close()
   searchDrawer.close()
   fileHistoryDrawer.close()
@@ -1404,7 +1403,6 @@ function handleJumpPdfPage(pageNum) {
 
 watch(() => currentFile.value, (file, prevFile) => {
     tocDrawer.close()
-    tocDockPref.close()
     detailsDrawer.close()
     searchDrawer.close()
     markdownViewMode.value = 'rendered'
