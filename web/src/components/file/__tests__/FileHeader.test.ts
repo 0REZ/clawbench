@@ -217,6 +217,24 @@ describe('FileHeader', () => {
     })
   })
 
+  describe('binary file openAsText button', () => {
+    it('renders the button with a real Code2 SVG icon', () => {
+      const wrapper = mountHeader({ file: { name: 'app.apk', path: '/tmp/app.apk', content: null, isBinary: true, size: 100 } })
+      const btn = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Open as text')
+      expect(btn).toBeTruthy()
+      // Code2 must be imported: an unresolved <code2> custom element renders
+      // with no SVG, leaving a visually empty button (blank gap in the toolbar)
+      expect(btn!.find('svg').exists()).toBe(true)
+      expect(btn!.find('code2').exists()).toBe(false)
+    })
+
+    it('is hidden for non-binary files', () => {
+      const wrapper = mountHeader()
+      const btn = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Open as text')
+      expect(btn).toBeUndefined()
+    })
+  })
+
   it('emits openAsText when handleOpenAsText is called', async () => {
     const wrapper = mountHeader({ viewMode: 'source' })
     const vm = wrapper.vm as any
