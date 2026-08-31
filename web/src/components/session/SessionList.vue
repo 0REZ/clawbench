@@ -294,11 +294,10 @@ onUnmounted(() => {
 }
 
 .session-row.active {
-  background: var(--accent-bg, rgba(0, 102, 204, 0.1));
   border-left: 4px solid var(--accent-color, #0066cc);
-  border-right: 1px solid var(--accent-color, #0066cc);
-  border-top: 1px solid var(--accent-color, #0066cc);
-  border-bottom: 1px solid var(--accent-color, #0066cc);
+  border-right: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
 }
 
 .session-row.running {
@@ -344,7 +343,7 @@ onUnmounted(() => {
 }
 
 .session-row.active.running {
-  background: linear-gradient(135deg, rgba(0, 102, 204, 0.08), rgba(34, 197, 94, 0.1));
+  background: rgba(34, 197, 94, 0.05);
 }
 
 @media (hover: hover) {
