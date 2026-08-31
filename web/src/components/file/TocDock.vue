@@ -13,10 +13,10 @@
     </div>
 
     <div class="toc-dock-header">
-      <List :size="14" class="toc-dock-header-icon" />
+      <List :size="12" class="toc-dock-header-icon" />
       <span class="toc-dock-header-title">{{ t('toc.title') }}</span>
       <button class="toc-dock-close" @click="emit('close')" :title="t('common.close')">
-        <X :size="14" />
+        <X :size="12" />
       </button>
     </div>
 
@@ -162,10 +162,11 @@ onBeforeUnmount(() => {
 .toc-dock-header {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  min-height: 28px;
 }
 
 .toc-dock-header-icon {
@@ -175,7 +176,7 @@ onBeforeUnmount(() => {
 
 .toc-dock-header-title {
   flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
@@ -184,7 +185,7 @@ onBeforeUnmount(() => {
 }
 
 .toc-dock-close {
-  padding: 4px;
+  padding: 2px;
   border: none;
   border-radius: 4px;
   background: transparent;
