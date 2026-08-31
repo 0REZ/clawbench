@@ -3,11 +3,11 @@
     <template #header>
       <ZapIcon :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ t('terminal.quickCommands') }}</span>
-      <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('terminal.moreActions')">
-        <MoreVerticalIcon :size="16" />
-      </button>
       <button class="create-btn" @click.stop="addNewCommand" :title="t('terminal.addCommand')">
         <PlusIcon :size="16" />
+      </button>
+      <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('terminal.moreActions')">
+        <MoreVerticalIcon :size="16" />
       </button>
     </template>
 

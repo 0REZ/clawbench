@@ -7,11 +7,11 @@
         <button class="create-btn" @click.stop="clustersDrawerRef?.open()" :title="t('chat.messageClusters.title')">
           <SparklesIcon :size="16" />
         </button>
-        <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('chat.quickSend.moreActions')">
-          <MoreVerticalIcon :size="16" />
-        </button>
         <button class="create-btn" @click.stop="addNewItem" :title="t('chat.quickSend.addItem')">
           <PlusIcon :size="16" />
+        </button>
+        <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('chat.quickSend.moreActions')">
+          <MoreVerticalIcon :size="16" />
         </button>
       </span>
     </template>
