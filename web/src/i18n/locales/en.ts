@@ -479,6 +479,8 @@ export default {
       send: 'Send',
       markRead: 'Mark as read',
       external: 'External',
+      sentToast: 'Message sent',
+      markedReadToast: 'Marked as read',
     },
     session: {
       aiDialog: 'AI Chat',

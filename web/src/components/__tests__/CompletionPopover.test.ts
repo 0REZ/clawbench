@@ -13,12 +13,17 @@ const mockState = {
     dismissOnBackdrop: vi.fn(),
 }
 
-const { mockGetAgentBackend } = vi.hoisted(() => ({
+const { mockGetAgentBackend, mockToastShow } = vi.hoisted(() => ({
     mockGetAgentBackend: vi.fn(() => ''),
+    mockToastShow: vi.fn(),
 }))
 
 vi.mock('@/composables/useCompletionPopover', () => ({
     useCompletionPopover: () => mockState,
+}))
+
+vi.mock('@/composables/useToast', () => ({
+    useToast: () => ({ show: mockToastShow }),
 }))
 
 vi.mock('@/composables/useAgents', async (importOriginal) => {
@@ -566,6 +571,31 @@ describe('CompletionPopover', () => {
             expect.stringContaining('/api/ai/chat/read?session_id=s42'),
             expect.objectContaining({ method: 'POST' })
         )
+        // 发送成功弹出确认气泡（文案随当前语言环境，这里只断言调用发生与类型）
+        expect(mockToastShow).toHaveBeenCalledTimes(1)
+        expect(mockToastShow).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'success' }))
+    })
+
+    it('does not show a sent toast when sending fails (keeps popover open)', async () => {
+        mockState.active = ref(makeItem({ sessionId: 's42' }))
+        mountPopover()
+
+        const fetchMock = vi.fn().mockResolvedValue({ ok: false })
+        globalThis.fetch = fetchMock
+
+        const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
+        textarea.value = '会失败的回复'
+        textarea.dispatchEvent(new Event('input'))
+        await nextTick()
+
+        const sendBtn = document.querySelector('.completion-popover-send')!
+        sendBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        await vi.waitFor(() => {
+            // 失败时不得弹出"已发送"气泡，也不关闭弹窗
+            expect(mockToastShow).not.toHaveBeenCalled()
+            expect(mockState.dismiss).not.toHaveBeenCalled()
+        })
     })
 
     it('does not send when input is empty', () => {
@@ -603,5 +633,8 @@ describe('CompletionPopover', () => {
             )
             expect(mockState.dismiss).toHaveBeenCalledTimes(1)
         })
+        // 标记已读成功弹出确认气泡（文案随当前语言环境，这里只断言调用发生与类型）
+        expect(mockToastShow).toHaveBeenCalledTimes(1)
+        expect(mockToastShow).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'success' }))
     })
 })

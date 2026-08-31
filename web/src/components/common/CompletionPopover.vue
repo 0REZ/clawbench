@@ -69,10 +69,12 @@ import { useAgents } from '@/composables/useAgents'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader'
 import { gt } from '@/composables/useLocale'
+import { useToast } from '@/composables/useToast'
 import { canSendInput } from '@/utils/quoteQuestionUtils'
 
 const { active, dismiss, dismissOnBackdrop } = useCompletionPopover()
 const { getAgentBackend } = useAgents()
+const toast = useToast()
 
 const agentBackend = computed(() => {
     const agentId = active.value?.agentId
@@ -155,6 +157,8 @@ async function handleSend(): Promise<void> {
         }
         // 发送成功后清空该会话未读（独立 /read 端点，不影响其他会话未读）
         await markRead(item)
+        // 气泡提示发送成功，给用户确认感
+        toast.show(gt('chat.popover.sentToast'), { type: 'success', duration: 2000 })
         dismiss()
     } catch {
         sending.value = false
@@ -182,6 +186,8 @@ async function handleMarkRead(): Promise<void> {
     sending.value = true
     try {
         await markRead(item)
+        // 气泡提示标记成功，给用户确认感
+        toast.show(gt('chat.popover.markedReadToast'), { type: 'success', duration: 2000 })
         dismiss()
     } catch {
         sending.value = false

@@ -479,6 +479,8 @@ export default {
       send: '发送',
       markRead: '标记已读',
       external: '外部',
+      sentToast: '消息已发送',
+      markedReadToast: '已标记为已读',
     },
     session: {
       aiDialog: 'AI 对话',
