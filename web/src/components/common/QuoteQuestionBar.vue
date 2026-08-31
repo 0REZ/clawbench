@@ -200,7 +200,7 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
 <style scoped>
 .quote-question-bar {
   position: fixed;
-  top: calc(var(--header-height, 40px) + 8px + var(--header-safe-area-top, 0px));
+  top: calc(var(--header-height) + 8px + var(--header-safe-area-top));
   left: 8px;
   right: 8px;
   background: color-mix(in srgb, var(--bg-tertiary) 88%, var(--bg-elevated, var(--bg-tertiary)));

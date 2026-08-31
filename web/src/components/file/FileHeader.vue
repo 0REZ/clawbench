@@ -489,7 +489,8 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 4px 2px 6px;
+    height: var(--header-height);
+    padding: 0 4px 0 6px;
     background: var(--bg-secondary);
     border: none;
     font-size: 12px;

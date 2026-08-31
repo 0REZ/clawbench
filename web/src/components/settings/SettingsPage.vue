@@ -132,7 +132,7 @@ watch(() => props.active, (val) => {
 .settings-page__header {
   display: flex;
   align-items: center;
-  height: 44px;
+  height: var(--header-height);
   padding: 0 4px 0 12px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
