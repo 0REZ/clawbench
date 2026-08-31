@@ -3,7 +3,7 @@
     <!-- Top action bar (above input box) -->
     <div class="chat-top-actions" ref="actionBarRef" :class="{ 'show-labels': showActionLabels }">
       <div class="chat-action-group">
-        <span v-if="!showActionLabels" class="chat-group-label" :title="t('chat.actions.session')">
+        <span class="chat-group-label" :title="t('chat.actions.session')">
           {{ t('chat.actions.session') }}
         </span>
         <button class="chat-action-btn" data-action="session"
@@ -670,9 +670,9 @@ let actionBarMeasureTimer = null
 function measureActionLabels() {
   const el = actionBarRef.value
   if (!el) return
-  // Force the labels-on layout synchronously via .measure-labels (shows label
-  // spans and hides the group label through CSS) so scrollWidth reflects the
-  // intended final width, then compare against the available clientWidth.
+  // Force the labels-on layout synchronously via .measure-labels (shows the
+  // label spans) so scrollWidth reflects the intended final width — the group
+  // label is always present — then compare against the available clientWidth.
   el.classList.add('measure-labels')
   const overflow = el.scrollWidth > el.clientWidth + 2
   el.classList.remove('measure-labels')
@@ -1665,12 +1665,6 @@ defineExpose({
 .chat-top-actions.show-labels .chat-action-label,
 .chat-top-actions.measure-labels .chat-action-label {
   display: inline-block;
-}
-/* During measurement the final "labels shown" state also drops the group label
-   (v-if removes it once showActionLabels is true), so hide it here too to get
-   an accurate scrollWidth of the intended layout. */
-.chat-top-actions.measure-labels .chat-group-label {
-  display: none;
 }
 
 /* Session button group */

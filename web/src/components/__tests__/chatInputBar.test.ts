@@ -627,20 +627,18 @@ describe('ChatInputBar — action labels by container width', () => {
     expect(texts).toContain('跳转')
   })
 
-  it('keeps the group label hidden when labels are shown', async () => {
+  it('keeps the group label visible whether or not labels are shown', async () => {
+    // Width suffices → labels shown, group label stays
     const wrapper = mountInputBar({}, { deep: true })
     await nextTick()
     expect(actionBar(wrapper).classes()).toContain('show-labels')
-    expect(wrapper.find('.chat-group-label').exists()).toBe(false)
-  })
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
+    expect(wrapper.find('.chat-group-label').text()).toBe('会话')
 
-  it('shows the group label when labels are hidden', async () => {
-    const wrapper = mountInputBar({}, { deep: true })
-    await nextTick()
+    // Width insufficient → labels hidden, group label still stays
     mockBarWidth(wrapper, 600, 400)
     wrapper.vm.measureActionLabels()
     await nextTick()
-
     expect(actionBar(wrapper).classes()).not.toContain('show-labels')
     expect(wrapper.find('.chat-group-label').exists()).toBe(true)
   })
