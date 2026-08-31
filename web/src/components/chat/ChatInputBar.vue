@@ -1,7 +1,7 @@
 <template>
   <div class="chat-input-wrapper" ref="rootRef">
     <!-- Top action bar (above input box) -->
-    <div class="chat-top-actions" ref="actionBarRef" :class="{ 'chat-top-actions--wide': isWideScreen, 'show-labels': showActionLabels }">
+    <div class="chat-top-actions" ref="actionBarRef" :class="{ 'show-labels': showActionLabels }">
       <div class="chat-action-group">
         <span v-if="!showActionLabels" class="chat-group-label" :title="t('chat.actions.session')">
           {{ t('chat.actions.session') }}
@@ -303,12 +303,10 @@ import { useVoiceInput } from '@/composables/useVoiceInput'
 import { useChatRecommendation } from '@/composables/useChatRecommendation'
 import { usePlatformDetect } from '@/composables/usePlatformDetect'
 import { useChatContext } from '@/composables/useChatContext'
-import { getWideScreenState } from '@/composables/useWideScreenLayout'
 import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
-const { isWideScreen } = getWideScreenState()
 const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency } = useSessionIdentity()
 const { supportsACP, hasPreferredMode } = useAgents()
 const toast = useToast()
@@ -661,10 +659,9 @@ const textareaRef = ref(null)
 const actionBarRef = ref(null)
 /**
  * Action-bar labels visibility: labels are shown only when the chat pane is
- * wide enough to hold them. In wide-screen mode we force labels on, measure
- * whether the action bar overflows its container, and toggle a flag. This
- * keeps labels off on narrow chat panes (e.g. when the session sidebar eats
- * most of a minimally-wide screen) while still following the wide-screen mode.
+ * wide enough to hold them. We force labels on, measure whether the action bar
+ * overflows its container, and toggle a flag. This keeps labels off on narrow
+ * chat panes regardless of wide-screen mode.
  */
 const showActionLabels = ref(false)
 let actionBarObserver = null
@@ -673,17 +670,13 @@ let actionBarMeasureTimer = null
 function measureActionLabels() {
   const el = actionBarRef.value
   if (!el) return
-  if (isWideScreen.value) {
-    // Force the labels-on layout synchronously via .measure-labels (shows label
-    // spans and hides the group label through CSS) so scrollWidth reflects the
-    // intended final width, then compare against the available clientWidth.
-    el.classList.add('measure-labels')
-    const overflow = el.scrollWidth > el.clientWidth + 2
-    el.classList.remove('measure-labels')
-    showActionLabels.value = !overflow
-  } else {
-    showActionLabels.value = false
-  }
+  // Force the labels-on layout synchronously via .measure-labels (shows label
+  // spans and hides the group label through CSS) so scrollWidth reflects the
+  // intended final width, then compare against the available clientWidth.
+  el.classList.add('measure-labels')
+  const overflow = el.scrollWidth > el.clientWidth + 2
+  el.classList.remove('measure-labels')
+  showActionLabels.value = !overflow
 }
 function scheduleMeasureActionLabels() {
   if (actionBarMeasureTimer) clearTimeout(actionBarMeasureTimer)
@@ -1516,9 +1509,6 @@ onBeforeUnmount(() => {
   stopPlaceholderRotation()
 })
 
-// Re-measure when wide-screen mode flips (labels only exist in wide mode).
-watch(isWideScreen, () => scheduleMeasureActionLabels())
-
 // Reset stop confirmation state when loading ends (AI finished or cancelled)
 watch(() => props.loading, (val) => {
   if (!val) {
@@ -1651,18 +1641,14 @@ defineExpose({
   align-items: center;
   gap: 6px;
   padding: 2px 4px 6px;
-  overflow: hidden;
-}
-
-/* Wide-screen: buttons carry text labels and may exceed the chat pane width on
-   smaller wide screens — allow horizontal scroll (scrollbar hidden) instead of
-   clipping the last buttons. */
-.chat-top-actions--wide {
+  /* When labels are briefly rendered during measurement (or when the chat pane
+     is too narrow), allow horizontal scroll with a hidden scrollbar instead of
+     clipping the trailing buttons. */
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
-.chat-top-actions--wide::-webkit-scrollbar {
+.chat-top-actions::-webkit-scrollbar {
   display: none;
 }
 

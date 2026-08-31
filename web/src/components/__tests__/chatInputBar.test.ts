@@ -58,11 +58,6 @@ vi.mock('@/utils/stopButtonMachine', () => ({
   }),
 }))
 
-// Wide-screen detection: the real singleton module exposes a test hook that
-// forces isWideScreen directly (jsdom's innerWidth 1024 would otherwise init
-// to wide-screen). Same pattern as useTabDrawer.test.ts / DirBreadcrumb.test.ts.
-import { _setWideScreenForTest } from '@/composables/useWideScreenLayout'
-
 // ── i18n ─────────────────────────────────────────────────────
 const i18n = createI18n({
   legacy: false,
@@ -151,9 +146,6 @@ afterEach(() => {
 
 beforeEach(() => {
   mockFetchItems.mockReset()
-  // Force narrow (icons-only) default — jsdom's innerWidth (1024) would
-  // otherwise init the wide-screen layout as active.
-  _setWideScreenForTest(false)
 })
 
 const TeleportStub = { template: '<div><slot /></div>' }
@@ -582,26 +574,32 @@ describe('ChatInputBar — user message index button', () => {
   })
 })
 
-describe('ChatInputBar — wide-screen action labels', () => {
+describe('ChatInputBar — action labels by container width', () => {
   function actionBar(wrapper: ReturnType<typeof mount>) {
     return wrapper.find('.chat-top-actions')
   }
   function labelTexts(wrapper: ReturnType<typeof mount>) {
     return wrapper.findAll('.chat-action-label').map(el => el.text())
   }
+  function mockBarWidth(wrapper: ReturnType<typeof mount>, scrollWidth: number, clientWidth: number) {
+    const bar = actionBar(wrapper).element as HTMLElement
+    Object.defineProperty(bar, 'scrollWidth', { configurable: true, value: scrollWidth })
+    Object.defineProperty(bar, 'clientWidth', { configurable: true, value: clientWidth })
+  }
 
-  it('hides action text labels in narrow mode (icons only)', async () => {
-    _setWideScreenForTest(false)
+  it('hides labels when the container is too narrow (icons only)', async () => {
     const wrapper = mountInputBar({}, { deep: true })
     await nextTick()
-    // Labels are always in the DOM but hidden by CSS; the container must not
-    // carry the show-labels class and the group label stays visible.
+    // jsdom measures 0x0, which fits → labels shown by default. Force overflow.
+    mockBarWidth(wrapper, 600, 400)
+    wrapper.vm.measureActionLabels()
+    await nextTick()
+
     expect(actionBar(wrapper).classes()).not.toContain('show-labels')
     expect(wrapper.find('.chat-group-label').exists()).toBe(true)
   })
 
-  it('shows short Chinese labels for every action button in wide mode', async () => {
-    _setWideScreenForTest(true)
+  it('shows short Chinese labels for every action button when width suffices', async () => {
     const wrapper = mountInputBar({}, { deep: true })
     await nextTick()
 
@@ -619,8 +617,7 @@ describe('ChatInputBar — wide-screen action labels', () => {
     expect(texts).not.toContain('同步')
   })
 
-  it('shows the sync label in wide mode for ACP transport sessions', async () => {
-    _setWideScreenForTest(true)
+  it('shows the sync label for ACP transport sessions', async () => {
     const wrapper = mountInputBar({ currentTransport: 'acp-stdio' }, { deep: true })
     await nextTick()
 
@@ -631,30 +628,16 @@ describe('ChatInputBar — wide-screen action labels', () => {
   })
 
   it('keeps the group label hidden when labels are shown', async () => {
-    _setWideScreenForTest(true)
     const wrapper = mountInputBar({}, { deep: true })
     await nextTick()
     expect(actionBar(wrapper).classes()).toContain('show-labels')
     expect(wrapper.find('.chat-group-label').exists()).toBe(false)
   })
 
-  it('shows the group label in narrow mode', async () => {
-    _setWideScreenForTest(false)
+  it('shows the group label when labels are hidden', async () => {
     const wrapper = mountInputBar({}, { deep: true })
     await nextTick()
-    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
-    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
-  })
-
-  it('keeps labels hidden in wide mode when the action bar has no room (overflow)', async () => {
-    _setWideScreenForTest(true)
-    const wrapper = mountInputBar({}, { deep: true })
-    await nextTick()
-    // Simulate insufficient width: the labelled action bar overflows its
-    // container → labels must stay hidden and the group label must return.
-    const bar = actionBar(wrapper).element as HTMLElement
-    Object.defineProperty(bar, 'scrollWidth', { configurable: true, value: 600 })
-    Object.defineProperty(bar, 'clientWidth', { configurable: true, value: 400 })
+    mockBarWidth(wrapper, 600, 400)
     wrapper.vm.measureActionLabels()
     await nextTick()
 
