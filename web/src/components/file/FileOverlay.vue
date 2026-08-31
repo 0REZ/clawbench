@@ -149,11 +149,14 @@ function handleContentClick(event) {
 .file-overlay {
   position: absolute;
   inset: 0;
-  z-index: 100;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
   overflow: hidden;
+  /* No z-index here. FileOverlay is the only child of its tab panel, so it
+     needs no stacking level inside the panel; an explicit z-index would
+     escape the panel unless the panel is isolated (TabPanel uses
+     isolation:isolate), risking covers over the split divider. */
 }
 
 .file-overlay-body {
