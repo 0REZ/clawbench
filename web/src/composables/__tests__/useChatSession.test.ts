@@ -4235,6 +4235,62 @@ describe('handleWsReconnect', () => {
     vi.restoreAllMocks()
   })
 
+  it('when loading=false and snapshot unchanged: re-sync skips message re-parse (data-layer no-op)', async () => {
+    // Regression: the WS reconnect path (skipIfUnchanged=true) must skip the
+    // message re-parse / re-dispatch when the snapshot is unchanged — the
+    // messages array must not be rebuilt or rewritten. This is what makes the
+    // onAppForeground → handleWsReconnect belt-and-suspenders refresh harmless
+    // on every return to the foreground when nothing changed in the background.
+    // Note: onRenderUpdate(true) is intentionally STILL called — syncSessionOnReconnect
+    // forces a full re-render after any reconnect-style sync (matching the WS
+    // reconnect behavior), so the test asserts the data layer stays quiet, not
+    // the UI layer.
+    const loading = ref(false)
+    const onRenderUpdate = vi.fn()
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate,
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    // Step 1: establish a baseline snapshot ('snap-a') via a normal load.
+    mockUtilsFns.buildMessageSnapshot.mockReturnValue('snap-a')
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1', messages: [{ id: 'm1' }], total: 1, running: false,
+      }),
+    })
+    await session.loadHistory(true, false, false)
+
+    // Messages were parsed once during the baseline load.
+    const parseCallsBefore = mockUtilsFns.parseMessages.mock.calls.length
+    const msgsSnapshot = [...options.messages.value]
+
+    // Step 2: WS reconnect with the SAME snapshot — the message parse / array
+    // rebuild must be skipped (syncSessionState returns early).
+    await session.handleWsReconnect()
+
+    expect(mockUtilsFns.parseMessages.mock.calls.length).toBe(parseCallsBefore)
+    expect(options.messages.value).toEqual(msgsSnapshot)
+
+    vi.restoreAllMocks()
+  })
+
   it('when no currentSessionId: does nothing', async () => {
     const loading = ref(true)
     const onDisconnectStream = vi.fn()
