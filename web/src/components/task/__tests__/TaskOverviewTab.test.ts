@@ -7,9 +7,23 @@ vi.mock('@/utils/html', () => ({
   escapeHtml: (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c)),
 }))
 
-// Mock splitPath
+// Mock path utils — must provide every function useFilePathAnnotation imports
+// (splitPath, dirName, normalizeSlashes, isAbsolutePath, toProjectRelative),
+// otherwise the annotation pipeline throws on undefined callers.
 vi.mock('@/utils/path', () => ({
-  splitPath: (p: string) => p.split('/').filter(Boolean),
+  splitPath: (p: string) => p.split(/[/\\]/).filter(Boolean),
+  dirName: (p: string) => {
+    const parts = p.split('/')
+    parts.pop()
+    return parts.join('/')
+  },
+  normalizeSlashes: (p: string) => p.replace(/\\/g, '/'),
+  isAbsolutePath: (p: string) => p.startsWith('/'),
+  toProjectRelative: (p: string, root: string) => {
+    if (!root) return p
+    const prefix = root + '/'
+    return p.startsWith(prefix) ? p.slice(prefix.length) : p
+  },
 }))
 
 // Mock store
