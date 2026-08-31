@@ -14,10 +14,14 @@
             :search-open="searchOpen"
             :markdown-view-mode="markdownViewMode"
             :external-loading="fileLoading"
+            :toc-file="tocFile"
+            :pdf-outline="pdfOutline"
+            :docked="docked"
             @delete="emit('delete', $event)"
             @show-details="emit('showDetails')"
             @open-git-history="emit('openGitHistory')"
             @toggle-toc="emit('toggleToc')"
+            @close-toc="emit('closeToc')"
             @toggle-search="emit('toggleSearch')"
             @toggle-view="emit('toggleView')"
             @refresh="emit('refresh')"
@@ -63,17 +67,6 @@
           @open-file="emit('openFile', $event)"
         />
       </div>
-
-      <!-- Wide-screen inline TOC dock (right side) -->
-      <TocDock
-        v-if="docked && tocOpen"
-        :open="tocOpen"
-        :file="tocFile"
-        :pdf-outline="pdfOutline"
-        @close="emit('closeToc')"
-        @jump="emit('jump', $event)"
-        @jump-page="emit('jumpPage', $event)"
-      />
     </div>
   </Transition>
 </template>
@@ -83,7 +76,6 @@ import { ref, computed } from 'vue'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import FileViewer from '@/components/file/FileViewer.vue'
 import TocDrawer from '@/components/TocDrawer.vue'
-import TocDock from '@/components/file/TocDock.vue'
 import SearchDrawer from '@/components/common/SearchDrawer.vue'
 import GitHistoryDrawer from '@/components/git/GitHistoryDrawer.vue'
 import { getWideScreenState } from '@/composables/useWideScreenLayout'

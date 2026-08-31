@@ -201,14 +201,17 @@
             <template #right>
               <div class="col-right" v-show="isWideScreen || activeTab === 'chat'" :class="{ 'chat-drop-active': chatDropActive }" @pointerdown="setActivePane('right')" @focusin="setActivePane('right')" @dragenter="onChatColDragEnter" @dragover="onChatColDragOver" @dragleave="onChatColDragLeave" @drop="onChatColDrop">
                 <div class="col-right-chat">
-                  <!-- Chat Tab -->
-                  <TabPanel tabId="chat" :activeTab="chatActive">
-                    <template #header>
-                      <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
-                      <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description bs-header-title-editable" :title="t('chat.sessionRename.tooltip')" @click="handleRenameSession">
-                        <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
-                      </div>
-                    </template>
+                  <!-- Shared chat title bar: spans both the chat panel and the
+                       session sidebar so they read as one column. -->
+                  <div class="chat-title-bar">
+                    <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
+                    <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description bs-header-title-editable" :title="t('chat.sessionRename.tooltip')" @click="handleRenameSession">
+                      <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
+                    </div>
+                  </div>
+                  <div class="chat-panel-row">
+                  <!-- Chat Tab (title bar is now the shared one above) -->
+                  <TabPanel class="chat-tab-panel" noHeader tabId="chat" :activeTab="chatActive">
                     <ChatPanelContent
                       :active="isWideScreen || activeTab === 'chat'"
                       :keyboard-active="chatShortcutActive"
@@ -224,23 +227,24 @@
                     <Paperclip :size="16" />
                     {{ t('file.dropToAttach') }}
                   </div>
+                  <SessionSidebar
+                    ref="sessionSidebarRef"
+                    v-show="sessionSidebar.open.value && isWideScreen"
+                    :width="sessionSidebar.width.value"
+                    :current-session-id="sessionIdentity.currentSessionId.value"
+                    :running-session-ids="sessionIdentity.runningSessions.value"
+                    :is-active="sessionSidebar.open.value && isWideScreen"
+                    @resize="sessionSidebar.setWidth"
+                    @close="sessionSidebar.closeSidebar"
+                    @select="handleSessionSelect"
+                    @create="handleSessionCreate"
+                    @archive="handleSessionArchive"
+                    @destroy="handleSessionDestroy"
+                    @open-session-search="sessionSearchDrawer.open()"
+                    @create-agent-select="sessionIdentity.openAgentSelector"
+                  />
+                  </div>
                 </div>
-                <SessionSidebar
-                  ref="sessionSidebarRef"
-                  v-show="sessionSidebar.open.value && isWideScreen"
-                  :width="sessionSidebar.width.value"
-                  :current-session-id="sessionIdentity.currentSessionId.value"
-                  :running-session-ids="sessionIdentity.runningSessions.value"
-                  :is-active="sessionSidebar.open.value && isWideScreen"
-                  @resize="sessionSidebar.setWidth"
-                  @close="sessionSidebar.closeSidebar"
-                  @select="handleSessionSelect"
-                  @create="handleSessionCreate"
-                  @archive="handleSessionArchive"
-                  @destroy="handleSessionDestroy"
-                  @open-session-search="sessionSearchDrawer.open()"
-                  @create-agent-select="sessionIdentity.openAgentSelector"
-                />
               </div>
             </template>
           </SplitView>
@@ -2601,6 +2605,37 @@ onUnmounted(() => {
     flex: 1;
     min-width: 0;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+/* Shared chat title bar sits above the chat panel + session sidebar row. */
+.chat-title-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px;
+    min-height: 32px;
+    background: var(--bg-secondary, #fff);
+    border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+    overflow: hidden;
+    white-space: nowrap;
+}
+/* Chat tab panel + session sidebar live in this row below the title bar. */
+.chat-panel-row {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+}
+/* Chat tab panel participates in the chat-panel-row flex row so the session
+   sidebar can sit inline beside it (instead of the global absolute inset:0
+   .tab-panel default which would cover the sidebar). */
+.chat-panel-row > .chat-tab-panel {
+    position: relative;
+    flex: 1;
+    min-width: 0;
 }
 
 /* Drag file/dir onto the chat column (wide-screen) — highlight the drop target */

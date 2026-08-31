@@ -3,19 +3,20 @@ import { mount } from '@vue/test-utils'
 import FileOverlay from '../FileOverlay.vue'
 import { _resetForTest as _resetWideForTest } from '@/composables/useWideScreenLayout'
 
-// Emits close so tests can verify FileOverlay forwards it as closeToc (not toggleToc).
-const TocDockStub = {
-  name: 'TocDock',
-  props: ['open', 'file', 'pdfOutline'],
-  emits: ['close', 'jump', 'jumpPage'],
-  template: '<div class="toc-dock-stub"><button class="toc-dock-close-stub" @click="$emit(\'close\')" /></div>',
+// FileViewer stub forwards the inline TOC dock props/events so tests can
+// verify FileOverlay passes them through.
+const FileViewerStub = {
+  name: 'FileViewer',
+  props: ['file', 'tocOpen', 'searchOpen', 'markdownViewMode', 'externalLoading', 'tocFile', 'pdfOutline', 'docked'],
+  emits: ['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'],
+  template: '<div class="file-viewer-stub"><button class="viewer-close-toc-stub" @click="$emit(\'closeToc\')" /></div>',
 }
 
 const stubs = {
-  FileViewer: { template: '<div class="file-viewer-stub"><slot/></div>' },
+  FileViewer: FileViewerStub,
   LoadingIndicator: true,
   TocDrawer: true,
-  TocDock: TocDockStub,
+  TocDock: true,
   SearchDrawer: true,
   GitHistoryDrawer: true,
   Transition: { template: '<div><slot/></div>' },
@@ -73,36 +74,31 @@ describe('FileOverlay — TOC dock vs drawer', () => {
       global: { stubs },
     })
     expect(wrapper.findComponent({ name: 'TocDrawer' }).exists()).toBe(true)
-    expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(false)
+    // Narrow screen: FileViewer receives docked=false so it won't render TocDock.
+    const viewer = wrapper.findComponent({ name: 'FileViewer' })
+    expect(viewer.props('docked')).toBe(false)
   })
 
-  it('renders the inline TocDock on wide screens when tocOpen (docked=true)', () => {
+  it('passes docked=true to FileViewer on wide screens so it can render the inline TocDock', () => {
     setViewportWidth(1400)
     const wrapper = mount(FileOverlay, {
-      props: { overlayOpen: true, currentFile: { path: 'a.md' }, tocOpen: true },
+      props: { overlayOpen: true, currentFile: { path: 'a.md' }, tocOpen: true, tocFile: { name: 'a.md' }, pdfOutline: [] },
       global: { stubs },
     })
-    expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(true)
+    const viewer = wrapper.findComponent({ name: 'FileViewer' })
+    expect(viewer.props('docked')).toBe(true)
+    expect(viewer.props('tocFile')).toMatchObject({ name: 'a.md' })
     // Bottom drawer is suppressed in docked mode
     expect(wrapper.findComponent({ name: 'TocDrawer' }).exists()).toBe(false)
   })
 
-  it('does not render TocDock on wide screens when tocOpen is false', () => {
-    setViewportWidth(1400)
-    const wrapper = mount(FileOverlay, {
-      props: { overlayOpen: true, currentFile: { path: 'a.md' }, tocOpen: false },
-      global: { stubs },
-    })
-    expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(false)
-  })
-
-  it('forwards TocDock close as closeToc (not toggleToc)', async () => {
+  it('forwards FileViewer closeToc as closeToc (not toggleToc)', async () => {
     setViewportWidth(1400)
     const wrapper = mount(FileOverlay, {
       props: { overlayOpen: true, currentFile: { path: 'a.md' }, tocOpen: true },
       global: { stubs },
     })
-    await wrapper.find('.toc-dock-close-stub').trigger('click')
+    await wrapper.find('.viewer-close-toc-stub').trigger('click')
     expect(wrapper.emitted('closeToc')).toBeTruthy()
     expect(wrapper.emitted('toggleToc')).toBeFalsy()
   })
