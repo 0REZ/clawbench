@@ -2615,7 +2615,7 @@ onUnmounted(() => {
     align-items: center;
     gap: 8px;
     padding: 2px 8px;
-    min-height: 32px;
+    height: var(--header-height);
     background: var(--bg-secondary, #fff);
     border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
     overflow: hidden;
