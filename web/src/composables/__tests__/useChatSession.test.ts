@@ -867,6 +867,36 @@ describe('onSessionEvent', () => {
     })
   })
 
+  it('marks a cross-project session read passing its project_path', async () => {
+    // A session belonging to another project completes while being viewed
+    // (opened via a notification deep link / completion popover). The WS
+    // session_update event carries project_path — markSessionRead must pass
+    // it so the backend can verify ownership against the session's own
+    // project instead of the current cookie project.
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({
+      session_id: 'current-s1',
+      status: 'completed',
+      project_path: '/other/project',
+    })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1&project_path=%2Fother%2Fproject'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
   it('does NOT mark read when a non-current session completes', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
