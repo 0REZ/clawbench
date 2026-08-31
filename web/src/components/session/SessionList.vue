@@ -298,6 +298,7 @@ onUnmounted(() => {
   border-right: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
   border-top: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
   border-bottom: 1px solid color-mix(in srgb, var(--accent-color, #0066cc) 35%, transparent);
+  box-shadow: inset 0 0 8px color-mix(in srgb, var(--accent-color, #0066cc) 15%, transparent);
 }
 
 .session-row.running {
