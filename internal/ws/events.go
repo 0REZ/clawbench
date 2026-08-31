@@ -91,7 +91,11 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 		mgr.StopWriter(clientID, conn)
 	}()
 
-	// Replay buffered events on reconnect
+	// Replay buffered events on reconnect.
+	// The buffer was preserved across Subscribe (manager.go no longer clears
+	// it), so events that arrived while this client was disconnected — or the
+	// rolling tail sent just before a connection replace — are replayed here.
+	// The frontend dedups by event ID, so replaying already-seen events is safe.
 	buffered := sub.GetBufferedEvents()
 	if len(buffered) > 0 {
 		slog.Debug("ws: replaying buffered events", "count", len(buffered), "client_id", clientID)
@@ -108,6 +112,14 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 			writeMu.Unlock()
 		}
 	}
+	// The replay buffer has been consumed — clear it and start a fresh buffer
+	// window for this connection. This must happen AFTER GetBufferedEvents
+	// returns (otherwise the replay above would be empty). Deliberately not
+	// done inside Subscribe: that function runs before the replay.
+	sub.mu.Lock()
+	sub.eventBuffer = nil
+	sub.bufferStart = time.Time{}
+	sub.mu.Unlock()
 
 	// Start the async writer goroutine that drains the send queue to the socket.
 	// Chat events enqueued via broadcastToSubscription are written here instead
