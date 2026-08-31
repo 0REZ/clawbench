@@ -1141,6 +1141,7 @@ export default {
     noMatch: '无匹配结果',
     noHeadings: '无标题',
     loading: '正在加载目录...',
+    dragResize: '拖动调整宽度',
   },
   quoteBar: {
     clear: '清空',

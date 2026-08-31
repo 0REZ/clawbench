@@ -82,6 +82,8 @@ const props = defineProps({
     file: Object,
     pdfOutline: { type: Array, default: () => [] },
     open: Boolean,
+    /** Docked (inline outline-panel) mode: clicking an item keeps the panel open. */
+    docked: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close', 'jump', 'jumpPage'])
 
@@ -224,7 +226,7 @@ function scrollTo(item) {
     if (isPdfOutline.value && item.line > 0) {
         emit('jumpPage', item.line)
         activeId.value = item.id
-        emit('close')
+        if (!props.docked) emit('close')
         return
     }
 
@@ -234,13 +236,13 @@ function scrollTo(item) {
         elById.classList.add('line-flash')
         elById.addEventListener('animationend', () => elById.classList.remove('line-flash'), { once: true })
         activeId.value = item.id
-        emit('close')
+        if (!props.docked) emit('close')
         return
     }
     if (item.line) {
         emit('jump', item.line)
     }
-    emit('close')
+    if (!props.docked) emit('close')
 }
 
 let observer = null

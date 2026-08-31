@@ -172,6 +172,30 @@ describe('TocDrawer', () => {
     await wrapper.find('.toc-item').trigger('click')
     expect(wrapper.emitted('close')).toBeTruthy()
   })
+
+  it('emits jumpPage but does NOT emit close when docked', async () => {
+    const wrapper = mountTocDrawer({
+      file: { name: 'doc.pdf', path: '/doc.pdf' },
+      pdfOutline: [{ id: 'p5', text: 'Page 5', level: 1, line: 5 }],
+      docked: true,
+    })
+    await nextTick()
+    await wrapper.find('.toc-item').trigger('click')
+    expect(wrapper.emitted('jumpPage')).toBeTruthy()
+    expect(wrapper.emitted('close')).toBeFalsy()
+  })
+
+  it('emits jump but does NOT emit close when docked for text headings', async () => {
+    const wrapper = mountTocDrawer({
+      file: { name: 'readme.md', content: '# Title\n## Section 1', path: '/readme.md' },
+      docked: true,
+    })
+    await nextTick()
+    await nextTick()
+    await wrapper.find('.toc-item').trigger('click')
+    expect(wrapper.emitted('jump')).toBeTruthy()
+    expect(wrapper.emitted('close')).toBeFalsy()
+  })
 })
 
 describe('TocDrawer — editor dirty path', () => {

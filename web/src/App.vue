@@ -98,7 +98,7 @@
                       :overlay-open="fileNav.overlayOpen.value"
                       :current-file="currentFile"
                       :file-loading="store.state.fileLoading"
-                      :toc-open="tocDrawer.effectiveOpen.value"
+                      :toc-open="effectiveTocOpen"
                       :search-open="searchDrawer.effectiveOpen.value"
                       :markdown-view-mode="markdownViewMode"
                       :file-history-open="fileHistoryDrawer.effectiveOpen.value"
@@ -107,7 +107,8 @@
                       @delete="handleDelete($event)"
                       @show-details="detailsDrawer.open()"
                       @open-git-history="openFileHistory"
-                      @toggle-toc="tocDrawer.toggle()"
+                      @toggle-toc="handleToggleToc"
+                      @close-toc="tocDockPref.close()"
                       @toggle-search="currentFile?.content && openFileSearch()"
                       @close-search="searchDrawer.close()"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
@@ -465,6 +466,7 @@ import { useTerminalStatus } from './composables/useTerminalStatus.ts'
 import { useFileWatch } from './composables/useFileWatch.ts'
 import { useFileNavStack } from './composables/useFileNavStack'
 import { useFileEditor } from './composables/useFileEditor'
+import { useTocDockPreference } from './composables/useTocDockPreference'
 import { openRecentFile, removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
 import { initLocalLinkGuard } from './composables/useLocalLinkGuard'
 import { openFilePath } from './composables/useFilePathAnnotation'
@@ -792,6 +794,27 @@ const searchDrawer = useTabDrawer('view')
 const fileHistoryDrawer = useTabDrawer('view')
 const fileSearchDrawer = useTabDrawer('browse', { autoRestore: false })
 
+// Wide-screen inline TOC dock preference (open/width persisted, editing hides).
+const tocDockPref = useTocDockPreference()
+
+/**
+ * Effective TOC visibility for the FileHeader button highlight: the inline
+ * dock on wide screens, the bottom drawer otherwise.
+ */
+const effectiveTocOpen = computed(() => isWideScreen.value ? tocDockPref.effectiveOpen.value : tocDrawer.effectiveOpen.value)
+
+/**
+ * TOC toggle: wide screens toggle the inline right-side dock; narrow screens
+ * keep the bottom drawer.
+ */
+function handleToggleToc() {
+  if (isWideScreen.value) {
+    tocDockPref.toggle()
+  } else {
+    tocDrawer.toggle()
+  }
+}
+
 function openFileHistory() {
   fileHistoryDrawer.open()
 }
@@ -833,6 +856,7 @@ function closeOverlayAndSync() {
   fileNav.closeOverlay()
   store.closeCurrentFile()
   tocDrawer.close()
+  tocDockPref.close()
   detailsDrawer.close()
   searchDrawer.close()
   fileHistoryDrawer.close()
@@ -1380,6 +1404,7 @@ function handleJumpPdfPage(pageNum) {
 
 watch(() => currentFile.value, (file, prevFile) => {
     tocDrawer.close()
+    tocDockPref.close()
     detailsDrawer.close()
     searchDrawer.close()
     markdownViewMode.value = 'rendered'
