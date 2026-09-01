@@ -156,12 +156,15 @@ describe('MarkdownSearchBar', () => {
     wrapper.unmount()
   })
 
-  it('renders select-all button and option checkboxes (case/regexp/word)', async () => {
+  it('renders inline option icons (case/regexp/word) and no select-all button', async () => {
     const wrapper = mountBar({ open: true })
     await sleep(20)
-    expect(wrapper.find('button[name=select]').exists()).toBe(true)
-    const boxes = wrapper.findAll('.cm-search-options input[type=checkbox]')
-    expect(boxes).toHaveLength(3)
+    expect(wrapper.find('button[name=select]').exists()).toBe(false)
+    const icons = wrapper.findAll('.search-input-actions button.search-opt-btn')
+    expect(icons).toHaveLength(3)
+    expect(wrapper.find('button[name=case]').exists()).toBe(true)
+    expect(wrapper.find('button[name=regexp]').exists()).toBe(true)
+    expect(wrapper.find('button[name=word]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -175,9 +178,8 @@ describe('MarkdownSearchBar', () => {
     await sleep(20)
     const insensitive = wrapper.find('.cm-search-match-info').text()
     expect(insensitive).toBe('1/2')
-    // Enable case-sensitive: only lowercase "alpha" matches → 1/1
-    wrapper.find('input[name=case]').setValue(true)
-    wrapper.find('input[name=case]').trigger('change')
+    // Enable case-sensitive via the inline icon: only lowercase "alpha" matches → 1/1
+    await wrapper.find('button[name=case]').trigger('click')
     await sleep(20)
     expect(wrapper.find('.cm-search-match-info').text()).toBe('1/1')
     wrapper.unmount()
@@ -192,8 +194,7 @@ describe('MarkdownSearchBar', () => {
     input.trigger('input')
     await sleep(20)
     expect(wrapper.find('.cm-search-match-info').text()).toBe('1/2')
-    wrapper.find('input[name=word]').setValue(true)
-    wrapper.find('input[name=word]').trigger('change')
+    await wrapper.find('button[name=word]').trigger('click')
     await sleep(20)
     // Whole-word: only the standalone "cat" matches.
     expect(wrapper.find('.cm-search-match-info').text()).toBe('1/1')

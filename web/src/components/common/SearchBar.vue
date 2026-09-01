@@ -1,27 +1,49 @@
 <template>
   <div class="search-bar" :class="{ 'is-open': open }">
     <div class="cm-search">
-      <input
-        ref="inputRef"
-        name="search"
-        class="cm-textfield"
-        :value="modelValue"
-        :placeholder="labels.find"
-        spellcheck="false"
-        autocomplete="off"
-        @input="emit('input', ($event.target as HTMLInputElement).value)"
-        @keydown="onKeydown"
-      />
+      <span class="search-input-wrap">
+        <input
+          ref="inputRef"
+          name="search"
+          class="cm-textfield"
+          :value="modelValue"
+          :placeholder="labels.find"
+          spellcheck="false"
+          autocomplete="off"
+          @input="emit('input', ($event.target as HTMLInputElement).value)"
+          @keydown="onKeydown"
+        />
+        <span class="search-input-actions">
+          <button
+            name="case"
+            class="search-opt-btn"
+            :class="{ active: caseSensitive }"
+            :title="labels.matchCase"
+            :aria-pressed="caseSensitive"
+            @click="emit('case-change', !caseSensitive)"
+          >Aa</button>
+          <button
+            name="regexp"
+            class="search-opt-btn"
+            :class="{ active: regexp }"
+            :title="labels.regexp"
+            :aria-pressed="regexp"
+            @click="emit('regexp-change', !regexp)"
+          >.*</button>
+          <button
+            name="word"
+            class="search-opt-btn"
+            :class="{ active: wholeWord }"
+            :title="labels.byWord"
+            :aria-pressed="wholeWord"
+            @click="emit('word-change', !wholeWord)"
+          >Ab</button>
+        </span>
+      </span>
       <button name="prev" class="cm-button" :disabled="!canNav" :title="labels.previous" aria-label="Previous match" @click="emit('prev')"></button>
       <button name="next" class="cm-button" :disabled="!canNav" :title="labels.next" aria-label="Next match" @click="emit('next')"></button>
-      <button name="select" class="cm-button" :disabled="!canNav" :title="labels.all" @click="emit('select')">{{ labels.all }}</button>
       <span class="cm-search-match-info">{{ matchText }}</span>
       <button name="close" class="cm-button" :title="labels.close" aria-label="Close search" @click="emit('close')">×</button>
-      <span class="cm-search-options">
-        <label><input name="case" type="checkbox" :checked="caseSensitive" @change="emit('case-change', ($event.target as HTMLInputElement).checked)">{{ labels.matchCase }}</label>
-        <label><input name="regexp" type="checkbox" :checked="regexp" @change="emit('regexp-change', ($event.target as HTMLInputElement).checked)">{{ labels.regexp }}</label>
-        <label><input name="word" type="checkbox" :checked="wholeWord" @change="emit('word-change', ($event.target as HTMLInputElement).checked)">{{ labels.byWord }}</label>
-      </span>
       <span v-if="showReplace" class="cm-search-replace">
         <input
           name="replace"

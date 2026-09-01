@@ -28,7 +28,7 @@ describe('codeMirrorSearchPanel', () => {
         expect(panel).not.toBeNull()
         expect(panel!.querySelector('input[name=search]')).not.toBeNull()
         expect(panel!.querySelector('input[name=replace]')).not.toBeNull()
-        expect(panel!.querySelectorAll('label input[type=checkbox]')).toHaveLength(3)
+        expect(panel!.querySelectorAll('.search-input-actions button.search-opt-btn')).toHaveLength(3)
         expect(panel!.querySelector('button[name=close]')).not.toBeNull()
         v.destroy()
     })

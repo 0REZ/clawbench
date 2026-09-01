@@ -6,9 +6,9 @@
  *   - Markdown preview search bar (MarkdownSearchBar.vue → SearchBar.vue)
  *
  * Both render the same SearchBar component (same `.cm-search` structure):
- *     input[name=search].cm-textfield · button.cm-button[name=prev|next|select]
- *     span.cm-search-match-info · button.cm-button[name=close]
- *     .cm-search-options (label + checkbox) · .cm-search-replace
+ *     .search-input-wrap (input + inline VS Code-style option icons)
+ *     · button.cm-button[name=prev|next] · span.cm-search-match-info
+ *     · button.cm-button[name=close] · .cm-search-replace
  *
  * The `.search-bar` host is a full-width bar pinned to the bottom with only a
  * top separator line. Both CodeMirror and markdown share it, so the UIs are
@@ -47,34 +47,30 @@
 }
 
 /* ── Layout order ───────────────────────────────────────────────────────────
-   Row 1: search input + prev(←) + next(→) + all + match info + close.
-   Row 2: .cm-search-options (case/regexp/word) + .cm-search-replace (editable).
-   The option/replace groups wrap as units via their containers. */
-.search-bar .cm-search input[name='search'] { order: 1; flex: 1; min-width: 0; }
+   Row 1: search input (with inline option icons) + prev(←) + next(→) + match
+           info + close.
+   Row 2 (editable only): .cm-search-replace.
+   The replace row wraps as a unit via its container. */
+.search-bar .cm-search .search-input-wrap { order: 1; flex: 1; min-width: 0; }
 .search-bar .cm-search .cm-button[name='prev'] { order: 2; }
 .search-bar .cm-search .cm-button[name='next'] { order: 3; }
-.search-bar .cm-search .cm-button[name='select'] { order: 4; }
 .search-bar .cm-search .cm-search-match-info {
-  order: 5;
+  order: 4;
   margin: 0 4px;
   align-self: center;
 }
 .search-bar .cm-search button[name='close'] {
-  order: 6;
+  order: 5;
   margin-left: auto;
 }
-.search-bar .cm-search .cm-search-options {
+.search-bar .cm-search .cm-search-replace {
   order: 10;
-  /* Force the options+replace groups onto their own row so the close button
-     stays pinned to the far right of row 1 via margin-left:auto. */
+  /* Force the replace row onto its own line when present. */
   flex-basis: 100%;
 }
-.search-bar .cm-search .cm-search-replace { order: 11; }
-.search-bar .cm-search .cm-search-options,
 .search-bar .cm-search .cm-search-replace {
   padding: 4px 0 5px;
 }
-.search-bar .cm-search .cm-search-options > label,
 .search-bar .cm-search .cm-search-replace > * {
   flex-shrink: 0;
 }
@@ -94,6 +90,57 @@
 }
 .cm-search .cm-textfield:focus {
   border-color: var(--accent-color);
+}
+
+/* Search input with inline VS Code-style option icons. The wrap keeps the
+   icons absolutely positioned inside the input's right edge. */
+.search-input-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.search-input-wrap > .cm-textfield {
+  flex: 1;
+  min-width: 0;
+  /* Room for the three inline option icons (Aa / .* / Ab). */
+  padding-right: 62px;
+}
+.search-input-actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.search-input-actions .search-opt-btn {
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  line-height: 1;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s;
+}
+.search-input-actions .search-opt-btn:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+.search-input-actions .search-opt-btn.active {
+  color: var(--accent-color);
 }
 
 /* ── Buttons ── */
@@ -178,61 +225,11 @@
   white-space: nowrap;
 }
 
-/* ── Option row (case / regexp / word) ── */
-.cm-search .cm-search-options,
+/* ── Replace row (editable only) ── */
 .cm-search .cm-search-replace {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-.cm-search .cm-search-options label {
-  color: var(--text-muted);
-  font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  cursor: pointer;
-  user-select: none;
-}
-.cm-search .cm-search-options label input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  margin: 0;
-  flex-shrink: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  background: var(--bg-tertiary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
-}
-.cm-search .cm-search-options label input[type='checkbox']:hover {
-  border-color: var(--accent-color);
-}
-.cm-search .cm-search-options label input[type='checkbox']:checked {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-}
-.cm-search .cm-search-options label input[type='checkbox']:checked::after {
-  content: '';
-  /* Flex centering keeps the rotated checkmark centered in the box. The
-     checkmark's thick hook sits slightly low-right, so nudge it up-left. */
-  width: 5px;
-  height: 10px;
-  margin-top: -1px;
-  border: solid #fff;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-.cm-search .cm-search-options label input[type='checkbox']:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
-  outline-offset: 1px;
 }
 
 /* ── Match highlighting + active-match flash ─────────────────────────────────

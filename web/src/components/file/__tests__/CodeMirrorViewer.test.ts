@@ -528,11 +528,11 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     expect(zhInput).toBeTruthy()
     expect(zhInput!.placeholder).toBe('查找')
     // Button labels are translated as well. prev/next render as CSS arrows
-    // (empty text) with the label in the title attribute.
+    // (empty text) with the label in the title attribute; the option toggles
+    // are inline icons (Aa / .* / Ab) whose titles carry the translation.
     const zhButtons = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
       .map((b) => b.textContent?.trim())
       .filter(Boolean)
-    expect(zhButtons).toContain('全部') // select-all button label
     expect(zhButtons).toContain('×') // close button glyph
     expect(zhButtons).toContain('替换') // replace action
     const zhTitles = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
@@ -540,6 +540,13 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
       .filter(Boolean)
     expect(zhTitles).toContain('下一个')
     expect(zhTitles).toContain('上一个')
+    // Inline option icons carry localized titles.
+    const zhOptTitles = [...document.querySelectorAll('.cm-viewer .cm-search .search-opt-btn')]
+      .map((b) => b.getAttribute('title'))
+      .filter(Boolean)
+    expect(zhOptTitles).toContain('区分大小写')
+    expect(zhOptTitles).toContain('正则')
+    expect(zhOptTitles).toContain('全词匹配')
     zhWrapper.unmount()
   })
 

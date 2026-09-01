@@ -24,14 +24,21 @@ function mountBar(props = {}) {
 }
 
 describe('SearchBar', () => {
-  it('renders all controls: input, prev/next/select/close, options, replace row', () => {
+  it('renders all controls: input, prev/next/close, inline option icons, replace row', () => {
     const wrapper = mountBar({ open: true, showReplace: true })
     expect(wrapper.find('input[name=search]').exists()).toBe(true)
     expect(wrapper.find('button[name=prev]').exists()).toBe(true)
     expect(wrapper.find('button[name=next]').exists()).toBe(true)
-    expect(wrapper.find('button[name=select]').exists()).toBe(true)
     expect(wrapper.find('button[name=close]').exists()).toBe(true)
-    expect(wrapper.findAll('.cm-search-options input[type=checkbox]')).toHaveLength(3)
+    // The three options are inline icons inside the input, not a separate row.
+    const icons = wrapper.findAll('.search-input-actions button.search-opt-btn')
+    expect(icons).toHaveLength(3)
+    expect(wrapper.find('button[name=case]').exists()).toBe(true)
+    expect(wrapper.find('button[name=regexp]').exists()).toBe(true)
+    expect(wrapper.find('button[name=word]').exists()).toBe(true)
+    // No "select all" button and no checkbox row anymore.
+    expect(wrapper.find('button[name=select]').exists()).toBe(false)
+    expect(wrapper.find('.cm-search-options').exists()).toBe(false)
     expect(wrapper.find('input[name=replace]').exists()).toBe(true)
     expect(wrapper.find('button[name=replace]').exists()).toBe(true)
     expect(wrapper.find('button[name=replaceAll]').exists()).toBe(true)
@@ -52,11 +59,10 @@ describe('SearchBar', () => {
     wrapper.unmount()
   })
 
-  it('disables prev/next/select when canNav is false', () => {
+  it('disables prev/next when canNav is false', () => {
     const wrapper = mountBar({ open: true, canNav: false })
     expect((wrapper.find('button[name=prev]').element as HTMLButtonElement).disabled).toBe(true)
     expect((wrapper.find('button[name=next]').element as HTMLButtonElement).disabled).toBe(true)
-    expect((wrapper.find('button[name=select]').element as HTMLButtonElement).disabled).toBe(true)
     wrapper.unmount()
   })
 
@@ -69,15 +75,13 @@ describe('SearchBar', () => {
     wrapper.unmount()
   })
 
-  it('emits prev/next/select/close on button clicks', async () => {
+  it('emits prev/next/close on button clicks', async () => {
     const wrapper = mountBar({ open: true, canNav: true })
     await wrapper.find('button[name=prev]').trigger('click')
     await wrapper.find('button[name=next]').trigger('click')
-    await wrapper.find('button[name=select]').trigger('click')
     await wrapper.find('button[name=close]').trigger('click')
     expect(wrapper.emitted('prev')).toBeTruthy()
     expect(wrapper.emitted('next')).toBeTruthy()
-    expect(wrapper.emitted('select')).toBeTruthy()
     expect(wrapper.emitted('close')).toBeTruthy()
     wrapper.unmount()
   })
@@ -95,14 +99,22 @@ describe('SearchBar', () => {
     wrapper.unmount()
   })
 
-  it('emits case-change / regexp-change / word-change on checkbox toggles', async () => {
+  it('toggles option icons and emits case/regexp/word-change', async () => {
     const wrapper = mountBar({ open: true })
-    await wrapper.find('input[name=case]').trigger('change')
+    await wrapper.find('button[name=case]').trigger('click')
     expect(wrapper.emitted('case-change')).toBeTruthy()
-    await wrapper.find('input[name=regexp]').trigger('change')
+    expect(wrapper.emitted('case-change')![0]).toEqual([true])
+    await wrapper.find('button[name=regexp]').trigger('click')
     expect(wrapper.emitted('regexp-change')).toBeTruthy()
-    await wrapper.find('input[name=word]').trigger('change')
+    expect(wrapper.emitted('regexp-change')![0]).toEqual([true])
+    await wrapper.find('button[name=word]').trigger('click')
     expect(wrapper.emitted('word-change')).toBeTruthy()
+    expect(wrapper.emitted('word-change')![0]).toEqual([true])
+    // Active prop drives the icon's active class.
+    await wrapper.setProps({ caseSensitive: true, regexp: true, wholeWord: true })
+    expect(wrapper.find('button[name=case]').classes()).toContain('active')
+    expect(wrapper.find('button[name=regexp]').classes()).toContain('active')
+    expect(wrapper.find('button[name=word]').classes()).toContain('active')
     wrapper.unmount()
   })
 
