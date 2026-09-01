@@ -14,6 +14,11 @@ interface ServerEvent {
     type: string           // "event" | "ping"
     id?: string            // event ID for dedup
     event?: string         // "session_update" | "task_update"
+    // True when the server replayed this event from the replay buffer right
+    // after a WS reconnect (events.go GetBufferedEvents). Such events are
+    // caught-up history, NOT live completions — consumers must suppress
+    // completion popups / notifications for them.
+    replayed?: boolean
     data?: {
         session_id?: string
         status?: string
@@ -101,9 +106,12 @@ if (!clientId) {
 // in-page WS reconnect still recovers events missed while disconnected.
 let lastSeenEventId = ''
 
-// True while fetchPendingEvents() is dispatching caught-up events (the WS was
-// down when they were originally broadcast). Consumers use this to distinguish
-// replayed background events from live foreground ones.
+// True while a replayed event is being dispatched — either fetched via
+// fetchPendingEvents() (the WS was down when it was originally broadcast) or
+// replayed from the server's WS replay buffer right after a reconnect (the
+// server tags those messages with `replayed: true`). Consumers use this to
+// distinguish replayed background events from live foreground ones (e.g.
+// suppress completion popups / mark-read).
 const isReplayingEvents = ref(false)
 
 // Mirror the in-memory cursor to the host app (Android native background
@@ -294,6 +302,19 @@ function connect() {
                     addProcessedId(msg.id)
                 }
 
+                // Reset the per-message replay flag first so it never leaks from
+                // the previous message (e.g. a replayed burst followed by a live
+                // event must not have the live event suppressed).
+                isReplayingEvents.value = false
+
+                // Replay-buffer events (tagged `replayed: true` by the server
+                // when it replays the buffered history right after a reconnect)
+                // are caught-up history, not live completions — flag them so
+                // consumers can suppress completion popups / notifications.
+                if (msg.replayed) {
+                    isReplayingEvents.value = true
+                }
+
                 // Dispatch to handlers
                 for (const handler of handlers) {
                     handler(msg.event!, msg.data)
@@ -311,8 +332,9 @@ function connect() {
 
                 // Browser notification: when page is not focused, show browser
                 // notification for terminal events (completed/cancelled/failed/
-                // permission_pending).
-                showEventBrowserNotification(msg.event!, msg.data)
+                // permission_pending). Replayed events are caught-up history
+                // and never notify.
+                showEventBrowserNotification(msg.event!, msg.data, true)
 
                 // Send ack
                 if (msg.id) {
@@ -423,12 +445,24 @@ function stopHeartbeat() {
  *   failed:             title=TaskFailed,      alert=responsePreview || TaskFailed
  *   cancelled:          title=TaskCancelled,   alert=responsePreview || TaskCancelled
  */
-function showEventBrowserNotification(event: string, data: ServerEvent['data']) {
+/**
+ * Show a browser notification for a terminal event.
+ *
+ * @param skipReplay when true, a replay-phase (caught-up history) event does
+ *   NOT produce a notification — it is suppressed like a background event
+ *   would be. Callers use this for events that arrive via fetchPendingEvents()
+ *   or the WS replay buffer after a reconnect.
+ */
+function showEventBrowserNotification(event: string, data: ServerEvent['data'], skipReplay = false) {
     if (!data) return
 
     // Only show native browser notifications when push_mode is "native"
     const pushMode = serverConfig.value?.push_mode as string || 'native'
     if (pushMode !== 'native') return
+
+    // A replay-phase event is caught-up history, not a live completion — never
+    // notify for it, even if the page is in the background right now.
+    if (skipReplay && isReplayingEvents.value) return
 
     // Only show notification when page is not focused
     if (document.visibilityState === 'visible' && document.hasFocus()) return

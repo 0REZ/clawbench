@@ -292,17 +292,16 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
   it('does not show quote question while the search panel is open', async () => {
     const wrapper = mountViewer({ content: 'alpha beta\nalpha gamma', file: { path: '/p/main.go' } })
     await sleep(80)
-    // Open the built-in search panel, then move the selection onto a match
-    // (as findNext does when navigating results).
+    // Open the search panel, then move the selection onto a match (as findNext
+    // does when navigating results).
     wrapper.vm.openSearch()
     await sleep(50)
     const view = wrapper.vm.getView()
     view.dispatch({ selection: { anchor: 0, head: 5 } })
     await sleep(700) // debounce 200ms + showBar 400ms — must not fire
     expect(quoteMocks.showBar).not.toHaveBeenCalled()
-    // Closing the panel restores normal quote behavior.
-    const { closeSearchPanel } = await import('@codemirror/search')
-    closeSearchPanel(view)
+    // Closing the panel restores normal quote behavior (openSearch toggles).
+    wrapper.vm.openSearch()
     await sleep(50)
     view.dispatch({ selection: { anchor: 0, head: 5 } })
     await sleep(700)
@@ -528,12 +527,29 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     const zhInput = document.querySelector<HTMLInputElement>('.cm-viewer .cm-search input[name="search"]')
     expect(zhInput).toBeTruthy()
     expect(zhInput!.placeholder).toBe('查找')
-    // Button labels are translated as well.
+    // Button labels are translated as well. prev/next render as CSS arrows
+    // (empty text) with the label in the title attribute; the option toggles
+    // are inline icons (Aa / .* / Ab) whose titles carry the translation.
     const zhButtons = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
       .map((b) => b.textContent?.trim())
       .filter(Boolean)
-    expect(zhButtons).toContain('下一个')
-    expect(zhButtons).toContain('上一个')
+    expect(zhButtons).toContain('替换') // replace action
+    // Close is an SVG icon button (no text) with the label in its title.
+    const closeBtn = document.querySelector('.cm-viewer .cm-search button[name=close]')
+    expect(closeBtn?.querySelector('svg.search-close-icon')).not.toBeNull()
+    expect(closeBtn?.getAttribute('title')).toBe('关闭')
+    const zhTitles = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
+      .map((b) => b.getAttribute('title'))
+      .filter(Boolean)
+    expect(zhTitles).toContain('下一个')
+    expect(zhTitles).toContain('上一个')
+    // Inline option icons carry localized titles.
+    const zhOptTitles = [...document.querySelectorAll('.cm-viewer .cm-search .search-opt-btn')]
+      .map((b) => b.getAttribute('title'))
+      .filter(Boolean)
+    expect(zhOptTitles).toContain('区分大小写')
+    expect(zhOptTitles).toContain('正则')
+    expect(zhOptTitles).toContain('全词匹配')
     zhWrapper.unmount()
   })
 
@@ -563,5 +579,38 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     await sleep(30)
     // indentMore returns false when read-only, so the doc must be untouched.
     expect(view.state.doc.toString()).toBe('const a = 1\n')
+  })
+})
+describe('CodeMirrorViewer — viewport line event (for TOC scroll-follow)', () => {
+  function mountViewerLocal(props = {}) {
+    return mount(CodeMirrorViewer, {
+      props: { content: 'const a = 1\nconst b = 2\n', language: 'javascript', ...props },
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    })
+  }
+
+  it('dispatches cm-editor-viewport-line when the editor scrolls', async () => {
+    const content = Array.from({ length: 200 }, function(_, i) { return 'line ' + (i + 1) }).join('\n')
+    const wrapper = mountViewerLocal({ content, file: { path: '/tmp/big.ts', name: 'big.ts' } })
+    await sleep(120)
+    const view = wrapper.vm.getView()
+
+    const listener = vi.fn()
+    window.addEventListener('cm-editor-viewport-line', listener)
+
+    // Scroll the editor's scrollDOM to a later position.
+    const scroller = view.scrollDOM
+    scroller.scrollTop = 400
+    scroller.dispatchEvent(new Event('scroll', { bubbles: false }))
+
+    await sleep(80)
+    expect(listener).toHaveBeenCalled()
+    const detail = listener.mock.calls[0][0].detail
+    expect(typeof detail.line).toBe('number')
+    expect(detail.line).toBeGreaterThan(1)
+
+    window.removeEventListener('cm-editor-viewport-line', listener)
+    wrapper.unmount()
   })
 })

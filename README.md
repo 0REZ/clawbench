@@ -172,6 +172,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **File Path Navigation**: Clickable file paths in code previews with import path resolution (e.g., @/composables/useFoo resolves to the actual file path); line range navigation support (e.g., `file.go:42-50`) with flash highlight
 - **Edit Mode**: undo/redo, save & exit, unsaved changes confirmation dialog, visual distinction for edit mode (accent-tinted background + top border)
 - **Markdown Heading-Anchored Scroll Sync**: Scroll position synchronized between rendered view and source edit based on heading anchors
+- **Excalidraw Canvas**: `.excalidraw` files open directly in an in-app canvas editor (embedded independent build in an iframe) with drawing and editing, save-writes back to the original file; language and theme follow the app settings, with unsaved-change confirmation on exit
 - Swipe gestures: swipe left/right to switch files
 
 ### 📝 Markdown
@@ -192,6 +193,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Continue Conversation**: One-click continue conversation from task execution detail, auto-copies history messages and summaries to a new session, inherits backend/agent/model/thinking effort; sessions originated from scheduled tasks show a purple "Task" badge in session list
 - **Multi-Session Management**: Create, switch, archive independent sessions, swipe to switch; archived sessions recoverable via search, physical delete (irreversible) and archive retention auto-cleanup available; Ctrl/Cmd+Delete to quick-archive current session
 - **Swipe Session Toggle**: Toggle left/right swipe session switching in Settings → Chat; defaults to off to prevent accidental switches when scrolling wide content
+- **Wide-Screen Chat Toggle**: A button at the bottom of the wide-screen dock hides/shows the chat area — when hidden, the left pane takes the full width for focused work (files, terminal, etc.) and can be restored on demand
 - **Image Upload**: Upload images for AI conversation (multimodal)
 - **Disconnect Protection**: Messages persist immediately, no data loss on disconnect, 15s heartbeat keep-alive + 30s timeout auto-reconnect (live content updates during polling fallback); on reconnect, auto-checks session state to prevent UI stuck when AI completed during disconnect
 - **Auto Resume**: Automatically sends "continue" after Claude/CodeBuddy/Qoder/CodeWhale/MiMo/Pi/Copilot/Kimi exits Plan Mode
@@ -210,7 +212,8 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Extended Thinking**: Complex tasks auto-trigger extended thinking, reasoning visible in real time
 - **File Path Navigation**: Clickable file paths in AI responses, with line range navigation
 - **Localhost URL Navigation**: localhost URLs in AI responses (e.g., http://localhost:3000) are auto-detected with an open button; in App mode, port mapping is auto-registered and the URL opens via WebView with zero manual config
-- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder, one-click send, input placeholder hint showing current quick send; long-press fills input box (with progressive fill bar) for editing before sending; message clusters analysis discovers recurring patterns and adds them
+- **Quick Send**: Preset common commands (continue, build, commit, etc.) with drag reorder; an input-bar trailing icon injects the command into the input box for editing before sending; input placeholder hints at the current quick send; message clusters analysis discovers recurring patterns and adds them
+- **Input Draft & Attachment Restore**: When switching sessions, unsent input text, attached files and staged quotes are snapshotted and restored when you switch back — no lost input from accidental session switches
 - **Quote & Ask**: Select code or text, ask AI directly, auto-attaches context
 - **Current Directory Attachment**: Chat input supports attaching current directory context, AI auto-gets directory structure
 - **Drag & Paste Upload**: Drag files onto chat area or paste clipboard content (screenshots/files), auto-upload and attach as tags without opening the attach drawer
@@ -218,6 +221,11 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Unread Badge**: Chat panel icon shows unread message count
 - **Attach Drawer Footer**: Selected files shown as persistent scrollable tags at the bottom of the attach drawer, with direct removal support
 - **Auto-Approve Indicator**: Mode chip turns green when auto-approve is enabled, providing visual feedback for ACP permission mode
+- **Reset Session**: A "Reset session" button on AI error/warning banners restarts a stuck agent process (e.g., a tool approved but never executed); the external session ID and chat history are preserved, context is restored on reconnect and the last user message is re-sent
+- **Completion Popup**: When a session or scheduled task finishes while the chat UI is not in the foreground (you're on another tab or a different session), an Android-notification-style card slides in from the top — showing the full summary, project name/path, the last user message and the agent backend icon, with a built-in quick input to follow up, a mark-as-read button and a jump button to the session/task detail. Sending a follow-up message or tapping mark-as-read clears the unread badge for that session (via `/api/ai/chat/read`, project-aware so cross-project popups work) and shows a success toast; tapping the backdrop closes the popup (ignored within the first second to prevent accidental taps). The user message renders as a quote-style block that expands on tap. External-project popups show a footer divider with the project name/path. Multiple completions queue up and show one at a time; replaces the old in-UI toast
+- **Scroll Position Retention**: Scrolling position is kept while you read older messages within a session (loading more history mid-session doesn't jump the view); switching sessions/projects always returns to the bottom (tab switches rely on the browser's native scroll retention). After sending a message, if scrolling has stopped, the view unconditionally snaps back to the bottom
+- **Per-Project Session Restore**: Each project remembers the session you last opened (keyed by project root), and reopens it automatically on entry — falling back to default behavior when that session is gone. Jumping between projects doesn't lose your place
+- **Auto Clear Unread**: The current session is marked read automatically when execution finishes or when you switch back to the foreground — unread badges exist only for sessions you're not looking at, and clear the moment you return
 
 ### 🖼️ Media Preview
 - In-app preview of images, audio, video
@@ -264,7 +272,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 ### 💻 Web Terminal
 - **Interactive Terminal**: PTY + WebSocket + xterm.js, operate server terminal directly in browser
 - **Concurrent Sessions**: Each client gets an independent PTY session, no interference
-- **Multi-Tab Management**: Close all tabs, empty state with create button, dock icon shows active session count
+- **Multi-Tab Management**: Close all tabs, empty state with create button, dock icon shows active session count; background tabs show an unread dot when new output arrives
 - **Three-Mode Gesture System**: Browse (default, touch scroll), Gesture (Termius-style swipe→arrow keys, hold-to-repeat, double-tap→Tab, pinch-to-zoom), Selection (drag-to-select text + floating copy bar)
 - **Virtual Key Toolbar**: Color-coded key groups (modifiers, shortcuts, navigation, arrows, actions), three-state modifier toggle
 - **Key/Symbol Configuration**: Full-screen configuration drawer with keys and symbols dual tabs; supports tap-to-add, drag-to-reorder, gesture mode auto-hides certain keys; configuration persisted to database
@@ -288,6 +296,9 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - **Self-Update**: One-click version check, binary download, and service restart from the Web UI; disconnect recovery with polling fallback; version skip option
 - **Desktop App Upgrade**: `GET /api/desktop/latest` checks npm registry for the latest ClawBench desktop (Electron) version and per-platform download links
 - **Android Version Mismatch Detection**: WebView startup compares APK version with server version; shows `VersionMismatchOverlay` prompting APK update when mismatched
+- **Floating Status Window**: System-level overlay capsule (Android 8.0+ `TYPE_APPLICATION_OVERLAY`) that shows real-time session stats (running / pending-approval / unread counts) via the background WebSocket channel. Shows an "idle" capsule state when there's nothing to report rather than hiding. Draggable with edge-snapping and position persistence; tap expands a grouped session-list panel (per-project headers with name+path, status dots + unread badges) to jump straight into a session. Toggle + `SYSTEM_ALERT_WINDOW` permission flow in Settings
+- **Live Updates (Dynamic Island)**: Android 16 live-update notifications surface session state on the status bar and lock screen — a single-line status-bar chip (pending approvals > unread > running, highest priority only, auto-removed when empty) plus an expanded-by-default card on the lock screen / notification drawer (full three-group counts). Shares the same overview data as the floating window, so the numbers always agree. Independent opt-in toggle in Settings (on by default); requires the system "Live Updates" notification permission, with graceful fallback to a plain ongoing notification
+- **Full Android i18n**: Native Android UI is fully bilingual (English default + Chinese mirror) — hardcoded Chinese in login/connection errors and notification text has been moved to string resources, with a three-layer language resolution (in-app choice > cookie > system locale)
 
 ### 🖥️ Desktop App
 - **Cross-platform Electron client**: Windows / macOS / Linux desktop window wrapping the same Web UI — a full native experience without a browser
@@ -307,7 +318,7 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 
 
 ### 🎨 Themes
-- **18 Named Themes**: VSCode-style self-contained color schemes — GitHub Light/Dark, One Dark Pro, Catppuccin Mocha/Latte, Dracula, Nord, Tokyo Night, Solarized Dark/Light/Deep, Gruvbox Dark/Light, High Contrast Dark/Light, Night Owl, Ayu Dark, Vitesse Dark
+- **27 Named Themes**: VSCode-style self-contained color schemes sorted by background brightness — 11 light (GitHub Light, One Light, Ayu Light, Everforest Light, High Contrast Light, Mint Light, Sky Light, Nord Light, Catppuccin Latte, Solarized Light, Gruvbox Light) and 16 dark (Solarized Dark/Deep, Nord, Everforest Dark, One Dark Pro, Dracula, Rose Pine, Gruvbox Dark, GitHub Dark, Catppuccin Mocha, Vitesse Dark, Tokyo Night, Kanagawa, Ayu Dark, Night Owl, High Contrast Dark)
 - **Follow System**: `auto` mode picks the default GitHub Light/Dark based on the system color scheme
 - **Quick Theme Picker**: Palette button in the header switches themes on the fly with live color previews
 - **Persistent & Status Bar Aware**: Selection is saved locally and restored on reload; Android status bar color follows the active theme

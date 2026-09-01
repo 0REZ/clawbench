@@ -841,6 +841,7 @@ async function sendMessageNow(text, filePaths, files) {
     const optimisticMsg = {
       role: 'user',
       id: pendingId,
+      queueId: pendingId,
       content: text || '',
       blocks: text ? [{ type: 'text', text: text || '' }] : [],
       filePath: filePaths.length > 0 ? filePaths[0] : '',

@@ -23,6 +23,8 @@
             @toggle-toc="emit('toggleToc')"
             @close-toc="emit('closeToc')"
             @toggle-search="emit('toggleSearch')"
+            @close-search="emit('closeSearch')"
+            @search-change="emit('searchChange', $event)"
             @toggle-view="emit('toggleView')"
             @refresh="emit('refresh')"
             @open-file="emit('openFile', $event)"
@@ -30,6 +32,8 @@
             @navigate-back="emit('navigateBack')"
             @navigate-forward="emit('navigateForward')"
             @share-external="emit('shareExternal')"
+            @jump="emit('jump', $event)"
+            @jump-page="emit('jumpPage', $event)"
           />
           <!-- File loading mask — same style as chat session-switch -->
           <Transition name="loading-fade">
@@ -52,7 +56,7 @@
 
         <SearchDrawer
           ref="searchDrawerRef"
-          :open="searchOpen"
+          :open="searchDrawerOpen"
           :file="currentFile"
           :view-mode="markdownViewMode"
           @close="emit('closeSearch')"
@@ -88,6 +92,9 @@ const props = defineProps({
   fileLoading: Boolean,
   tocOpen: Boolean,
   searchOpen: Boolean,
+  /** Whether the SearchDrawer bottom sheet itself should be shown (fallback
+      views only — markdown/code use inline search UIs driven by searchOpen). */
+  searchDrawerOpen: Boolean,
   markdownViewMode: String,
   fileHistoryOpen: Boolean,
   tocFile: Object,
@@ -99,9 +106,9 @@ const docked = computed(() => isWideScreen.value)
 
 const emit = defineEmits([
   'delete', 'showDetails', 'openGitHistory',
-  'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh',
+  'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh',
   'jump', 'jumpPage', 'closeGitHistory', 'openFile',
-  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'closeSearch',
+  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal',
 ])
 
 const contentRef = ref(null)
@@ -117,7 +124,8 @@ function pdfScrollToPage(pageNum) {
 
 function focusSearchInput() {
   // FileViewer routes internally: CodeMirror views open the editor's own
-  // search panel, rendered markdown focuses the SearchDrawer bottom sheet.
+  // search panel, rendered markdown opens its inline search bar. The
+  // SearchDrawer is only touched when it is already open (legacy fallback).
   fileViewerRef.value?.focusSearchInput?.()
   searchDrawerRef.value?.focusSearchInput?.()
 }

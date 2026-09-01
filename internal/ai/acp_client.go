@@ -77,7 +77,15 @@ func (c *ClawBenchACPClient) RegisterSession(acpSessionID string, ch chan<- Stre
 
 // UnregisterSession removes the StreamEvent channel for an ACP session.
 // Must be called after the Prompt for this session completes.
-// Also cancels any pending permission requests for this session.
+//
+// Pending permission requests are deliberately NOT cancelled here: a prompt
+// turn can end while a permission request is still pending (observed when the
+// agent ends its turn right after issuing session/request_permission — an ACP
+// protocol violation). Cancelling on unregister would make the frontend
+// approval card un-respondable ("no pending permission found"), stranding the
+// user. The permission is kept so the user can still approve/reject; it is
+// cleaned up automatically when the agent connection dies (RequestPermission's
+// ctx is the SDK inboundCtx, which is cancelled on connection shutdown).
 func (c *ClawBenchACPClient) UnregisterSession(acpSessionID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -87,16 +95,6 @@ func (c *ClawBenchACPClient) UnregisterSession(acpSessionID string) {
 	if deb, ok := c.debouncers[acpSessionID]; ok {
 		deb.flushAll()
 		delete(c.debouncers, acpSessionID)
-	}
-
-	// Cancel any pending permission requests for this session
-	for key, pp := range c.pendingPermission {
-		if pp.SessionID == acpSessionID {
-			pp.Ch <- acp.RequestPermissionResponse{
-				Outcome: acp.NewRequestPermissionOutcomeCancelled(),
-			}
-			delete(c.pendingPermission, key)
-		}
 	}
 }
 

@@ -102,13 +102,18 @@ describe('FileOverlay', () => {
     expect(wrapper.find('.toc-drawer-stub').exists()).toBe(true)
   })
 
-  it('renders SearchDrawer when searchOpen is true', () => {
-    const wrapper = mountOverlay({ overlayOpen: true, searchOpen: true })
+  it('renders SearchDrawer when searchDrawerOpen is true', () => {
+    const wrapper = mountOverlay({ overlayOpen: true, searchDrawerOpen: true })
     expect(wrapper.find('.search-drawer-stub').exists()).toBe(true)
   })
 
-  it('emits closeSearch (not toggleSearch) when SearchDrawer closes', async () => {
+  it('does not render SearchDrawer when only searchOpen (inline search UI) is true', () => {
     const wrapper = mountOverlay({ overlayOpen: true, searchOpen: true })
+    expect(wrapper.find('.search-drawer-stub').exists()).toBe(false)
+  })
+
+  it('emits closeSearch (not toggleSearch) when SearchDrawer closes', async () => {
+    const wrapper = mountOverlay({ overlayOpen: true, searchDrawerOpen: true })
     const drawer = wrapper.findComponent(SearchDrawerStub)
     drawer.vm.$emit('close')
     await wrapper.vm.$nextTick()

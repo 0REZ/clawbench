@@ -224,7 +224,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown, Sun, Moon } from 'lucide-vue-next'
+import { Eye, EyeOff, RefreshCw, RotateCcw, ChevronsUpDown, Sun, Moon, Palette } from 'lucide-vue-next'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import { useTabDrawer } from '@/composables/useTabDrawer'

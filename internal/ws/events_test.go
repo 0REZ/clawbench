@@ -2,6 +2,7 @@ package ws
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -201,4 +202,76 @@ func TestEventsHandler_ServerCloseOnExit(t *testing.T) {
 
 	// Give the server time to process the disconnect
 	time.Sleep(300 * time.Millisecond)
+}
+
+// TestEventsHandler_ReplayTagsReplayedEvent verifies that events replayed from
+// the subscription's replay buffer on reconnect are tagged with Replayed=true.
+// Regression test for the "stale completion notification after page reload" bug:
+// without the tag the frontend cannot distinguish caught-up history (a session
+// that finished while the page was reloading) from a live completion, so it
+// would re-pop the completion popup for every buffered historical event.
+func TestEventsHandler_ReplayTagsReplayedEvent(t *testing.T) {
+	mgr := newTestManager()
+	origMgr := defaultManager
+	defaultManager = mgr
+	defer func() { defaultManager = origMgr }()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/ai/events/ws", EventsHandler)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	clientID := "replay-tag-client"
+	wsURL := "ws" + server.URL[4:] + "/api/ai/events/ws?client_id=" + clientID
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First connection.
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	require.NoError(t, err, "first WebSocket connection should succeed")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	// Allow the subscription to register, then disconnect so the buffer window
+	// opens. The subscription (and its replay buffer) is preserved.
+	time.Sleep(100 * time.Millisecond)
+	mgr.DisconnectClient(clientID)
+
+	// Broadcast a terminal event while the client is away — it is buffered.
+	mgr.BroadcastEvent(ServerMessage{
+		Type:  "event",
+		ID:    "evt_away_completed",
+		Event: "session_update",
+		Data:  &SessionUpdateData{SessionID: "s1", Status: "completed"},
+	})
+
+	// Close the first connection so the handler goroutine exits cleanly before
+	// the reconnect (otherwise the old handler's read loop may interfere).
+	_ = conn.Close(websocket.StatusNormalClosure, "reconnecting")
+	time.Sleep(200 * time.Millisecond)
+
+	// Reconnect — EventsHandler replays the buffered event with Replayed=true.
+	conn2, _, err := websocket.Dial(ctx, wsURL, nil)
+	require.NoError(t, err, "reconnect WebSocket should succeed")
+	defer func() { _ = conn2.Close(websocket.StatusNormalClosure, "") }()
+
+	var got ServerMessage
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	_, data, err := conn2.Read(readCtx)
+	require.NoError(t, err, "should receive the replayed event")
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, "evt_away_completed", got.ID, "replayed event should carry its original id")
+	require.True(t, got.Replayed, "replayed event must be tagged Replayed=true so the frontend suppresses stale completion popups")
+
+	// The replayed event must NOT have been mutated in the buffer (it is a copy
+	// tagged only for this replay).
+	mgr.mu.Lock()
+	sub, ok := mgr.subscriptions[clientID]
+	mgr.mu.Unlock()
+	require.True(t, ok, "subscription should be preserved after reconnect")
+	for _, ev := range sub.GetBufferedEvents() {
+		if ev.Replayed {
+			t.Error("the in-buffer event must NOT carry the Replayed tag (only the replayed copy is tagged)")
+		}
+	}
 }

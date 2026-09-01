@@ -28,7 +28,7 @@
 
 <script setup>
 import { Braces, Box, Boxes, FileCode2, SquareAsterisk, ListOrdered, Variable, Hash, Package, FolderTree, CircleDot, Settings2, Hammer, Layers, Puzzle, Zap, Code2, Heading } from 'lucide-vue-next'
-import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SearchInput from '@/components/common/SearchInput.vue'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
@@ -70,6 +70,12 @@ const props = defineProps({
     pdfOutline: { type: Array, default: () => [] },
     /** Whether the panel is visible. Drives the document-level keyboard nav. */
     open: { type: Boolean, default: true },
+    /**
+     * Whether the content is rendered by CodeMirror (code files, or markdown
+     * in raw/editing view). Scroll-follow then uses the editor's
+     * `cm-editor-viewport-line` event instead of heading-DOM observation.
+     */
+    codeView: { type: Boolean, default: false },
 })
 const emit = defineEmits(['jump', 'jumpPage'])
 
@@ -236,6 +242,9 @@ function setupObserver() {
     observer = null
     prevObserver?.disconnect()
     if (isPdfOutline.value) return
+    // CodeMirror-rendered content virtualizes its DOM — scroll-follow there is
+    // driven by cm-editor-viewport-line instead (see onEditorViewportLine).
+    if (props.codeView) return
 
     nextTick(() => {
         // If another setupObserver() was called before this nextTick fired,
@@ -278,9 +287,75 @@ watch(toc, () => {
     setupObserver()
 })
 
+// ── Code-view scroll-follow ──
+// CodeMirror virtualizes its DOM (only visible lines exist as elements), so an
+// IntersectionObserver cannot reliably track the active line there. The editor
+// reports its top visible line via `cm-editor-viewport-line`; we highlight the
+// deepest TOC symbol at or above that line.
+function onEditorViewportLine(e) {
+    if (!props.codeView) return
+    const viewportLine = e.detail?.line
+    if (typeof viewportLine !== 'number') return
+    let match = null
+    for (const item of toc.value) {
+        if (typeof item.line !== 'number') continue
+        if (item.line <= viewportLine) {
+            // Keep the deepest (largest line) symbol at-or-above the viewport top.
+            match = item
+        } else {
+            break
+        }
+    }
+    if (match) activeId.value = match.id
+}
+
+// ── Markdown preview DOM-rebuild tracking ──
+// When the user toggles between rendered preview and source/code view,
+// MarkdownPreview is unmounted and re-mounted, rebuilding the heading DOM. The
+// IntersectionObserver holds references to the OLD (detached) elements, so it
+// silently stops following scroll. A body-level MutationObserver re-runs
+// setupObserver() when the .markdown-body tree is replaced.
+let domObserver = null
+let domObserverTimer = 0
+function ensureDomObserver() {
+    // CodeMirror-rendered content (code view) mutates its DOM constantly and
+    // scroll-follow there is driven by cm-editor-viewport-line instead — no
+    // DOM watching needed.
+    if (domObserver) return
+    domObserver = new MutationObserver(() => {
+        if (domObserverTimer) return
+        domObserverTimer = setTimeout(() => {
+            domObserverTimer = 0
+            // Only non-CodeMirror content (markdown rendered preview) uses
+            // heading-DOM observation.
+            if (!props.codeView && !isPdfOutline.value) setupObserver()
+        }, 50)
+    })
+    domObserver.observe(document.body, { childList: true, subtree: true })
+}
+function stopDomObserver() {
+    if (domObserver) {
+        domObserver.disconnect()
+        domObserver = null
+    }
+    if (domObserverTimer) clearTimeout(domObserverTimer)
+    domObserverTimer = 0
+}
+// Re-engage DOM watching when switching back to markdown rendered preview.
+watch(() => props.codeView, (codeView) => {
+    if (codeView) stopDomObserver()
+    else ensureDomObserver()
+})
+
+onMounted(() => {
+    window.addEventListener('cm-editor-viewport-line', onEditorViewportLine)
+    ensureDomObserver()
+})
 onBeforeUnmount(() => {
     observer?.disconnect()
     observer = null
+    stopDomObserver()
+    window.removeEventListener('cm-editor-viewport-line', onEditorViewportLine)
 })
 </script>
 
@@ -299,6 +374,7 @@ onBeforeUnmount(() => {
     overflow-y: auto;
     min-height: 0;
     -webkit-overflow-scrolling: touch;
+    margin-top: 8px;
     padding-bottom: 8px;
 }
 

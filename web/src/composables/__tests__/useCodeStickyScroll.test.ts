@@ -196,6 +196,17 @@ describe('buildStickyLines', () => {
     expect(rows[0]).toMatchObject({ lineNum: 5, height: 60 })
   })
 
+  it('does not pin a scope whose definition line is still fully visible (line 1 at top)', () => {
+    // The def line itself is the first line — it has not left the viewport yet,
+    // so no sticky row should be shown even though it "reaches the top".
+    const view = makeView(50)
+    const symbols = [sym(1, 40), sym(10, 30)]
+    expect(buildStickyLines(view, symbols, 0, 5)).toEqual([])
+    // Once scrolled a little (def line line 1 starts leaving view), it pins.
+    const rows = buildStickyLines(view, symbols, 5, 5)
+    expect(rows.map((r) => r.lineNum)).toEqual([1])
+  })
+
   it('sticks an inner scope once it reaches the bottom of the already-stuck rows, not only past the viewport top', () => {
     // Four nested scopes, all 20px lines, all enclosing the visible line 27.
     const view = makeView(40)

@@ -2642,3 +2642,101 @@ describe('ws_error / ws_warning structured error fields', () => {
     expect(sm.blocks[0].error_source).toBeUndefined()
   })
 })
+
+// ── Queued message ordering after refresh (queued message must render AFTER
+//    the in-flight streaming reply, not before it) ──
+//
+// Reported: user adds a queued message while a reply streams; after a refresh
+// the queued message renders between the latest user message and the streaming
+// reply. Expected: Q1 → reply1(streaming) → Q2(queued/pending).
+//
+// Root cause: the direct-sent user row did NOT persist its queue_id, so after a
+// refresh rebuildFromDb's anchorRepliesToQuestions could not associate the
+// streaming reply (queue_id='pending-A' on its DB row) with its question. The
+// reply fell into the TRANSIENT_BASE sort domain — after every DB message —
+// while the queued message (persisted later, larger DB id, or still a pending
+// bubble with a large seq) sorted before it. Fixes: backend persists queue_id
+// on direct-sent user rows; rebuildFromDb merges the DB streaming row's queueId
+// onto the live placeholder; anchorRepliesToQuestions rewrites stale string-id
+// anchors to the DB row's queueId.
+describe('queued message ordering after refresh (regression)', () => {
+  const aMsg = (id: unknown, content: string, extra: Record<string, unknown> = {}): any =>
+    ({ role: 'assistant', id, content: '', blocks: content ? [{ type: 'text', text: content }] : [], createdAt: '2026-01-01T00:00:01Z', ...extra })
+  const uMsg = (id: unknown, content: string, extra: Record<string, unknown> = {}): any =>
+    ({ role: 'user', id, content, blocks: content ? [{ type: 'text', text: content }] : [], files: [], createdAt: '2026-01-01T00:00:01Z', ...extra })
+
+  it('refresh while a queued message waits: queued bubble renders AFTER the streaming reply', () => {
+    // Live state: Q1 direct-sent (string id), reply1 streaming anchored to
+    // pending-A, Q2 queued (pending bubble). A refresh (full reload, empty
+    // in-memory state) fetches the DB snapshot.
+    const dbMsgs: any[] = [
+      uMsg(1, 'Q1', { queueId: 'pending-A', createdAt: '2026-01-01T00:00:01Z' }),
+      // Reply1's DB streaming row records the answered queue_id.
+      aMsg(2, 'reply1', { streaming: true, queueId: 'pending-A', createdAt: '2026-01-01T00:00:02Z' }),
+      uMsg(3, 'Q2', { queueId: 'pending-B', queued: true, createdAt: '2026-01-01T00:00:03Z' }),
+    ]
+    // Fresh reload → no live state; rebuild from the DB snapshot only.
+    const merged = rebuildFromDb([], dbMsgs as any)
+
+    // Q2 stays a pending bubble; the streaming reply must stay anchored right
+    // after its question, so the visual order is Q1 → reply1 → Q2.
+    expect(merged.map((m: any) => `${m.role}:${String(m.id)}${m.pending ? ':P' : ''}${m.streaming ? ':S' : ''}`))
+      .toEqual(['user:1', 'assistant:2:S', 'user:3:P'])
+  })
+
+  it('refresh while a queued message was just drained (queued=0): queued row still renders AFTER the streaming reply', () => {
+    // Q2 was claimed by the drain loop (queued=0) but reply1 is still streaming
+    // — the worst case: Q2 has a LARGER DB id than the reply. Without the
+    // anchor the reply sorts in the TRANSIENT_BASE domain after every DB row.
+    const dbMsgs: any[] = [
+      uMsg(1, 'Q1', { queueId: 'pending-A', createdAt: '2026-01-01T00:00:01Z' }),
+      aMsg(2, 'reply1', { streaming: true, queueId: 'pending-A', createdAt: '2026-01-01T00:00:02Z' }),
+      uMsg(3, 'Q2', { queueId: 'pending-B', queued: false, createdAt: '2026-01-01T00:00:03Z' }),
+    ]
+    const merged = rebuildFromDb([], dbMsgs as any)
+
+    expect(merged.map((m: any) => `${m.role}:${String(m.id)}${m.streaming ? ':S' : ''}`))
+      .toEqual(['user:1', 'assistant:2:S', 'user:3'])
+  })
+
+  it('refresh keeps a live placeholder whose anchor string id was dropped (SPA refresh mid-stream)', () => {
+    // SPA refresh (not a full reload): the live placeholder survives in memory
+    // anchored to the optimistic bubble's string id 'pending-A'. The rebuild
+    // drops the string-id bubble (DB row is authoritative) but must keep the
+    // reply anchored to its question — the DB row carries queueId 'pending-A'.
+    const messages: any[] = [
+      { role: 'user', id: 'pending-A', content: 'Q1', blocks: [{ type: 'text', text: 'Q1' }], seq: 1, queueId: 'pending-A' },
+      { role: 'assistant', id: 'drain-r1', content: '', blocks: [{ type: 'text', text: 'reply1' }], streaming: true, seq: 2, parentQueueId: 'pending-A' },
+      { role: 'user', id: 'pending-B', content: 'Q2', blocks: [{ type: 'text', text: 'Q2' }], pending: true, seq: 3, queueId: 'pending-B' },
+    ]
+    const dbMsgs: any[] = [
+      uMsg(1, 'Q1', { queueId: 'pending-A', createdAt: '2026-01-01T00:00:01Z' }),
+      aMsg(2, 'reply1', { streaming: true, queueId: 'pending-A', createdAt: '2026-01-01T00:00:02Z' }),
+      uMsg(3, 'Q2', { queueId: 'pending-B', queued: true, createdAt: '2026-01-01T00:00:03Z' }),
+    ]
+    const merged = rebuildFromDb(messages, dbMsgs as any)
+
+    // The live placeholder survives (id adopted from the DB row), anchored
+    // after Q1, before the still-queued Q2. Q2 keeps its optimistic string id
+    // (the drain loop later adopts the DB id) — the visual order is the point.
+    expect(merged.map((m: any) => `${m.role}:${String(m.id)}${m.pending ? ':P' : ''}${m.streaming ? ':S' : ''}`))
+      .toEqual(['user:1', 'assistant:2:S', 'user:pending-B:P'])
+  })
+
+  it('anchorRepliesToQuestions rewrites a stale string-id anchor to the DB row queueId', () => {
+    // A finalized/finalized-in-flight reply whose parentQueueId still points at
+    // an optimistic string id that a rebuild dropped. The DB row for the
+    // question carries that string id as its queueId.
+    const msgs = [
+      { role: 'user', id: 1, content: 'Q1', queueId: 'pending-A' },
+      { role: 'assistant', id: 2, content: 'reply1', parentQueueId: 'pending-A', streaming: true },
+      { role: 'user', id: 3, content: 'Q2', queueId: 'pending-B', queued: true },
+    ] as any[]
+    anchorRepliesToQuestions(msgs)
+    // The reply's parentQueueId is rewritten to the DB row's queueId (same
+    // value here, but the chain resolution now works through the real row).
+    expect(msgs[1].parentQueueId).toBe('pending-A')
+    sortMessages(msgs)
+    expect(msgs.map((m: any) => `${m.role}:${String(m.id)}`)).toEqual(['user:1', 'assistant:2', 'user:3'])
+  })
+})

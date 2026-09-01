@@ -25,7 +25,11 @@
     @prev="tableRowPrev"
     @next="tableRowNext"
   />
-</template>
+
+  <!-- Inline search bar (bottom of the preview), replacing the SearchDrawer
+       bottom sheet for rendered markdown. Its open state is driven by the
+       searchDrawer state via props; closing is reported upward. -->
+  <MarkdownSearchBar ref="searchBarRef" :open="!!searchOpen" @close="emit('closeSearch')" /></template>
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
@@ -40,6 +44,7 @@ import { store } from '@/stores/app.ts'
 import { dirName, splitPath, joinPath } from '@/utils/path.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import TableRowModal from '@/components/common/TableRowModal.vue'
+import MarkdownSearchBar from '@/components/file/MarkdownSearchBar.vue'
 import {
   diffMarkers,
   clearDiffMarkers,
@@ -53,12 +58,15 @@ import '@/assets/diff-marker.css'
 const props = defineProps<{
     file?: { content: string; path: string; error?: boolean }
     viewMode?: string
+    searchOpen?: boolean
     wordWrap?: boolean
     showLineNumbers?: boolean
 }>()
+const emit = defineEmits(['closeSearch'])
 
 const renderedHtml = ref('')
 const bodyRef = ref<HTMLElement | null>(null)
+const searchBarRef = ref<InstanceType<typeof MarkdownSearchBar> | null>(null)
 const imageTimestamp = ref(Date.now())
 let currentRenderId = 0
 
@@ -355,9 +363,17 @@ watch(() => props.viewMode, () => {
     positionedMarkers.value = []
 })
 
+// Focus the inline search bar's input (opened via the searchOpen prop).
+// Used by FileViewer.focusSearchInput so the toolbar/ctrl-F flow focuses the
+// search box, matching CodeMirror's openSearch behavior.
+function focusSearchInput() {
+    searchBarRef.value?.focus()
+}
+
 defineExpose({
     lastBlockList,
     bodyRef,
+    focusSearchInput,
 })
 </script>
 

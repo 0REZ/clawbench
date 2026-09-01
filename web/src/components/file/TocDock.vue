@@ -1,6 +1,8 @@
 <template>
-  <div class="toc-dock" :style="dockStyle">
-    <!-- Drag divider to resize (mirrors SplitDivider interaction/style) -->
+  <div class="toc-dock" :class="`toc-dock--${side}`" :style="dockStyle">
+    <!-- Drag divider to resize (mirrors SplitDivider interaction/style).
+         On the right-side dock it sits on the dock's LEFT edge; on the
+         left-side dock it sits on the dock's RIGHT edge. -->
     <div
       ref="dividerRef"
       class="toc-dock-divider"
@@ -15,6 +17,14 @@
     <div class="toc-dock-header">
       <List :size="12" class="toc-dock-header-icon" />
       <span class="toc-dock-header-title">{{ t('toc.title') }}</span>
+      <button
+        class="toc-dock-side-toggle"
+        @click="toggleSide"
+        :title="side === 'left' ? t('toc.dockRight') : t('toc.dockLeft')"
+      >
+        <PanelRight v-if="side === 'left'" :size="12" />
+        <PanelLeft v-else :size="12" />
+      </button>
       <button class="toc-dock-close" @click="emit('close')" :title="t('common.close')">
         <X :size="12" />
       </button>
@@ -24,6 +34,7 @@
       open
       :file="file"
       :pdf-outline="pdfOutline"
+      :code-view="codeView"
       @jump="emit('jump', $event)"
       @jump-page="emit('jumpPage', $event)"
     />
@@ -33,18 +44,22 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { List, X } from 'lucide-vue-next'
+import { List, PanelLeft, PanelRight, X } from 'lucide-vue-next'
 import TocPanel from '@/components/TocPanel.vue'
 import { useTocDockPreference } from '@/composables/useTocDockPreference'
 
-defineProps({
+const props = defineProps({
   file: Object,
   pdfOutline: { type: Array, default: () => [] },
+  /** Whether the underlying content is rendered by CodeMirror (drives scroll-follow). */
+  codeView: { type: Boolean, default: false },
+  /** Which edge of the content area the dock is attached to. */
+  side: { type: String, default: 'right' },
 })
 const emit = defineEmits(['close', 'jump', 'jumpPage'])
 
 const { t } = useI18n()
-const { tocDockWidth, setWidth } = useTocDockPreference()
+const { tocDockWidth, setWidth, toggleSide } = useTocDockPreference()
 
 const dockStyle = computed(() => ({ width: `${tocDockWidth.value}px` }))
 
@@ -65,10 +80,17 @@ function startDrag(e) {
 
 function onDragMove(e) {
   if (!dragging) return
-  // The dock sits on the RIGHT edge of the content area; the divider is its
-  // LEFT edge, which follows the pointer. Dragging left widens the dock,
-  // dragging right narrows it — so the delta is SUBTRACTED.
-  setWidth(startWidth - (e.clientX - startClientX))
+  const delta = e.clientX - startClientX
+  if (props.side === 'left') {
+    // Left-side dock: the divider is its RIGHT edge, which follows the
+    // pointer. Dragging right widens the dock, dragging left narrows it —
+    // so the delta is ADDED.
+    setWidth(startWidth + delta)
+  } else {
+    // Right-side dock: the divider is its LEFT edge. Dragging left widens
+    // the dock, dragging right narrows it — the delta is SUBTRACTED.
+    setWidth(startWidth - delta)
+  }
 }
 
 function endDrag(e) {
@@ -101,16 +123,17 @@ onBeforeUnmount(() => {
   max-width: 400px;
   flex-shrink: 0;
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
-  /* Separate the dock from the FileHeader above it so they don't stick
-     together — the dock starts below the header's bottom edge. */
-  border-top: 1px solid var(--border-color);
+  /* No border-left: the drag divider's gutter-line (centered on this edge)
+     already provides the separator — combining both would render a thick
+     double line between the content area and the dock.
+     No border-top: the FileHeader's bottom border already separates it. */
   overflow: hidden;
 }
 
 /* Divider (mirrors SplitDivider): a single 1px line by default; on hover/drag
    it expands (via negative margins so layout does NOT shift) into a grab-able
-   gap with an accent highlight. */
+   gap with an accent highlight. Sits on the dock's LEFT edge when docked
+   right; moves to the RIGHT edge when docked left. */
 .toc-dock-divider {
   position: absolute;
   left: -3px;
@@ -122,6 +145,10 @@ onBeforeUnmount(() => {
   -webkit-tap-highlight-color: transparent;
   z-index: 5;
   transition: width 0.15s ease, margin 0.15s ease, background 0.15s ease;
+}
+.toc-dock--left .toc-dock-divider {
+  left: auto;
+  right: -3px;
 }
 /* invisible wider hit area so hover/touch can catch the thin line */
 .toc-dock-divider::before {
@@ -143,6 +170,12 @@ onBeforeUnmount(() => {
     margin-left: -3px;
     background: color-mix(in srgb, var(--accent-color, #0066cc) 12%, transparent);
   }
+}
+/* Left-docked: the divider hangs off the RIGHT edge, so the hover/drag
+   expansion must shift RIGHT (margin-left: 3px) to stay centered on it. */
+.toc-dock--left .toc-dock-divider:active,
+.toc-dock--left .toc-dock-divider:hover {
+  margin-left: 3px;
 }
 .toc-dock-divider__line {
   position: absolute;
@@ -196,8 +229,24 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
 }
+.toc-dock-side-toggle {
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 @media (hover: hover) {
   .toc-dock-close:hover {
+    background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
+    color: var(--accent-color);
+  }
+  .toc-dock-side-toggle:hover {
     background: var(--accent-color-dim, rgba(74, 144, 217, 0.12));
     color: var(--accent-color);
   }

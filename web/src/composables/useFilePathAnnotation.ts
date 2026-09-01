@@ -385,7 +385,12 @@ function extractLineInfoFromText(text: string): { path: string; lineStart?: numb
 
 // ── Path detection regex & helper ───────────────────────────────────────────────
 
-const FILE_PATH_RE = /(?:~?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)+\.[a-zA-Z][a-zA-Z0-9]*|\.\.?\/[^\s<>"')\]]+(?:\/[^\s<>"')\]]+)*\.[a-zA-Z][a-zA-Z0-9]*|[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z][a-zA-Z0-9]*|[A-Za-z]:[\\/](?![\\/])[^\s<>"')\]]+(?:[\\/][^\s<>"')\]]+)*(?:\.[a-zA-Z][a-zA-Z0-9]*)?)(?::(\d+)(?:-(\d+))?)?/g
+// NOTE: segment classes exclude '/' (and '\\' for the Windows drive form) so that
+// separators are structurally unique. Otherwise a long whitespace-free string with
+// many slashes but no file extension (e.g. a 2KB+ Base64 blob) triggers catastrophic
+// backtracking (2^slashCount) and freezes the UI thread. A dedicated dotfile branch
+// preserves matching of hidden last segments (e.g. /project/.worktrees).
+const FILE_PATH_RE = /(?:~?\/[^/\s<>"')\]]+(?:\/[^/\s<>"')\]]+)+\.[a-zA-Z][a-zA-Z0-9]*|~?\/[^/\s<>"')\]]+(?:\/[^/\s<>"')\]]+)+\/\.[^/\s<>"')\]]+|\.\.?\/[^/\s<>"')\]]+(?:\/[^/\s<>"')\]]+)*\.[a-zA-Z][a-zA-Z0-9]*|[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_.-]+)+\.[a-zA-Z][a-zA-Z0-9]*|[A-Za-z]:[\\/](?![\\/])[^\\/\s<>"')\]]+(?:[\\/][^\\/\s<>"')\]]+)*(?:\.[a-zA-Z][a-zA-Z0-9]*)?)(?::(\d+)(?:-(\d+))?)?/g
 
 /**
  * Check if a string looks like a file path that should be annotated.

@@ -99,7 +99,8 @@
                       :current-file="currentFile"
                       :file-loading="store.state.fileLoading"
                       :toc-open="effectiveTocOpen"
-                      :search-open="searchDrawer.effectiveOpen.value"
+                      :search-open="viewSearchActive"
+                      :search-drawer-open="searchDrawer.effectiveOpen.value"
                       :markdown-view-mode="markdownViewMode"
                       :file-history-open="fileHistoryDrawer.effectiveOpen.value"
                       :toc-file="tocFile"
@@ -109,8 +110,9 @@
                       @open-git-history="openFileHistory"
                       @toggle-toc="handleToggleToc"
                       @close-toc="tocDockPref.close()"
-                      @toggle-search="currentFile?.content && openFileSearch()"
-                      @close-search="searchDrawer.close()"
+                      @toggle-search="currentFile?.content && toggleViewSearch()"
+                      @close-search="closeViewSearch()"
+                      @search-change="viewSearchActive = !!$event"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
                       @refresh="handleRefresh"
                       @jump="scrollToLine"
@@ -798,6 +800,12 @@ const searchDrawer = useTabDrawer('view')
 const fileHistoryDrawer = useTabDrawer('view')
 const fileSearchDrawer = useTabDrawer('browse', { autoRestore: false })
 
+// Search-bar highlight state for the file header button. Separate from
+// searchDrawer (the SearchDrawer bottom sheet): the rendered markdown preview
+// and CodeMirror views have their own inline search UIs, which highlight the
+// button without opening the SearchDrawer.
+const viewSearchActive = ref(false)
+
 // Wide-screen inline TOC dock preference (open/width persisted, editing hides).
 const tocDockPref = useTocDockPreference()
 
@@ -912,7 +920,7 @@ const { navigateToTaskSettings, openExecDetail, loadTasks } = useTaskTab()
 registerSwitchTab(switchTab)
 
 // Wire up WS global events
-const { onEvent, init: initGlobalEvents, destroy: destroyGlobalEvents } = useGlobalEvents()
+const { onEvent, isReplayingEvents, init: initGlobalEvents, destroy: destroyGlobalEvents } = useGlobalEvents()
 const removeTaskHandler = onEvent((event, data) => {
     if (event === 'task_update') {
         onTaskEvent(data)
@@ -929,10 +937,18 @@ function projectBaseName(path) {
 // AI 完成弹窗：任何会话/定时任务完成时，若用户当前未在查看该会话，入队弹出。
 // 后端 session_update/task_update 的 completed 事件已携带 session_title 与
 // response_preview（Markdown 原文）；useGlobalEvents 已按事件 ID 全局去重。
+//
+// 关键：重放事件（fetchPendingEvents 断线补偿 / WS 重连 replay buffer）必须跳过。
+// 页面刷新时 lastSeenEventId 内存游标为空，useGlobalEvents 会跳过历史事件，
+// 但服务端 replay buffer 里的旧 completed 事件仍会通过 WS 重放送达——
+// 那些是补发的历史通知，不是用户正在观看的实时完成，绝不能再弹窗。
 const completionPopover = useCompletionPopover()
-const removeCompletionHandler = onEvent((event, data) => {
+function handleCompletionEvent(event, data, skipReplay = false) {
     if (!data || data.status !== 'completed') return
     if (event !== 'session_update' && event !== 'task_update') return
+    // 重放阶段（页面刷新/断线重连补发的历史完成）不弹窗：
+    // isReplayingEvents 在 fetchPendingEvents 与 WS replay 窗口期间为 true。
+    if (skipReplay && isReplayingEvents.value) return
     const sessionId = data.session_id
     if (!sessionId) return
     // 聊天界面在前台激活且正是当前会话时，用户正看着结果，不弹；
@@ -969,6 +985,9 @@ const removeCompletionHandler = onEvent((event, data) => {
             projectName,
         })
     }
+}
+const removeCompletionHandler = onEvent((event, data) => {
+    handleCompletionEvent(event, data, true)
 })
 
 // WS reconnect: refresh all state that may have changed while disconnected.
@@ -1380,6 +1399,14 @@ const isCodeMirrorFileView = computed(() => {
     }
     return true
 })
+// Rendered markdown/HTML preview (not CodeMirror): has an inline search bar
+// instead of the SearchDrawer bottom sheet.
+const isMarkdownRenderedView = computed(() => {
+    const f = currentFile.value
+    if (!f || typeof f.content !== 'string') return false
+    const ft = getFileType(f.name || '')
+    return ft.isMarkdown && markdownViewMode.value === 'rendered'
+})
 const { entries: recentFileEntries } = useRecentFiles()
 const recentFilesCount = computed(() => recentFileEntries.value.length)
 const projectRoot = computed(() => store.state.projectRoot)
@@ -1409,6 +1436,7 @@ watch(() => currentFile.value, (file, prevFile) => {
     tocDrawer.close()
     detailsDrawer.close()
     searchDrawer.close()
+    viewSearchActive.value = false
     markdownViewMode.value = 'rendered'
     // When the open file is closed while the user is on the file-view tab,
     // fall back to the file manager tab automatically.
@@ -1417,6 +1445,23 @@ watch(() => currentFile.value, (file, prevFile) => {
         if (currentTab === 'view') switchTab('browse')
     }
 })
+
+// The header search button highlight must track the *actual* visibility of a
+// search UI. Switching between the rendered markdown preview and the
+// CodeMirror view (raw / editing) unmounts the markdown search bar while the
+// CodeMirror panel starts closed, so a previously-active search state would
+// otherwise leave the header button stuck highlighted.
+watch(
+  () => [isCodeMirrorFileView.value, isMarkdownRenderedView.value, markdownViewMode.value],
+  ([cmNow, mdNow, _mode], [cmBefore, mdBefore, modeBefore]) => {
+    // Ignore the initial run and same-view transitions (e.g. raw->edit of the
+    // same CodeMirror view keeps its panel state).
+    if (modeBefore === undefined) return
+    if (cmNow === cmBefore && mdNow === mdBefore) return
+    viewSearchActive.value = false
+    searchDrawer.close()
+  },
+)
 
 function toggleHidden() {
     showHidden.value = !showHidden.value
@@ -2315,13 +2360,34 @@ function openFileViewSearchDrawer() {
 }
 
 // Route the view-pane search request. CodeMirror-rendered files (code,
-// markdown raw/editing) use CodeMirror's built-in search panel; only the
-// rendered markdown preview opens the SearchDrawer bottom sheet.
+// markdown raw/editing) use CodeMirror's search panel, and the rendered
+// markdown preview uses its inline search bar. Both highlight the header
+// search button via viewSearchActive without opening the SearchDrawer; the
+// SearchDrawer bottom sheet is only used as a fallback.
 function openFileSearch() {
-  if (isCodeMirrorFileView.value) {
+  if (isCodeMirrorFileView.value || isMarkdownRenderedView.value) {
+    viewSearchActive.value = true
     fileOverlayRef.value?.focusSearchInput()
   } else {
+    viewSearchActive.value = true
     openFileViewSearchDrawer()
+  }
+}
+function closeViewSearch() {
+  viewSearchActive.value = false
+  searchDrawer.close()
+}
+// Header search button click: toggle the search UI (CodeMirror panel or the
+// markdown preview inline bar) open/closed.
+function toggleViewSearch() {
+  if (viewSearchActive.value) {
+    // Close: focusSearchInput() toggles the CodeMirror panel closed (its
+    // searchChange event also clears viewSearchActive); the markdown bar is
+    // closed by clearing the state.
+    fileOverlayRef.value?.focusSearchInput()
+    closeViewSearch()
+  } else {
+    openFileSearch()
   }
 }
 function handleCtrlF(e) {

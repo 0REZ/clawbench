@@ -31,7 +31,7 @@
     />
 
     <!-- Content row: file content + (wide-screen) inline TOC dock -->
-    <div class="file-viewer-body">
+    <div class="file-viewer-body" :data-toc-side="tocDockSide">
       <div class="file-viewer-content" ref="contentRef">
         <!-- Loading (suppressed when external loading mask is active to avoid double flash) -->
         <div v-if="loading && !externalLoading" class="loading">
@@ -132,13 +132,16 @@
         <!-- Rendered browse (not editing) -->
         <MarkdownPreview
           v-if="!editing && markdownViewMode === 'rendered'"
+          ref="mdPreviewRef"
           :file="file"
           :view-mode="markdownViewMode"
+          :search-open="searchOpen"
           :word-wrap="wordWrap"
           :show-line-numbers="showLineNumbers"
           @delete="handleDeleteRequest(file.path)"
           @show-details="emit('showDetails')"
           @open-git-history="emit('openGitHistory')"
+          @close-search="emit('closeSearch')"
         />
         <!-- Source/raw mode: a single CodeMirrorViewer for both browse and edit
              (editable toggles), so scroll survives the edit toggle. -->
@@ -157,6 +160,7 @@
           @save-and-exit="handleSaveAndExit"
           @cancel="editing = false"
           @exit-edit="editing = false"
+          @search-change="emit('searchChange', $event)"
         />
       </template>
 
@@ -179,6 +183,7 @@
           :show-line-numbers="showLineNumbers"
           :sticky-scroll="stickyScroll"
           :editable="false"
+          @search-change="emit('searchChange', $event)"
         />
       </template>
 
@@ -199,6 +204,7 @@
             :show-line-numbers="showLineNumbers"
             :sticky-scroll="stickyScroll"
             :editable="false"
+            @search-change="emit('searchChange', $event)"
           />
         </div>
       </template>
@@ -223,6 +229,7 @@
           @save-and-exit="handleSaveAndExit"
           @cancel="editing = false"
           @exit-edit="editing = false"
+          @search-change="emit('searchChange', $event)"
         />
       </div>
       </div>
@@ -232,6 +239,8 @@
         v-if="docked && tocOpen"
         :file="tocFile"
         :pdf-outline="pdfOutline"
+        :code-view="isCodeMirrorView"
+        :side="tocDockSide"
         @close="emit('closeToc')"
         @jump="emit('jump', $event)"
         @jump-page="emit('jumpPage', $event)"
@@ -307,6 +316,7 @@ import { useAppMode } from '@/composables/useAppMode.ts'
 import { useFileNavStack } from '@/composables/useFileNavStack.ts'
 import { useTextSelectionActive } from '@/composables/useTextSelection.ts'
 import { useFileEditor } from '@/composables/useFileEditor.ts'
+import { useTocDockPreference } from '@/composables/useTocDockPreference.ts'
 import { exportRenderedHtml, imageIssueReasonKey } from '@/utils/exportHtml.ts'
 import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
 import { useToast } from '@/composables/useToast.ts'
@@ -331,7 +341,7 @@ const props = defineProps({
     /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
     docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()
@@ -367,6 +377,7 @@ const editing = fileEditor.editing
 const { saving, saveFile } = useCodeEditorSave()
 const cmEditorRef = ref(null)
 const excalidrawViewerRef = ref(null)
+const mdPreviewRef = ref(null)
 
 // The global back handler calls exitEdit() → run the active editor's exit flow,
 // which confirms save/discard/cancel when there are unsaved changes. For
@@ -413,22 +424,20 @@ async function handleSaveAndExit(content) {
 }
 
 function handleToggleSearch() {
-    // CodeMirror-rendered views (code, markdown raw/editing) use CodeMirror's
-    // own search panel; only the rendered markdown preview has no editor to
-    // search, so it falls back to the SearchDrawer bottom sheet.
-    if (isCodeMirrorView.value) {
-        cmEditorRef.value?.openSearch?.()
-    } else {
-        emit('toggleSearch')
-    }
+    // Route the toggle upward: App's openFileSearch() sets the header-button
+    // highlight (viewSearchActive) and then focuses the active search UI
+    // (CodeMirror panel or the markdown preview inline bar) via focusSearchInput.
+    emit('toggleSearch')
 }
 
 function focusSearchInput() {
     // Focus (not toggle) the active search UI. CodeMirror views open the
-    // editor's own search panel; the rendered markdown preview is focused by
-    // the SearchDrawer (via FileOverlay forwarding) — nothing to do here.
+    // editor's own search panel; the rendered markdown preview focuses its
+    // inline search bar (opened via the searchOpen prop).
     if (isCodeMirrorView.value) {
         cmEditorRef.value?.openSearch?.()
+    } else if (!editing.value && props.markdownViewMode === 'rendered' && isMarkdown.value) {
+        mdPreviewRef.value?.focusSearchInput?.()
     }
 }
 
@@ -540,6 +549,9 @@ const { localConfig, setLocalConfig } = useSettingsConfig()
 const wordWrap = computed(() => !!localConfig.wordWrap)
 const showLineNumbers = computed(() => localConfig.lineNumbers !== false)
 const stickyScroll = computed(() => localConfig.stickyScroll !== false)
+// Wide-screen inline TOC dock side (left/right). Toggled by a button in the
+// dock header; kept in sync with the dock via the shared preference module.
+const { tocDockSide } = useTocDockPreference()
 
 function toggleWordWrap() {
     setLocalConfig('wordWrap', !wordWrap.value)
@@ -906,6 +918,15 @@ defineExpose({
     flex-direction: column;
     min-height: 0;
     min-width: 0;
+}
+
+/* TOC dock side: reorder the flex children so the dock renders on the left
+   when the user chose that side (default right keeps the current order). */
+.file-viewer-body[data-toc-side="left"] .file-viewer-content {
+    order: 1;
+}
+.file-viewer-body[data-toc-side="left"] .toc-dock {
+    order: 0;
 }
 
 /* Floating history nav (back/forward) overlaid on the content area.

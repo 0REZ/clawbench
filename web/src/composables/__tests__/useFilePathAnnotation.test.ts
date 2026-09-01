@@ -519,6 +519,36 @@ describe('annotateFilePaths', () => {
     expect(result.html).toContain('chat-file-path')
   })
 
+  it('does not hang on long whitespace-free slash-heavy strings (Base64 blobs)', () => {
+    // Regression: FILE_PATH_RE used to allow '/' inside path segments, so a
+    // long Base64 string with many '/' but no '.' extension caused exponential
+    // backtracking (~2^slashCount) that froze the UI thread. The fixed regex
+    // treats '/' as a structural separator and must finish in milliseconds.
+    // 200 slash-separated 60-char segments, no dots — worst case for the old regex.
+    const segments = Array.from({ length: 200 }, () => 'a'.repeat(60))
+    const blob = segments.join('/')
+    const start = performance.now()
+    const result = annotateFilePaths(`<p>${blob}</p>`, { projectRoot })
+    const elapsed = performance.now() - start
+    expect(result.detectedPaths).toHaveLength(0)
+    expect(elapsed).toBeLessThan(1000)
+  })
+
+  it('does not hang on a realistic Base64 feature vector', () => {
+    // The exact shape from a real payload: one 2700+ char Base64 line (31 slashes,
+    // no dots). Concatenate repeated chunks so the test stays self-contained.
+    const chunk = '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'
+    const base64 = 'Uv2XPSLylj0e/6u91vwKPZK0F7qraau834yivQ9eDL3j+hg84OqqvKjUSD3YS/C74Y+MPdOwpD1UZlS9Q0alvU' + chunk.repeat(20)
+    expect(base64.length).toBeGreaterThan(2700)
+    expect(base64).toMatch(/\//)
+    expect(base64).not.toMatch(/\./)
+    const start = performance.now()
+    const result = annotateFilePaths(`<p>${base64}</p>`, { projectRoot })
+    const elapsed = performance.now() - start
+    expect(result.detectedPaths).toHaveLength(0)
+    expect(elapsed).toBeLessThan(1000)
+  })
+
   it('annotates <a> with file:// absolute path and line range', () => {
     const input = '<a href="file:///home/user/project/src/main.go#L10-L20">main.go</a>'
     const result = annotateFilePaths(input, { projectRoot })

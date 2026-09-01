@@ -89,6 +89,14 @@ vi.mock('@/composables/useFileNavStack.ts', () => ({
   useFileNavStack: () => fileNavState,
 }))
 
+const tocDockPrefState = vi.hoisted(() => {
+  // `ref` isn't importable inside hoisted callbacks, so hold the ref in a
+  // lazily-created slot: the mock factory assigns it on first use, and the
+  // tests mutate it via tocDockPrefState.tocDockSide.value.
+  const state: { tocDockSide: { value: string } | null } = { tocDockSide: null }
+  return state
+})
+
 vi.mock('@/composables/useSettingsConfig', () => ({
   useSettingsConfig: () => ({
     localConfig: { wordWrap: true, lineNumbers: true },
@@ -97,6 +105,26 @@ vi.mock('@/composables/useSettingsConfig', () => ({
   localConfig: { wordWrap: true, lineNumbers: true, recentFilesCount: 10 },
   setLocalConfig: vi.fn(),
 }))
+
+vi.mock('@/composables/useTocDockPreference.ts', async () => {
+  // The real composable returns an actual ref; template `:side` unwraps it.
+  // Build a real ref here so the template binding receives the string value.
+  const vue = await import('vue')
+  const side = vue.ref('right')
+  tocDockPrefState.tocDockSide = side
+  return {
+    useTocDockPreference: () => ({
+      tocDockOpen: { value: false },
+      tocDockWidth: { value: 260 },
+      tocDockSide: side,
+      effectiveOpen: { value: false },
+      toggle: vi.fn(),
+      close: vi.fn(),
+      setWidth: vi.fn(),
+      toggleSide: vi.fn(),
+    }),
+  }
+})
 
 vi.mock('@/stores/app.ts', () => ({
   store: {
@@ -158,6 +186,7 @@ afterEach(() => {
   fileNavState.overlayOpen.value = false
   fileNavState.canGoBack.value = false
   fileNavState.canGoForward.value = false
+  tocDockPrefState.tocDockSide.value = 'right'
   mockOpenSearch.mockClear()
   for (const id of pendingTimers) { clearTimeout(id) }
   pendingTimers.length = 0
@@ -191,7 +220,7 @@ const stubs = {
   DiffDrawer: true,
   TocDock: {
     name: 'TocDock',
-    props: ['file', 'pdfOutline'],
+    props: ['file', 'pdfOutline', 'side'],
     emits: ['close', 'jump', 'jumpPage'],
     template: '<div class="toc-dock-stub"><button class="toc-dock-close-stub" @click="$emit(\'close\')" /></div>',
   },
@@ -624,41 +653,44 @@ describe('FileViewer', () => {
       tooLarge: false,
     }
 
-    it('opens CodeMirror search for a code file (CodeMirror view)', async () => {
+    it('routes search toggle upward for a code file (App drives highlight + open)', async () => {
       const wrapper = mountViewer({ file: codeFile })
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
-      ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
-    })
-
-    it('opens CodeMirror search for markdown in source view', async () => {
-      const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'source' })
-      const ss = (wrapper.vm as any).$.setupState
-      expect(ss.isCodeMirrorView).toBe(true)
-      ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
-    })
-
-    it('emits toggleSearch for rendered markdown preview', async () => {
-      const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
-      const ss = (wrapper.vm as any).$.setupState
-      expect(ss.isCodeMirrorView).toBe(false)
       ss.handleToggleSearch()
       expect(mockOpenSearch).not.toHaveBeenCalled()
       expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
-    it('opens CodeMirror search when editing from rendered markdown preview', async () => {
+    it('routes search toggle upward for markdown in source view', async () => {
+      const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'source' })
+      const ss = (wrapper.vm as any).$.setupState
+      expect(ss.isCodeMirrorView).toBe(true)
+      ss.handleToggleSearch()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
+    })
+
+    it('routes search toggle upward for rendered markdown preview (App drives searchDrawer)', async () => {
+      const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
+      const ss = (wrapper.vm as any).$.setupState
+      expect(ss.isCodeMirrorView).toBe(false)
+      ss.handleToggleSearch()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      // The rendered-markdown search bar is driven by the App's searchDrawer
+      // state, so the toggle is forwarded upward instead of opened here.
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
+    })
+
+    it('routes search toggle upward when editing from rendered markdown preview', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       ss.handleToggleEdit()
       await nextTick()
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('focusSearchInput opens CodeMirror search for a code file', async () => {
@@ -668,7 +700,7 @@ describe('FileViewer', () => {
       expect(mockOpenSearch).toHaveBeenCalledTimes(1)
     })
 
-    it('focusSearchInput does nothing for rendered markdown (drawer is focused by FileOverlay)', async () => {
+    it('focusSearchInput does nothing for rendered markdown (inline bar opened via MarkdownPreview)', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       ss.focusSearchInput()
@@ -676,7 +708,7 @@ describe('FileViewer', () => {
       expect(wrapper.emitted('toggleSearch')).toBeFalsy()
     })
 
-    it('opens CodeMirror search for HTML raw view', async () => {
+    it('routes search toggle upward for HTML raw view', async () => {
       const htmlFile = {
         name: 'page.html', path: '/tmp/page.html', content: '<h1>hi</h1>',
         isMarkdown: false, isHtml: true, isOpenapi: false,
@@ -687,8 +719,8 @@ describe('FileViewer', () => {
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('opens CodeMirror search for OpenAPI raw view', async () => {
@@ -703,8 +735,8 @@ describe('FileViewer', () => {
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('does not treat media files as CodeMirror views (no search routing to CM)', async () => {
@@ -756,6 +788,22 @@ describe('FileViewer — inline TOC dock', () => {
     expect(dock.props('file')).toMatchObject({ name: 'readme.md' })
   })
 
+  it('forwards the persisted TOC dock side to TocDock', async () => {
+    tocDockPrefState.tocDockSide.value = 'left'
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: true })
+    await nextTick()
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    expect(dock.props('side')).toBe('left')
+    // The body carries the side as a data attribute so CSS can flip the order.
+    expect(wrapper.find('.file-viewer-body').attributes('data-toc-side')).toBe('left')
+
+    tocDockPrefState.tocDockSide.value = 'right'
+    const wrapperRight = mountViewerWithDock({ tocOpen: true, docked: true })
+    await nextTick()
+    expect(wrapperRight.findComponent({ name: 'TocDock' }).props('side')).toBe('right')
+    expect(wrapperRight.find('.file-viewer-body').attributes('data-toc-side')).toBe('right')
+  })
+
   it('does not render TocDock when docked but tocOpen is false', () => {
     const wrapper = mountViewerWithDock({ tocOpen: false, docked: true })
     expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(false)
@@ -771,5 +819,49 @@ describe('FileViewer — inline TOC dock', () => {
     await wrapper.find('.toc-dock-close-stub').trigger('click')
     expect(wrapper.emitted('closeToc')).toBeTruthy()
     expect(wrapper.emitted('toggleToc')).toBeFalsy()
+  })
+
+  it('forwards TocDock jump/jumpPage events to the parent', () => {
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: true })
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    dock.vm.$emit('jump', 12)
+    dock.vm.$emit('jumpPage', 3)
+    // Regression: FileViewer must declare + forward these — otherwise the
+    // inline dock's clicks are swallowed (code-browse TOC had no reaction).
+    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jumpPage')).toEqual([[3]])
+  })
+})
+
+describe('FileViewer — inline TOC dock jump integration (real CodeMirror)', () => {
+  // Mount with the REAL CodeMirrorViewer (stubs override removed) to verify the
+  // full chain: TocDock jump → FileViewer emit → parent receives a jump event.
+  function mountIntegration(props = {}) {
+    const stubsNoCm = { ...stubs }
+    delete stubsNoCm.CodeMirrorViewer
+    return mount(FileViewer, {
+      props: {
+        file: { name: 'main.ts', path: '/tmp/main.ts', content: 'const a = 1\nfunction foo() {}\nconst b = 2\nfunction bar() {}\n' },
+        tocOpen: true,
+        searchOpen: false,
+        markdownViewMode: 'rendered',
+        externalLoading: false,
+        docked: true,
+        tocFile: { name: 'main.ts', path: '/tmp/main.ts', content: 'const a = 1\nfunction foo() {}\n' },
+        pdfOutline: [],
+        ...props,
+      },
+      global: { plugins: [i18n], stubs: stubsNoCm },
+    })
+  }
+
+  it('forwards TocDock jump so the parent can scroll the code editor', async () => {
+    const wrapper = mountIntegration()
+    await new Promise(r => setTimeout(r, 120))
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    dock.vm.$emit('jump', 2)
+    await nextTick()
+    expect(wrapper.emitted('jump')).toEqual([[2]])
+    wrapper.unmount()
   })
 })

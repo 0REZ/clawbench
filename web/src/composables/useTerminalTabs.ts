@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { Terminal as TerminalType } from '@xterm/xterm'
 import { stripSyncOutput } from '@/utils/terminalSessionUtils'
+import { patchTerminalZoomCoords } from '@/utils/terminalZoomUtils'
 
 export interface TerminalTab {
   id: string
@@ -273,6 +274,11 @@ export function useTerminalTabs(
     if (tab.xterm.element) return // Already mounted
 
     tab.xterm.open(container)
+    // xterm instantiates its internal mouse service lazily inside open().
+    // Patch AFTER open() so mouse-coordinate zoom compensation wraps the live
+    // service (patching earlier is a silent no-op and mouse selection stays
+    // misaligned under the settings panel's UI zoom).
+    patchTerminalZoomCoords(tab.xterm)
     // Note: wheel/contextmenu handlers are added by TerminalPanelContent.mountTabToContainer()
   }
 

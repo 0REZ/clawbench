@@ -57,12 +57,16 @@ export interface ChatMessage {
    * the parent's CURRENT sort value dynamically, so when the parent adopts a
    * DB id the reply follows automatically — no loadHistory needed to fix the
    * order. Distinct from `queueId` (which marks a queued USER message) so
-   * hasMore's `!m.queueId` filter on user messages stays correct.
+   * hasMore's `!m.pending && !m.queued` filter on user messages stays correct.
    */
   parentQueueId?: string
-  /** DB-assigned queue id (backend echoes the frontend queueId for a queued
-   *  message). Lets the frontend match an optimistic pending bubble to its DB
-   *  row and lets queue_cancel remove pending bubbles whose id became numeric. */
+  /**
+   * Frontend-generated queue id, persisted by the backend on EVERY user row
+   * (queued and direct-sent alike) and on streaming assistant rows (the
+   * answered queue). Used to match optimistic bubbles to DB rows, let
+   * queue_cancel remove pending bubbles whose id became numeric, and anchor a
+   * reply to its own question after a refresh.
+   */
   queueId?: string
   /** True while this message is still waiting for the drain loop (queued=1 in
    *  chat_history). The frontend treats it as a pending bubble until queue_drain. */
@@ -464,16 +468,41 @@ export function sortMessages(messages: ChatMessage[]): void {
 export function anchorRepliesToQuestions(messages: ChatMessage[]): ChatMessage[] {
   // Build question lookup: queueId → the queued user message carrying it.
   const questionByQueueId = new Map<string, ChatMessage>()
+  // Build id lookup: String(id) → user message. Used to resolve a reply's
+  // parentQueueId that still points at a transient STRING id (e.g. the
+  // optimistic bubble id) once that bubble has adopted a DB row — the DB row
+  // then carries the real queueId, so the anchor is rewritten to it below.
+  const userById = new Map<string, ChatMessage>()
   for (const m of messages) {
     if (m.role !== 'user') continue
     if (m.queueId) questionByQueueId.set(m.queueId, m)
+    if (m.id != null) userById.set(String(m.id), m)
   }
   for (const m of messages) {
     if (m.role !== 'assistant') continue
-    if (!m.queueId) continue
-    const q = questionByQueueId.get(m.queueId)
-    if (!q) continue
-    m.parentQueueId = m.queueId
+    // Primary path: the reply's own queueId matches a queued user question.
+    if (m.queueId) {
+      const q = questionByQueueId.get(m.queueId)
+      if (q) {
+        m.parentQueueId = m.queueId
+        continue
+      }
+    }
+    // Fallback: the reply already carries a parentQueueId that points at a
+    // transient string id (an optimistic bubble) which the DB rebuild dropped.
+    // If that string id now maps to a DB user row (by id or by queueId),
+    // rewrite the anchor to the row's queueId so the reply still resolves
+    // directly after its question. Without this, a streaming reply whose anchor
+    // string id was dropped sorts in the TRANSIENT_BASE domain — after every DB
+    // message — so a queued message persisted LATER (larger DB id) renders above
+    // the in-flight reply.
+    if (m.parentQueueId) {
+      const anchor = String(m.parentQueueId)
+      const parent = userById.get(anchor) || questionByQueueId.get(anchor)
+      if (parent && parent !== m && parent.queueId) {
+        m.parentQueueId = parent.queueId
+      }
+    }
   }
   return messages
 }
@@ -910,6 +939,14 @@ export function rebuildFromDb(state: ChatMessage[], dbMessages: ChatMessage[]): 
       if (db.summaryCards) live.summaryCards = db.summaryCards
       if (db.metadata && !live.metadata) live.metadata = db.metadata
       if (db.files) live.files = db.files
+      // Merge the DB row's queueId onto the live object when it doesn't carry
+      // one. The live placeholder is usually anchored to a string id or created
+      // by a stream_start event without a queueId; the DB streaming row stores
+      // the answered queue_id. Without this, anchorRepliesToQuestions cannot
+      // associate the reply with its question after a refresh and the reply
+      // falls back to the raw DB-id sort domain — landing BEFORE a still-queued
+      // or drained-but-later message instead of right after its own question.
+      if (db.queueId && !live.queueId) live.queueId = db.queueId
       // Backfill partial content: if the live placeholder is empty (e.g. freshly
       // created by a stream_start event after a re-subscribe) but the DB row has
       // already-flushed content, copy it in so previously-streamed text isn't lost.

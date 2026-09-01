@@ -56,7 +56,7 @@ sequenceDiagram
 - **全局事件日志**：不按 client_id 分区，所有客户端共享同一个事件日志
 - **条件存储**：仅当存在断开连接的客户端时才写入（`HasDisconnectedClients()`），避免所有客户端在线时的写放大
 - **Write-ahead**：先存储后广播，确保事件日志无间隙
-- **客户端游标**：每个客户端在本地持久化 `last_seen_event_id`，重连时用 `after` 参数拉取游标之后的事件
+- **客户端游标**：每个客户端维护 `last_seen_event_id` 游标（前端为会话级内存态，重启后置空；Android 端持久化到设备），收到终态事件时同步推进，重连时用 `after` 参数拉取游标之后的事件。前端只同步 Android 设备游标、不反向读取——避免后台推送重复投递用户在前台已看到的事件
 - **TTL**：
   - 终端状态事件（completed/cancelled/failed）：24 小时
   - 权限审批事件（permission_pending）：7 天（防止离线期间权限请求被清理导致 agent 死锁）

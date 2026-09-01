@@ -1,0 +1,282 @@
+/* ────────────────────────────────────────────────────────────────────────────
+ * Shared search-panel styles (`.search-bar` / `.cm-search`).
+ *
+ * Single source of truth for the search bar used by BOTH search UIs:
+ *   - CodeMirror search panel (codeMirrorSearchPanel.ts → SearchBar.vue)
+ *   - Markdown preview search bar (MarkdownSearchBar.vue → SearchBar.vue)
+ *
+ * Both render the same SearchBar component (same `.cm-search` structure):
+ *     .search-input-wrap (input + inline VS Code-style option icons)
+ *     · button.cm-button[name=prev|next] · span.cm-search-match-info
+ *     · button.cm-button[name=close] · .cm-search-replace
+ *
+ * The `.search-bar` host is a full-width bar pinned to the bottom with only a
+ * top separator line. Both CodeMirror and markdown share it, so the UIs are
+ * visually identical.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+.cm-search {
+  --search-ctrl-h: 26px;
+}
+
+/* ── Host layout (`.search-bar`): full-width bar pinned to the bottom with
+   only a top separator line. Both the CodeMirror panel and the markdown
+   preview render the same SearchBar component, so this layout lives here. ── */
+.search-bar {
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.search-bar .cm-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px 6px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color-scheme: light;
+}
+[data-theme-base="dark"] .search-bar .cm-search {
+  color-scheme: dark;
+}
+
+/* ── Layout order ───────────────────────────────────────────────────────────
+   Row 1: search input (with inline option icons) + prev(←) + next(→) + match
+           info + close.
+   Row 2 (editable only): .cm-search-replace.
+   The replace row wraps as a unit via its container. */
+.search-bar .cm-search .search-input-wrap { order: 1; flex: 1; min-width: 0; }
+.search-bar .cm-search .cm-button[name='prev'] { order: 2; }
+.search-bar .cm-search .cm-button[name='next'] { order: 3; }
+.search-bar .cm-search .cm-search-match-info {
+  order: 4;
+  margin: 0 4px;
+  align-self: center;
+}
+.search-bar .cm-search button[name='close'] {
+  order: 5;
+}
+.search-bar .cm-search .cm-search-replace {
+  order: 10;
+  /* Force the replace row onto its own line when present. */
+  flex-basis: 100%;
+}
+.search-bar .cm-search .cm-search-replace {
+  padding: 4px 0 5px;
+}
+.search-bar .cm-search .cm-search-replace > * {
+  flex-shrink: 0;
+}
+
+/* ── Text inputs ── */
+.cm-search .cm-textfield {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  padding: 4px 10px;
+  outline: none;
+  font-family: inherit;
+  font-size: 14px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
+}
+.cm-search .cm-textfield:focus {
+  border-color: var(--accent-color);
+}
+
+/* Search input with inline VS Code-style option icons. The wrap keeps the
+   icons absolutely positioned inside the input's right edge. All classes are
+   scoped under `.search-bar` to avoid colliding with other global classes. */
+.search-bar .search-input-wrap {
+  --search-opt-size: 22px;
+  --search-opt-gap: 2px;
+  --search-opt-right: 4px;
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.search-bar .search-input-wrap > .cm-textfield {
+  flex: 1;
+  min-width: 0;
+  /* Room for the three inline option icons (Aa / ab / .*): right offset +
+     3 × icon + 2 × inter-icon gap. Derived from the same vars the actions
+     container uses, so enlarging the icons never leaves text under them. */
+  padding-right: calc(var(--search-opt-right) + var(--search-opt-size) * 3 + var(--search-opt-gap) * 2);
+}
+.search-bar .search-input-actions {
+  position: absolute;
+  right: var(--search-opt-right);
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--search-opt-gap);
+  pointer-events: none;
+}
+.search-bar .search-input-actions .search-opt-btn {
+  pointer-events: auto;
+  width: var(--search-opt-size);
+  height: var(--search-opt-size);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  line-height: 1;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s;
+}
+.search-bar .search-input-actions .search-opt-btn:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+.search-bar .search-input-actions .search-opt-btn.active {
+  color: var(--accent-color);
+}
+.search-bar .search-input-actions .search-opt-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
+  outline-offset: 1px;
+}
+/* Whole-word icon: VS Code renders "ab" with a bottom underline. */
+.search-bar .search-input-actions .search-opt-btn-word {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── Buttons ── */
+.cm-search .cm-button {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
+  line-height: 1;
+  white-space: nowrap;
+}
+.cm-search .cm-button:hover:not(:disabled) {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  border-color: var(--accent-color);
+}
+.cm-search .cm-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* close — icon-only (transparent, borderless), same footprint as prev/next.
+   No margin-left:auto — the input flexes to absorb the width, so the whole
+   control group sits compactly after it (no dead space). */
+.cm-search button[name='close'] {
+  background: transparent;
+  border: none;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s;
+}
+.cm-search button[name='close']:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+
+/* prev / next — arrow icons only. */
+.cm-search .cm-button[name='next'],
+.cm-search .cm-button[name='prev'] {
+  position: relative;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  font-size: 0;
+  flex-shrink: 0;
+}
+.cm-search .cm-button[name='next']::before,
+.cm-search .cm-button[name='prev']::before {
+  content: '';
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  border: solid var(--text-primary);
+  border-width: 0 1.5px 1.5px 0;
+  padding: 2.5px;
+}
+.cm-search .cm-button[name='prev']::before {
+  transform: rotate(135deg); /* ← */
+  margin-right: -2px;
+}
+.cm-search .cm-button[name='next']::before {
+  transform: rotate(-45deg); /* → */
+  margin-left: -2px;
+}
+
+/* ── Match counter ── */
+.cm-search .cm-search-match-info {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Replace row (editable only) ── */
+.cm-search .cm-search-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Match highlighting + active-match flash ─────────────────────────────────
+   Shared by BOTH search UIs:
+   - CodeMirror panel (decorations added by codeMirrorSearchPanel.ts:
+     .cm-searchMatch on every match, .cm-searchMatch-selected + flash on the
+     active one)
+   - Markdown preview (MarkdownSearchBar.vue: every match wrapped in a
+     <mark class="md-search-match">, the active one additionally gets the
+     .search-match-flash class to blink)
+   The flash keyframes are reused verbatim by both hosts.
+
+   Note: `.cm-editor` prefix outranks @codemirror/search's baseTheme rules
+   (`.ͼ2 .cm-searchMatch`), which would otherwise paint matches yellow/orange. */
+.cm-editor.cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 28%, transparent);
+  border-radius: 2px;
+}
+.cm-editor.cm-editor .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
+}
+
+@keyframes search-match-flash {
+  0%, 100% { background-color: transparent; }
+  25% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 75%, transparent); }
+  50% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 40%, transparent); }
+  75% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 65%, transparent); }
+}
+.cm-editor.cm-editor .cm-searchMatch-flash {
+  animation: search-match-flash 0.7s ease-out 1;
+}
+/* Markdown active-match <mark> reuses the same flash animation. */
+.search-match-flash {
+  animation: search-match-flash 0.7s ease-out 1;
+}
+

@@ -111,7 +111,7 @@
                 :aria-label="t('appHeader.removeRecentFile')"
                 @click.stop="removeRecentFile(entry.path)"
               >
-                <X :size="14" />
+                <X :size="12" />
               </button>
             </div>
           </div>
@@ -171,7 +171,7 @@
 
     <!-- Quick theme picker -->
     <button ref="themeBtnRef" class="theme-quick-toggle" :title="t('appHeader.themePicker')" :aria-label="t('appHeader.themePicker')" @click="toggleThemeMenu">
-      <Palette :size="14" />
+      <Palette :size="18" />
     </button>
     <PopupMenu v-model:show="themeMenuOpen" :target-element="themeBtnRef" :max-width="200" :max-height="440" :menu-items-count="1 + THEME_IDS.length" anchor="right">
       <div class="theme-picker">
@@ -199,8 +199,8 @@
 
     <!-- Server button: merged gauge + status dot. Icon color reflects connection status -->
     <button ref="serverBtnRef" class="server-toggle" :class="[statusDotClass, { 'pressure-alert': isUnderPressure && showMetricIcon }]" @click="toggleResourcesMenu" :title="t('systemResources.title')">
-      <Server v-if="!isUnderPressure || !showMetricIcon" :size="15" />
-      <component v-else :is="PressureIcon" :size="15" class="pressure-icon" />
+      <Server v-if="!isUnderPressure || !showMetricIcon" :size="18" />
+      <component v-else :is="PressureIcon" :size="18" class="pressure-icon" />
     </button>
 
     <!-- Server info + resources popup (both Web and APP mode) -->
@@ -1265,7 +1265,7 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
 
 /* Quick theme picker */
 .theme-quick-toggle {
-    padding: 6px;
+    padding: 10px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -1288,7 +1288,8 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
 
 /* Server icon button — merged gauge + status dot */
 .server-toggle {
-    padding: 6px;
+    padding: 10px;
+    margin-left: -8px;
     border: none;
     background: transparent;
     cursor: pointer;
@@ -1513,11 +1514,11 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 24px;
-    height: 24px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border: 0;
-    border-radius: 4px;
+    border-radius: 3px;
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;

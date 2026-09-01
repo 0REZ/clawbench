@@ -333,11 +333,15 @@ function handleFailedMermaid(clone: HTMLElement): void {
 /**
  * Build self-contained TOC HTML + JS for the exported document.
  * Uses var() references so colors come from the exported theme variables.
+ *
+ * Layout: a persistent right-side TOC sidebar inside a flex row wrapper
+ * (`toc-layout`), always visible by default. A collapse button on the sidebar
+ * toggles it into a slim rail; clicking it again restores the sidebar.
  */
-function buildToc(clone: HTMLElement, locale: string): { tocButtonHtml: string; tocDrawerHtml: string; tocCss: string; tocJs: string } {
+function buildToc(clone: HTMLElement, locale: string): { tocLayoutHtml: string; tocSidebarHtml: string; tocCss: string; tocJs: string } {
     // Headings
     const headings = Array.from(clone.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLHeadingElement[]
-    if (headings.length === 0) return { tocButtonHtml: '', tocDrawerHtml: '', tocCss: '', tocJs: '' }
+    if (headings.length === 0) return { tocLayoutHtml: '', tocSidebarHtml: '', tocCss: '', tocJs: '' }
 
     interface TocEntry {
         level: number
@@ -356,10 +360,12 @@ function buildToc(clone: HTMLElement, locale: string): { tocButtonHtml: string; 
         })
     }
 
-    if (entries.length === 0) return { tocButtonHtml: '', tocDrawerHtml: '', tocCss: '', tocJs: '' }
+    if (entries.length === 0) return { tocLayoutHtml: '', tocSidebarHtml: '', tocCss: '', tocJs: '' }
 
     const isZh = locale === 'zh'
     const tocTitle = isZh ? '目录' : 'Table of Contents'
+    const collapseTitle = isZh ? '收起目录' : 'Collapse TOC'
+    const expandTitle = isZh ? '展开目录' : 'Expand TOC'
 
     // Build TOC list HTML
     const tocItemsHtml = entries.map(e => {
@@ -367,52 +373,60 @@ function buildToc(clone: HTMLElement, locale: string): { tocButtonHtml: string; 
         return `<a class="toc-item" data-level="${e.level}" href="#${escapeHtml(e.id)}" style="padding-left: ${8 + indent}px">${escapeHtml(e.text)}</a>`
     }).join('\n')
 
-    // Floating button (inline SVG list icon) — uses CSS class for theme-aware colors
-    const tocButtonHtml = `<button id="toc-toggle" class="fab-btn" title="${tocTitle}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`
+    // Persistent right-side TOC sidebar. Always rendered in the flow; the
+    // collapse toggle JS hides/shows it by toggling a class on the layout.
+    const tocSidebarHtml = `<aside id="toc-sidebar" class="toc-sidebar"><div class="toc-sidebar-header"><span class="toc-sidebar-title">${tocTitle}</span><button id="toc-collapse" class="toc-collapse-btn" title="${collapseTitle}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button></div>${tocItemsHtml}</aside>`
 
-    // TOC drawer
-    const tocDrawerHtml = `<div id="toc-drawer"><div class="toc-drawer-title">${tocTitle}</div>${tocItemsHtml}</div>`
+    // Collapsed rail: a narrow fixed strip shown when the sidebar is hidden.
+    const tocRailHtml = `<button id="toc-rail" class="toc-rail-btn" title="${expandTitle}" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`
 
-    // TOC JS — fix: use contains() check on the button element (not === target)
+    // TOC JS — collapse/expand toggle. Collapsed state is NOT persisted (each
+    // open of the exported file starts with the TOC expanded).
     const tocJs = `
 (function() {
-    var btn = document.getElementById('toc-toggle');
-    var drawer = document.getElementById('toc-drawer');
-    var open = false;
-    btn.addEventListener('click', function(e) {
+    var sidebar = document.getElementById('toc-sidebar');
+    var collapseBtn = document.getElementById('toc-collapse');
+    var rail = document.getElementById('toc-rail');
+    var layout = document.getElementById('toc-layout');
+    if (!sidebar || !collapseBtn || !rail || !layout) return;
+    collapseBtn.addEventListener('click', function(e) {
         e.stopPropagation();
-        open = !open;
-        drawer.style.transform = open ? 'translateX(0)' : 'translateX(100%)';
+        layout.classList.add('toc-collapsed');
+        rail.hidden = false;
     });
-    drawer.addEventListener('click', function(e) {
+    rail.addEventListener('click', function(e) {
+        e.stopPropagation();
+        layout.classList.remove('toc-collapsed');
+        rail.hidden = true;
+    });
+    // Clicking a TOC entry scrolls to the heading; sidebar stays expanded.
+    sidebar.addEventListener('click', function(e) {
         var a = e.target.closest('a.toc-item');
         if (!a) return;
         e.preventDefault();
         var id = a.getAttribute('href').slice(1);
         var el = document.getElementById(id);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        open = false;
-        drawer.style.transform = 'translateX(100%)';
-    });
-    document.addEventListener('click', function(e) {
-        if (open && !drawer.contains(e.target) && !btn.contains(e.target)) {
-            open = false;
-            drawer.style.transform = 'translateX(100%)';
-        }
     });
 })();`
 
-    // TOC + floating button CSS — all via var() for theme support
+    // TOC + layout CSS — all via var() for theme support
     const tocCss = `
-.fab-btn { position: fixed; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-secondary); cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; padding: 0; }
-.fab-btn:hover { color: var(--accent-color); }
-#toc-toggle { bottom: 20px; right: 20px; z-index: 1000; }
-#toc-drawer { position: fixed; right: 0; top: 0; height: 100%; width: 280px; background: var(--bg-primary); border-left: 1px solid var(--border-color); box-shadow: -2px 0 12px rgba(0,0,0,0.08); transform: translateX(100%); transition: transform 0.3s ease; z-index: 999; overflow-y: auto; padding: 16px 8px; box-sizing: border-box; }
-.toc-drawer-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; padding: 0 8px; color: var(--text-primary); }
+/* Layout: content + persistent TOC sidebar in a flex row */
+.toc-layout { display: flex; flex-direction: row; align-items: flex-start; }
+.toc-layout .markdown-body { flex: 1; min-width: 0; }
+.toc-layout .toc-sidebar { flex: 0 0 240px; width: 240px; max-width: 280px; position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; box-sizing: border-box; padding: 12px 8px; background: var(--bg-primary); border-left: 1px solid var(--border-color); }
+.toc-layout.toc-collapsed .toc-sidebar { display: none; }
+.toc-sidebar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 8px; }
+.toc-sidebar-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.toc-collapse-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; }
+.toc-collapse-btn:hover { background: var(--bg-tertiary); color: var(--accent-color); }
 .toc-item { display: block; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--text-secondary); text-decoration: none; transition: background 0.15s, color 0.15s; border-left: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.toc-item:hover { background: var(--bg-tertiary); color: var(--accent-color); }`
+.toc-item:hover { background: var(--bg-tertiary); color: var(--accent-color); }
+.toc-rail-btn { position: fixed; top: 50%; right: 0; transform: translateY(-50%); width: 28px; height: 64px; border: 1px solid var(--border-color); border-right: none; border-radius: 6px 0 0 6px; background: var(--bg-primary); color: var(--text-secondary); cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1000; }
+.toc-rail-btn:hover { color: var(--accent-color); }`
 
-    return { tocButtonHtml, tocDrawerHtml, tocCss, tocJs }
+    return { tocLayoutHtml: `<div id="toc-layout" class="toc-layout">`, tocSidebarHtml: tocSidebarHtml + tocRailHtml, tocCss, tocJs }
 }
 
 // ─── Code block + Table block interaction JS ────────────────────────────────────
@@ -741,7 +755,7 @@ export async function exportRenderedHtml(options: ExportOptions): Promise<Export
     const css = serializeCss(markdownBodyEl)
 
     // 5. Build TOC
-    const { tocButtonHtml, tocDrawerHtml, tocCss, tocJs } = buildToc(clone, locale)
+    const { tocLayoutHtml, tocSidebarHtml, tocCss, tocJs } = buildToc(clone, locale)
 
     // 6. Build code block interaction JS
     const codeBlockJs = buildCodeBlockJs(locale)
@@ -856,9 +870,10 @@ ${tocCss}
 </style>
 </head>
 <body>
-${tocButtonHtml}
-${tocDrawerHtml}
+${tocLayoutHtml}
 ${bodyContent}
+${tocSidebarHtml}
+${tocLayoutHtml ? '</div>' : ''}
 <script>
 ${tocJs}
 ${codeBlockJs}

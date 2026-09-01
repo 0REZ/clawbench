@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { nextTick } from 'vue'
 
-import { useTocDockPreference, _resetForTest, TOC_DOCK_OPEN_KEY, TOC_DOCK_WIDTH_KEY, TOC_DOCK_MIN_WIDTH, TOC_DOCK_MAX_WIDTH, TOC_DOCK_DEFAULT_WIDTH } from '@/composables/useTocDockPreference'
+import { useTocDockPreference, _resetForTest, TOC_DOCK_OPEN_KEY, TOC_DOCK_WIDTH_KEY, TOC_DOCK_SIDE_KEY, TOC_DOCK_MIN_WIDTH, TOC_DOCK_MAX_WIDTH, TOC_DOCK_DEFAULT_WIDTH, TOC_DOCK_DEFAULT_SIDE } from '@/composables/useTocDockPreference'
 import { _setWideScreenForTest, _resetForTest as _resetWideForTest } from '@/composables/useWideScreenLayout'
 import { useFileEditor, _resetForTesting as _resetEditorForTesting } from '@/composables/useFileEditor'
 
@@ -18,7 +18,33 @@ describe('useTocDockPreference', () => {
         const pref = useTocDockPreference()
         expect(pref.tocDockOpen.value).toBe(false)
         expect(pref.tocDockWidth.value).toBe(TOC_DOCK_DEFAULT_WIDTH)
+        expect(pref.tocDockSide.value).toBe(TOC_DOCK_DEFAULT_SIDE)
         expect(pref.effectiveOpen.value).toBe(false)
+    })
+
+    it('toggleSide flips the side and persists it to localStorage', () => {
+        const pref = useTocDockPreference()
+        expect(pref.tocDockSide.value).toBe('right')
+
+        pref.toggleSide()
+        expect(pref.tocDockSide.value).toBe('left')
+        expect(localStorage.getItem(TOC_DOCK_SIDE_KEY)).toBe('left')
+
+        pref.toggleSide()
+        expect(pref.tocDockSide.value).toBe('right')
+        expect(localStorage.getItem(TOC_DOCK_SIDE_KEY)).toBe('right')
+    })
+
+    it('restores a persisted side on init', () => {
+        localStorage.setItem(TOC_DOCK_SIDE_KEY, 'left')
+        const pref = useTocDockPreference()
+        expect(pref.tocDockSide.value).toBe('left')
+    })
+
+    it('falls back to right for an invalid persisted side', () => {
+        localStorage.setItem(TOC_DOCK_SIDE_KEY, 'top')
+        const pref = useTocDockPreference()
+        expect(pref.tocDockSide.value).toBe('right')
     })
 
     it('toggle opens the dock and persists the open state to localStorage', () => {

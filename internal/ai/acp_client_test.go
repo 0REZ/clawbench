@@ -584,9 +584,17 @@ func TestClawBenchACPClient_RespondPermission_NoPendingRequest(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// --- UnregisterSession clears pending permissions ---
+// --- UnregisterSession keeps pending permissions (user can still respond) ---
+//
+// A prompt turn can end while a permission request is still pending (e.g. the
+// agent ended its turn right after requesting permission — a protocol violation
+// observed in production). Cancelling the permission on unregister would make
+// the frontend approval card un-respondable ("no pending permission found"),
+// stranding the user. Instead the pending permission must survive the turn so
+// the user can still approve/reject; it is cleaned up automatically when the
+// agent connection dies (inboundCtx cancel → RequestPermission ctx.Done path).
 
-func TestClawBenchACPClient_UnregisterSession_ClearsPendingPermissions(t *testing.T) {
+func TestClawBenchACPClient_UnregisterSession_KeepsPendingPermissions(t *testing.T) {
 	c := NewClawBenchACPClient()
 	ch := make(chan StreamEvent, 10)
 	c.RegisterSession("sess-1", ch)
@@ -610,8 +618,9 @@ func TestClawBenchACPClient_UnregisterSession_ClearsPendingPermissions(t *testin
 		defer close(done)
 		resp, err := c.RequestPermission(context.Background(), req)
 		assert.NoError(t, err)
-		// Should be cancelled because session was unregistered
-		assert.NotNil(t, resp.Outcome.Cancelled)
+		// The permission should still be resolvable AFTER unregister — the
+		// user's approval must not be silently discarded when the turn ends.
+		assert.NotNil(t, resp.Outcome.Selected)
 	}()
 
 	// Wait for tool_use event to confirm permission is pending
@@ -628,30 +637,40 @@ func TestClawBenchACPClient_UnregisterSession_ClearsPendingPermissions(t *testin
 	c.mu.Unlock()
 	assert.True(t, ok, "pending permission should exist")
 
-	// Unregister the session — should cancel pending permission
+	// Unregister the session — must NOT cancel the pending permission.
 	c.UnregisterSession("sess-1")
 
-	// Wait for RequestPermission to return
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for RequestPermission to complete after unregister")
-	}
-
-	// Pending permission should be removed
+	// Pending permission should be kept so the user can still approve
 	c.mu.Lock()
 	_, ok = c.pendingPermission[key]
 	c.mu.Unlock()
-	assert.False(t, ok, "pending permission should be cleared after unregister")
+	assert.True(t, ok, "pending permission should survive unregister")
 
-	// Session route should also be gone
+	// Session route should be gone
 	c.mu.Lock()
 	_, ok = c.sessionRoutes["sess-1"]
 	c.mu.Unlock()
 	assert.False(t, ok, "session route should be removed")
+
+	// User responds AFTER the turn ended — must succeed
+	ok = c.RespondPermission(key, "allow", false)
+	assert.True(t, ok, "RespondPermission should succeed after unregister")
+
+	// RequestPermission returns the user's selection, not Cancelled
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for RequestPermission to complete after respond")
+	}
+
+	// Pending permission removed after resolution
+	c.mu.Lock()
+	_, ok = c.pendingPermission[key]
+	c.mu.Unlock()
+	assert.False(t, ok, "pending permission should be cleared after response")
 }
 
-func TestClawBenchACPClient_UnregisterSession_OnlyCancelsMatchingSession(t *testing.T) {
+func TestClawBenchACPClient_UnregisterSession_KeepsAllSessionsPermissions(t *testing.T) {
 	c := NewClawBenchACPClient()
 	ch1 := make(chan StreamEvent, 10)
 	ch2 := make(chan StreamEvent, 10)
@@ -671,13 +690,22 @@ func TestClawBenchACPClient_UnregisterSession_OnlyCancelsMatchingSession(t *test
 	// Unregister only sess-1
 	c.UnregisterSession("sess-1")
 
-	// sess-1 pending should be cancelled, sess-2 should remain
+	// Unregister must NOT clear any pending permission — both survive so the
+	// user can still respond (a turn ending doesn't invalidate the request).
 	c.mu.Lock()
 	_, ok1 := c.pendingPermission["sess-1:tc-1"]
 	_, ok2 := c.pendingPermission["sess-2:tc-2"]
 	c.mu.Unlock()
-	assert.False(t, ok1, "sess-1 pending permission should be cleared")
+	assert.True(t, ok1, "sess-1 pending permission should survive unregister")
 	assert.True(t, ok2, "sess-2 pending permission should remain")
+
+	// Route for the unregistered session is gone, the other stays
+	c.mu.Lock()
+	_, r1 := c.sessionRoutes["sess-1"]
+	_, r2 := c.sessionRoutes["sess-2"]
+	c.mu.Unlock()
+	assert.False(t, r1, "sess-1 route should be removed")
+	assert.True(t, r2, "sess-2 route should remain")
 }
 
 // --- RegisterPendingPermissionForTest test ---

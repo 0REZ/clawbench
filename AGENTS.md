@@ -9,7 +9,7 @@ ClawBench 是移动优先的 AI 工作站，将 AI CLI 工具（CodeBuddy、Clau
 ## 构建与运行
 
 ```bash
-./build.sh                # 完整构建（Go 二进制 + Vue 前端）
+./build.sh                # 完整构建（Go 二进制 + Vue 前端 + Excalidraw 独立构建）
 ./build.sh --windows      # 交叉编译：Windows amd64
 ./build.sh --linux        # 交叉编译：Linux amd64
 ./build.sh --linux-arm64  # 交叉编译：Linux arm64
@@ -92,6 +92,8 @@ npm test                             # Vitest 前端测试
 Composable 按域分组：Chat、Session、Terminal、File、Navigation/Gesture、Settings、Agent、Task、Infrastructure、System。新建 composable 须放 `web/src/composables/` 并以 `useXxx` 命名，测试用 `*.test.ts` 同目录或 `__tests__/`。
 
 组件按域分组：Chat、File、Terminal、Git、Session/Agent、Task、Settings、Common。
+
+`web/vendor-build/excalidraw/` 是独立的 Excalidraw 编辑器构建（React），由 `build.sh` 单独构建到 `public/vendor/excalidraw/`，`.excalidraw` 文件通过 iframe 懒加载它，Vue 主包不包含 React 依赖。
 
 ### 桌面端（Electron）
 
