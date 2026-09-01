@@ -170,27 +170,26 @@
   cursor: default;
 }
 
-/* close — square bordered button with an SVG × icon, same footprint as
-   prev/next. No margin-left:auto — the input flexes to absorb the width, so
-   the whole control group sits compactly after it (no dead space). */
+/* close — icon-only (transparent, borderless), same footprint as prev/next.
+   No margin-left:auto — the input flexes to absorb the width, so the whole
+   control group sits compactly after it (no dead space). */
 .cm-search button[name='close'] {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
+  background: transparent;
+  border: none;
   width: var(--search-ctrl-h);
   height: var(--search-ctrl-h);
   padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-primary);
+  color: var(--text-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background-color 0.15s, border-color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
 }
 .cm-search button[name='close']:hover {
   background: var(--bg-quaternary, var(--bg-tertiary));
-  border-color: var(--accent-color);
+  color: var(--text-primary);
 }
 
 /* prev / next — arrow icons only. */
