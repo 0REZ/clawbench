@@ -37,7 +37,7 @@
             :title="labels.byWord"
             :aria-pressed="wholeWord"
             @click="emit('word-change', !wholeWord)"
-          >Ab</button>
+          >ab</button>
         </span>
       </span>
       <button name="prev" class="cm-button" :disabled="!canNav" :title="labels.previous" aria-label="Previous match" @click="emit('prev')"></button>
