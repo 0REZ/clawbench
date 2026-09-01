@@ -119,7 +119,7 @@ describe('codeMirrorSearchPanel', () => {
                         captured = u.transactions.flatMap((t) =>
                             t.effects
                                 .map((e) => e.value as { y?: string; yMargin?: number })
-                                .filter((v): v is { y: string; yMargin: number } => typeof v === 'object' && v !== null && v.y !== undefined),
+                                .filter((v): v is { y: string; yMargin?: number } => typeof v === 'object' && v !== null && v.y !== undefined),
                         )
                     }
                 }),
@@ -136,10 +136,10 @@ describe('codeMirrorSearchPanel', () => {
         captured = []
         document.querySelector<HTMLElement>('.cm-search button[name=next]')!.click()
         await new Promise(r => setTimeout(r, 20))
-        // The next-click jump scrolls instantly to the top with a sticky offset.
+        // The next-click jump scrolls the match to the CENTER of the viewport,
+        // keeping it clear of the sticky-scroll overlay at the top.
         expect(captured.length).toBe(1)
-        expect(captured[0].y).toBe('start')
-        expect(captured[0].yMargin).toBeGreaterThanOrEqual(8)
+        expect(captured[0].y).toBe('center')
         v.destroy()
     })
 

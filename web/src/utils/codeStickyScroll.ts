@@ -115,10 +115,13 @@ export function computeStickyOffsets(overlayLeft: number, contentLeft: number, c
  * Compute the sticky lines to pin for a given scroll position.
  *
  * Nested scopes stack at the top. A scope's definition line sticks as soon as it
- * reaches the bottom of the already-stuck rows (its relative top is within the
- * accumulated stack height), NOT only once it has scrolled past the viewport top —
- * otherwise inner definition lines would slide up underneath the outer stuck rows
- * before sticking.
+ * STARTS to leave the visible area (its relative top drops below the top edge of
+ * the already-stuck rows — `block.top - scrollTop < accTop`). The strip occupied
+ * by the stuck rows is NOT part of the visible area, so a def line reaching that
+ * strip counts as having left view and sticks. A def line still fully inside the
+ * visible area (relative top >= accTop, e.g. the very first line at scrollTop 0)
+ * does NOT stick — that's the "don't show the sticky row while the title is still
+ * on screen" behavior.
  *
  * The sticky stack covers the top `accTop` px of the viewport, so the first visible
  * CONTENT line is below it. Each iteration re-derives that line at `scrollTop + accTop`
@@ -131,13 +134,14 @@ export function buildStickyLines(view: StickyView, symbols: ScopeSymbol[], scrol
   while (result.length < maxSticky) {
     const firstVisible = firstVisibleLineNumber(view, scrollTop + accTop)
     const enclosing = findEnclosingScopes(symbols, firstVisible)
-    // Outermost scope not yet stuck whose definition line has reached the stack bottom.
+    // Outermost scope not yet stuck whose definition line has started leaving the
+    // visible area (reached the stack bottom / viewport top).
     let candidate: ScopeSymbol | null = null
     let candBlock: { top: number; height: number } | null = null
     for (const sym of enclosing) {
       if (result.some((r) => r.lineNum === sym.line)) continue
       const block = view.lineBlockAt(view.state.doc.line(sym.line).from)
-      if (block.top - scrollTop <= accTop) {
+      if (block.top - scrollTop < accTop) {
         candidate = sym
         candBlock = block
         break

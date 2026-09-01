@@ -343,21 +343,16 @@ function toSearchBarLabels(p: SearchPanelPhrases): SearchBarLabels {
 }
 
 // ── Match navigation ────────────────────────────────────────────────────────
-// Jump to a match: set the selection AND scroll it into view instantly, below
-// the sticky-scroll overlay. The library's default scrollToMatch uses
-// y:'nearest', which can park a match at the very top where the sticky scope
-// lines cover it — here we force y:'start' plus a margin equal to the sticky
-// height so the selected text always lands in the visible area below it.
-function stickyHeight(view: EditorView): number {
-    const sticky = view.dom.querySelector<HTMLElement>('.sticky-scroll-overlay')
-    return sticky ? sticky.getBoundingClientRect().height : 0
-}
-
+// Jump to a match: set the selection AND scroll it into view instantly,
+// vertically CENTERED in the viewport. Centering keeps the selected text clear
+// of the sticky-scroll overlay (which only occupies the top strip), so the
+// library's default y:'nearest' (which can park a match at the very top,
+// under the sticky lines) is replaced.
 function goToMatch(view: EditorView, from: number, to: number) {
     const selection = EditorSelection.single(from, to)
     view.dispatch({
         selection,
-        effects: EditorView.scrollIntoView(from, { y: 'start', yMargin: stickyHeight(view) + 8 }),
+        effects: EditorView.scrollIntoView(from, { y: 'center' }),
         userEvent: 'select.search',
     })
 }
