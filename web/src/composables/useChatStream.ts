@@ -6,7 +6,7 @@ import { gt } from '@/composables/useLocale'
 import { updateModeState, updateCommandState, updateThinkingEffortState, currentAgentId, updateUsageState } from './useSessionIdentity'
 import { updateACPModelList } from './useAgents'
 import { updatePlanEntries } from './usePlanProgress'
-import { FILE_MODIFYING_TOOLS, forceCleanupStreamingState as _forceCleanupStreamingState, findStreamingMsg, nextClientSeq, type ChatMessage, type ChatMessageAction, type ContentBlock, type ContentEventData, type ThinkingEventData, type ToolUseEventData, type QueueEventData, type ErrorEventData } from '@/utils/chatStreamUtils.ts'
+import { FILE_MODIFYING_TOOLS, forceCleanupStreamingState as _forceCleanupStreamingState, findStreamingMsg, messageText, nextClientSeq, type ChatMessage, type ChatMessageAction, type ContentBlock, type ContentEventData, type ThinkingEventData, type ToolUseEventData, type QueueEventData, type ErrorEventData } from '@/utils/chatStreamUtils.ts'
 import type { FileEntry } from '@/utils/fileAttachmentUtils'
 import type { ChatStreamEventData } from '@/utils/chatStreamUtils.ts'
 import { ToolUseWatchdog } from '@/utils/toolUseWatchdog'
@@ -144,6 +144,11 @@ export function useChatStream(options: UseChatStreamOptions) {
     return idx
   }
 
+  /** Whether an assistant message carries any renderable content (text/thinking/tool blocks). */
+  function messageHasContent(m: ChatMessage): boolean {
+    return messageText(m) !== '' || !!m.blocks?.length
+  }
+
   /** Ensure a streaming assistant placeholder exists for the current turn. */
   function ensureStreamingPlaceholder(options?: { reuseExistingStreaming?: boolean }) {
     const existingStreaming = findStreamingMsg(messages.value)
@@ -153,8 +158,22 @@ export function useChatStream(options: UseChatStreamOptions) {
     // Otherwise connectStream would reuse it and keep appending content,
     // echoing all earlier replies into the current reply. Reuse is only
     // legitimate when explicitly opted in (enqueue/reconnect to a live stream).
+    //
+    // IMPORTANT: only finalize a stale streaming message when it actually
+    // carries content. An EMPTY streaming message (no content, no blocks) may
+    // be the legitimate placeholder this very turn's stream_start event just
+    // created (WS can beat the sendMessage POST response) — finalizing it
+    // would strip its streaming flag and then `findStreamingMsg` below fails,
+    // so a SECOND placeholder with a drain-* id is created. Stream events
+    // (tool_use/thinking/content) then append onto the drain-* message, and
+    // clicking a tool on it sends message_id=drain-* → backend 400
+    // (InvalidMessageId) → "详情暂不可用". Reusing the empty placeholder is
+    // always safe: the stream_start placeholder has no stale content to leak.
     if (existingStreaming && !options?.reuseExistingStreaming) {
-      _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
+      const stale = messageHasContent(existingStreaming)
+      if (stale) {
+        _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
+      }
     }
 
     // Ensure a streaming assistant message exists — create one if needed

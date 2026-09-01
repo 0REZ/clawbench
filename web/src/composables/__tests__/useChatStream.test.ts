@@ -327,6 +327,43 @@ describe('useChatStream', () => {
       expect(texts.some((t: string) => t.includes('first reply') && t.includes('second reply'))).toBe(false)
     })
 
+    it('stream_start placeholder that arrived BEFORE connectStream is reused, not duplicated as a drain-* message', () => {
+      // Regression: the WS stream_start event can beat the sendMessage POST
+      // response, so a DB-id placeholder already exists (empty) when
+      // connectStream → ensureStreamingPlaceholder runs. The old code
+      // force-finalized ANY existing streaming message, stripping its
+      // streaming flag; findStreamingMsg then found nothing and created a
+      // SECOND placeholder with a drain-* id. Stream events (tool_use etc.)
+      // then appended onto the drain-* message, so clicking a tool sent
+      // message_id=drain-* → backend 400 (InvalidMessageId) → "详情暂不可用".
+      // An EMPTY streaming placeholder has no stale content to leak, so it
+      // must be reused instead of finalized+duplicated.
+      const options = createOptions()
+      const { connectStream } = useChatStream(options)
+
+      // Simulate the user message + stream_start arriving first (DB-id placeholder).
+      options.messages.value.push(
+        { role: 'user', id: 500, content: 'question', blocks: [{ type: 'text', text: 'question' }] },
+      )
+      simulateWsEvent('stream_start', { message_id: 501 })
+
+      // Then the sendMessage response path calls connectStream.
+      connectStream('test-session-1')
+      simulateWsEvent('tool_use', { id: 'call_1', name: 'Read', done: false })
+
+      const streaming = options.messages.value.filter((m: any) => m.role === 'assistant' && m.streaming)
+      expect(streaming.length).toBe(1, 'must not create a second drain-* streaming placeholder')
+      // The single streaming message must carry the DB id (501), so tool
+      // detail fetches use message_id=501 instead of a drain-* id.
+      expect(String(streaming[0].id)).toBe('501')
+      const tools = (streaming[0].blocks || []).filter((b: any) => b.type === 'tool_use')
+      expect(tools.length).toBe(1)
+      expect(tools[0].id).toBe('call_1')
+      // No drain-* message anywhere in the array.
+      const drainMsgs = options.messages.value.filter((m: any) => typeof m.id === 'string' && m.id.startsWith('drain-'))
+      expect(drainMsgs.length).toBe(0)
+    })
+
     it('reconnecting a LIVE stream with reuse keeps one streaming message (no split reply)', () => {
       const options = createOptions()
       const { connectStream } = useChatStream(options)
