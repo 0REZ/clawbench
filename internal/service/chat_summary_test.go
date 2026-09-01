@@ -356,17 +356,25 @@ func TestTriggerChatSummarization_DoesNotBlockOnRecommendation(t *testing.T) {
 	}
 
 	// And it must have broadcast its WS event too.
+	// Match the event for THIS session only — async recommendation goroutines
+	// from earlier tests can still be in flight (they broadcast to the shared
+	// manager), so asserting on every buffered chat_recommendation event would
+	// spuriously fail on a stale event from another session.
 	var eventSeen bool
 	for _, evt := range sub.GetBufferedEvents() {
-		if evt.Event == "chat_recommendation" {
-			eventSeen = true
-			data, ok := evt.Data.(ws.ChatRecommendationData)
-			if !ok {
-				t.Fatalf("unexpected data type: %T", evt.Data)
-			}
-			assert.Equal(t, int64(501), data.MessageID)
-			assert.Equal(t, "Continue the work.", data.Recommendation)
+		if evt.Event != "chat_recommendation" {
+			continue
 		}
+		data, ok := evt.Data.(ws.ChatRecommendationData)
+		if !ok {
+			t.Fatalf("unexpected data type: %T", evt.Data)
+		}
+		if data.SessionID != sessionID {
+			continue
+		}
+		eventSeen = true
+		assert.Equal(t, int64(501), data.MessageID)
+		assert.Equal(t, "Continue the work.", data.Recommendation)
 	}
 	assert.True(t, eventSeen, "expected a chat_recommendation WS event from the async goroutine")
 }
