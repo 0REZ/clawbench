@@ -424,7 +424,9 @@ function buildAllExtensions() {
         // precedence while the completion popup is open.
         keymap.of([{ key: 'Mod-s', run: handleSaveShortcut, preventDefault: true }, ...defaultKeymap, ...historyKeymap, indentWithTab]),
         searchCompartment.of([
-            search({ top: true }),
+            // Panel docks to the bottom edge; combined with right alignment in
+            // the panel CSS it reads as a floating corner popover.
+            search({ top: false }),
             // Mod-f/Mod-g/Mod-Shift-g/Mod-Alt-g are bound here; the global
             // Ctrl+F handler in App.vue skips contenteditable targets, so
             // inside the editor these take precedence and never collide.
@@ -893,85 +895,95 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   font-weight: 600;
 }
 
-/* Search panel (built-in @codemirror/search) — match the app's dark theme.
-   Sized for touch: generous padding, larger controls, side margins so the
-   panel never hugs the screen edge on mobile. */
+/* Search panel (built-in @codemirror/search) — compact, sharp-cornered.
+   Dense padding and small controls keep the panel from dominating the code
+   view; a shared control-height custom property keeps the buttons, inputs
+   and checkboxes visually aligned. */
 .cm-viewer .cm-panels {
   background: transparent;
   border: none;
 }
-.cm-viewer .cm-search {
+.cm-viewer .cm-panels .cm-panel.cm-search {
+  --search-ctrl-h: 22px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin: 8px 10px 0;
+  border-radius: 0;
+  padding: 6px 8px;
+  margin: 0 8px 8px 0;
+  /* Dock to the bottom-right corner instead of stretching across the
+     editor: let the flex row size to its content and pin it right. */
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  margin-left: auto;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
-  font-size: 14px;
+  font-size: 13px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   z-index: 5;
   /* Pick the native control rendering that matches the active theme so the
      checkboxes don't stay stuck in the browser's light-mode colors. */
   color-scheme: light;
 }
-[data-theme-base="dark"] .cm-viewer .cm-search {
+[data-theme-base="dark"] .cm-viewer .cm-panels .cm-panel.cm-search {
   color-scheme: dark;
 }
-.cm-viewer .cm-search .cm-textfield {
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-textfield {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--text-primary);
-  padding: 8px 10px;
+  padding: 3px 8px;
   outline: none;
   font-family: inherit;
-  font-size: 14px;
-  min-width: 0;
+  font-size: 13px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
+  min-width: 120px;
 }
-.cm-viewer .cm-search .cm-textfield:focus {
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-textfield:focus {
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-search .cm-button {
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--text-primary);
-  padding: 8px 12px;
+  padding: 3px 10px;
   cursor: pointer;
-  font-size: 13px;
-  min-height: 36px;
+  font-size: 12px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
   line-height: 1;
 }
-.cm-viewer .cm-search .cm-button:hover {
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button:hover {
   background: var(--bg-quaternary, var(--bg-tertiary));
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-search .cm-button:disabled {
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.cm-viewer .cm-search label {
+.cm-viewer .cm-panels .cm-panel.cm-search label {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 4px;
+  padding: 2px 4px;
   cursor: pointer;
   user-select: none;
 }
-.cm-viewer .cm-search label input[type='checkbox'] {
+.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
   margin: 0;
   flex-shrink: 0;
-  border: 1.5px solid var(--border-color);
-  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 0;
   background: var(--bg-tertiary);
   display: inline-block;
   vertical-align: middle;
@@ -979,39 +991,54 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
-.cm-viewer .cm-search label input[type='checkbox']:hover {
+.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:hover {
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-search label input[type='checkbox']:checked {
+.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:checked {
   background: var(--accent-color);
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-search label input[type='checkbox']:checked::after {
+.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:checked::after {
   content: '';
   position: absolute;
-  left: 4px;
-  top: 1px;
+  left: 5px;
+  top: 2px;
   width: 5px;
-  height: 9px;
+  height: 10px;
   border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-.cm-viewer .cm-search label input[type='checkbox']:focus-visible {
+.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
   outline-offset: 1px;
 }
-.cm-viewer .cm-search [name='close'] {
-  background: transparent;
-  border: none;
+/* Close button — CodeMirror's base theme absolutely pins it to the panel's
+   top-right (`.ͼ1 .cm-panel.cm-search [name=close]`), which makes it overlap
+   the wrapped option rows; re-enable the flex-row layout, and give it a real
+   filled background so it reads as a button. Selectors are kept specific so
+   they win over that base rule in both light and dark themes. */
+.cm-viewer .cm-panels .cm-panel.cm-search button[name='close'] {
+  position: static;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin: 0 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
-  font-size: 18px;
-  padding: 8px 10px;
-  min-height: 36px;
-  margin-left: auto;
+  font-size: 13px;
   line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
-.cm-viewer .cm-search [name='close']:hover {
+.cm-viewer .cm-panels .cm-panel.cm-search button[name='close']:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  border-color: var(--accent-color);
   color: var(--text-primary);
 }
 .cm-viewer .cm-textfield-autofill {
