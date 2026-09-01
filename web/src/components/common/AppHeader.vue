@@ -111,7 +111,7 @@
                 :aria-label="t('appHeader.removeRecentFile')"
                 @click.stop="removeRecentFile(entry.path)"
               >
-                <X :size="14" />
+                <X :size="12" />
               </button>
             </div>
           </div>
@@ -1514,11 +1514,11 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 24px;
-    height: 24px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border: 0;
-    border-radius: 4px;
+    border-radius: 3px;
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
