@@ -279,7 +279,7 @@ defineExpose({ observeList, unobserveList, commitSearch })
   align-items: center;
   justify-content: space-between;
   padding: 0 14px;
-  height: var(--header-height, 44px);
+  height: var(--header-height);
   border-bottom: 1px solid var(--border-color, #dee2e6);
   background: var(--bg-secondary, #f8f9fa);
   flex-shrink: 0;

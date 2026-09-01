@@ -1,9 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { annotateCodeBlockHeaders, annotateTableBlockHeaders, handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
+import { annotateCodeBlockHeaders, annotateTableBlockHeaders, handleCodeBlockClick, handleTableBlockClick, closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader.ts'
 
 // Mock clipboard
+const { copyText } = vi.hoisted(() => ({ copyText: vi.fn() }))
 vi.mock('@/utils/clipboard.ts', () => ({
-  copyText: vi.fn(),
+  copyText,
 }))
 
 // Mock locale
@@ -26,6 +27,7 @@ afterEach(() => {
     clearTimeout(id)
   }
   pendingTimers.length = 0
+  copyText.mockClear()
 })
 
 describe('annotateCodeBlockHeaders', () => {
@@ -194,6 +196,21 @@ describe('annotateTableBlockHeaders', () => {
     expect(result).toContain('table-block-wrap-btn')
   })
 
+  it('builds a copy dropdown menu with Markdown/HTML/TSV items', () => {
+    const html = '<div class="table-wrap"><table><tr><td>data</td></tr></table></div>'
+    const result = annotateTableBlockHeaders(html)
+    expect(result).toContain('table-block-copy-dropdown')
+    expect(result).toContain('table-block-copy-menu')
+    expect(result).toContain('data-action="copy-md"')
+    expect(result).toContain('data-action="copy-html"')
+    expect(result).toContain('data-action="copy-tsv"')
+    // Trigger uses the open-copy-menu action with aria-haspopup
+    expect(result).toContain('data-action="open-copy-menu"')
+    expect(result).toContain('aria-haspopup="true"')
+    // Menu is initially hidden
+    expect(result).toContain('style="display: none;"')
+  })
+
   it('is idempotent (does not double-wrap)', () => {
     const html = '<div class="table-wrap"><table><tr><td>1</td></tr></table></div>'
     const first = annotateTableBlockHeaders(html)
@@ -217,6 +234,69 @@ describe('handleTableBlockClick', () => {
       preventDefault: vi.fn(),
       stopPropagation: vi.fn(),
     } as unknown as MouseEvent
+  }
+
+  function buildBlock(tableHtml?: string) {
+    const wrapper = document.createElement('div')
+    wrapper.className = 'table-block-wrapper'
+    const btn = document.createElement('button')
+    btn.className = 'table-block-copy-btn'
+    btn.setAttribute('data-action', 'open-copy-menu')
+    btn.setAttribute('title', 'Copy')
+    btn.setAttribute('aria-label', 'Copy')
+    const menu = document.createElement('div')
+    menu.className = 'table-block-copy-menu'
+    menu.style.display = 'none'
+
+    const itemMd = document.createElement('button')
+    itemMd.className = 'table-block-copy-menu-item'
+    itemMd.setAttribute('data-action', 'copy-md')
+    itemMd.textContent = 'Copy Markdown'
+    const itemHtml = document.createElement('button')
+    itemHtml.className = 'table-block-copy-menu-item'
+    itemHtml.setAttribute('data-action', 'copy-html')
+    itemHtml.textContent = 'Copy HTML'
+    const itemTsv = document.createElement('button')
+    itemTsv.className = 'table-block-copy-menu-item'
+    itemTsv.setAttribute('data-action', 'copy-tsv')
+    itemTsv.textContent = 'Copy TSV'
+    menu.appendChild(itemMd)
+    menu.appendChild(itemHtml)
+    menu.appendChild(itemTsv)
+
+    wrapper.appendChild(btn)
+    wrapper.appendChild(menu)
+
+    if (tableHtml !== undefined) {
+      const holder = document.createElement('div')
+      holder.innerHTML = tableHtml
+      const table = holder.querySelector('table')
+      if (table) wrapper.appendChild(table)
+    }
+    document.body.appendChild(wrapper)
+    return { wrapper, btn, menu, itemMd, itemHtml, itemTsv }
+  }
+
+  function buildTheadTable() {
+    const table = document.createElement('table')
+    const thead = document.createElement('thead')
+    const headerRow = document.createElement('tr')
+    const th1 = document.createElement('th'); th1.textContent = 'Name'
+    const th2 = document.createElement('th'); th2.textContent = 'Value'
+    headerRow.appendChild(th1)
+    headerRow.appendChild(th2)
+    thead.appendChild(headerRow)
+    table.appendChild(thead)
+
+    const tbody = document.createElement('tbody')
+    const dataRow = document.createElement('tr')
+    const td1 = document.createElement('td'); td1.textContent = 'foo'
+    const td2 = document.createElement('td'); td2.textContent = 'bar'
+    dataRow.appendChild(td1)
+    dataRow.appendChild(td2)
+    tbody.appendChild(dataRow)
+    table.appendChild(tbody)
+    return table
   }
 
   it('returns false for non-table-block clicks', () => {
@@ -246,121 +326,137 @@ describe('handleTableBlockClick', () => {
     wrapper.remove()
   })
 
-  it('returns true for copy button click with table', () => {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'table-block-wrapper'
+  it('opens the copy menu on trigger click', () => {
+    const { wrapper, btn, menu } = buildBlock()
+    const event = createClickEvent(btn)
+    expect(handleTableBlockClick(event)).toBe(true)
+    expect(menu.classList.contains('is-open')).toBe(true)
+    expect(menu.style.display).toBe('block')
+    expect(btn.getAttribute('aria-expanded')).toBe('true')
+
+    // Second click closes it
+    handleTableBlockClick(createClickEvent(btn))
+    expect(menu.classList.contains('is-open')).toBe(false)
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+
+    wrapper.remove()
+  })
+
+  it('closes menus in other blocks when one opens', () => {
+    const a = buildBlock()
+    const b = buildBlock()
+    // Open A's menu
+    handleTableBlockClick(createClickEvent(a.btn))
+    expect(a.menu.classList.contains('is-open')).toBe(true)
+    // Open B's menu — A's should close
+    handleTableBlockClick(createClickEvent(b.btn))
+    expect(b.menu.classList.contains('is-open')).toBe(true)
+    expect(a.menu.classList.contains('is-open')).toBe(false)
+
+    a.wrapper.remove()
+    b.wrapper.remove()
+  })
+
+  it('copies Markdown via copy-md menu item', () => {
+    const { wrapper, menu, itemMd } = buildBlock()
+    wrapper.appendChild(buildTheadTable())
+    handleTableBlockClick(createClickEvent(itemMd))
+    expect(copyText).toHaveBeenCalledWith('| Name | Value |\n| --- | --- |\n| foo | bar |')
+    expect(itemMd.classList.contains('is-copied')).toBe(true)
+    // Menu closes after copying
+    expect(menu.classList.contains('is-open')).toBe(false)
+
+    wrapper.remove()
+  })
+
+  it('copies TSV via copy-tsv menu item', () => {
+    const { wrapper, itemTsv } = buildBlock()
+    wrapper.appendChild(buildTheadTable())
+    handleTableBlockClick(createClickEvent(itemTsv))
+    expect(copyText).toHaveBeenCalledWith('Name\tValue\nfoo\tbar')
+
+    wrapper.remove()
+  })
+
+  it('copies HTML via copy-html menu item', () => {
+    const { wrapper, itemHtml } = buildBlock()
+    wrapper.appendChild(buildTheadTable())
+    handleTableBlockClick(createClickEvent(itemHtml))
+    expect(copyText).toHaveBeenCalledWith(expect.stringContaining('<table><thead><tr><th>Name</th><th>Value</th>'))
+
+    wrapper.remove()
+  })
+
+  it('escapes pipes in Markdown cells', () => {
+    const { wrapper, itemMd } = buildBlock()
     const table = document.createElement('table')
     const tr = document.createElement('tr')
-    const td = document.createElement('td')
-    td.textContent = 'cell'
+    const td = document.createElement('td'); td.textContent = 'a|b'
     tr.appendChild(td)
     table.appendChild(tr)
-    const btn = document.createElement('button')
-    btn.className = 'table-block-copy-btn'
-    btn.setAttribute('data-action', 'copy')
-    btn.setAttribute('title', 'Copy')
-    btn.setAttribute('aria-label', 'Copy')
-    wrapper.appendChild(btn)
     wrapper.appendChild(table)
-    document.body.appendChild(wrapper)
-
-    const event = createClickEvent(btn)
-    expect(handleTableBlockClick(event)).toBe(true)
-    expect(btn.classList.contains('is-copied')).toBe(true)
+    handleTableBlockClick(createClickEvent(itemMd))
+    expect(copyText).toHaveBeenCalledWith(expect.stringContaining('a\\|b'))
 
     wrapper.remove()
   })
 
-  it('returns true for copy button click without table', () => {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'table-block-wrapper'
+  it('open-copy-menu without table still toggles menu', () => {
+    const { wrapper, btn, menu } = buildBlock()
+    const event = createClickEvent(btn)
+    expect(handleTableBlockClick(event)).toBe(true)
+    expect(menu.classList.contains('is-open')).toBe(true)
+
+    wrapper.remove()
+  })
+
+  it('returns true for open-copy-menu click without table', () => {
+    const { wrapper, btn } = buildBlock()
+    const event = createClickEvent(btn)
+    expect(handleTableBlockClick(event)).toBe(true)
+
+    wrapper.remove()
+  })
+})
+
+describe('closeAllTableBlockMenus', () => {
+  function buildMenu() {
     const btn = document.createElement('button')
     btn.className = 'table-block-copy-btn'
-    btn.setAttribute('data-action', 'copy')
-    wrapper.appendChild(btn)
-    document.body.appendChild(wrapper)
+    btn.setAttribute('data-action', 'open-copy-menu')
+    const menu = document.createElement('div')
+    menu.className = 'table-block-copy-menu is-open'
+    menu.style.display = 'block'
+    btn.appendChild(menu) // sibling structure: btn then menu
+    return { btn, menu }
+  }
 
-    const event = createClickEvent(btn)
-    expect(handleTableBlockClick(event)).toBe(true)
+  it('closes all open menus', () => {
+    const { btn, menu } = buildMenu()
+    document.body.appendChild(btn)
+    document.body.appendChild(menu)
 
-    wrapper.remove()
+    closeAllTableBlockMenus()
+    expect(menu.classList.contains('is-open')).toBe(false)
+    expect(menu.style.display).toBe('none')
+
+    btn.remove()
+    menu.remove()
   })
 
-  it('returns true for copy when already is-copied (no-op)', () => {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'table-block-wrapper'
-    const btn = document.createElement('button')
-    btn.className = 'table-block-copy-btn is-copied'
-    btn.setAttribute('data-action', 'copy')
-    wrapper.appendChild(btn)
-    document.body.appendChild(wrapper)
+  it('keeps the excepted trigger open', () => {
+    const a = buildMenu()
+    const b = buildMenu()
+    document.body.appendChild(a.btn)
+    document.body.appendChild(a.menu)
+    document.body.appendChild(b.btn)
+    document.body.appendChild(b.menu)
 
-    const event = createClickEvent(btn)
-    expect(handleTableBlockClick(event)).toBe(true)
+    closeAllTableBlockMenus(a.btn)
+    expect(a.menu.classList.contains('is-open')).toBe(true)
+    expect(b.menu.classList.contains('is-open')).toBe(false)
 
-    wrapper.remove()
-  })
-
-  it('copy button with thead-based table triggers clipboard', () => {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'table-block-wrapper'
-    const table = document.createElement('table')
-
-    const thead = document.createElement('thead')
-    const headerRow = document.createElement('tr')
-    const th1 = document.createElement('th'); th1.textContent = 'Name'
-    const th2 = document.createElement('th'); th2.textContent = 'Value'
-    headerRow.appendChild(th1)
-    headerRow.appendChild(th2)
-    thead.appendChild(headerRow)
-    table.appendChild(thead)
-
-    const tbody = document.createElement('tbody')
-    const dataRow = document.createElement('tr')
-    const td1 = document.createElement('td'); td1.textContent = 'foo'
-    const td2 = document.createElement('td'); td2.textContent = 'bar'
-    dataRow.appendChild(td1)
-    dataRow.appendChild(td2)
-    tbody.appendChild(dataRow)
-    table.appendChild(tbody)
-
-    const btn = document.createElement('button')
-    btn.className = 'table-block-copy-btn'
-    btn.setAttribute('data-action', 'copy')
-    btn.setAttribute('title', 'Copy')
-    btn.setAttribute('aria-label', 'Copy')
-    wrapper.appendChild(btn)
-    wrapper.appendChild(table)
-    document.body.appendChild(wrapper)
-
-    const event = createClickEvent(btn)
-    expect(handleTableBlockClick(event)).toBe(true)
-    expect(btn.classList.contains('is-copied')).toBe(true)
-
-    wrapper.remove()
-  })
-
-  it('copy button with table containing special characters escapes HTML', () => {
-    const wrapper = document.createElement('div')
-    wrapper.className = 'table-block-wrapper'
-    const table = document.createElement('table')
-    const tr = document.createElement('tr')
-    const td = document.createElement('td'); td.textContent = '<script>alert(1)</script>'
-    tr.appendChild(td)
-    table.appendChild(tr)
-
-    const btn = document.createElement('button')
-    btn.className = 'table-block-copy-btn'
-    btn.setAttribute('data-action', 'copy')
-    btn.setAttribute('title', 'Copy')
-    btn.setAttribute('aria-label', 'Copy')
-    wrapper.appendChild(btn)
-    wrapper.appendChild(table)
-    document.body.appendChild(wrapper)
-
-    const event = createClickEvent(btn)
-    expect(handleTableBlockClick(event)).toBe(true)
-
-    wrapper.remove()
+    a.btn.remove(); a.menu.remove()
+    b.btn.remove(); b.menu.remove()
   })
 })

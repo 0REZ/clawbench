@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, ref, defineComponent, h } from 'vue'
 import SessionDrawer from '@/components/chat/SessionDrawer.vue'
-import { useAgents } from '@/composables/useAgents'
+import { useAgents, setCLIModels } from '@/composables/useAgents'
 import { useSessionIdentity } from '@/composables/useSessionIdentity'
 import { apiPost } from '@/utils/api'
 import { patchAgentPref } from '@/composables/useSettingsConfig'
@@ -46,6 +46,7 @@ vi.mock('@/components/common/PopupMenu.vue', () => ({
 vi.mock('@/composables/useAgents', () => ({
   useAgents: vi.fn(),
   restoreOriginalModels: vi.fn(),
+  setCLIModels: vi.fn(),
   populateACPStateCache: vi.fn().mockResolvedValue(undefined),
   invalidateACPStateCache: vi.fn(),
 }))
@@ -284,7 +285,7 @@ describe('SessionDrawer', () => {
     await nextTick()
 
     expect(apiPost).toHaveBeenCalledWith('/api/agents/claude/refresh-models', {})
-    expect(mockAgents.updateAgentField).toHaveBeenCalledWith('claude', 'models', newModels)
+    expect(setCLIModels).toHaveBeenCalledWith('claude', newModels)
     expect(mockToastShow).toHaveBeenCalledWith('chat.sessionSetting.refreshSuccess', expect.any(Object))
   })
 

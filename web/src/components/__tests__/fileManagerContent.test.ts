@@ -100,6 +100,7 @@ vi.mock('@/utils/fileManager', () => ({
   createMultiSelect: () => ({
     state: reactive({ active: false, selected: new Set() }),
     enterMultiSelect: vi.fn(),
+    enterMultiSelectKeepSelection: vi.fn(),
     exitMultiSelect: vi.fn(),
     toggleSelect: vi.fn(),
   }),

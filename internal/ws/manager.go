@@ -163,8 +163,15 @@ func (m *Manager) Subscribe(conn *websocket.Conn, writeMu *sync.Mutex, clientID,
 	sub.writeMu = writeMu
 	sub.locale = locale
 	sub.lastActive = time.Now()
-	sub.eventBuffer = nil
-	sub.bufferStart = time.Time{}
+	// NOTE: eventBuffer is deliberately NOT cleared here. It holds the events
+	// buffered while this subscription was disconnected (or the rolling tail of
+	// events sent before a replace) and EventsHandler replays them via
+	// GetBufferedEvents right after Subscribe returns. Clearing it here made
+	// reconnect replay a no-op: buffered stream events (content/tool_use/done)
+	// produced while the client was away were silently lost, and the frontend
+	// could show a "finished" session that was still streaming.
+	// bufferStart is also left untouched — it is reset after replay completes
+	// in EventsHandler, so a fresh buffer window starts for the new connection.
 	// Rebuild the async queue for this connection. The fresh queue isolates the
 	// new connection from any stragglers of the old one.
 	sub.sendQueue = make(chan []byte, maxAsyncQueue)

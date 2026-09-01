@@ -867,6 +867,36 @@ describe('onSessionEvent', () => {
     })
   })
 
+  it('marks a cross-project session read passing its project_path', async () => {
+    // A session belonging to another project completes while being viewed
+    // (opened via a notification deep link / completion popover). The WS
+    // session_update event carries project_path — markSessionRead must pass
+    // it so the backend can verify ownership against the session's own
+    // project instead of the current cookie project.
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 'current-s1', messages: [], total: 0, running: false,
+      }),
+    })
+
+    const session = createSession()
+    mockState.currentSessionId = 'current-s1'
+
+    session.onSessionEvent({
+      session_id: 'current-s1',
+      status: 'completed',
+      project_path: '/other/project',
+    })
+
+    await vi.waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ai/chat/read?session_id=current-s1&project_path=%2Fother%2Fproject'),
+        expect.objectContaining({ method: 'POST' })
+      )
+    })
+  })
+
   it('does NOT mark read when a non-current session completes', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -1433,6 +1463,27 @@ describe('foreground return marks current session read', () => {
       (c: unknown[]) => String(c[0]).includes('/api/ai/chat/read')
     )
     expect(readCalls.length).toBe(0)
+  })
+
+  it('re-syncs the current session messages when the app returns to the foreground', async () => {
+    // Regression: on Android, document.visibilityState is unreliable in the
+    // WebView, so the WS may NOT have been disconnected while backgrounded —
+    // no clawbench-reconnect event fires on return, and background messages
+    // never appear. The native __setAppForeground bridge drives this callback
+    // regardless, so the current session must be re-synced (loadHistory) here.
+    const session = createForegroundTestSession()
+    const handlers = captureForegroundHandlers()
+
+    handlers[handlers.length - 1](true)
+
+    // handleWsReconnect → syncSessionOnReconnect(false) → loadHistory, which
+    // fetches /api/ai/chat?session_id=current-s1 with view=summary.
+    await vi.waitFor(() => {
+      const chatFetches = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: unknown[]) => String(c[0]).includes('/api/ai/chat?session_id=current-s1')
+      )
+      expect(chatFetches.length).toBeGreaterThan(0)
+    })
   })
 })
 
@@ -4180,6 +4231,62 @@ describe('handleWsReconnect', () => {
     // switchSession paths via immediate=true). The shared syncSessionOnReconnect
     // refactor must keep immediate=false for forceReload=false.
     expect(session.switching.value).toBe(false)
+
+    vi.restoreAllMocks()
+  })
+
+  it('when loading=false and snapshot unchanged: re-sync skips message re-parse (data-layer no-op)', async () => {
+    // Regression: the WS reconnect path (skipIfUnchanged=true) must skip the
+    // message re-parse / re-dispatch when the snapshot is unchanged — the
+    // messages array must not be rebuilt or rewritten. This is what makes the
+    // onAppForeground → handleWsReconnect belt-and-suspenders refresh harmless
+    // on every return to the foreground when nothing changed in the background.
+    // Note: onRenderUpdate(true) is intentionally STILL called — syncSessionOnReconnect
+    // forces a full re-render after any reconnect-style sync (matching the WS
+    // reconnect behavior), so the test asserts the data layer stays quiet, not
+    // the UI layer.
+    const loading = ref(false)
+    const onRenderUpdate = vi.fn()
+    const options = {
+      currentSessionId: ref('s1'),
+      messages: ref([]),
+      dispatch: (action: any) => { options.messages.value = chatMessageReducer(options.messages.value, action) },
+      loading,
+      inputDisabled: ref(false),
+      blockTasks: {},
+      blockAskQuestions: {},
+      expandedTools: ref({}),
+      onParseAssistantContent: vi.fn(),
+      onExtractScheduledTasks: vi.fn(),
+      onRenderUpdate,
+      onScrollBottom: vi.fn(),
+      onConnectStream: vi.fn(),
+      onDisconnectStream: vi.fn(),
+      onOpen: vi.fn(),
+    }
+    lastSessionOptions = options
+    const session = useChatSession(options)
+
+    // Step 1: establish a baseline snapshot ('snap-a') via a normal load.
+    mockUtilsFns.buildMessageSnapshot.mockReturnValue('snap-a')
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessionId: 's1', messages: [{ id: 'm1' }], total: 1, running: false,
+      }),
+    })
+    await session.loadHistory(true, false, false)
+
+    // Messages were parsed once during the baseline load.
+    const parseCallsBefore = mockUtilsFns.parseMessages.mock.calls.length
+    const msgsSnapshot = [...options.messages.value]
+
+    // Step 2: WS reconnect with the SAME snapshot — the message parse / array
+    // rebuild must be skipped (syncSessionState returns early).
+    await session.handleWsReconnect()
+
+    expect(mockUtilsFns.parseMessages.mock.calls.length).toBe(parseCallsBefore)
+    expect(options.messages.value).toEqual(msgsSnapshot)
 
     vi.restoreAllMocks()
   })

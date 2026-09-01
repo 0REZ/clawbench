@@ -6,7 +6,25 @@
       <button class="create-btn" @click.stop="addNewCommand" :title="t('terminal.addCommand')">
         <PlusIcon :size="16" />
       </button>
+      <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('terminal.moreActions')">
+        <MoreVerticalIcon :size="16" />
+      </button>
     </template>
+
+    <PopupMenu
+      v-model:show="showMoreMenu"
+      :target-element="moreBtnRef"
+      anchor="right"
+      :max-width="180"
+      :menu-items-count="2"
+    >
+      <button class="menu-item" @click="exportJson">
+        <DownloadIcon :size="14" /> {{ t('terminal.exportJson') }}
+      </button>
+      <button class="menu-item" @click="importJson">
+        <UploadIcon :size="14" /> {{ t('terminal.importJson') }}
+      </button>
+    </PopupMenu>
 
     <div class="qc-content">
       <div v-if="commands.length > 0" class="qc-list">
@@ -62,9 +80,11 @@ import { useI18n } from 'vue-i18n'
 import { VueDraggable } from 'vue-draggable-plus'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import QuickCommandEditModal from './QuickCommandEditModal.vue'
-import { ZapIcon, PencilIcon, Trash2Icon, PlusIcon, EyeOffIcon } from 'lucide-vue-next'
+import PopupMenu from '@/components/common/PopupMenu.vue'
+import { ZapIcon, PencilIcon, Trash2Icon, PlusIcon, EyeOffIcon, MoreVertical as MoreVerticalIcon, Download as DownloadIcon, Upload as UploadIcon } from 'lucide-vue-next'
 import { useQuickCommands, type QuickCommand } from '@/composables/useQuickCommands'
 import { useToast } from '@/composables/useToast'
+import { createJsonImporter, buildExportPayload, downloadJson } from '@/composables/useQuickSendIO'
 
 const props = defineProps({
   open: Boolean,
@@ -74,12 +94,14 @@ defineEmits(['close'])
 
 const { t } = useI18n()
 const toast = useToast()
-const { commands, reorderCommands, deleteCommand } = useQuickCommands()
+const { commands, addCommand, reorderCommands, deleteCommand } = useQuickCommands()
 
 const localCommands = ref<QuickCommand[]>([...commands.value])
 const deleteConfirmId = ref<number | null>(null)
 const editOpen = ref(false)
 const editingCommand = ref<QuickCommand | null>(null)
+const moreBtnRef = ref<HTMLElement | null>(null)
+const showMoreMenu = ref(false)
 
 // Sync local list when commands change
 watch(commands, (val) => {
@@ -110,6 +132,36 @@ function onCommandSaved() {
 
 function toggleDeleteConfirm(id: number) {
   deleteConfirmId.value = deleteConfirmId.value === id ? null : id
+}
+
+// ── Export / Import ──
+// Import resets all optional flags to defaults (hidden=false, auto_execute=false,
+// project_only=false → global) per design decision.
+const importer = createJsonImporter({
+  kind: 'terminal_quick_command',
+  existingLabels: () => new Set(commands.value.map(c => c.label)),
+  addItem: (item) => addCommand({ ...item, hidden: false, auto_execute: false, project_only: false }),
+  onError: (reason) => {
+    const key = reason === 'parseError'
+      ? 'terminal.importParseError'
+      : reason === 'kindMismatch'
+        ? 'terminal.importKindMismatch'
+        : 'terminal.importInvalidFile'
+    toast.show(t(key), { icon: '⚠️', type: 'error' })
+  },
+  onSummary: ({ imported, skipped }) => {
+    toast.show(t('terminal.importSuccess', { imported, skipped }), { icon: '✅', type: 'success' })
+  },
+})
+
+function exportJson() {
+  showMoreMenu.value = false
+  downloadJson(buildExportPayload('terminal_quick_command', commands.value), 'terminal_quick_command.json')
+}
+
+function importJson() {
+  showMoreMenu.value = false
+  importer.trigger()
 }
 
 async function doDelete(id: number) {
@@ -306,5 +358,26 @@ async function onDragEnd() {
 
 .qc-empty-icon {
   opacity: 0.3;
+}
+
+/* PopupMenu teleports to body — these styles must be unscoped */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+@media (hover: hover) {
+  .menu-item:hover {
+    background: var(--bg-tertiary, #f0f0f0);
+  }
 }
 </style>

@@ -1309,3 +1309,62 @@ func TestClientSubscription_ReconnectOldStopWriterNoOp(t *testing.T) {
 	_ = clientA.CloseNow()
 	_ = clientB.CloseNow()
 }
+
+// TestSubscribe_PreservesEventBufferForReplay is the regression test for the
+// reconnect-replay bug: Subscribe used to clear eventBuffer before
+// EventsHandler called GetBufferedEvents, so events buffered while a client
+// was disconnected were never replayed. Stream events (content/tool_use/done)
+// produced during the gap were silently lost, and the frontend could render a
+// "finished" session that was still streaming.
+//
+// The test simulates: connect → disconnect → broadcast while away → reconnect.
+// After the reconnect, GetBufferedEvents (what EventsHandler replays) MUST
+// still contain the event broadcast while the client was away.
+func TestSubscribe_PreservesEventBufferForReplay(t *testing.T) {
+	mgr := newTestManager()
+	var writeMu sync.Mutex
+
+	// First connection.
+	sub := mgr.Subscribe(nil, &writeMu, "replay-client", "")
+	if sub == nil {
+		t.Fatal("expected non-nil subscription on first connect")
+	}
+
+	// Disconnect — the subscription (and its buffer) is preserved.
+	mgr.DisconnectClient("replay-client")
+
+	// Event broadcast while the client is away must be buffered.
+	msg := ServerMessage{Type: "event", ID: "evt_away_1", Event: "chat_stream", Data: &ChatStreamData{SessionID: "s1", EventType: "done"}}
+	mgr.BroadcastEvent(msg)
+
+	bufferedBefore := sub.GetBufferedEvents()
+	if len(bufferedBefore) != 1 {
+		t.Fatalf("expected 1 buffered event while disconnected, got %d", len(bufferedBefore))
+	}
+
+	// Reconnect — Subscribe must NOT clear the buffer, so EventsHandler's
+	// subsequent GetBufferedEvents() can replay it.
+	sub2 := mgr.Subscribe(nil, &writeMu, "replay-client", "")
+	if sub2 == nil {
+		t.Fatal("expected non-nil subscription on reconnect")
+	}
+
+	bufferedAfter := sub2.GetBufferedEvents()
+	if len(bufferedAfter) != 1 {
+		t.Fatalf("REGRESSION: reconnect lost the buffered event — replay would be empty (got %d events)", len(bufferedAfter))
+	}
+	if bufferedAfter[0].ID != "evt_away_1" {
+		t.Errorf("expected buffered event 'evt_away_1', got %q", bufferedAfter[0].ID)
+	}
+
+	// After the replay is consumed, the buffer window resets (EventsHandler
+	// clears the buffer post-replay). Simulate that here so a subsequent
+	// reconnect does not replay the same event again.
+	sub2.mu.Lock()
+	sub2.eventBuffer = nil
+	sub2.bufferStart = time.Time{}
+	sub2.mu.Unlock()
+	if got := sub2.GetBufferedEvents(); len(got) != 0 {
+		t.Errorf("expected empty buffer after replay consumption, got %d events", len(got))
+	}
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { numberedName } from '@/utils/fileManager.ts'
+import { numberedName, createMultiSelect } from '@/utils/fileManager.ts'
 
 describe('numberedName', () => {
   it('appends a numeric suffix before the extension', () => {
@@ -30,5 +30,35 @@ describe('numberedName', () => {
 
   it('handles single-character extension', () => {
     expect(numberedName('file.c', 1)).toBe('file_1.c')
+  })
+})
+
+describe('createMultiSelect — enterMultiSelectKeepSelection', () => {
+  it('activates multi-select while preserving an existing selection', () => {
+    const { state, toggleSelect, enterMultiSelectKeepSelection } = createMultiSelect()
+    toggleSelect('a.txt')
+    enterMultiSelectKeepSelection()
+    expect(state.active).toBe(true)
+    expect(state.selected.has('a.txt')).toBe(true)
+  })
+
+  it('keeps all previously selected paths when entering multi-select', () => {
+    const { state, toggleSelect, enterMultiSelectKeepSelection } = createMultiSelect()
+    toggleSelect('a.txt')
+    toggleSelect('b.txt')
+    enterMultiSelectKeepSelection()
+    toggleSelect('c.txt')
+    expect(state.selected.size).toBe(3)
+    expect(state.selected.has('a.txt')).toBe(true)
+    expect(state.selected.has('b.txt')).toBe(true)
+    expect(state.selected.has('c.txt')).toBe(true)
+  })
+
+  it('returned API exposes enterMultiSelectKeepSelection alongside the other actions', () => {
+    const api = createMultiSelect()
+    expect(typeof api.enterMultiSelectKeepSelection).toBe('function')
+    expect(typeof api.enterMultiSelect).toBe('function')
+    expect(typeof api.exitMultiSelect).toBe('function')
+    expect(typeof api.toggleSelect).toBe('function')
   })
 })

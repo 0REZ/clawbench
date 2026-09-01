@@ -200,7 +200,7 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
 <style scoped>
 .quote-question-bar {
   position: fixed;
-  top: calc(var(--header-height, 40px) + 8px + var(--header-safe-area-top, 0px));
+  top: calc(var(--header-height) + 8px + var(--header-safe-area-top));
   left: 8px;
   right: 8px;
   background: color-mix(in srgb, var(--bg-tertiary) 88%, var(--bg-elevated, var(--bg-tertiary)));
@@ -312,6 +312,19 @@ defineExpose({ expanded, expand, displayQuoteText, onVisibleChange, inputRef, in
   margin: 0 2px;
   flex: 1;
   min-width: 0;
+}
+
+/* The scrollable text element must constrain itself — flex min-width on the
+   parent does NOT propagate to a scrollable child (min-width only takes effect
+   on the overflow element itself). Without this, a long unbreakable line (e.g.
+   a selected table rendered as text) stretches the text element to near-full
+   width, so its vertical scrollbar lands mid-bar instead of at the right edge.
+   max-width leaves room for the floating copy button; the 8px right padding
+   keeps the scrollbar clear of it. */
+.qq-quoted-text--expanded {
+  flex: 1;
+  min-width: 0;
+  max-width: calc(100% - 40px);
 }
 
 /* Collapsed inline variant — single row, no flex-start */

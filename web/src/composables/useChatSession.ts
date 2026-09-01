@@ -736,15 +736,19 @@ export function useChatSession(options: UseChatSessionOptions) {
    * happens only when the user actively opens the session (switchSession),
    * so automatic reloads never clear an unread badge the user hasn't seen.
    */
-  async function markSessionRead(sessionId: string): Promise<void> {
+  async function markSessionRead(sessionId: string, projectPath?: string): Promise<void> {
     if (!sessionId) return
     const params = new URLSearchParams({ session_id: sessionId })
-    // No project_path: MarkChatRead falls back to the cookie project for
-    // ownership verification. Passing the current projectRoot would 403 when
-    // the session belongs to a different project (e.g. a notification deep
-    // link into another project's session). Same-project switches work via
-    // the cookie; cross-project opens degrade gracefully (read not marked,
-    // session still opens).
+    // When the session's owning project is known (e.g. from the WS
+    // session_update event's project_path), pass it explicitly so the backend
+    // can verify ownership even when the current cookie project differs —
+    // otherwise cross-project sessions opened via notification deep links or
+    // the completion popover never get marked read. Omit it when unknown:
+    // MarkChatRead falls back to the cookie project, which is correct for
+    // same-project switches.
+    if (projectPath) {
+      params.set('project_path', projectPath)
+    }
     const resp = await fetch(`/api/ai/chat/read?${params.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -764,12 +768,23 @@ export function useChatSession(options: UseChatSessionOptions) {
   // refreshes the anchor harmlessly. loadSessionsOnce (deduped) re-reads the
   // unread state so the session list badge clears without waiting for a WS
   // event round-trip.
+  //
+  // handleWsReconnect() resyncs the current session's messages. This is the
+  // belt-and-suspenders path for Android: document.visibilityState is
+  // unreliable in the WebView (onPause doesn't reliably flip it to 'hidden'),
+  // so the WS may NOT have been disconnected while backgrounded and no
+  // clawbench-reconnect event fires on return. Messages produced in the
+  // background would then never appear. The native __setAppForeground bridge
+  // (authoritative on Android) drives this callback regardless, so the session
+  // is always re-synced here. skipIfUnchanged inside loadHistory makes the
+  // refresh a no-op when nothing changed.
   const removeForegroundReadListener = onAppForeground((fg) => {
     if (!fg) return
     const sid = currentSessionId.value
     if (!sid) return
     markSessionRead(sid).catch(() => {})
     loadSessionsOnce()
+    handleWsReconnect().catch(() => {})
   })
 
   async function switchSession(sessionId: string) {
@@ -1026,7 +1041,7 @@ export function useChatSession(options: UseChatSessionOptions) {
   let completionDebounce: ReturnType<typeof setTimeout> | null = null
 
   // Called from WS session_update event
-  function onSessionEvent(data: { session_id?: string; status?: string; has_new_messages?: boolean } | undefined) {
+  function onSessionEvent(data: { session_id?: string; status?: string; has_new_messages?: boolean; project_path?: string } | undefined) {
     if (!data) return
     const sid = data.session_id
 
@@ -1099,7 +1114,11 @@ export function useChatSession(options: UseChatSessionOptions) {
         // watching when it finished, so the badge must survive until opened.
         if ((data.status === 'completed' || data.status === 'cancelled')
             && appInForeground.value && !isReplayingEvents.value) {
-          markSessionRead(sid).catch(() => {})
+          // Pass the session's owning project (from the WS event) so a
+          // cross-project session that finished while viewed still gets marked
+          // read; without it the backend falls back to the cookie project and
+          // rejects ownership for a different project.
+          markSessionRead(sid, data.project_path).catch(() => {})
         }
       }
       // Recalculate chatUnread from backend instead of optimistically setting true.

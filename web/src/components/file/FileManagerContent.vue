@@ -839,8 +839,7 @@ function itemPath(name) {
 }
 
 // ── Multi-select ──
-const { state: multiSelect, enterMultiSelect, exitMultiSelect, toggleSelect } = _createMultiSelect()
-
+const { state: multiSelect, enterMultiSelect, enterMultiSelectKeepSelection, exitMultiSelect, toggleSelect } = _createMultiSelect()
 defineExpose({
     multiSelectState: multiSelect,
     searchDrawer: props.searchDrawer,
@@ -1258,9 +1257,17 @@ function handleItemClick(e) {
     const action = item.dataset.action
     const path = item.dataset.path
 
-    // PC Ctrl/Cmd+click toggles multi-select without entering the explicit mode first
+    // PC Ctrl/Cmd+click toggles multi-select without entering the explicit mode first.
+    // Keep any previously selected paths: Ctrl+click accumulates a multi-selection.
     if (isPC.value && (e.ctrlKey || e.metaKey)) {
-        if (!multiSelect.active) enterMultiSelect()
+        if (!multiSelect.active) {
+            // Seed the batch with the previously highlighted file so the
+            // prior single selection is included in the multi-selection.
+            enterMultiSelectKeepSelection()
+            if (selectedPath.value && selectedPath.value !== path) {
+                multiSelect.selected.add(selectedPath.value)
+            }
+        }
         selectedPath.value = path
         toggleSelect(path)
         return
@@ -1495,6 +1502,16 @@ function toggleAttach(path) {
 }
 
 function doDelete() {
+    // When a multi-selection exists (e.g. accumulated via PC Ctrl+click), the
+    // context-menu delete should remove all selected files, not just the item
+    // under the cursor. Delegate to doBatchDelete so the confirmation dialog
+    // matches the explicit multi-select delete flow.
+    if (multiSelect.active && multiSelect.selected.size > 0) {
+        appLog.d(TAG, '[doDelete] emitting batchDelete for:', multiSelect.selected.size, 'items')
+        closeCtxMenu()
+        doBatchDelete()
+        return
+    }
     const path = ctxMenu.entry.path
     appLog.d(TAG, '[doDelete] emitting delete for:', path)
     closeCtxMenu()
@@ -1569,6 +1586,10 @@ async function handleKeydown(e) {
         if (multiSelect.active && multiSelect.selected.size > 0) {
             e.preventDefault()
             doBatchDelete()
+        } else if (selectedPath.value) {
+            e.preventDefault()
+            appLog.d(TAG, '[kbd:Delete] emitting delete for:', selectedPath.value)
+            emit('delete', selectedPath.value)
         } else if (props.currentFile) {
             e.preventDefault()
             appLog.d(TAG, '[kbd:Delete] emitting delete for:', props.currentFile.path)

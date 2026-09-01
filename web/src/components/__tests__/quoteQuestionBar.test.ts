@@ -510,4 +510,26 @@ describe('QuoteQuestionBar component', () => {
     const active = document.activeElement
     expect(active?.classList.contains('qq-textarea')).toBe(true)
   })
+
+  it('expanded quote text constrains its own width so the scrollbar hugs the snippet edge', async () => {
+    // Regression: selecting a table yields a long unbreakable text line. The
+    // scrollable .qq-quoted-text--expanded is a flex item and must carry its own
+    // min-width:0/flex:1/max-width — flex min-width on the parent does not
+    // propagate to a scrollable child, which would stretch the text element to
+    // full width and park the vertical scrollbar mid-bar.
+    const longTableText = '| 列A  | 列B  | 列C  |'.repeat(200) // 无空格断行点
+    const wrapper = mountBar({ quoteData: { text: longTableText } })
+    const vm = wrapper.vm as any
+    await vm.expand()
+    await nextTick()
+
+    const textEl = wrapper.find('.qq-quoted-text--expanded').element as HTMLElement
+    const styles = window.getComputedStyle(textEl)
+    expect(styles.overflowY).toBe('auto')
+    // 滚动元素自身必须约束宽度，而不是依赖父容器 min-width
+    expect(styles.minWidth).toBe('0px')
+    expect(styles.flexGrow).toBe('1')
+    // 预留浮动 copy 按钮空间，避免滚动条压在按钮下面
+    expect(styles.maxWidth).toBe('calc(100% - 40px)')
+  })
 })

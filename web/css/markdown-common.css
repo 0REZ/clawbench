@@ -288,6 +288,28 @@
     color: #ffffff;
 }
 
+.chat-message.user .table-block-copy-btn[aria-expanded="true"] {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-message.user .table-block-copy-menu {
+    background: rgba(0, 0, 0, 0.75);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.chat-message.user .table-block-copy-menu-item {
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.chat-message.user .table-block-copy-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-message.user .table-block-copy-menu-item.is-copied {
+    color: #ffffff;
+}
+
 .chat-message.user th,
 .chat-message.user td {
     padding: 8px 14px;

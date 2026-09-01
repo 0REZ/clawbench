@@ -60,6 +60,12 @@ let initialized = false
 let sideEffects: ((tab: string) => void) | null = null
 let setActiveTab: ((tab: string) => void) | null = null
 
+// Listener handles kept so re-init (test reset) can remove old listeners
+// instead of accumulating duplicates on window / matchMedia.
+let resizeListener: (() => void) | null = null
+let mql: MediaQueryList | null = null
+let mqlChangeListener: (() => void) | null = null
+
 function readPersistedLeftTab(): string {
   try {
     const v = localStorage.getItem(WIDE_SCREEN_LEFT_TAB_KEY)
@@ -99,15 +105,23 @@ function initWideScreen() {
       )
     }
     recompute()
+    // Remove any previously registered listeners (a prior init in this
+    // process, e.g. after a test reset, may have added them).
+    if (resizeListener) window.removeEventListener('resize', resizeListener)
+    if (mql && mqlChangeListener) {
+      if (typeof mql.removeEventListener === 'function') mql.removeEventListener('change', mqlChangeListener)
+      else if (typeof (mql as { removeListener?: unknown }).removeListener === 'function') (mql as { removeListener: (cb: () => void) => void }).removeListener(mqlChangeListener)
+    }
     // Viewport resize covers rotation, window resize and browser-zoom DPR changes.
+    resizeListener = recompute
     window.addEventListener('resize', recompute)
     if (typeof window.matchMedia === 'function') {
-      const mql = window.matchMedia(`(min-width: ${WIDE_SCREEN_MIN_WIDTH}px)`)
-      const onChange = () => recompute()
+      mql = window.matchMedia(`(min-width: ${WIDE_SCREEN_MIN_WIDTH}px)`)
+      mqlChangeListener = () => recompute()
       if (typeof mql.addEventListener === 'function') {
-        mql.addEventListener('change', onChange)
+        mql.addEventListener('change', mqlChangeListener)
       } else if (typeof (mql as { addListener?: unknown }).addListener === 'function') {
-        ;(mql as { addListener: (cb: () => void) => void }).addListener(onChange)
+        ;(mql as { addListener: (cb: () => void) => void }).addListener(mqlChangeListener)
       }
     }
   }

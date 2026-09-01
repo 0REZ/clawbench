@@ -15,6 +15,9 @@
       :style="showConfirm ? confirmStyle : svgStyle"
       @animationend="onCheckAnimationEnd"
     />
+    <!-- Optional trailing content (e.g. a wide-screen text label). Default slot
+         renders after the icon; all existing callers pass no slot content. -->
+    <slot />
   </button>
 </template>
 

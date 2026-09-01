@@ -25,6 +25,26 @@ describe('multi-select state', () => {
     expect(state.selected.size).toBe(0)
   })
 
+  it('enterMultiSelectKeepSelection activates without clearing existing selection', () => {
+    const { state, enterMultiSelectKeepSelection, toggleSelect } = createMultiSelect()
+    toggleSelect('a.txt')
+    enterMultiSelectKeepSelection()
+    expect(state.active).toBe(true)
+    expect(state.selected.has('a.txt')).toBe(true)
+  })
+
+  it('enterMultiSelectKeepSelection when already selected keeps all previous paths', () => {
+    const { state, enterMultiSelectKeepSelection, toggleSelect } = createMultiSelect()
+    toggleSelect('a.txt')
+    toggleSelect('b.txt')
+    enterMultiSelectKeepSelection()
+    toggleSelect('c.txt')
+    expect(state.selected.size).toBe(3)
+    expect(state.selected.has('a.txt')).toBe(true)
+    expect(state.selected.has('b.txt')).toBe(true)
+    expect(state.selected.has('c.txt')).toBe(true)
+  })
+
   it('exitMultiSelect deactivates and clears selection', () => {
     const { state, enterMultiSelect, exitMultiSelect, toggleSelect } = createMultiSelect()
     enterMultiSelect()

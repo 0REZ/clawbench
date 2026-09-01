@@ -10,16 +10,23 @@ vi.mock('lucide-vue-next', () => ({
   Trash2Icon: { name: 'Trash2Icon', template: '<span />' },
   PlusIcon: { name: 'PlusIcon', template: '<span />' },
   SparklesIcon: { name: 'SparklesIcon', template: '<span />' },
+  MoreVerticalIcon: { name: 'MoreVerticalIcon', template: '<span />' },
+  DownloadIcon: { name: 'DownloadIcon', template: '<span />' },
+  UploadIcon: { name: 'UploadIcon', template: '<span />' },
   Send: { name: 'SendIcon', template: '<span />' },
   Pencil: { name: 'PencilIcon', template: '<span />' },
   Trash2: { name: 'Trash2Icon', template: '<span />' },
   Plus: { name: 'PlusIcon', template: '<span />' },
   Sparkles: { name: 'SparklesIcon', template: '<span />' },
+  MoreVertical: { name: 'MoreVerticalIcon', template: '<span />' },
+  Download: { name: 'DownloadIcon', template: '<span />' },
+  Upload: { name: 'UploadIcon', template: '<span />' },
 }))
 
-const { mockDeleteItem, mockReorderItems, mockToastShow } = vi.hoisted(() => ({
+const { mockDeleteItem, mockReorderItems, mockAddItem, mockToastShow } = vi.hoisted(() => ({
   mockDeleteItem: vi.fn().mockResolvedValue(true),
   mockReorderItems: vi.fn().mockResolvedValue(true),
+  mockAddItem: vi.fn().mockResolvedValue(true),
   mockToastShow: vi.fn(),
 }))
 
@@ -60,9 +67,19 @@ vi.mock('vue-draggable-plus', () => ({
 vi.mock('@/composables/useQuickSend', () => ({
   useQuickSend: () => ({
     items: ref([]),
+    addItem: mockAddItem,
     reorderItems: mockReorderItems,
     deleteItem: mockDeleteItem,
   }),
+}))
+
+vi.mock('@/composables/useQuickSendIO', () => ({
+  createJsonImporter: () => ({
+    trigger: vi.fn(),
+    importFromText: vi.fn(),
+  }),
+  buildExportPayload: (kind: string, items: unknown[]) => ({ version: 1, kind, items }),
+  downloadJson: vi.fn(),
 }))
 
 vi.mock('@/composables/useToast', () => ({
@@ -97,10 +114,10 @@ describe('QuickSendDrawer', () => {
     expect(wrapper.find('.qs-edit-modal-stub').exists()).toBe(true)
   })
 
-  it('renders add and clusters buttons in header', () => {
+  it('renders add, more and clusters buttons in header', () => {
     const wrapper = mountDrawer()
     const buttons = wrapper.findAll('.create-btn')
-    expect(buttons.length).toBe(2)
+    expect(buttons.length).toBe(3)
   })
 
   it('declares close emit', () => {

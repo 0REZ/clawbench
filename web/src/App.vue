@@ -98,7 +98,7 @@
                       :overlay-open="fileNav.overlayOpen.value"
                       :current-file="currentFile"
                       :file-loading="store.state.fileLoading"
-                      :toc-open="tocDrawer.effectiveOpen.value"
+                      :toc-open="effectiveTocOpen"
                       :search-open="searchDrawer.effectiveOpen.value"
                       :markdown-view-mode="markdownViewMode"
                       :file-history-open="fileHistoryDrawer.effectiveOpen.value"
@@ -107,7 +107,8 @@
                       @delete="handleDelete($event)"
                       @show-details="detailsDrawer.open()"
                       @open-git-history="openFileHistory"
-                      @toggle-toc="tocDrawer.toggle()"
+                      @toggle-toc="handleToggleToc"
+                      @close-toc="tocDockPref.close()"
                       @toggle-search="currentFile?.content && openFileSearch()"
                       @close-search="searchDrawer.close()"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
@@ -200,14 +201,17 @@
             <template #right>
               <div class="col-right" v-show="isWideScreen || activeTab === 'chat'" :class="{ 'chat-drop-active': chatDropActive }" @pointerdown="setActivePane('right')" @focusin="setActivePane('right')" @dragenter="onChatColDragEnter" @dragover="onChatColDragOver" @dragleave="onChatColDragLeave" @drop="onChatColDrop">
                 <div class="col-right-chat">
-                  <!-- Chat Tab -->
-                  <TabPanel tabId="chat" :activeTab="chatActive">
-                    <template #header>
-                      <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
-                      <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description bs-header-title-editable" :title="t('chat.sessionRename.tooltip')" @click="handleRenameSession">
-                        <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
-                      </div>
-                    </template>
+                  <!-- Shared chat title bar: spans both the chat panel and the
+                       session sidebar so they read as one column. -->
+                  <div class="chat-title-bar">
+                    <span class="bs-header-title"><AgentIcon v-if="sessionIdentity.currentAgentId.value" :backend="getAgentBackend(sessionIdentity.currentAgentId.value)" :name="getAgentName(sessionIdentity.currentAgentId.value)" :size="18" />{{ sessionIdentity.agentHeaderTitle.value }}</span>
+                    <div v-if="sessionIdentity.currentSessionTitle.value" class="bs-header-description bs-header-title-editable" :title="t('chat.sessionRename.tooltip')" @click="handleRenameSession">
+                      <HeaderMarquee :text="sessionIdentity.currentSessionTitle.value">{{ sessionIdentity.currentSessionTitle.value }}</HeaderMarquee>
+                    </div>
+                  </div>
+                  <div class="chat-panel-row">
+                  <!-- Chat Tab (title bar is now the shared one above) -->
+                  <TabPanel class="chat-tab-panel" noHeader tabId="chat" :activeTab="chatActive">
                     <ChatPanelContent
                       :active="isWideScreen || activeTab === 'chat'"
                       :keyboard-active="chatShortcutActive"
@@ -223,23 +227,24 @@
                     <Paperclip :size="16" />
                     {{ t('file.dropToAttach') }}
                   </div>
+                  <SessionSidebar
+                    ref="sessionSidebarRef"
+                    v-show="sessionSidebar.open.value && isWideScreen"
+                    :width="sessionSidebar.width.value"
+                    :current-session-id="sessionIdentity.currentSessionId.value"
+                    :running-session-ids="sessionIdentity.runningSessions.value"
+                    :is-active="sessionSidebar.open.value && isWideScreen"
+                    @resize="sessionSidebar.setWidth"
+                    @close="sessionSidebar.closeSidebar"
+                    @select="handleSessionSelect"
+                    @create="handleSessionCreate"
+                    @archive="handleSessionArchive"
+                    @destroy="handleSessionDestroy"
+                    @open-session-search="sessionSearchDrawer.open()"
+                    @create-agent-select="sessionIdentity.openAgentSelector"
+                  />
+                  </div>
                 </div>
-                <SessionSidebar
-                  ref="sessionSidebarRef"
-                  v-show="sessionSidebar.open.value && isWideScreen"
-                  :width="sessionSidebar.width.value"
-                  :current-session-id="sessionIdentity.currentSessionId.value"
-                  :running-session-ids="sessionIdentity.runningSessions.value"
-                  :is-active="sessionSidebar.open.value && isWideScreen"
-                  @resize="sessionSidebar.setWidth"
-                  @close="sessionSidebar.closeSidebar"
-                  @select="handleSessionSelect"
-                  @create="handleSessionCreate"
-                  @archive="handleSessionArchive"
-                  @destroy="handleSessionDestroy"
-                  @open-session-search="sessionSearchDrawer.open()"
-                  @create-agent-select="sessionIdentity.openAgentSelector"
-                />
               </div>
             </template>
           </SplitView>
@@ -405,6 +410,7 @@ import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { resolveThemeId, applyThemeAttributes, buildThemePalette } from '@/utils/themeMeta'
 import { useDockOverflow } from '@/composables/useDockOverflow'
+import { closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
 import { MessageSquare, MessageSquareOff, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
@@ -464,6 +470,7 @@ import { useTerminalStatus } from './composables/useTerminalStatus.ts'
 import { useFileWatch } from './composables/useFileWatch.ts'
 import { useFileNavStack } from './composables/useFileNavStack'
 import { useFileEditor } from './composables/useFileEditor'
+import { useTocDockPreference } from './composables/useTocDockPreference'
 import { openRecentFile, removeRecentFile, useRecentFiles } from './composables/useRecentFiles'
 import { initLocalLinkGuard } from './composables/useLocalLinkGuard'
 import { openFilePath } from './composables/useFilePathAnnotation'
@@ -790,6 +797,27 @@ const tocDrawer = useTabDrawer('view')
 const searchDrawer = useTabDrawer('view')
 const fileHistoryDrawer = useTabDrawer('view')
 const fileSearchDrawer = useTabDrawer('browse', { autoRestore: false })
+
+// Wide-screen inline TOC dock preference (open/width persisted, editing hides).
+const tocDockPref = useTocDockPreference()
+
+/**
+ * Effective TOC visibility for the FileHeader button highlight: the inline
+ * dock on wide screens, the bottom drawer otherwise.
+ */
+const effectiveTocOpen = computed(() => isWideScreen.value ? tocDockPref.effectiveOpen.value : tocDrawer.effectiveOpen.value)
+
+/**
+ * TOC toggle: wide screens toggle the inline right-side dock; narrow screens
+ * keep the bottom drawer.
+ */
+function handleToggleToc() {
+  if (isWideScreen.value) {
+    tocDockPref.toggle()
+  } else {
+    tocDrawer.toggle()
+  }
+}
 
 function openFileHistory() {
   fileHistoryDrawer.open()
@@ -1953,6 +1981,10 @@ function handleOverflowOutsideClick(e) {
   if (overflowMenuOpen.value && !e.target.closest('.dock-overflow-popup') && !e.target.closest('.dock-overflow-btn')) {
     overflowMenuOpen.value = false
   }
+  // Close any open table block copy menus (dropdowns injected into markdown)
+  if (!e.target.closest('.table-block-copy-menu') && !e.target.closest('.table-block-copy-btn')) {
+    closeAllTableBlockMenus()
+  }
 }
 
 // ── Wide-screen dock overflow state ──
@@ -2573,6 +2605,37 @@ onUnmounted(() => {
     flex: 1;
     min-width: 0;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+/* Shared chat title bar sits above the chat panel + session sidebar row. */
+.chat-title-bar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px;
+    height: var(--header-height);
+    background: var(--bg-secondary, #fff);
+    border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.12));
+    overflow: hidden;
+    white-space: nowrap;
+}
+/* Chat tab panel + session sidebar live in this row below the title bar. */
+.chat-panel-row {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+}
+/* Chat tab panel participates in the chat-panel-row flex row so the session
+   sidebar can sit inline beside it (instead of the global absolute inset:0
+   .tab-panel default which would cover the sidebar). */
+.chat-panel-row > .chat-tab-panel {
+    position: relative;
+    flex: 1;
+    min-width: 0;
 }
 
 /* Drag file/dir onto the chat column (wide-screen) — highlight the drop target */

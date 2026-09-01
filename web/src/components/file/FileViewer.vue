@@ -30,11 +30,13 @@
       @fit-width="handleFitWidth"
     />
 
-    <div class="file-viewer-content" ref="contentRef">
-      <!-- Loading (suppressed when external loading mask is active to avoid double flash) -->
-      <div v-if="loading && !externalLoading" class="loading">
-        <LoadingIndicator size="md" />
-      </div>
+    <!-- Content row: file content + (wide-screen) inline TOC dock -->
+    <div class="file-viewer-body">
+      <div class="file-viewer-content" ref="contentRef">
+        <!-- Loading (suppressed when external loading mask is active to avoid double flash) -->
+        <div v-if="loading && !externalLoading" class="loading">
+          <LoadingIndicator size="md" />
+        </div>
 
       <!-- Error -->
       <div v-else-if="file.error" class="error-bubble">
@@ -223,6 +225,17 @@
           @exit-edit="editing = false"
         />
       </div>
+      </div>
+
+      <!-- Wide-screen inline TOC dock, inside the content area -->
+      <TocDock
+        v-if="docked && tocOpen"
+        :file="tocFile"
+        :pdf-outline="pdfOutline"
+        @close="emit('closeToc')"
+        @jump="emit('jump', $event)"
+        @jump-page="emit('jumpPage', $event)"
+      />
     </div>
 
     <!-- Floating history nav (back/forward) over the content area -->
@@ -284,6 +297,7 @@ import DiffDrawer from './DiffDrawer.vue'
 import { useDiffDrawer } from '@/composables/useDiffDrawer.ts'
 import { diffDrawer } from '@/composables/useMarkdownDiff.ts'
 import FileHeader from './FileHeader.vue'
+import TocDock from './TocDock.vue'
 import { getFileType, formatFileSize } from '@/utils/fileType.ts'
 import { EditorView } from '@codemirror/view'
 import { extractToc } from '@/utils/toc.ts'
@@ -311,8 +325,13 @@ const props = defineProps({
     searchOpen: Boolean,
     markdownViewMode: String,
     externalLoading: Boolean,
+    /** Inline TOC dock payload (wide-screen only). */
+    tocFile: Object,
+    pdfOutline: { type: Array, default: () => [] },
+    /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
+    docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()
@@ -871,11 +890,22 @@ defineExpose({
     position: relative;
 }
 
+/* Content row: file content + optional inline TOC dock (wide-screen) */
+.file-viewer-body {
+    display: flex;
+    flex: 1;
+    flex-direction: row;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
 .file-viewer-content {
     display: flex;
     flex: 1;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
 }
 
 /* Floating history nav (back/forward) overlaid on the content area.

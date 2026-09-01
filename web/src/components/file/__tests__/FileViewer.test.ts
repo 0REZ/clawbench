@@ -189,6 +189,12 @@ const stubs = {
   MarkdownPreview: true,
   CodeMirrorViewer: codeMirrorViewerStub,
   DiffDrawer: true,
+  TocDock: {
+    name: 'TocDock',
+    props: ['file', 'pdfOutline'],
+    emits: ['close', 'jump', 'jumpPage'],
+    template: '<div class="toc-dock-stub"><button class="toc-dock-close-stub" @click="$emit(\'close\')" /></div>',
+  },
 }
 
 describe('FileViewer', () => {
@@ -715,5 +721,55 @@ describe('FileViewer', () => {
       ss.handleToggleSearch()
       expect(mockOpenSearch).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('FileViewer — inline TOC dock', () => {
+  function mountViewerWithDock(props = {}) {
+    return mount(FileViewer, {
+      props: {
+        file: { name: 'main.ts', path: 'main.ts', content: 'const x = 1' },
+        tocOpen: false,
+        searchOpen: false,
+        markdownViewMode: 'rendered',
+        externalLoading: false,
+        docked: false,
+        tocFile: null,
+        pdfOutline: [],
+        ...props,
+      },
+      global: {
+        plugins: [i18n],
+        stubs,
+      },
+    })
+  }
+
+  it('renders TocDock inside the content area on wide screens when tocOpen and docked', () => {
+    const wrapper = mountViewerWithDock({
+      tocOpen: true,
+      docked: true,
+      tocFile: { name: 'readme.md', path: '/readme.md' },
+    })
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    expect(dock.exists()).toBe(true)
+    expect(dock.props('file')).toMatchObject({ name: 'readme.md' })
+  })
+
+  it('does not render TocDock when docked but tocOpen is false', () => {
+    const wrapper = mountViewerWithDock({ tocOpen: false, docked: true })
+    expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(false)
+  })
+
+  it('does not render TocDock when not docked (narrow screen keeps bottom drawer)', () => {
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: false })
+    expect(wrapper.findComponent({ name: 'TocDock' }).exists()).toBe(false)
+  })
+
+  it('forwards TocDock close as closeToc', async () => {
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: true })
+    await wrapper.find('.toc-dock-close-stub').trigger('click')
+    expect(wrapper.emitted('closeToc')).toBeTruthy()
+    expect(wrapper.emitted('toggleToc')).toBeFalsy()
   })
 })

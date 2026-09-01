@@ -68,6 +68,12 @@ function handleHeaderClick() {
   opacity: 0;
   transition: opacity 150ms ease;
   pointer-events: none;
+  /* Create a stacking context so child z-indexes (e.g. .file-overlay's
+     z-index:100) stay contained inside this panel instead of escaping to
+     cover sibling panes — e.g. the split divider (z-index:2) next to the
+     left column. z-index:auto on a positioned element does NOT create a
+     stacking context, which is why the overlay escaped before. */
+  isolation: isolate;
 }
 
 .tab-panel-active {

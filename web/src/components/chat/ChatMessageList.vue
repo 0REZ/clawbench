@@ -150,7 +150,7 @@ import TableRowModal from '@/components/common/TableRowModal.vue'
 import { useDoubleClickCopy } from '@/composables/useDoubleClickCopy.ts'
 import { useTextSelectionActive } from '@/composables/useTextSelection.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
-import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
+import { handleCodeBlockClick, handleTableBlockClick, closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader.ts'
 import { useLocalhostUrlClickHandler } from '@/composables/useLocalhostAnnotation.ts'
 import { useDialog } from '@/composables/useDialog'
 import { useUserMsgIndex } from '@/composables/useUserMsgIndex.ts'
@@ -668,6 +668,10 @@ function hideScrollFab() {
 }
 
 function onDocumentClick(e) {
+  // Close any open table block copy menus when clicking elsewhere
+  if (!e.target.closest('.table-block-copy-menu') && !e.target.closest('.table-block-copy-btn')) {
+    closeAllTableBlockMenus()
+  }
   if (!scrollFabRef.value) return
   if (!scrollFabRef.value.contains(e.target)) {
     hideScrollFab()

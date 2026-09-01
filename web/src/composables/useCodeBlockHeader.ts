@@ -106,6 +106,9 @@ export function handleCodeBlockClick(event: MouseEvent): boolean {
     event.preventDefault()
     event.stopPropagation()
 
+    // Clicking a code block button dismisses any open table copy menus
+    closeAllTableBlockMenus()
+
     const wrapper = btn.closest('.code-block-wrapper')
     if (!wrapper) return true
 
@@ -147,6 +150,8 @@ export function handleCodeBlockClick(event: MouseEvent): boolean {
 
 const TABLE_COPY_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
 
+const TABLE_CHEVRON_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="M6 9l6 6 6-6"/></svg>'
+
 const TABLE_WRAP_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-3"/><path d="M18 15l-3 3 3 3"/><path d="M3 18h7"/></svg>'
 
 /**
@@ -183,15 +188,43 @@ export function annotateTableBlockHeaders(html: string): string {
         const actions = doc.createElement('span')
         actions.className = 'table-block-header-actions'
 
-        // Copy button
+        // Copy dropdown button (opens menu with Markdown/HTML/TSV options)
+        const copyDropdown = doc.createElement('span')
+        copyDropdown.className = 'table-block-copy-dropdown'
         const copyBtn = doc.createElement('button')
         copyBtn.className = 'table-block-copy-btn'
-        copyBtn.setAttribute('data-action', 'copy')
-        copyBtn.setAttribute('title', gt('common.copy'))
-        copyBtn.setAttribute('aria-label', gt('common.copy'))
+        copyBtn.setAttribute('data-action', 'open-copy-menu')
+        copyBtn.setAttribute('title', gt('tableBlock.copy'))
+        copyBtn.setAttribute('aria-label', gt('tableBlock.copy'))
+        copyBtn.setAttribute('aria-haspopup', 'true')
+        copyBtn.setAttribute('aria-expanded', 'false')
         copyBtn.setAttribute('type', 'button')
-        copyBtn.innerHTML = TABLE_COPY_ICON_SVG
-        actions.appendChild(copyBtn)
+        copyBtn.innerHTML = TABLE_COPY_ICON_SVG + TABLE_CHEVRON_ICON_SVG
+        copyDropdown.appendChild(copyBtn)
+
+        // Copy menu (popup with three formats)
+        const copyMenu = doc.createElement('div')
+        copyMenu.className = 'table-block-copy-menu'
+        copyMenu.setAttribute('role', 'menu')
+        copyMenu.style.display = 'none'
+
+        const copyMenuItems = [
+            { action: 'copy-md', label: gt('tableBlock.copyMarkdown') },
+            { action: 'copy-html', label: gt('tableBlock.copyHtml') },
+            { action: 'copy-tsv', label: gt('tableBlock.copyTsv') },
+        ]
+        for (const item of copyMenuItems) {
+            const menuItem = doc.createElement('button')
+            menuItem.className = 'table-block-copy-menu-item'
+            menuItem.setAttribute('data-action', item.action)
+            menuItem.setAttribute('role', 'menuitem')
+            menuItem.setAttribute('type', 'button')
+            menuItem.textContent = item.label
+            copyMenu.appendChild(menuItem)
+        }
+
+        copyDropdown.appendChild(copyMenu)
+        actions.appendChild(copyDropdown)
 
         // Wrap toggle button (default: wrap on, so button shows "wrapOn" state)
         const wrapBtn = doc.createElement('button')
@@ -215,9 +248,9 @@ export function annotateTableBlockHeaders(html: string): string {
 }
 
 /**
- * Extract table data as tab-separated values (TSV) for Word-pasteable copying.
+ * Extract table data: header row (first row / thead) and remaining data rows.
  */
-function tableToTSV(table: HTMLTableElement): string {
+function extractTableData(table: HTMLTableElement): { headers: string[]; rows: string[][] } {
     const rows: string[][] = []
 
     // Determine header row and data rows
@@ -246,6 +279,15 @@ function tableToTSV(table: HTMLTableElement): string {
         rows.push(cells)
     }
 
+    return { headers, rows }
+}
+
+/**
+ * Extract table data as tab-separated values (TSV) for spreadsheet-pasteable copying.
+ */
+function tableToTSV(table: HTMLTableElement): string {
+    const { headers, rows } = extractTableData(table)
+
     // Build TSV: header row + data rows
     const lines: string[] = []
     if (headers.length > 0) lines.push(headers.join('\t'))
@@ -254,27 +296,91 @@ function tableToTSV(table: HTMLTableElement): string {
 }
 
 /**
- * Copy table to clipboard in both HTML and plain-text formats.
- * HTML format ensures Word/Excel/Google Sheets paste as a proper table.
- * Falls back to plain TSV if ClipboardItem is unavailable.
+ * Escape a cell value for embedding in a GFM table:
+ * pipes must be escaped and newlines collapsed.
  */
-function copyTableToClipboard(table: HTMLTableElement): void {
-    const tsv = tableToTSV(table)
+function escapeMarkdownCell(text: string): string {
+    return text.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>')
+}
 
-    // Try ClipboardItem with text/html for rich paste into Word/Excel
+/**
+ * Extract table data as GitHub-Flavored Markdown table syntax.
+ * Includes header separator row (:-:, :--, --: alignment) using the same
+ * alignment hints as the rendered table's th elements when available.
+ */
+function tableToMarkdown(table: HTMLTableElement): string {
+    const thead = table.querySelector('thead')
+    const headers: string[] = []
+    const aligns: string[] = []
+
+    if (thead) {
+        thead.querySelectorAll('th').forEach(th => {
+            headers.push(escapeMarkdownCell((th.textContent || '').trim()))
+            aligns.push(tableCellAlignment(th))
+        })
+    } else {
+        const headerRow = table.querySelector('tr')
+        if (headerRow) {
+            headerRow.querySelectorAll('th, td').forEach(cell => {
+                headers.push(escapeMarkdownCell((cell.textContent || '').trim()))
+                aligns.push(tableCellAlignment(cell))
+            })
+        }
+    }
+
+    const { rows } = extractTableData(table)
+
+    const lines: string[] = []
+    if (headers.length > 0) {
+        lines.push(`| ${headers.join(' | ')} |`)
+        lines.push(`| ${aligns.join(' | ')} |`)
+    }
+    for (const row of rows) {
+        lines.push(`| ${row.map(escapeMarkdownCell).join(' | ')} |`)
+    }
+    return lines.join('\n')
+}
+
+/**
+ * Map a table cell's horizontal alignment (from inline style) to a GFM
+ * separator marker: :--- (left), ---: (right), :---: (center), --- (default).
+ */
+function tableCellAlignment(cell: Element): string {
+    const style = (cell as HTMLElement).style?.textAlign
+    if (style === 'left') return ':---'
+    if (style === 'right') return '---:'
+    if (style === 'center') return ':---:'
+    return '---'
+}
+
+/**
+ * Copy table content to the clipboard in a specific format.
+ * - markdown: GFM table syntax
+ * - html: clean <table> HTML (rich paste into Word/Excel)
+ * - tsv: tab-separated plain text
+ */
+function copyTableContent(table: HTMLTableElement, format: 'markdown' | 'html' | 'tsv'): void {
+    if (format === 'markdown') {
+        copyText(tableToMarkdown(table))
+        return
+    }
+    if (format === 'tsv') {
+        copyText(tableToTSV(table))
+        return
+    }
+    // html: prefer ClipboardItem so Word/Excel paste a proper table
+    const html = buildCleanTableHTML(table)
     if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-        // Build a clean HTML table from the DOM table's text content
-        const html = buildCleanTableHTML(table)
         const clipboardItem = new ClipboardItem({
             'text/html': new Blob([html], { type: 'text/html' }),
-            'text/plain': new Blob([tsv], { type: 'text/plain' }),
+            'text/plain': new Blob([tableToTSV(table)], { type: 'text/plain' }),
         })
         navigator.clipboard.write([clipboardItem]).catch(() => {
             // Fallback to plain TSV
-            copyText(tsv)
+            copyText(tableToTSV(table))
         })
     } else {
-        copyText(tsv)
+        copyText(html)
     }
 }
 
@@ -335,9 +441,20 @@ function escapeCellText(text: string): string {
  *
  * @returns true if the click was handled (caller should return early)
  */
+/**
+ * Handle table block header button clicks via event delegation.
+ * Call from any container click handler (ChatMessageList, MarkdownPreview, etc.).
+ *
+ * Supports:
+ *  - data-action="open-copy-menu" → toggle the copy format dropdown
+ *  - data-action="copy-md|copy-html|copy-tsv" → copy the table in that format
+ *  - data-action="wrap" → toggle word-wrap
+ *
+ * @returns true if the click was handled (caller should return early)
+ */
 export function handleTableBlockClick(event: MouseEvent): boolean {
     const target = event.target as HTMLElement
-    const btn = target.closest('.table-block-copy-btn, .table-block-wrap-btn')
+    const btn = target.closest<HTMLElement>('.table-block-copy-btn, .table-block-wrap-btn, .table-block-copy-menu-item')
     if (!btn) return false
 
     event.preventDefault()
@@ -348,25 +465,40 @@ export function handleTableBlockClick(event: MouseEvent): boolean {
 
     const action = btn.getAttribute('data-action')
 
-    if (action === 'copy') {
-        if (btn.classList.contains('is-copied')) return true
+    if (action === 'open-copy-menu') {
+        // Toggle this block's copy menu; close all other blocks' menus first
+        closeAllTableBlockMenus(btn)
+        const menu = btn.nextElementSibling as HTMLElement | null
+        const isOpen = menu && menu.classList.contains('is-open')
+        setTableMenuOpen(btn, menu, !isOpen)
+        return true
+    }
+
+    if (action === 'copy-md' || action === 'copy-html' || action === 'copy-tsv') {
         const table = wrapper.querySelector('table')
         if (!table) return true
-        copyTableToClipboard(table as HTMLTableElement)
-        // Show "Copied!" on the button briefly
-        const originalTitle = btn.getAttribute('title') || ''
-        const originalAriaLabel = btn.getAttribute('aria-label') || ''
-        btn.innerHTML = `<span class="table-block-copied-text">${gt('common.copied')}</span>`
+        const format = action === 'copy-md' ? 'markdown' : action === 'copy-html' ? 'html' : 'tsv'
+        copyTableContent(table as HTMLTableElement, format)
+        // Show "Copied!" on the menu item briefly
+        const originalText = btn.textContent || ''
+        btn.innerHTML = `<span class="table-block-copied-text">${gt('tableBlock.copied')}</span>`
         btn.classList.add('is-copied')
-        btn.setAttribute('title', gt('common.copied'))
-        btn.setAttribute('aria-label', gt('common.copied'))
         setTimeout(() => {
-            btn.innerHTML = TABLE_COPY_ICON_SVG
+            btn.textContent = originalText
             btn.classList.remove('is-copied')
-            btn.setAttribute('title', originalTitle)
-            btn.setAttribute('aria-label', originalAriaLabel)
         }, 1500)
-    } else if (action === 'wrap') {
+        // Close the menu after copying
+        const menu = btn.closest<HTMLElement>('.table-block-copy-menu')
+        if (menu) {
+            const trigger = menu.previousElementSibling as HTMLElement | null
+            setTableMenuOpen(trigger, menu, false)
+        }
+        return true
+    }
+
+    if (action === 'wrap') {
+        // Wrap toggle dismisses any open copy menus
+        closeAllTableBlockMenus()
         const isWrapped = wrapper.classList.contains('word-wrap')
         if (isWrapped) {
             wrapper.classList.remove('word-wrap')
@@ -384,6 +516,34 @@ export function handleTableBlockClick(event: MouseEvent): boolean {
     return true
 }
 
+/**
+ * Close every open table copy menu across the document. Called from
+ * global click handlers so clicking elsewhere dismisses open menus.
+ */
+export function closeAllTableBlockMenus(exceptBtn?: HTMLElement | null): void {
+    const menus = document.querySelectorAll('.table-block-copy-menu.is-open')
+    for (const el of Array.from(menus)) {
+        const menu = el as HTMLElement
+        const trigger = menu.previousElementSibling as HTMLElement | null
+        if (exceptBtn && trigger === exceptBtn) continue
+        setTableMenuOpen(trigger, menu, false)
+    }
+}
+
+function setTableMenuOpen(trigger: HTMLElement | null, menu: HTMLElement | null, open: boolean): void {
+    if (!menu) return
+    if (open) {
+        menu.classList.add('is-open')
+        menu.style.display = 'block'
+    } else {
+        menu.classList.remove('is-open')
+        menu.style.display = 'none'
+    }
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false')
+    }
+}
+
 export function useCodeBlockHeader() {
-    return { annotateCodeBlockHeaders, handleCodeBlockClick, annotateTableBlockHeaders, handleTableBlockClick }
+    return { annotateCodeBlockHeaders, handleCodeBlockClick, annotateTableBlockHeaders, handleTableBlockClick, closeAllTableBlockMenus }
 }

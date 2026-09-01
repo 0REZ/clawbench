@@ -1,7 +1,7 @@
 <template>
   <div class="chat-input-wrapper" ref="rootRef">
     <!-- Top action bar (above input box) -->
-    <div class="chat-top-actions">
+    <div class="chat-top-actions" ref="actionBarRef" :class="{ 'show-labels': showActionLabels }">
       <div class="chat-action-group">
         <span class="chat-group-label" :title="t('chat.actions.session')">
           {{ t('chat.actions.session') }}
@@ -11,22 +11,26 @@
           @click="$emit('open-session-tab', 'sessions')"
           :title="t('chat.actions.session')">
           <List :size="14" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.session') }}</span>
         </button>
         <button class="chat-action-btn"
           @click="handleCreateClick"
           @contextmenu.prevent="emit('create-session')"
           :title="t('chat.create.selectAgentOrLongPress')">
           <Plus :size="14" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.create') }}</span>
         </button>
         <button class="chat-action-btn"
           @click="$emit('open-session-search')"
           :title="t('chat.actions.sessionSearch')">
           <Search :size="14" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.search') }}</span>
         </button>
         <button class="chat-action-btn"
           @click="$emit('open-user-msg-index')"
           :title="t('chat.actions.userMsgIndex')">
           <MessagesSquare :size="14" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.jump') }}</span>
         </button>
         <button
           v-if="isACPTransport"
@@ -39,19 +43,24 @@
         >
           <LoadingIndicator v-if="props.acpSyncing" size="sm" inline />
           <ArrowRightLeft v-else :size="14" :stroke-width="1.5" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.sync') }}</span>
         </button>
         <button class="chat-action-btn chat-action-btn-archive" :class="{ disabled: !currentSessionId }"
           @click="handleArchive"
           :title="currentSessionId ? t('chat.actions.archiveCurrentSession') : t('chat.actions.noSessionToArchive')">
           <Archive :size="14" />
+          <span class="chat-action-label">{{ t('chat.actions.wideLabels.archive') }}</span>
         </button>
       </div>
       <button class="chat-action-btn auto-speech-btn" :class="{ active: autoSpeechEnabled }"
         @click="$emit('toggle-auto-speech')"
         :title="t('chat.actions.autoSpeech')">
         <Volume2 :size="14" />
+        <span class="chat-action-label">{{ t('chat.actions.wideLabels.speak') }}</span>
       </button>
-      <RefreshButton v-if="currentSessionId" data-action="refresh-session" class="chat-action-btn" :loading="refreshingSession" :title="t('chat.actions.reloadSession')" @click="$emit('refresh-session')" />
+      <RefreshButton v-if="currentSessionId" data-action="refresh-session" class="chat-action-btn" :loading="refreshingSession" :title="t('chat.actions.reloadSession')" @click="$emit('refresh-session')">
+        <span class="chat-action-label">{{ t('chat.actions.wideLabels.refresh') }}</span>
+      </RefreshButton>
     </div>
     <!-- Conversation recommendation banner (推荐回复) — sits above the input box so it never steals input space -->
     <Transition name="recommend-slide">
@@ -647,6 +656,35 @@ function onVoiceBlurStop() {
 
 const rootRef = ref(null)
 const textareaRef = ref(null)
+const actionBarRef = ref(null)
+/**
+ * Action-bar labels visibility: labels are shown only when the chat pane is
+ * wide enough to hold them. We force labels on, measure whether the action bar
+ * overflows its container, and toggle a flag. This keeps labels off on narrow
+ * chat panes regardless of wide-screen mode.
+ */
+const showActionLabels = ref(false)
+let actionBarObserver = null
+let actionBarMeasureTimer = null
+
+function measureActionLabels() {
+  const el = actionBarRef.value
+  if (!el) return
+  // Force the labels-on layout synchronously via .measure-labels (shows the
+  // label spans) so scrollWidth reflects the intended final width — the group
+  // label is always present — then compare against the available clientWidth.
+  el.classList.add('measure-labels')
+  const overflow = el.scrollWidth > el.clientWidth + 2
+  el.classList.remove('measure-labels')
+  showActionLabels.value = !overflow
+}
+function scheduleMeasureActionLabels() {
+  if (actionBarMeasureTimer) clearTimeout(actionBarMeasureTimer)
+  actionBarMeasureTimer = setTimeout(() => {
+    actionBarMeasureTimer = null
+    measureActionLabels()
+  }, 50)
+}
 const isPasteOver = ref(false)
 let pasteOverlayTimer = 0
 const attachDrawer = useTabDrawer('chat')
@@ -1127,7 +1165,7 @@ function autoResizeTextarea() {
   const lineHeight = parseFloat(computed.lineHeight) || 20
   const paddingTop = parseFloat(computed.paddingTop) || 0
   const paddingBottom = parseFloat(computed.paddingBottom) || 0
-  const maxContentHeight = lineHeight * 3
+  const maxContentHeight = lineHeight * 10
   const maxHeight = maxContentHeight + paddingTop + paddingBottom
   el.style.height = Math.min(el.scrollHeight, maxHeight) + 'px'
 }
@@ -1439,6 +1477,11 @@ onMounted(() => {
   window.addEventListener('keyup', onVoiceShortcutUp)
   window.addEventListener('blur', onVoiceBlurStop)
   window.addEventListener('clawbench-recommendation', onRecommendationEvent)
+  measureActionLabels()
+  if (typeof ResizeObserver !== 'undefined' && actionBarRef.value) {
+    actionBarObserver = new ResizeObserver(() => scheduleMeasureActionLabels())
+    actionBarObserver.observe(actionBarRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1455,7 +1498,14 @@ onBeforeUnmount(() => {
   }
   voiceInput.cancel()
   clearTimeout(pasteOverlayTimer)
-
+  if (actionBarObserver) {
+    actionBarObserver.disconnect()
+    actionBarObserver = null
+  }
+  if (actionBarMeasureTimer) {
+    clearTimeout(actionBarMeasureTimer)
+    actionBarMeasureTimer = null
+  }
   stopPlaceholderRotation()
 })
 
@@ -1482,6 +1532,7 @@ defineExpose({
   handleQuickSendClick,
   handleQuickSendInject,
   handleArchive,
+  measureActionLabels,
 })
 </script>
 
@@ -1590,7 +1641,30 @@ defineExpose({
   align-items: center;
   gap: 6px;
   padding: 2px 4px 6px;
-  overflow: hidden;
+  /* When labels are briefly rendered during measurement (or when the chat pane
+     is too narrow), allow horizontal scroll with a hidden scrollbar instead of
+     clipping the trailing buttons. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.chat-top-actions::-webkit-scrollbar {
+  display: none;
+}
+
+/* Wide-screen short label next to the action icon. Always in the DOM so the
+   action bar can be measured with labels forced on (see .measure-labels);
+   hidden unless the container proves it has room for them. */
+.chat-action-label {
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: none;
+}
+.chat-top-actions.show-labels .chat-action-label,
+.chat-top-actions.measure-labels .chat-action-label {
+  display: inline-block;
 }
 
 /* Session button group */
@@ -2092,7 +2166,7 @@ defineExpose({
   resize: none;
   overflow-y: auto;
   min-height: 28px;
-  max-height: calc(20px * 3 + 4px + 4px); /* 3 lines + padding-top + padding-bottom */
+  max-height: calc(20px * 10 + 4px + 4px); /* 10 lines + padding-top + padding-bottom */
   font-family: inherit;
 }
 

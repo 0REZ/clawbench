@@ -4,60 +4,69 @@
       v-if="overlayOpen"
       class="file-overlay"
     >
-      <!-- Main viewer area (no separate topbar — nav buttons are in FileManagerContent toolbar) -->
-      <div class="file-overlay-body" ref="contentRef" @click="handleContentClick">
-        <FileViewer
-          ref="fileViewerRef"
-          :file="currentFile"
-          :toc-open="tocOpen"
-          :search-open="searchOpen"
-          :markdown-view-mode="markdownViewMode"
-          :external-loading="fileLoading"
-          @delete="emit('delete', $event)"
-          @show-details="emit('showDetails')"
-          @open-git-history="emit('openGitHistory')"
-          @toggle-toc="emit('toggleToc')"
-          @toggle-search="emit('toggleSearch')"
-          @toggle-view="emit('toggleView')"
-          @refresh="emit('refresh')"
-          @open-file="emit('openFile', $event)"
-          @overlay-close="emit('overlayClose')"
-          @navigate-back="emit('navigateBack')"
-          @navigate-forward="emit('navigateForward')"
-          @share-external="emit('shareExternal')"
+      <div class="file-overlay-col">
+        <!-- Main viewer area (no separate topbar — nav buttons are in FileManagerContent toolbar) -->
+        <div class="file-overlay-body" ref="contentRef" @click="handleContentClick">
+          <FileViewer
+            ref="fileViewerRef"
+            :file="currentFile"
+            :toc-open="tocOpen"
+            :search-open="searchOpen"
+            :markdown-view-mode="markdownViewMode"
+            :external-loading="fileLoading"
+            :toc-file="tocFile"
+            :pdf-outline="pdfOutline"
+            :docked="docked"
+            @delete="emit('delete', $event)"
+            @show-details="emit('showDetails')"
+            @open-git-history="emit('openGitHistory')"
+            @toggle-toc="emit('toggleToc')"
+            @close-toc="emit('closeToc')"
+            @toggle-search="emit('toggleSearch')"
+            @toggle-view="emit('toggleView')"
+            @refresh="emit('refresh')"
+            @open-file="emit('openFile', $event)"
+            @overlay-close="emit('overlayClose')"
+            @navigate-back="emit('navigateBack')"
+            @navigate-forward="emit('navigateForward')"
+            @share-external="emit('shareExternal')"
+          />
+          <!-- File loading mask — same style as chat session-switch -->
+          <Transition name="loading-fade">
+            <LoadingIndicator v-if="fileLoading" overlay size="md" />
+          </Transition>
+        </div>
+
+        <!-- Drawers -->
+        <!-- Narrow-screen TOC: bottom drawer. Wide-screen uses the inline
+             TocDock rendered to the right of the content column instead. -->
+        <TocDrawer
+          v-if="!docked"
+          :open="tocOpen"
+          :file="tocFile"
+          :pdf-outline="pdfOutline"
+          @close="emit('toggleToc')"
+          @jump="emit('jump', $event)"
+          @jump-page="emit('jumpPage', $event)"
         />
-        <!-- File loading mask — same style as chat session-switch -->
-        <Transition name="loading-fade">
-          <LoadingIndicator v-if="fileLoading" overlay size="md" />
-        </Transition>
+
+        <SearchDrawer
+          ref="searchDrawerRef"
+          :open="searchOpen"
+          :file="currentFile"
+          :view-mode="markdownViewMode"
+          @close="emit('closeSearch')"
+          @jump="emit('jump', $event)"
+        />
+
+        <GitHistoryDrawer
+          :open="fileHistoryOpen"
+          mode="file"
+          :file="currentFile"
+          @close="emit('closeGitHistory')"
+          @open-file="emit('openFile', $event)"
+        />
       </div>
-
-      <!-- Drawers -->
-      <TocDrawer
-        :open="tocOpen"
-        :file="tocFile"
-        :pdf-outline="pdfOutline"
-        @close="emit('toggleToc')"
-        @jump="emit('jump', $event)"
-        @jump-page="emit('jumpPage', $event)"
-      />
-
-      <SearchDrawer
-        ref="searchDrawerRef"
-        :open="searchOpen"
-        :file="currentFile"
-        :view-mode="markdownViewMode"
-        @close="emit('closeSearch')"
-        @jump="emit('jump', $event)"
-      />
-
-      <GitHistoryDrawer
-        :open="fileHistoryOpen"
-        mode="file"
-        :file="currentFile"
-        @close="emit('closeGitHistory')"
-        @open-file="emit('openFile', $event)"
-      />
     </div>
   </Transition>
 </template>
@@ -69,6 +78,9 @@ import FileViewer from '@/components/file/FileViewer.vue'
 import TocDrawer from '@/components/TocDrawer.vue'
 import SearchDrawer from '@/components/common/SearchDrawer.vue'
 import GitHistoryDrawer from '@/components/git/GitHistoryDrawer.vue'
+import { getWideScreenState } from '@/composables/useWideScreenLayout'
+
+const { isWideScreen } = getWideScreenState()
 
 const props = defineProps({
   overlayOpen: Boolean,
@@ -82,9 +94,12 @@ const props = defineProps({
   pdfOutline: Object,
 })
 
+/** Wide-screen inline TOC dock vs narrow-screen bottom drawer. */
+const docked = computed(() => isWideScreen.value)
+
 const emit = defineEmits([
   'delete', 'showDetails', 'openGitHistory',
-  'toggleToc', 'toggleSearch', 'toggleView', 'refresh',
+  'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh',
   'jump', 'jumpPage', 'closeGitHistory', 'openFile',
   'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'closeSearch',
 ])
@@ -149,10 +164,21 @@ function handleContentClick(event) {
 .file-overlay {
   position: absolute;
   inset: 0;
-  z-index: 100;
+  display: flex;
+  flex-direction: row;
+  background: var(--bg-primary);
+  overflow: hidden;
+  /* No z-index here. FileOverlay is the only child of its tab panel, so it
+     needs no stacking level inside the panel; an explicit z-index would
+     escape the panel unless the panel is isolated (TabPanel uses
+     isolation:isolate), risking covers over the split divider. */
+}
+
+.file-overlay-col {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
   overflow: hidden;
 }
 

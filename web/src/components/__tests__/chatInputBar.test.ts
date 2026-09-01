@@ -75,6 +75,19 @@ const i18n = createI18n({
           noSessionToArchive: '无可归档会话',
           forkSession: '派生会话',
           userMsgIndex: '消息索引',
+          sessionSearch: '搜索会话',
+          acpSync: 'ACP 同步',
+          reloadSession: '重新打开会话',
+          wideLabels: {
+            session: '列表',
+            create: '创建',
+            search: '搜索',
+            jump: '跳转',
+            sync: '同步',
+            archive: '归档',
+            speak: '朗读',
+            refresh: '刷新',
+          },
         },
         create: { selectAgentOrLongPress: '选择Agent' },
         delete: { confirm: '确认删除？' },
@@ -558,5 +571,75 @@ describe('ChatInputBar — user message index button', () => {
 
     await indexBtn!.trigger('click')
     expect(wrapper.emitted('open-user-msg-index')).toBeTruthy()
+  })
+})
+
+describe('ChatInputBar — action labels by container width', () => {
+  function actionBar(wrapper: ReturnType<typeof mount>) {
+    return wrapper.find('.chat-top-actions')
+  }
+  function labelTexts(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAll('.chat-action-label').map(el => el.text())
+  }
+  function mockBarWidth(wrapper: ReturnType<typeof mount>, scrollWidth: number, clientWidth: number) {
+    const bar = actionBar(wrapper).element as HTMLElement
+    Object.defineProperty(bar, 'scrollWidth', { configurable: true, value: scrollWidth })
+    Object.defineProperty(bar, 'clientWidth', { configurable: true, value: clientWidth })
+  }
+
+  it('hides labels when the container is too narrow (icons only)', async () => {
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    // jsdom measures 0x0, which fits → labels shown by default. Force overflow.
+    mockBarWidth(wrapper, 600, 400)
+    wrapper.vm.measureActionLabels()
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
+  })
+
+  it('shows short Chinese labels for every action button when width suffices', async () => {
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    const texts = labelTexts(wrapper)
+    // 列表、创建、搜索、跳转、归档、朗读、刷新 always render; 同步 only when
+    // the current session uses ACP transport (isACPTransport computed).
+    expect(texts).toContain('列表')
+    expect(texts).toContain('创建')
+    expect(texts).toContain('搜索')
+    expect(texts).toContain('跳转')
+    expect(texts).toContain('归档')
+    expect(texts).toContain('朗读')
+    expect(texts).toContain('刷新')
+    expect(texts).not.toContain('同步')
+  })
+
+  it('shows the sync label for ACP transport sessions', async () => {
+    const wrapper = mountInputBar({ currentTransport: 'acp-stdio' }, { deep: true })
+    await nextTick()
+
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    const texts = labelTexts(wrapper)
+    expect(texts).toContain('同步')
+    expect(texts).toContain('跳转')
+  })
+
+  it('keeps the group label visible whether or not labels are shown', async () => {
+    // Width suffices → labels shown, group label stays
+    const wrapper = mountInputBar({}, { deep: true })
+    await nextTick()
+    expect(actionBar(wrapper).classes()).toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
+    expect(wrapper.find('.chat-group-label').text()).toBe('会话')
+
+    // Width insufficient → labels hidden, group label still stays
+    mockBarWidth(wrapper, 600, 400)
+    wrapper.vm.measureActionLabels()
+    await nextTick()
+    expect(actionBar(wrapper).classes()).not.toContain('show-labels')
+    expect(wrapper.find('.chat-group-label').exists()).toBe(true)
   })
 })

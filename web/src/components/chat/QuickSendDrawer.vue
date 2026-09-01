@@ -10,8 +10,26 @@
         <button class="create-btn" @click.stop="addNewItem" :title="t('chat.quickSend.addItem')">
           <PlusIcon :size="16" />
         </button>
+        <button ref="moreBtnRef" class="create-btn" @click.stop="showMoreMenu = !showMoreMenu" :title="t('chat.quickSend.moreActions')">
+          <MoreVerticalIcon :size="16" />
+        </button>
       </span>
     </template>
+
+    <PopupMenu
+      v-model:show="showMoreMenu"
+      :target-element="moreBtnRef"
+      anchor="right"
+      :max-width="180"
+      :menu-items-count="2"
+    >
+      <button class="menu-item" @click="exportJson">
+        <DownloadIcon :size="14" /> {{ t('chat.quickSend.exportJson') }}
+      </button>
+      <button class="menu-item" @click="importJson">
+        <UploadIcon :size="14" /> {{ t('chat.quickSend.importJson') }}
+      </button>
+    </PopupMenu>
 
     <div class="qs-content">
       <div v-if="items.length > 0" class="qs-list">
@@ -67,9 +85,11 @@ import { VueDraggable } from 'vue-draggable-plus'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import QuickSendEditModal from './QuickSendEditModal.vue'
 import MessageClustersDrawer from './MessageClustersDrawer.vue'
-import { Send as SendIcon, PencilIcon, Trash2Icon, PlusIcon, Sparkles as SparklesIcon } from 'lucide-vue-next'
+import PopupMenu from '@/components/common/PopupMenu.vue'
+import { Send as SendIcon, PencilIcon, Trash2Icon, PlusIcon, Sparkles as SparklesIcon, MoreVertical as MoreVerticalIcon, Download as DownloadIcon, Upload as UploadIcon } from 'lucide-vue-next'
 import { useQuickSend, type QuickSendItem } from '@/composables/useQuickSend'
 import { useToast } from '@/composables/useToast'
+import { createJsonImporter, buildExportPayload, downloadJson } from '@/composables/useQuickSendIO'
 
 const props = defineProps({
   open: Boolean,
@@ -79,13 +99,15 @@ defineEmits(['close'])
 
 const { t } = useI18n()
 const toast = useToast()
-const { items, reorderItems, deleteItem } = useQuickSend()
+const { items, addItem, reorderItems, deleteItem } = useQuickSend()
 
 const localItems = ref<QuickSendItem[]>([...items.value])
 const deleteConfirmId = ref<number | null>(null)
 const editOpen = ref(false)
 const editingItem = ref<QuickSendItem | null>(null)
 const clustersDrawerRef = ref<InstanceType<typeof MessageClustersDrawer> | null>(null)
+const moreBtnRef = ref<HTMLElement | null>(null)
+const showMoreMenu = ref(false)
 
 // Sync local list when items change
 watch(items, (val) => {
@@ -116,6 +138,35 @@ function onItemSaved() {
 
 function toggleDeleteConfirm(id: number) {
   deleteConfirmId.value = deleteConfirmId.value === id ? null : id
+}
+
+// ── Export / Import ──
+const importer = createJsonImporter({
+  kind: 'chat_quick_send',
+  existingLabels: () => new Set(items.value.map(it => it.label)),
+  // Import resets project_only to false (global) per design decision.
+  addItem: (item) => addItem({ ...item, project_only: false }),
+  onError: (reason) => {
+    const key = reason === 'parseError'
+      ? 'chat.quickSend.importParseError'
+      : reason === 'kindMismatch'
+        ? 'chat.quickSend.importKindMismatch'
+        : 'chat.quickSend.importInvalidFile'
+    toast.show(t(key), { icon: '⚠️', type: 'error' })
+  },
+  onSummary: ({ imported, skipped }) => {
+    toast.show(t('chat.quickSend.importSuccess', { imported, skipped }), { icon: '✅', type: 'success' })
+  },
+})
+
+function exportJson() {
+  showMoreMenu.value = false
+  downloadJson(buildExportPayload('chat_quick_send', items.value), 'chat_quick_send.json')
+}
+
+function importJson() {
+  showMoreMenu.value = false
+  importer.trigger()
 }
 
 async function doDelete(id: number) {
@@ -301,5 +352,26 @@ async function onDragEnd() {
 
 .qs-empty-icon {
   opacity: 0.3;
+}
+
+/* PopupMenu teleports to body — these styles must be unscoped */
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+@media (hover: hover) {
+  .menu-item:hover {
+    background: var(--bg-tertiary, #f0f0f0);
+  }
 }
 </style>
