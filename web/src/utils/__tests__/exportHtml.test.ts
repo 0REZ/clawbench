@@ -658,13 +658,31 @@ describe('exportRenderedHtml', () => {
     })
     el.remove()
 
-    expect(result.html).toContain('toc-toggle')
-    expect(result.html).toContain('toc-drawer')
+    expect(result.html).toContain('toc-sidebar')
     expect(result.html).toContain('Table of Contents')
     expect(result.html).toContain('#intro')
     expect(result.html).toContain('#setup')
     expect(result.html).toContain('Introduction')
     expect(result.html).toContain('Setup')
+  })
+
+  it('renders a persistent TOC sidebar (collapsible) instead of a floating drawer', async () => {
+    const el = createElement('<h1 id="intro">Introduction</h1><h2 id="setup">Setup</h2><p>content</p>')
+    const result = await exportRenderedHtml({
+      markdownBodyEl: el,
+      filePath: 'test.md',
+      fileName: 'test.md',
+    })
+    el.remove()
+
+    // Persistent sidebar container — present in the body by default
+    expect(result.html).toContain('toc-sidebar')
+    // Collapse toggle button (collapsible)
+    expect(result.html).toContain('toc-collapse')
+    // No floating translateX-hidden drawer anymore
+    expect(result.html).not.toContain('translateX(100%)')
+    // Content + sidebar live in a flex row so the TOC stays visible
+    expect(result.html).toContain('toc-layout')
   })
 
   it('does not include TOC when no headings', async () => {
@@ -676,8 +694,8 @@ describe('exportRenderedHtml', () => {
     })
     el.remove()
 
-    expect(result.html).not.toContain('toc-toggle')
-    expect(result.html).not.toContain('toc-drawer')
+    expect(result.html).not.toContain('toc-sidebar')
+    expect(result.html).not.toContain('toc-collapse')
   })
 
   it('localizes TOC title, copy feedback and word-wrap labels for zh locale', async () => {
@@ -727,7 +745,7 @@ describe('exportRenderedHtml', () => {
     })
     el.remove()
 
-    expect(result.html).toContain('toc-drawer')
+    expect(result.html).toContain('toc-sidebar')
     expect(result.html).toContain('#has-id')
     const tocItems = result.html.match(/class="toc-item"/g)
     expect(tocItems).toHaveLength(1)
