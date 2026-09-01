@@ -55,7 +55,7 @@ func scanSkillsFromDir(skillsDir string) []SkillInfo {
 			continue
 		}
 
-		data, err := os.ReadFile(skillFile) //nolint:gosec // G122: path is constructed from ReadDir entries; skills are trusted local files
+		data, err := os.ReadFile(skillFile)
 		if err != nil {
 			slog.Debug("acp skill scan: cannot read skill file", "path", skillFile, "error", err)
 			continue

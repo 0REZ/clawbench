@@ -12,11 +12,11 @@ import (
 
 func TestParseSkillFrontmatter(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantName    string
-		wantDesc    string
-		wantOK      bool
+		name     string
+		input    string
+		wantName string
+		wantDesc string
+		wantOK   bool
 	}{
 		{
 			name: "valid frontmatter with name and description",
@@ -451,12 +451,12 @@ func TestEscapeTableCell(t *testing.T) {
 
 func TestSkillsToCommands(t *testing.T) {
 	tests := []struct {
-		name       string
-		skills     []SkillInfo
-		wantNil    bool
-		wantNames  []string
-		wantDescs  []string
-		wantLen    int
+		name      string
+		skills    []SkillInfo
+		wantNil   bool
+		wantNames []string
+		wantDescs []string
+		wantLen   int
 	}{
 		{
 			name:    "nil skills",
