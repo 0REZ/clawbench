@@ -135,6 +135,16 @@ func (b *ACPBackend) ExecuteStream(ctx context.Context, req ChatRequest) (<-chan
 
 		// Step 3: Send prompt
 		slog.Info("acp perf: ExecuteStream.step3_Prompt_start", "session_id", req.SessionID, "after_emitSession", time.Since(streamStart))
+	// Inject CodeBuddy skills prompt into system prompt so skills are
+	// available in ACP mode just like TUI mode.
+	if conn.skillsPrompt != "" {
+		if req.SystemPrompt != "" {
+			req.SystemPrompt = req.SystemPrompt + "\n\n" + conn.skillsPrompt
+		} else {
+			req.SystemPrompt = conn.skillsPrompt
+		}
+		slog.Info("acp: injected skills prompt into system prompt", "session_id", req.SessionID, "skills_len", len(conn.skillsPrompt))
+	}
 		promptBlocks := b.buildPromptBlocks(req)
 		err = conn.Prompt(ctx, promptBlocks, ch, req)
 		if err != nil {

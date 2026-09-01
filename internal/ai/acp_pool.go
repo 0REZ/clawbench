@@ -894,6 +894,11 @@ type ACPConn struct {
 	// Protected by rawOutputMu. Cleared at the start of each Prompt call.
 	rawOutputMu  sync.Mutex
 	rawOutputBuf strings.Builder
+
+	// skillsPrompt is the pre-built system prompt section for CodeBuddy skills,
+	// injected into each prompt so CodeBuddy can auto-load skills. Populated
+	// during spawn for CodeBuddy backend. Empty if no skills found.
+	skillsPrompt string
 }
 
 // cancelPrompt cancels the in-flight prompt (if any) via the ACP protocol,

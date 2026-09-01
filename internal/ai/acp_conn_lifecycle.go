@@ -615,6 +615,29 @@ func (c *ACPConn) spawnLocked(ctx context.Context) error {
 		}
 	}
 
+	// Pre-scan CodeBuddy skills so they are available in ACP mode just like TUI mode.
+	// CodeBuddy's ACP process does not auto-scan ~/.codebuddy/skills/, so we
+	// scan them here and inject a skills summary into the system prompt.
+	// Skills also appear in the slash command menu (/) via AvailableCommandsUpdate.
+	if isCodeBuddyBackend(c.agent) {
+		if skills := ScanCodeBuddySkills(); len(skills) > 0 {
+			c.skillsPrompt = buildSkillsSystemPrompt(skills)
+
+			// Register skills as slash commands so they appear in the / menu
+			skillCmds := SkillsToCommands(skills)
+			agentID := c.agent.ID
+			existing := GetAgentCapabilityRegistry().GetCommands(agentID)
+			merged := MergeCommands(existing, skillCmds)
+			GetAgentCapabilityRegistry().UpdateCommands(agentID, merged)
+			client.MergeCommandsFromScan(skillCmds)
+
+			slog.Info("acp: pre-scanned CodeBuddy skills",
+				"agent", agentID, "skill_count", len(skills), "command_count", len(skillCmds))
+		} else {
+			c.skillsPrompt = ""
+		}
+	}
+
 	c.cmd = cmd
 	c.conn = conn
 	c.client = client
