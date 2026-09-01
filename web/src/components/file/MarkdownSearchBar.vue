@@ -12,7 +12,6 @@
     @input="onQueryInput"
     @prev="goPrev"
     @next="goNext"
-    @select="selectAll"
     @close="close"
     @enter="onEnter"
     @escape="close"
@@ -237,24 +236,6 @@ function goPrev() {
     activeIndex.value = (activeIndex.value - 1 + matches.value.length) % matches.value.length
     applyActive()
     jumpTo(marks.value[activeIndex.value])
-}
-
-// Select all matches (mirrors CodeMirror's selectMatches). The rendered DOM
-// cannot hold a multi-range selection, so this selects the first match's text
-// while all matches stay highlighted via their <mark> wrappers.
-function selectAll() {
-    if (!matches.value.length) return
-    activeIndex.value = 0
-    applyActive()
-    const first = marks.value[0]
-    try {
-        const range = document.createRange()
-        range.selectNodeContents(first)
-        const sel = window.getSelection()
-        sel?.removeAllRanges()
-        sel?.addRange(range)
-    } catch { /* ignore */ }
-    jumpTo(first)
 }
 
 // ── Jump: instant center scroll + match-text flash ──────────────────────────

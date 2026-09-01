@@ -24,7 +24,6 @@ import {
     getSearchQuery,
     replaceNext,
     replaceAll,
-    selectMatches,
 } from '@codemirror/search'
 import { h, render, type VNode } from 'vue'
 import SearchBar, { type SearchBarLabels } from '@/components/common/SearchBar.vue'
@@ -184,7 +183,6 @@ export function searchPanel(spec: SearchPanelSpec) {
                         },
                         onPrev: () => this.goPrev(),
                         onNext: () => this.goNext(),
-                        onSelect: () => selectMatches(this.view),
                         onClose: () => this.close(),
                         onEnter: (shift: boolean) => {
                             if (shift) this.goPrev()

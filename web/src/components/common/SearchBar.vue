@@ -17,26 +17,29 @@
           <button
             name="case"
             class="search-opt-btn"
-            :class="{ active: caseSensitive }"
+            :class="{ active: localCase }"
             :title="labels.matchCase"
-            :aria-pressed="caseSensitive"
-            @click="emit('case-change', !caseSensitive)"
+            :aria-label="labels.matchCase"
+            :aria-pressed="localCase"
+            @click="toggle('case')"
           >Aa</button>
           <button
             name="word"
             class="search-opt-btn search-opt-btn-word"
-            :class="{ active: wholeWord }"
+            :class="{ active: localWord }"
             :title="labels.byWord"
-            :aria-pressed="wholeWord"
-            @click="emit('word-change', !wholeWord)"
+            :aria-label="labels.byWord"
+            :aria-pressed="localWord"
+            @click="toggle('word')"
           >ab</button>
           <button
             name="regexp"
             class="search-opt-btn"
-            :class="{ active: regexp }"
+            :class="{ active: localRegexp }"
             :title="labels.regexp"
-            :aria-pressed="regexp"
-            @click="emit('regexp-change', !regexp)"
+            :aria-label="labels.regexp"
+            :aria-pressed="localRegexp"
+            @click="toggle('regexp')"
           >.*</button>
         </span>
       </span>
@@ -129,7 +132,6 @@ const emit = defineEmits<{
   (e: 'replace-input', value: string): void
   (e: 'prev'): void
   (e: 'next'): void
-  (e: 'select'): void
   (e: 'close'): void
   (e: 'enter', shiftKey: boolean): void
   (e: 'escape'): void
@@ -141,6 +143,31 @@ const emit = defineEmits<{
 }>()
 
 const inputRef = ref<HTMLInputElement | null>(null)
+
+// Local mirrors of the option props. Clicking toggles these immediately and
+// emits the new value — relying on `!prop` directly would read a stale prop
+// when the user double-clicks faster than the parent re-renders, wedging the
+// toggle. The props stay the source of truth; the mirrors resync via watch.
+const localCase = ref(props.caseSensitive)
+const localRegexp = ref(props.regexp)
+const localWord = ref(props.wholeWord)
+
+watch(() => props.caseSensitive, (v) => { localCase.value = v })
+watch(() => props.regexp, (v) => { localRegexp.value = v })
+watch(() => props.wholeWord, (v) => { localWord.value = v })
+
+function toggle(which: 'case' | 'regexp' | 'word') {
+  if (which === 'case') {
+    localCase.value = !localCase.value
+    emit('case-change', localCase.value)
+  } else if (which === 'regexp') {
+    localRegexp.value = !localRegexp.value
+    emit('regexp-change', localRegexp.value)
+  } else {
+    localWord.value = !localWord.value
+    emit('word-change', localWord.value)
+  }
+}
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter') {

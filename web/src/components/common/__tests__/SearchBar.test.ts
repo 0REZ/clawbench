@@ -110,11 +110,25 @@ describe('SearchBar', () => {
     await wrapper.find('button[name=word]').trigger('click')
     expect(wrapper.emitted('word-change')).toBeTruthy()
     expect(wrapper.emitted('word-change')![0]).toEqual([true])
-    // Active prop drives the icon's active class.
+    // Active prop drives the icon's active class + aria-pressed.
     await wrapper.setProps({ caseSensitive: true, regexp: true, wholeWord: true })
     expect(wrapper.find('button[name=case]').classes()).toContain('active')
     expect(wrapper.find('button[name=regexp]').classes()).toContain('active')
     expect(wrapper.find('button[name=word]').classes()).toContain('active')
+    expect(wrapper.find('button[name=case]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('button[name=regexp]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('button[name=word]').attributes('aria-pressed')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('emits false when toggling an option off (true → false)', async () => {
+    const wrapper = mountBar({ open: true, caseSensitive: true, regexp: true, wholeWord: true })
+    await wrapper.find('button[name=case]').trigger('click')
+    expect(wrapper.emitted('case-change')![0]).toEqual([false])
+    await wrapper.find('button[name=regexp]').trigger('click')
+    expect(wrapper.emitted('regexp-change')![0]).toEqual([false])
+    await wrapper.find('button[name=word]').trigger('click')
+    expect(wrapper.emitted('word-change')![0]).toEqual([false])
     wrapper.unmount()
   })
 
