@@ -245,6 +245,18 @@ describe('ProjectDialog — toolbar buttons', () => {
     expect(mockFetch).toHaveBeenCalled()
   })
 
+  it('jump button is grouped with the toolbar actions before the search input', async () => {
+    const wrapper = await mountOpen()
+    await flushPromises()
+    const toolbarRow = wrapper.find('.dialog-toolbar-row')
+    const jumpBtn = toolbarRow.find('button[title*="jump.button"]')
+    const searchInput = toolbarRow.find('.search-stub')
+    expect(jumpBtn.exists()).toBe(true)
+    // Search input is pushed to the right edge (margin-left:auto), so the jump
+    // button must sit before it in DOM order to be part of the toolbar cluster.
+    expect(jumpBtn.element.compareDocumentPosition(searchInput.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('new folder button calls dialog.prompt', async () => {
     mockDialogPrompt.mockResolvedValueOnce(null)
     const wrapper = await mountNonRoot()

@@ -1,5 +1,5 @@
 <template>
-  <ModalDialog :open="open" :title="t('jump.title')" :z-index="2400" @close="$emit('close')">
+  <ModalDialog :open="open" :title="t('jump.title')" :z-index="2600" @close="$emit('close')">
     <div class="jump-dialog-body">
       <input
         ref="inputRef"

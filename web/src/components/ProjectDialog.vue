@@ -15,10 +15,10 @@
           <Eye v-else :size="16" />
         </button>
         <RefreshButton icon="RotateCw" :size="16" class="toolbar-btn" :loading="refreshing" :disabled="refreshing" :title="t('nav.refresh')" @click="doRefresh" />
-        <SearchInput v-model="searchQuery" :placeholder="t('projectDialog.search')" />
         <button class="toolbar-btn jump-btn" @click="jumpOpen = true" :title="t('jump.button')">
           <LocateFixed :size="16" />
         </button>
+        <SearchInput v-model="searchQuery" :placeholder="t('projectDialog.search')" />
       </div>
       <DirBreadcrumb :path="browsePath === '/' ? '' : browsePath" @navigate="onBreadcrumbNavigate" />
     </div>
