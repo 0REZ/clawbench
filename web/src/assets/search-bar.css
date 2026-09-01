@@ -16,7 +16,7 @@
  * ──────────────────────────────────────────────────────────────────────────── */
 
 .cm-search {
-  --search-ctrl-h: 22px;
+  --search-ctrl-h: 26px;
 }
 
 /* ── Host layout (`.search-bar`): full-width bar pinned to the bottom with
@@ -80,10 +80,10 @@
   border: 1px solid var(--border-color);
   border-radius: 0;
   color: var(--text-primary);
-  padding: 3px 8px;
+  padding: 4px 10px;
   outline: none;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   min-height: var(--search-ctrl-h);
   box-sizing: border-box;
 }
@@ -103,7 +103,7 @@
   flex: 1;
   min-width: 0;
   /* Room for the three inline option icons (Aa / .* / Ab). */
-  padding-right: 62px;
+  padding-right: 78px;
 }
 .search-input-actions {
   position: absolute;
@@ -117,12 +117,12 @@
 }
 .search-input-actions .search-opt-btn {
   pointer-events: auto;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
   line-height: 1;
   border-radius: 3px;
@@ -153,9 +153,9 @@
   border: 1px solid var(--border-color);
   border-radius: 0;
   color: var(--text-primary);
-  padding: 3px 10px;
+  padding: 4px 12px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   min-height: var(--search-ctrl-h);
   box-sizing: border-box;
   line-height: 1;
@@ -225,7 +225,7 @@
 /* ── Match counter ── */
 .cm-search .cm-search-match-info {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }

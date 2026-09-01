@@ -44,7 +44,7 @@
       <button name="next" class="cm-button" :disabled="!canNav" :title="labels.next" aria-label="Next match" @click="emit('next')"></button>
       <span class="cm-search-match-info">{{ matchText }}</span>
       <button name="close" class="cm-button" :title="labels.close" aria-label="Close search" @click="emit('close')">
-        <svg class="search-close-icon" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+        <svg class="search-close-icon" width="12" height="12" viewBox="0 0 10 10" fill="none" aria-hidden="true">
           <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>
       </button>
