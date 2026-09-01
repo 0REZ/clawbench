@@ -101,10 +101,10 @@ onBeforeUnmount(() => {
   max-width: 400px;
   flex-shrink: 0;
   background: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
-  /* Separate the dock from the FileHeader above it so they don't stick
-     together — the dock starts below the header's bottom edge. */
-  border-top: 1px solid var(--border-color);
+  /* No border-left: the drag divider's gutter-line (centered on this edge)
+     already provides the separator — combining both would render a thick
+     double line between the content area and the dock.
+     No border-top: the FileHeader's bottom border already separates it. */
   overflow: hidden;
 }
 

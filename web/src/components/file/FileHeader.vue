@@ -493,6 +493,7 @@ onBeforeUnmount(() => {
     padding: 0 4px 0 6px;
     background: var(--bg-secondary);
     border: none;
+    border-bottom: 1px solid var(--border-color);
     font-size: 12px;
     position: sticky;
     top: 0;
