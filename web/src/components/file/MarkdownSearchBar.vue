@@ -26,7 +26,6 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SearchBar, { type SearchBarLabels } from '@/components/common/SearchBar.vue'
-import { shouldCorrectAfterSettle } from '@/utils/searchUtils.ts'
 
 const { t } = useI18n()
 
@@ -258,74 +257,23 @@ function selectAll() {
     jumpTo(first)
 }
 
-// ── Jump: center scroll + match-text flash ──────────────────────────────────
-function getScrollParent(node: Node): HTMLElement | null {
-    let el = node.parentElement
-    while (el) {
-        const s = getComputedStyle(el)
-        if (/(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight) return el
-        el = el.parentElement
-    }
-    return null
-}
-
-function centerDelta(anchor: HTMLElement, scroller: HTMLElement): number {
-    const a = anchor.getBoundingClientRect()
-    const s = scroller.getBoundingClientRect()
-    return a.top + a.height / 2 - (s.top + scroller.clientHeight / 2)
-}
-
-const correctionTimers = new Set<ReturnType<typeof setInterval>>()
-
-function correctAfterSettle(anchor: HTMLElement, scroller: HTMLElement | null, onDone: () => void) {
-    if (!anchor || !scroller) { onDone(); return }
-    const deltas: number[] = []
-    let attempts = 0
-    let centeredStreak = 0
-    const MAX_ATTEMPTS = 25
-    const CENTERED_TICKS = 8
-    const timer = setInterval(() => {
-        if (!anchor.isConnected || attempts++ >= MAX_ATTEMPTS) {
-            clearInterval(timer)
-            correctionTimers.delete(timer)
-            onDone()
-            return
-        }
-        const delta = centerDelta(anchor, scroller)
-        deltas.push(delta)
-        const decision = shouldCorrectAfterSettle(deltas)
-        if (decision.index !== -1) {
-            if (decision.corrected) {
-                scroller.scrollTop += delta
-                deltas.length = 0
-                centeredStreak = 0
-            } else if (++centeredStreak >= CENTERED_TICKS) {
-                clearInterval(timer)
-                correctionTimers.delete(timer)
-                onDone()
-            }
-        } else {
-            centeredStreak = 0
-        }
-    }, 80)
-    correctionTimers.add(timer)
-}
+// ── Jump: instant center scroll + match-text flash ──────────────────────────
+const flashTimers = new Set<ReturnType<typeof setTimeout>>()
 
 onBeforeUnmount(() => {
-    correctionTimers.forEach((t) => clearInterval(t))
-    correctionTimers.clear()
+    flashTimers.forEach((t) => clearTimeout(t))
+    flashTimers.clear()
     clearHighlights()
 })
 
 function jumpTo(mark: HTMLElement | null | undefined) {
     if (!mark || !mark.isConnected) return
-    // Flash the active match text, then settle-center it in the scroller.
+    // Flash the active match text. The scroll is a single instant jump
+    // (behavior:'auto' centers immediately — no animation, no settle loop).
     mark.classList.add('search-match-flash')
-    const scroller = getScrollParent(mark)
     mark.scrollIntoView({ behavior: 'auto', block: 'center' })
-    correctAfterSettle(mark, scroller, () => {
-        mark.classList.remove('search-match-flash')
-    })
+    const timer = setTimeout(() => mark.classList.remove('search-match-flash'), 800)
+    flashTimers.add(timer)
 }
 
 function close() {

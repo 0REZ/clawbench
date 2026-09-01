@@ -114,13 +114,7 @@ describe('MarkdownSearchBar', () => {
   })
 
   it('wraps every match in a mark and flashes the active one (no line-flash)', async () => {
-    const md = seedMarkdownBody('<p>alpha one</p><p>alpha two</p>')
-    // jsdom reports 0 scrollHeight/clientHeight, so getScrollParent can't find
-    // a scroller → correctAfterSettle returns instantly. Stub the dimensions
-    // so the flash class stays long enough to assert.
-    Object.defineProperty(md, 'clientHeight', { value: 100, configurable: true })
-    Object.defineProperty(md, 'scrollHeight', { value: 300, configurable: true })
-    md.style.overflowY = 'auto'
+    seedMarkdownBody('<p>alpha one</p><p>alpha two</p>')
     const wrapper = mountBar({ open: true })
     await sleep(20)
     const input = wrapper.find('input')
@@ -142,8 +136,8 @@ describe('MarkdownSearchBar', () => {
     expect(active[0].classList.contains('search-match-flash')).toBe(true)
     // No whole-block flash remains.
     expect(document.querySelectorAll('.line-flash')).toHaveLength(0)
-    // The flash class is removed after the settle timer chain.
-    await sleep(2600)
+    // The flash class is removed after the 800ms timeout.
+    await sleep(900)
     expect(document.querySelectorAll('.search-match-flash')).toHaveLength(0)
     // Active highlight persists after the flash.
     expect(document.querySelectorAll('.markdown-body mark.md-search-match-active')).toHaveLength(1)

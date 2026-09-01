@@ -17,13 +17,11 @@
  * emits (input / prev / next / close / …).
  */
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet } from '@codemirror/view'
-import { Prec, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state'
+import { EditorSelection, EditorState, Prec, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state'
 import {
     SearchQuery,
     setSearchQuery,
     getSearchQuery,
-    findNext,
-    findPrevious,
     replaceNext,
     replaceAll,
     selectMatches,
@@ -184,13 +182,13 @@ export function searchPanel(spec: SearchPanelSpec) {
                             this.replaceValue = value
                             this.commit()
                         },
-                        onPrev: () => findPrevious(this.view),
-                        onNext: () => findNext(this.view),
+                        onPrev: () => this.goPrev(),
+                        onNext: () => this.goNext(),
                         onSelect: () => selectMatches(this.view),
                         onClose: () => this.close(),
                         onEnter: (shift: boolean) => {
-                            if (shift) findPrevious(this.view)
-                            else findNext(this.view)
+                            if (shift) this.goPrev()
+                            else this.goNext()
                         },
                         onEscape: () => this.close(),
                         'onCase-change': (checked: boolean) => {
@@ -209,6 +207,31 @@ export function searchPanel(spec: SearchPanelSpec) {
                         'onReplace-all': () => replaceAll(this.view),
                     })
                     render(this.vnode, this.host)
+                }
+
+                // Move to the next match (with wrap-around), using the public
+                // getCursor API: first search forward from the selection, then
+                // wrap to the document start if nothing is found ahead.
+                private goNext() {
+                    const spec = getSearchQuery(this.view.state)
+                    if (!spec || !spec.valid || !spec.search) return
+                    const query = new SearchQuery(spec)
+                    const state = this.view.state
+                    const { to } = state.selection.main
+                    const match = findMatchAhead(query, state, to)
+                    if (match) goToMatch(this.view, match.from, match.to)
+                }
+
+                // Move to the previous match (with wrap-around): search backward
+                // from the selection, wrapping to the document end if needed.
+                private goPrev() {
+                    const spec = getSearchQuery(this.view.state)
+                    if (!spec || !spec.valid || !spec.search) return
+                    const query = new SearchQuery(spec)
+                    const state = this.view.state
+                    const { from } = state.selection.main
+                    const match = findMatchBehind(query, state, from)
+                    if (match) goToMatch(this.view, match.from, match.to)
                 }
 
                 private commit() {
@@ -318,3 +341,55 @@ function toSearchBarLabels(p: SearchPanelPhrases): SearchBarLabels {
         close: p.close,
     }
 }
+
+// ── Match navigation ────────────────────────────────────────────────────────
+// Jump to a match: set the selection AND scroll it into view instantly, below
+// the sticky-scroll overlay. The library's default scrollToMatch uses
+// y:'nearest', which can park a match at the very top where the sticky scope
+// lines cover it — here we force y:'start' plus a margin equal to the sticky
+// height so the selected text always lands in the visible area below it.
+function stickyHeight(view: EditorView): number {
+    const sticky = view.dom.querySelector<HTMLElement>('.sticky-scroll-overlay')
+    return sticky ? sticky.getBoundingClientRect().height : 0
+}
+
+function goToMatch(view: EditorView, from: number, to: number) {
+    const selection = EditorSelection.single(from, to)
+    view.dispatch({
+        selection,
+        effects: EditorView.scrollIntoView(from, { y: 'start', yMargin: stickyHeight(view) + 8 }),
+        userEvent: 'select.search',
+    })
+}
+
+// First match at or after `from`, wrapping to the document start when nothing
+// is found ahead (mirrors @codemirror/search's findNext wrap-around).
+function findMatchAhead(query: SearchQuery, state: EditorState, from: number): { from: number; to: number } | null {
+    const doc = state.doc
+    const range = query.getCursor(state, from, doc.length)
+    let step = range.next()
+    if (!step.done) return step.value
+    // Wrap: search from the document start up to `from`.
+    const wrap = query.getCursor(state, 0, Math.max(0, from))
+    step = wrap.next()
+    return step.done ? null : step.value
+}
+
+// Last match strictly before `from`, wrapping to the document end when nothing
+// is found behind (mirrors @codemirror/search's findPrevious wrap-around).
+function findMatchBehind(query: SearchQuery, state: EditorState, from: number): { from: number; to: number } | null {
+    const doc = state.doc
+    const range = query.getCursor(state, 0, from)
+    let last: { from: number; to: number } | null = null
+    let step = range.next()
+    while (!step.done) {
+        last = step.value
+        step = range.next()
+    }
+    if (last) return last
+    // Wrap: search from `from` to the end.
+    const wrap = query.getCursor(state, from, doc.length)
+    step = wrap.next()
+    return step.done ? null : step.value
+}
+

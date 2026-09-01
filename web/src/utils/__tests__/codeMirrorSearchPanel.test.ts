@@ -1,9 +1,8 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { search, highlightSelectionMatches, setSearchQuery, SearchQuery } from '@codemirror/search'
 import { searchPanel, searchPanelField, searchPanelToggle, openSearchPanelCommand } from '../codeMirrorSearchPanel'
-
 const phrases = { find: 'Find', replace: 'Replace', next: 'Next', previous: 'Previous', all: 'All', matchCase: 'Match case', regexp: 'Regexp', byWord: 'By word', replaceAction: 'Replace', replaceAllAction: 'Replace all', close: 'Close' }
 
 function makeView(readonly = false) {
@@ -17,6 +16,10 @@ function makeView(readonly = false) {
     })
     return new EditorView({ state: st, parent: document.body })
 }
+
+beforeEach(() => {
+    document.body.innerHTML = ''
+})
 
 describe('codeMirrorSearchPanel', () => {
     it('creates the panel DOM with search/replace/option controls', () => {
@@ -101,6 +104,42 @@ describe('codeMirrorSearchPanel', () => {
         await new Promise(r => setTimeout(r, 20))
         // First click jumps from match 1 to match 2 (anchor moved past 0).
         expect(v.state.selection.main.head).toBeGreaterThan(0)
+        v.destroy()
+    })
+
+    it('navigation dispatches an instant scrollIntoView with a sticky offset', async () => {
+        let captured: Array<{ y?: string; yMargin?: number }> = []
+        const st = EditorState.create({
+            doc: 'alpha beta\nalpha gamma\nalpha',
+            extensions: [
+                search({ top: false }),
+                highlightSelectionMatches(),
+                EditorView.updateListener.of((u) => {
+                    if (u.transactions.some((t) => t.selection)) {
+                        captured = u.transactions.flatMap((t) =>
+                            t.effects
+                                .map((e) => e.value as { y?: string; yMargin?: number })
+                                .filter((v): v is { y: string; yMargin: number } => typeof v === 'object' && v !== null && v.y !== undefined),
+                        )
+                    }
+                }),
+                searchPanel({ readonly: false, phrases }),
+            ],
+        })
+        const v = new EditorView({ state: st, parent: document.body })
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        captured = []
+        document.querySelector<HTMLElement>('.cm-search button[name=next]')!.click()
+        await new Promise(r => setTimeout(r, 20))
+        // The next-click jump scrolls instantly to the top with a sticky offset.
+        expect(captured.length).toBe(1)
+        expect(captured[0].y).toBe('start')
+        expect(captured[0].yMargin).toBeGreaterThanOrEqual(8)
         v.destroy()
     })
 
