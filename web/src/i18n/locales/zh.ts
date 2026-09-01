@@ -984,7 +984,6 @@ export default {
         replace: '替换',
         next: '下一个',
         previous: '上一个',
-        all: '全部',
         matchCase: '区分大小写',
         regexp: '正则',
         byWord: '全词匹配',

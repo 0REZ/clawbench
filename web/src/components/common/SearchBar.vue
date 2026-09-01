@@ -75,7 +75,6 @@ export interface SearchBarLabels {
   replace: string
   previous: string
   next: string
-  all: string
   matchCase: string
   regexp: string
   byWord: string
@@ -118,7 +117,6 @@ const labels = computed<SearchBarLabels>(() => ({
   replace: props.labels.replace || 'Replace',
   previous: props.labels.previous || 'Previous match',
   next: props.labels.next || 'Next match',
-  all: props.labels.all || 'All',
   matchCase: props.labels.matchCase || 'Match case',
   regexp: props.labels.regexp || 'Regexp',
   byWord: props.labels.byWord || 'By word',

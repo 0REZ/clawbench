@@ -35,7 +35,6 @@ const labels = computed<SearchBarLabels>(() => ({
     replace: t('file.editor.searchPanel.replace'),
     previous: t('file.editor.searchPanel.previous'),
     next: t('file.editor.searchPanel.next'),
-    all: t('file.editor.searchPanel.all'),
     matchCase: t('file.editor.searchPanel.matchCase'),
     regexp: t('file.editor.searchPanel.regexp'),
     byWord: t('file.editor.searchPanel.byWord'),

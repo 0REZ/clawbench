@@ -434,7 +434,6 @@ function searchPhrases() {
         replace: zh ? '替换' : 'Replace',
         next: zh ? '下一个' : 'Next',
         previous: zh ? '上一个' : 'Previous',
-        all: zh ? '全部' : 'All',
         matchCase: zh ? '区分大小写' : 'Match case',
         regexp: zh ? '正则' : 'Regexp',
         byWord: zh ? '全词匹配' : 'By word',

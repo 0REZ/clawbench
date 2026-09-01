@@ -3,7 +3,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { search, highlightSelectionMatches, setSearchQuery, SearchQuery } from '@codemirror/search'
 import { searchPanel, searchPanelField, searchPanelToggle, openSearchPanelCommand } from '../codeMirrorSearchPanel'
-const phrases = { find: 'Find', replace: 'Replace', next: 'Next', previous: 'Previous', all: 'All', matchCase: 'Match case', regexp: 'Regexp', byWord: 'By word', replaceAction: 'Replace', replaceAllAction: 'Replace all', close: 'Close' }
+const phrases = { find: 'Find', replace: 'Replace', next: 'Next', previous: 'Previous', matchCase: 'Match case', regexp: 'Regexp', byWord: 'By word', replaceAction: 'Replace', replaceAllAction: 'Replace all', close: 'Close' }
 
 function makeView(readonly = false) {
     const st = EditorState.create({

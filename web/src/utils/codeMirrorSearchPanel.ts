@@ -53,7 +53,6 @@ export interface SearchPanelPhrases {
     replace: string
     next: string
     previous: string
-    all: string
     matchCase: string
     regexp: string
     byWord: string
@@ -330,7 +329,6 @@ function toSearchBarLabels(p: SearchPanelPhrases): SearchBarLabels {
         replace: p.replace,
         previous: p.previous,
         next: p.next,
-        all: p.all,
         matchCase: p.matchCase,
         regexp: p.regexp,
         byWord: p.byWord,

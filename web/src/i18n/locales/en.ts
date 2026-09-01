@@ -984,7 +984,6 @@ export default {
         replace: 'Replace',
         next: 'Next',
         previous: 'Previous',
-        all: 'All',
         matchCase: 'Match case',
         regexp: 'Regexp',
         byWord: 'By word',

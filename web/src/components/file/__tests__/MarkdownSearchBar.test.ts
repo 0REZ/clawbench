@@ -14,7 +14,6 @@ const i18n = createI18n({
             replace: 'Replace',
             previous: 'Prev',
             next: 'Next',
-            all: 'All',
             matchCase: 'Match case',
             regexp: 'Regexp',
             byWord: 'By word',

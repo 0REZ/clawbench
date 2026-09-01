@@ -92,33 +92,39 @@
 }
 
 /* Search input with inline VS Code-style option icons. The wrap keeps the
-   icons absolutely positioned inside the input's right edge. */
-.search-input-wrap {
+   icons absolutely positioned inside the input's right edge. All classes are
+   scoped under `.search-bar` to avoid colliding with other global classes. */
+.search-bar .search-input-wrap {
+  --search-opt-size: 22px;
+  --search-opt-gap: 2px;
+  --search-opt-right: 4px;
   position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
 }
-.search-input-wrap > .cm-textfield {
+.search-bar .search-input-wrap > .cm-textfield {
   flex: 1;
   min-width: 0;
-  /* Room for the three inline option icons (Aa / .* / Ab). */
-  padding-right: 78px;
+  /* Room for the three inline option icons (Aa / ab / .*): right offset +
+     3 × icon + 2 × inter-icon gap. Derived from the same vars the actions
+     container uses, so enlarging the icons never leaves text under them. */
+  padding-right: calc(var(--search-opt-right) + var(--search-opt-size) * 3 + var(--search-opt-gap) * 2);
 }
-.search-input-actions {
+.search-bar .search-input-actions {
   position: absolute;
-  right: 4px;
+  right: var(--search-opt-right);
   top: 50%;
   transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--search-opt-gap);
   pointer-events: none;
 }
-.search-input-actions .search-opt-btn {
+.search-bar .search-input-actions .search-opt-btn {
   pointer-events: auto;
-  width: 22px;
-  height: 22px;
+  width: var(--search-opt-size);
+  height: var(--search-opt-size);
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -134,19 +140,19 @@
   flex-shrink: 0;
   transition: background-color 0.15s, color 0.15s;
 }
-.search-input-actions .search-opt-btn:hover {
+.search-bar .search-input-actions .search-opt-btn:hover {
   background: var(--bg-quaternary, var(--bg-tertiary));
   color: var(--text-primary);
 }
-.search-input-actions .search-opt-btn.active {
+.search-bar .search-input-actions .search-opt-btn.active {
   color: var(--accent-color);
 }
-.search-input-actions .search-opt-btn:focus-visible {
+.search-bar .search-input-actions .search-opt-btn:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
   outline-offset: 1px;
 }
 /* Whole-word icon: VS Code renders "ab" with a bottom underline. */
-.search-input-actions .search-opt-btn-word {
+.search-bar .search-input-actions .search-opt-btn-word {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
