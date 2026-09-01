@@ -382,13 +382,33 @@ public class MainActivity extends AppCompatActivity {
                 bgPrimary = 0xFFECEFF4; bgSecondary = 0xFFE5E9F0;
                 textPrimary = 0xFF2E3440; textMuted = 0xFF8A93A5; textHint = 0xFF8A93A5;
                 isLight = true; break;
-            case "mint-light":
-                bgPrimary = 0xFFE8F5E9; bgSecondary = 0xFFDCF0DD;
-                textPrimary = 0xFF1B5E20; textMuted = 0xFF6B9A72; textHint = 0xFF6B9A72;
+            case "light-modern":
+                bgPrimary = 0xFFFAFAFA; bgSecondary = 0xFFF3F3F3;
+                textPrimary = 0xFF1A1A1A; textMuted = 0xFF717175; textHint = 0xFF717175;
                 isLight = true; break;
-            case "sky-light":
-                bgPrimary = 0xFFE3F2FD; bgSecondary = 0xFFD9EDF9;
-                textPrimary = 0xFF0D47A1; textMuted = 0xFF5C93C8; textHint = 0xFF5C93C8;
+            case "light-plus":
+                bgPrimary = 0xFFFFFFFF; bgSecondary = 0xFFF5F5F5;
+                textPrimary = 0xFF000000; textMuted = 0xFF6F6F6F; textHint = 0xFF6F6F6F;
+                isLight = true; break;
+            case "quiet-light":
+                bgPrimary = 0xFFF5F5F5; bgSecondary = 0xFFECECEC;
+                textPrimary = 0xFF333333; textMuted = 0xFF767676; textHint = 0xFF767676;
+                isLight = true; break;
+            case "vitesse-light":
+                bgPrimary = 0xFFFFFFFF; bgSecondary = 0xFFF6F6F4;
+                textPrimary = 0xFF393A34; textMuted = 0xFF999999; textHint = 0xFF999999;
+                isLight = true; break;
+            case "bluloco-light":
+                bgPrimary = 0xFFF7F9FC; bgSecondary = 0xFFEDF1F7;
+                textPrimary = 0xFF292D3E; textMuted = 0xFF718096; textHint = 0xFF718096;
+                isLight = true; break;
+            case "material-lighter":
+                bgPrimary = 0xFFFAFAFA; bgSecondary = 0xFFF0F0F0;
+                textPrimary = 0xFF212121; textMuted = 0xFF9E9E9E; textHint = 0xFF9E9E9E;
+                isLight = true; break;
+            case "alabaster":
+                bgPrimary = 0xFFF7F7F7; bgSecondary = 0xFFEEEEEE;
+                textPrimary = 0xFF272727; textMuted = 0xFF777777; textHint = 0xFF777777;
                 isLight = true; break;
             case "github-light":
                 bgPrimary = 0xFFFFFFFF; bgSecondary = 0xFFF8F9FA;
@@ -421,6 +441,22 @@ public class MainActivity extends AppCompatActivity {
             case "tokyo-night":
                 bgPrimary = 0xFF1A1B26; bgSecondary = 0xFF16161E;
                 textPrimary = 0xFFC0CAF5; textMuted = 0xFF7F87AF; textHint = 0xFF7F87AF;
+                isLight = false; break;
+            case "dark-plus":
+                bgPrimary = 0xFF1E1E1E; bgSecondary = 0xFF252526;
+                textPrimary = 0xFFD4D4D4; textMuted = 0xFF8C8C8C; textHint = 0xFF8C8C8C;
+                isLight = false; break;
+            case "bluloco-dark":
+                bgPrimary = 0xFF1D212C; bgSecondary = 0xFF242936;
+                textPrimary = 0xFFE2E8F0; textMuted = 0xFF94A3B8; textHint = 0xFF94A3B8;
+                isLight = false; break;
+            case "material-darker":
+                bgPrimary = 0xFF212121; bgSecondary = 0xFF282828;
+                textPrimary = 0xFFEEFFFF; textMuted = 0xFF92A6A7; textHint = 0xFF92A6A7;
+                isLight = false; break;
+            case "monokai":
+                bgPrimary = 0xFF272822; bgSecondary = 0xFF2E2F29;
+                textPrimary = 0xFFF8F8F2; textMuted = 0xFFA6A68E; textHint = 0xFFA6A68E;
                 isLight = false; break;
             case "solarized-dark":
                 bgPrimary = 0xFF002B36; bgSecondary = 0xFF0A3541;
