@@ -292,17 +292,16 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
   it('does not show quote question while the search panel is open', async () => {
     const wrapper = mountViewer({ content: 'alpha beta\nalpha gamma', file: { path: '/p/main.go' } })
     await sleep(80)
-    // Open the built-in search panel, then move the selection onto a match
-    // (as findNext does when navigating results).
+    // Open the search panel, then move the selection onto a match (as findNext
+    // does when navigating results).
     wrapper.vm.openSearch()
     await sleep(50)
     const view = wrapper.vm.getView()
     view.dispatch({ selection: { anchor: 0, head: 5 } })
     await sleep(700) // debounce 200ms + showBar 400ms — must not fire
     expect(quoteMocks.showBar).not.toHaveBeenCalled()
-    // Closing the panel restores normal quote behavior.
-    const { closeSearchPanel } = await import('@codemirror/search')
-    closeSearchPanel(view)
+    // Closing the panel restores normal quote behavior (openSearch toggles).
+    wrapper.vm.openSearch()
     await sleep(50)
     view.dispatch({ selection: { anchor: 0, head: 5 } })
     await sleep(700)

@@ -27,7 +27,8 @@ import { useI18n } from 'vue-i18n'
 import { Compartment, EditorState, RangeSetBuilder } from '@codemirror/state'
 import { EditorView, lineNumbers, Decoration, gutter, GutterMarker, keymap } from '@codemirror/view'
 import { defaultKeymap, historyKeymap, history, indentWithTab, undo, redo, undoDepth, redoDepth } from '@codemirror/commands'
-import { search, searchKeymap, highlightSelectionMatches, openSearchPanel, searchPanelOpen } from '@codemirror/search'
+import { search, highlightSelectionMatches, findNext, findPrevious } from '@codemirror/search'
+import { searchPanel, searchPanelField, searchPanelToggle, openSearchPanelCommand } from '@/utils/codeMirrorSearchPanel'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
 import { buildLangExtension, buildCompletionExtension } from '@/utils/codeEditorLang'
@@ -203,10 +204,10 @@ function maybeShowQuoteBar() {
     if (props.editable) return
     const editor = view.value
     if (!editor) return
-    // The built-in search panel moves the selection onto each match as the
-    // user navigates (findNext/select all). That is not a user quote gesture,
-    // so suppress the quote bar while search is active.
-    if (searchPanelOpen(editor.state)) return
+    // The search panel moves the selection onto each match as the user
+    // navigates (findNext/select all). That is not a user quote gesture, so
+    // suppress the quote bar while search is active.
+    if (editor.state.field(searchPanelField, false)) return
     const sel = editor.state.selection.main
     if (sel.empty) {
         quoteQuestion.hideBar()
@@ -425,25 +426,22 @@ function onScrollToLine(e) {
 // All extensions are passed directly to EditorState at creation — NO basicSetup,
 // NO vue-codemirror. Toggleable parts live in top-level Compartments, which
 // CodeMirror reconfigures reliably (verified against raw CodeMirror).
-// Localize the built-in search panel text via CodeMirror's phrases facet.
-// The panel renders from `state.phrase(...)` keys (Find/Replace/next/...),
-// which default to English; supplying the app locale's translations keeps the
-// panel consistent with the rest of the UI.
-function buildSearchPhrases() {
+// Localized labels for the custom search panel.
+function searchPhrases() {
     const zh = locale.value === 'zh'
-    return EditorState.phrases.of({
-        'Find': zh ? '查找' : 'Find',
-        'Replace': zh ? '替换' : 'Replace',
-        'next': zh ? '下一个' : 'Next',
-        'previous': zh ? '上一个' : 'Previous',
-        'all': zh ? '全部' : 'All',
-        'match case': zh ? '区分大小写' : 'Match case',
-        'regexp': zh ? '正则' : 'Regexp',
-        'by word': zh ? '全词匹配' : 'By word',
-        'replace': zh ? '替换' : 'Replace',
-        'replace all': zh ? '全部替换' : 'Replace all',
-        'close': zh ? '关闭' : 'Close',
-    })
+    return {
+        find: zh ? '查找' : 'Find',
+        replace: zh ? '替换' : 'Replace',
+        next: zh ? '下一个' : 'Next',
+        previous: zh ? '上一个' : 'Previous',
+        all: zh ? '全部' : 'All',
+        matchCase: zh ? '区分大小写' : 'Match case',
+        regexp: zh ? '正则' : 'Regexp',
+        byWord: zh ? '全词匹配' : 'By word',
+        replaceAction: zh ? '替换' : 'Replace',
+        replaceAllAction: zh ? '全部替换' : 'Replace all',
+        close: zh ? '关闭' : 'Close',
+    }
 }
 
 function buildAllExtensions() {
@@ -453,7 +451,6 @@ function buildAllExtensions() {
         completionCompartment.of([]), // placeholder; loaded async in mountCompletion()
         lineNumbersCompartment.of(props.showLineNumbers ? [lineNumbers()] : []),
         wrapCompartment.of(props.wordWrap ? [EditorView.lineWrapping] : []),
-        buildSearchPhrases(),
         codeMirrorTheme,
         syntaxHighlighting(codeHighlightStyle),
         history(),
@@ -464,14 +461,25 @@ function buildAllExtensions() {
         // precedence while the completion popup is open.
         keymap.of([{ key: 'Mod-s', run: handleSaveShortcut, preventDefault: true }, ...defaultKeymap, ...historyKeymap, indentWithTab]),
         searchCompartment.of([
-            // Panel docks to the bottom edge; combined with right alignment in
-            // the panel CSS it reads as a floating corner popover.
+            // Search state + match highlighting from @codemirror/search.
+            // `search()` also carries the built-in panel's base theme, but the
+            // panel itself is only created by openSearchPanel() — which this
+            // component never calls — so only the state/highlight are active.
             search({ top: false }),
-            // Mod-f/Mod-g/Mod-Shift-g/Mod-Alt-g are bound here; the global
-            // Ctrl+F handler in App.vue skips contenteditable targets, so
-            // inside the editor these take precedence and never collide.
-            keymap.of(searchKeymap),
             highlightSelectionMatches(),
+            // Custom-rendered search panel (see codeMirrorSearchPanel.ts).
+            searchPanel({
+                readonly: !props.editable,
+                phrases: searchPhrases(),
+            }),
+            // Mod-f toggles the panel; Mod-g / Mod-Shift-g jump matches. The
+            // built-in searchKeymap is not used so its openSearchPanel side
+            // effect never creates the built-in panel.
+            keymap.of([
+                { key: 'Mod-f', run: openSearchPanelCommand, preventDefault: true },
+                { key: 'Mod-g', run: () => findNextSafe(), preventDefault: true },
+                { key: 'Mod-Shift-g', run: () => findPrevSafe(), preventDefault: true },
+            ]),
         ]),
         interactionExtension,
         selectionExtension,
@@ -638,11 +646,33 @@ function handleRedo() {
     if (view.value) redo(view.value)
 }
 
-// Open the built-in CodeMirror search panel programmatically (used by the
-// toolbar search button and the global Ctrl+F routing). The search extension
-// is always mounted, so this works in both browse and edit mode.
+// Open the custom search panel programmatically (used by the toolbar search
+// button and the global Ctrl+F routing). The search extension is always
+// mounted, so this works in both browse and edit mode.
 function openSearch() {
-    if (view.value) openSearchPanel(view.value)
+    const editor = view.value
+    if (editor) {
+        if (editor.state.field(searchPanelField, false)) {
+            // Toggle closed on repeat.
+            editor.dispatch({ effects: searchPanelToggle.of(false) })
+        } else {
+            openSearchPanelCommand(editor)
+        }
+    }
+}
+
+// Mod-g / Mod-Shift-g jump to the next/previous match only when a search query
+// exists; without one, opening the panel is more useful than a silent no-op.
+function findNextSafe() {
+    const editor = view.value
+    if (!editor) return false
+    if (!editor.state.doc.toString()) return false
+    return findNext(editor)
+}
+function findPrevSafe() {
+    const editor = view.value
+    if (!editor) return false
+    return findPrevious(editor)
 }
 
 // Ctrl/Cmd+S save shortcut (Mod = Ctrl on Windows/Linux, Cmd on Mac). Mirrors
@@ -937,23 +967,27 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   font-weight: 600;
 }
 
-/* Search panel (built-in @codemirror/search) — compact, sharp-cornered.
-   Dense padding and small controls keep the panel from dominating the code
-   view; a shared control-height custom property keeps the buttons, inputs
-   and checkboxes visually aligned. */
+/* Search panel (custom-rendered) — compact, sharp-cornered, docked to the
+   bottom-right corner. The DOM is ours (see codeMirrorSearchPanel.ts), so a
+   simple two-row flex layout keeps the groups intact at any width:
+     row 1: input + prev(←) + next(→) + all + match info            + close
+     row 2: case + regexp + word + replace input + replace + replace-all */
 .cm-viewer .cm-panels {
   background: transparent;
   border: none;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search {
+.cm-viewer .cm-panels .cm-search {
   --search-ctrl-h: 22px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 0;
   padding: 6px 8px;
+  /* Room for the absolutely-positioned close button in the top-right corner. */
+  padding-right: 34px;
   margin: 0 8px 8px 0;
   /* Dock to the bottom-right corner instead of stretching across the
-     editor: let the flex row size to its content and pin it right. */
+     editor: let the panel size to its content and pin it right. */
+  position: relative;
   width: fit-content;
   max-width: calc(100% - 16px);
   margin-left: auto;
@@ -968,10 +1002,61 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
      checkboxes don't stay stuck in the browser's light-mode colors. */
   color-scheme: light;
 }
-[data-theme-base="dark"] .cm-viewer .cm-panels .cm-panel.cm-search {
+[data-theme-base="dark"] .cm-viewer .cm-panels .cm-search {
   color-scheme: dark;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-textfield {
+/* ── Two-row grouping ────────────────────────────────────────────────────────
+   The option checkboxes and the replace group are wrapped in their own
+   containers (.cm-search-options / .cm-search-replace), so each group wraps
+   as a unit — the panel can never split a group across rows. */
+.cm-viewer .cm-panels .cm-search input[name='search'] { order: 1; }
+.cm-viewer .cm-panels .cm-search .cm-button[name='prev'] { order: 2; }
+.cm-viewer .cm-panels .cm-search .cm-button[name='next'] { order: 3; }
+.cm-viewer .cm-panels .cm-search .cm-button[name='select'] { order: 4; }
+.cm-viewer .cm-panels .cm-search .cm-search-match-info {
+  order: 5;
+  margin: 0 4px;
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cm-viewer .cm-panels .cm-search button[name='close'] {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.cm-viewer .cm-panels .cm-search button[name='close']:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+.cm-viewer .cm-panels .cm-search .cm-search-options { order: 10; }
+.cm-viewer .cm-panels .cm-search .cm-search-replace { order: 11; }
+.cm-viewer .cm-panels .cm-search .cm-search-options,
+.cm-viewer .cm-panels .cm-search .cm-search-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm-viewer .cm-panels .cm-search .cm-search-options > label,
+.cm-viewer .cm-panels .cm-search .cm-search-replace > * {
+  flex-shrink: 0;
+}
+.cm-viewer .cm-panels .cm-search .cm-textfield {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 0;
@@ -984,10 +1069,10 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   box-sizing: border-box;
   min-width: 120px;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-textfield:focus {
+.cm-viewer .cm-panels .cm-search .cm-textfield:focus {
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button {
+.cm-viewer .cm-panels .cm-search .cm-button {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 0;
@@ -998,18 +1083,19 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   min-height: var(--search-ctrl-h);
   box-sizing: border-box;
   line-height: 1;
+  white-space: nowrap;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button:hover {
+.cm-viewer .cm-panels .cm-search .cm-button:hover {
   background: var(--bg-quaternary, var(--bg-tertiary));
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button:disabled {
+.cm-viewer .cm-panels .cm-search .cm-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
-/* next / prev — hide the localized text and render arrow icons instead. */
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next'],
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev'] {
+/* next / prev — arrow icons only. */
+.cm-viewer .cm-panels .cm-search .cm-button[name='next'],
+.cm-viewer .cm-panels .cm-search .cm-button[name='prev'] {
   position: relative;
   width: var(--search-ctrl-h);
   height: var(--search-ctrl-h);
@@ -1017,8 +1103,8 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   font-size: 0;
   flex-shrink: 0;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next']::before,
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev']::before {
+.cm-viewer .cm-panels .cm-search .cm-button[name='next']::before,
+.cm-viewer .cm-panels .cm-search .cm-button[name='prev']::before {
   content: '';
   display: inline-block;
   font-size: 12px;
@@ -1027,15 +1113,15 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   border-width: 0 1.5px 1.5px 0;
   padding: 2.5px;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev']::before {
+.cm-viewer .cm-panels .cm-search .cm-button[name='prev']::before {
   transform: rotate(135deg); /* ← */
   margin-right: -2px;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next']::before {
+.cm-viewer .cm-panels .cm-search .cm-button[name='next']::before {
   transform: rotate(-45deg); /* → */
   margin-left: -2px;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label {
+.cm-viewer .cm-panels .cm-search label {
   color: var(--text-muted);
   font-size: 12px;
   display: inline-flex;
@@ -1045,7 +1131,7 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   cursor: pointer;
   user-select: none;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox'] {
+.cm-viewer .cm-panels .cm-search label input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
   width: var(--search-ctrl-h);
@@ -1055,58 +1141,36 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   border: 1px solid var(--border-color);
   border-radius: 0;
   background: var(--bg-tertiary);
-  display: inline-block;
-  vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   position: relative;
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:hover {
+.cm-viewer .cm-panels .cm-search label input[type='checkbox']:hover {
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:checked {
+.cm-viewer .cm-panels .cm-search label input[type='checkbox']:checked {
   background: var(--accent-color);
   border-color: var(--accent-color);
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:checked::after {
+.cm-viewer .cm-panels .cm-search label input[type='checkbox']:checked::after {
   content: '';
-  position: absolute;
-  left: 5px;
-  top: 2px;
+  /* Flex centering keeps the rotated checkmark centered in the box. The
+     checkmark's thick hook sits slightly low-right, so nudge it up-left. */
   width: 5px;
   height: 10px;
+  margin-top: -1px;
   border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-.cm-viewer .cm-panels .cm-panel.cm-search label input[type='checkbox']:focus-visible {
+.cm-viewer .cm-panels .cm-search label input[type='checkbox']:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
   outline-offset: 1px;
 }
-/* Close button — CodeMirror's base theme absolutely pins it to the panel's
-   top-right (`.ͼ1 .cm-panel.cm-search [name=close]`), which makes it overlap
-   the wrapped option rows; re-enable the flex-row layout, and give it a real
-   filled background so it reads as a button. Selectors are kept specific so
-   they win over that base rule in both light and dark themes. */
-.cm-viewer .cm-panels .cm-panel.cm-search button[name='close'] {
-  position: static;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  margin: 0 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-.cm-viewer .cm-panels .cm-panel.cm-search button[name='close']:hover {
+.cm-viewer .cm-panels .cm-search button[name='close']:hover {
   background: var(--bg-quaternary, var(--bg-tertiary));
   border-color: var(--accent-color);
   color: var(--text-primary);

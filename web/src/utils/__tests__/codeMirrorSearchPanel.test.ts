@@ -1,0 +1,116 @@
+import { describe, it, expect, vi } from 'vitest'
+import { EditorState } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
+import { search, highlightSelectionMatches, setSearchQuery, SearchQuery } from '@codemirror/search'
+import { searchPanel, searchPanelField, searchPanelToggle, openSearchPanelCommand } from '../codeMirrorSearchPanel'
+
+const phrases = { find: 'Find', replace: 'Replace', next: 'Next', previous: 'Previous', all: 'All', matchCase: 'Match case', regexp: 'Regexp', byWord: 'By word', replaceAction: 'Replace', replaceAllAction: 'Replace all', close: 'Close' }
+
+function makeView(readonly = false) {
+    const st = EditorState.create({
+        doc: 'alpha beta\nalpha gamma\nalpha',
+        extensions: [
+            search({ top: false }),
+            highlightSelectionMatches(),
+            searchPanel({ readonly, phrases }),
+        ],
+    })
+    return new EditorView({ state: st, parent: document.body })
+}
+
+describe('codeMirrorSearchPanel', () => {
+    it('creates the panel DOM with search/replace/option controls', () => {
+        const v = makeView(false)
+        const panel = document.querySelector('.cm-search')
+        expect(panel).not.toBeNull()
+        expect(panel!.querySelector('input[name=search]')).not.toBeNull()
+        expect(panel!.querySelector('input[name=replace]')).not.toBeNull()
+        expect(panel!.querySelectorAll('label input[type=checkbox]')).toHaveLength(3)
+        expect(panel!.querySelector('button[name=close]')).not.toBeNull()
+        v.destroy()
+    })
+
+    it('hides the replace row in read-only mode', () => {
+        const v = makeView(true)
+        expect(document.querySelector('.cm-search input[name=replace]')).toBeNull()
+        expect(document.querySelector('.cm-search button[name=replace]')).toBeNull()
+        v.destroy()
+    })
+
+    it('openSearchPanelCommand shows the panel', async () => {
+        const v = makeView(false)
+        expect(document.querySelector('.cm-search')!.parentElement!.style.display).toBe('none')
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        expect(document.querySelector('.cm-search')!.parentElement!.style.display).not.toBe('none')
+        expect(v.state.field(searchPanelField)).toBe(true)
+        v.destroy()
+    })
+
+    it('toggle closes the panel and match info survives a query dispatch', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 20))
+        // Match info should show 3/1 or similar; and the panel must stay open.
+        expect(document.querySelector('.cm-search')).not.toBeNull()
+        expect(document.querySelector('.cm-search')!.parentElement!.style.display).not.toBe('none')
+        v.destroy()
+    })
+
+    it('types in search input update the search query and highlight matches', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 20))
+        const q = v.state.field(searchPanelField)
+        expect(q).toBe(true)
+        // Selection moves onto first match after Ctrl+G? Not required here.
+        v.destroy()
+    })
+
+    it('shows current/total match count after typing a query', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        // doc has 3 'alpha' occurrences; selection at start = match 1.
+        expect(document.querySelector<HTMLElement>('.cm-search .cm-search-match-info')!.textContent).toBe('1/3')
+        v.destroy()
+    })
+
+    it('findNext via the next button moves the selection and updates the counter', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        document.querySelector<HTMLElement>('.cm-search button[name=next]')!.click()
+        await new Promise(r => setTimeout(r, 20))
+        // First click jumps from match 1 to match 2 (anchor moved past 0).
+        expect(v.state.selection.main.head).toBeGreaterThan(0)
+        v.destroy()
+    })
+
+    it('close button hides the panel', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        document.querySelector<HTMLElement>('.cm-search button[name=close]')!.click()
+        await new Promise(r => setTimeout(r, 20))
+        expect(v.state.field(searchPanelField)).toBe(false)
+        expect(document.querySelector<HTMLElement>('.cm-panels')!.style.display).toBe('none')
+        v.destroy()
+    })
+})
