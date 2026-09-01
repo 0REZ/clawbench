@@ -772,4 +772,48 @@ describe('FileViewer — inline TOC dock', () => {
     expect(wrapper.emitted('closeToc')).toBeTruthy()
     expect(wrapper.emitted('toggleToc')).toBeFalsy()
   })
+
+  it('forwards TocDock jump/jumpPage events to the parent', () => {
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: true })
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    dock.vm.$emit('jump', 12)
+    dock.vm.$emit('jumpPage', 3)
+    // Regression: FileViewer must declare + forward these — otherwise the
+    // inline dock's clicks are swallowed (code-browse TOC had no reaction).
+    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jumpPage')).toEqual([[3]])
+  })
+})
+
+describe('FileViewer — inline TOC dock jump integration (real CodeMirror)', () => {
+  // Mount with the REAL CodeMirrorViewer (stubs override removed) to verify the
+  // full chain: TocDock jump → FileViewer emit → parent receives a jump event.
+  function mountIntegration(props = {}) {
+    const stubsNoCm = { ...stubs }
+    delete stubsNoCm.CodeMirrorViewer
+    return mount(FileViewer, {
+      props: {
+        file: { name: 'main.ts', path: '/tmp/main.ts', content: 'const a = 1\nfunction foo() {}\nconst b = 2\nfunction bar() {}\n' },
+        tocOpen: true,
+        searchOpen: false,
+        markdownViewMode: 'rendered',
+        externalLoading: false,
+        docked: true,
+        tocFile: { name: 'main.ts', path: '/tmp/main.ts', content: 'const a = 1\nfunction foo() {}\n' },
+        pdfOutline: [],
+        ...props,
+      },
+      global: { plugins: [i18n], stubs: stubsNoCm },
+    })
+  }
+
+  it('forwards TocDock jump so the parent can scroll the code editor', async () => {
+    const wrapper = mountIntegration()
+    await new Promise(r => setTimeout(r, 120))
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    dock.vm.$emit('jump', 2)
+    await nextTick()
+    expect(wrapper.emitted('jump')).toEqual([[2]])
+    wrapper.unmount()
+  })
 })

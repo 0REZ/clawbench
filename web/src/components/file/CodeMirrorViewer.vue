@@ -344,6 +344,46 @@ function scrollToLine(line, lineEnd) {
 
 let pendingScrollRequestId = null
 let pendingScrollRAF = null
+
+// ─── Viewport-line events (drives TOC scroll-follow in code view) ────────────
+// CodeMirror virtualizes its DOM — only visible lines exist as elements — so an
+// IntersectionObserver cannot reliably track the active line. Instead the
+// editor reports the top visible line on scroll via a window event, which the
+// TOC panel listens to for highlighting.
+let viewportScroller = null
+let viewportScrollHandler = null
+let viewportScrollRAF = 0
+
+function attachViewportLineDispatch() {
+    const editor = view.value
+    if (!editor) return
+    viewportScroller = editor.scrollDOM
+    viewportScrollHandler = () => {
+        if (viewportScrollRAF) return
+        viewportScrollRAF = requestAnimationFrame(() => {
+            viewportScrollRAF = 0
+            const v = view.value
+            const scroller = viewportScroller
+            if (!v || !scroller) return
+            // Top visible line via CodeMirror's block layout (wrapped lines OK).
+            const block = v.lineBlockAtHeight(scroller.scrollTop)
+            const line = v.state.doc.lineAt(block.from).number
+            window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line, path: props.file?.path } }))
+        })
+    }
+    viewportScroller.addEventListener('scroll', viewportScrollHandler, { passive: true })
+}
+
+function detachViewportLineDispatch() {
+    if (viewportScrollHandler && viewportScroller) {
+        viewportScroller.removeEventListener('scroll', viewportScrollHandler)
+    }
+    if (viewportScrollRAF) cancelAnimationFrame(viewportScrollRAF)
+    viewportScroller = null
+    viewportScrollHandler = null
+    viewportScrollRAF = 0
+}
+
 function onScrollToLine(e) {
     const d = e.detail
     if (!d || typeof d.line !== 'number') return
@@ -499,11 +539,13 @@ onMounted(() => {
     sticky.init(view.value, props.file?.path, stickyScrollEnabled())
     window.addEventListener('cm-scroll-to-line', onScrollToLine)
     document.addEventListener('pointerup', onDocPointerUp)
+    attachViewportLineDispatch()
 })
 
 onUnmounted(() => {
     window.removeEventListener('cm-scroll-to-line', onScrollToLine)
     document.removeEventListener('pointerup', onDocPointerUp)
+    detachViewportLineDispatch()
     if (pendingScrollRAF) cancelAnimationFrame(pendingScrollRAF)
     pendingScrollRAF = null
     pendingScrollRequestId = null
@@ -964,6 +1006,34 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
 .cm-viewer .cm-panels .cm-panel.cm-search .cm-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+/* next / prev — hide the localized text and render arrow icons instead. */
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next'],
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev'] {
+  position: relative;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  font-size: 0;
+  flex-shrink: 0;
+}
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next']::before,
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev']::before {
+  content: '';
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  border: solid var(--text-primary);
+  border-width: 0 1.5px 1.5px 0;
+  padding: 2.5px;
+}
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='prev']::before {
+  transform: rotate(135deg); /* ← */
+  margin-right: -2px;
+}
+.cm-viewer .cm-panels .cm-panel.cm-search .cm-button[name='next']::before {
+  transform: rotate(-45deg); /* → */
+  margin-left: -2px;
 }
 .cm-viewer .cm-panels .cm-panel.cm-search label {
   color: var(--text-muted);

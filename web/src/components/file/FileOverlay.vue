@@ -30,6 +30,8 @@
             @navigate-back="emit('navigateBack')"
             @navigate-forward="emit('navigateForward')"
             @share-external="emit('shareExternal')"
+            @jump="emit('jump', $event)"
+            @jump-page="emit('jumpPage', $event)"
           />
           <!-- File loading mask — same style as chat session-switch -->
           <Transition name="loading-fade">

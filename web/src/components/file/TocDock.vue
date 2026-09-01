@@ -24,6 +24,7 @@
       open
       :file="file"
       :pdf-outline="pdfOutline"
+      :code-view="codeView"
       @jump="emit('jump', $event)"
       @jump-page="emit('jumpPage', $event)"
     />
@@ -40,6 +41,8 @@ import { useTocDockPreference } from '@/composables/useTocDockPreference'
 defineProps({
   file: Object,
   pdfOutline: { type: Array, default: () => [] },
+  /** Whether the underlying content is rendered by CodeMirror (drives scroll-follow). */
+  codeView: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close', 'jump', 'jumpPage'])
 

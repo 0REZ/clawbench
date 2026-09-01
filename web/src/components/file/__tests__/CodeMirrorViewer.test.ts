@@ -565,3 +565,36 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     expect(view.state.doc.toString()).toBe('const a = 1\n')
   })
 })
+describe('CodeMirrorViewer — viewport line event (for TOC scroll-follow)', () => {
+  function mountViewerLocal(props = {}) {
+    return mount(CodeMirrorViewer, {
+      props: { content: 'const a = 1\nconst b = 2\n', language: 'javascript', ...props },
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    })
+  }
+
+  it('dispatches cm-editor-viewport-line when the editor scrolls', async () => {
+    const content = Array.from({ length: 200 }, function(_, i) { return 'line ' + (i + 1) }).join('\n')
+    const wrapper = mountViewerLocal({ content, file: { path: '/tmp/big.ts', name: 'big.ts' } })
+    await sleep(120)
+    const view = wrapper.vm.getView()
+
+    const listener = vi.fn()
+    window.addEventListener('cm-editor-viewport-line', listener)
+
+    // Scroll the editor's scrollDOM to a later position.
+    const scroller = view.scrollDOM
+    scroller.scrollTop = 400
+    scroller.dispatchEvent(new Event('scroll', { bubbles: false }))
+
+    await sleep(80)
+    expect(listener).toHaveBeenCalled()
+    const detail = listener.mock.calls[0][0].detail
+    expect(typeof detail.line).toBe('number')
+    expect(detail.line).toBeGreaterThan(1)
+
+    window.removeEventListener('cm-editor-viewport-line', listener)
+    wrapper.unmount()
+  })
+})

@@ -66,11 +66,13 @@ vi.mock('@/utils/fileType.ts', () => ({
 
 // Mock IntersectionObserver (not available in jsdom)
 class MockIntersectionObserver {
-  observe() {}
+  static observed: Element[] = []
+  observe(el: Element) { MockIntersectionObserver.observed.push(el) }
   disconnect() {}
   unobserve() {}
 }
 beforeEach(() => {
+  MockIntersectionObserver.observed = []
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
 })
 
@@ -180,6 +182,29 @@ describe('TocPanel — fetchCodeSymbols with results', () => {
     await nextTick()
     const items = wrapper.findAll('.toc-item')
     expect(items.length).toBe(2)
+  })
+
+  it('emits jump with the symbol line when a code symbol is clicked', async () => {
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    const wrapper = mountPanel({
+      file: { name: 'main.go', content: 'package main', path: '/main.go' },
+    })
+    await nextTick()
+    await new Promise(r => setTimeout(r, 50))
+    await nextTick()
+
+    // No DOM element has id "toc-l10" — clicking must fall back to emit('jump', line)
+    await wrapper.findAll('.toc-item')[0].trigger('click')
+    expect(wrapper.emitted('jump')).toBeTruthy()
+    expect(wrapper.emitted('jump')![0]).toEqual([10])
   })
 
   it('falls back to extractToc when fetchCodeSymbols returns null', async () => {
@@ -298,5 +323,148 @@ describe('TocPanel — onBeforeUnmount', () => {
     // At minimum, unmount should not throw
     expect(true).toBe(true)
     disconnectSpy.mockRestore()
+  })
+})
+
+describe('TocPanel — scroll-follow mode selection (codeView)', () => {
+  it('does NOT use IntersectionObserver in code view (CodeMirror virtualizes DOM)', async () => {
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+      ],
+    })
+
+    const wrapper = mountPanel({
+      file: { name: 'main.go', content: 'package main', path: '/main.go' },
+      codeView: true,
+    })
+    await nextTick()
+    await new Promise(r => setTimeout(r, 50))
+    await nextTick()
+
+    // Code view must not observe .code-line elements — scroll-follow relies on
+    // cm-editor-viewport-line events instead.
+    expect(MockIntersectionObserver.observed.length).toBe(0)
+
+    wrapper.unmount()
+  })
+
+  it('uses IntersectionObserver in markdown rendered view (codeView=false)', async () => {
+    const h1 = document.createElement('h1')
+    h1.id = 'intro'
+    h1.textContent = 'Intro'
+    document.body.appendChild(h1)
+
+    const wrapper = mountPanel({
+      file: { name: 'doc.md', content: '# Intro\ncontent', path: '/doc.md' },
+      codeView: false,
+    })
+    await nextTick()
+    await nextTick()
+
+    const observedIds = MockIntersectionObserver.observed.map(el => el.id)
+    expect(observedIds).toContain('intro')
+
+    h1.remove()
+    wrapper.unmount()
+  })
+})
+
+describe('TocPanel — code scroll-follow via viewport-line event', () => {
+  it('highlights the matching TOC item when the code editor reports a viewport line', async () => {
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    const wrapper = mountPanel({
+      file: { name: 'main.go', content: 'package main', path: '/main.go' },
+      codeView: true,
+    })
+    await nextTick()
+    await new Promise(r => setTimeout(r, 50))
+    await nextTick()
+
+    // Editor scrolls so line 25 is at the top — TOC should highlight "Handler".
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 25 } }))
+    await nextTick()
+
+    const items = wrapper.findAll('.toc-item')
+    const handlerItem = items.find(i => i.text().includes('Handler'))
+    expect(handlerItem?.classes()).toContain('active')
+    const mainItem = items.find(i => i.text().includes('main'))
+    expect(mainItem?.classes()).not.toContain('active')
+    wrapper.unmount()
+  })
+})
+
+describe('TocPanel — markdown view re-render re-attaches observer', () => {
+  it('re-observes new heading elements after the preview DOM is rebuilt', async () => {
+    // Build initial preview DOM with a heading.
+    const body = document.createElement('div')
+    body.className = 'markdown-body'
+    const h1 = document.createElement('h1')
+    h1.id = 'intro'
+    h1.textContent = 'Intro'
+    body.appendChild(h1)
+    document.body.appendChild(body)
+
+    const wrapper = mountPanel({
+      file: { name: 'doc.md', content: '# Intro\ncontent', path: '/doc.md' },
+    })
+    await nextTick()
+    await nextTick()
+
+    // First observation pass should have observed the original h1.
+    expect(MockIntersectionObserver.observed.some(el => el.id === 'intro')).toBe(true)
+
+    // Simulate MarkdownPreview being torn down and re-mounted (raw→rendered toggle).
+    MockIntersectionObserver.observed = []
+    const newBody = document.createElement('div')
+    newBody.className = 'markdown-body'
+    const newH1 = document.createElement('h1')
+    newH1.id = 'intro'
+    newH1.textContent = 'Intro'
+    newBody.appendChild(newH1)
+    body.replaceWith(newBody)
+
+    await nextTick()
+    await new Promise(r => setTimeout(r, 120))
+    await nextTick()
+
+    // After the DOM rebuild the observer must watch the NEW heading element.
+    const observedIds = MockIntersectionObserver.observed.map(el => el.id)
+    expect(observedIds).toContain('intro')
+
+    newBody.remove()
+    wrapper.unmount()
+  })
+})
+
+describe('TocPanel — markdown source view scroll-follow (codeView)', () => {
+  it('follows viewport-line events in markdown source view (CodeMirror renders it)', async () => {
+    const wrapper = mountPanel({
+      file: { name: 'doc.md', content: '# Intro\n## Setup\n# Conclusion', path: '/doc.md' },
+      codeView: true,
+    })
+    await nextTick()
+    await nextTick()
+
+    // Editor scrolls so "Conclusion" (line 3) is at the top.
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 3 } }))
+    await nextTick()
+
+    const items = wrapper.findAll('.toc-item')
+    const conclusion = items.find(i => i.text().includes('Conclusion'))
+    expect(conclusion?.classes()).toContain('active')
+    const intro = items.find(i => i.text().includes('Intro'))
+    expect(intro?.classes()).not.toContain('active')
+    wrapper.unmount()
   })
 })

@@ -8,7 +8,7 @@ import { _resetForTest as _resetWideForTest } from '@/composables/useWideScreenL
 const FileViewerStub = {
   name: 'FileViewer',
   props: ['file', 'tocOpen', 'searchOpen', 'markdownViewMode', 'externalLoading', 'tocFile', 'pdfOutline', 'docked'],
-  emits: ['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'],
+  emits: ['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'],
   template: '<div class="file-viewer-stub"><button class="viewer-close-toc-stub" @click="$emit(\'closeToc\')" /></div>',
 }
 
@@ -101,5 +101,20 @@ describe('FileOverlay — TOC dock vs drawer', () => {
     await wrapper.find('.viewer-close-toc-stub').trigger('click')
     expect(wrapper.emitted('closeToc')).toBeTruthy()
     expect(wrapper.emitted('toggleToc')).toBeFalsy()
+  })
+
+  it('forwards FileViewer jump/jumpPage so the parent can scroll code/PDF', () => {
+    setViewportWidth(1400)
+    const wrapper = mount(FileOverlay, {
+      props: { overlayOpen: true, currentFile: { path: 'a.md' }, tocOpen: true },
+      global: { stubs },
+    })
+    const viewer = wrapper.findComponent({ name: 'FileViewer' })
+    viewer.vm.$emit('jump', 12)
+    viewer.vm.$emit('jumpPage', 3)
+    // Regression: inline TOC dock clicks must reach App's scrollToLine /
+    // handleJumpPdfPage — previously the dock was only wired for close.
+    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jumpPage')).toEqual([[3]])
   })
 })

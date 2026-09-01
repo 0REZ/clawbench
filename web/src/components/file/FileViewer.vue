@@ -232,6 +232,7 @@
         v-if="docked && tocOpen"
         :file="tocFile"
         :pdf-outline="pdfOutline"
+        :code-view="isCodeMirrorView"
         @close="emit('closeToc')"
         @jump="emit('jump', $event)"
         @jump-page="emit('jumpPage', $event)"
@@ -331,7 +332,7 @@ const props = defineProps({
     /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
     docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()
