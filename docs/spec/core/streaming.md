@@ -79,6 +79,7 @@ sequenceDiagram
 ### 设计要点
 
 - **WS 单通道统一推送**：聊天流和系统事件共用 `/api/ai/events/ws`，由 `StreamHub` 做会话级扇出（多客户端订阅同一 session）；避免双通道带来的状态同步问题
+- **流式入库批量合并**：高频流事件（tool-call、context-state、thinking）不逐事件写库，而是合并进 500ms flush 周期的批量写——tool-call 只在 flush 时重扫最新块状态、context-state 原子合并、thinking 以固定 ID 覆盖写全文；content 行无变化时跳过整行 UPDATE，Finalize 前补一次 flush 防止流末尾排队数据丢失。实时推送不受影响（WS 照常逐事件推），落库吞吐与写放大被大幅压缩
 - **断线缓冲只是减震**：缓冲窗口（10s / 50 条）有限，**不是持久化方案**。重连超时（>120s）后客户端通过 REST API 重新加载会话完整状态
 - **客户端 ack 用 `permission_respond`**：WS 客户端消息支持 `permission_respond`（替代旧 HTTP `/api/ai/permission`），ACP 权限待审场景下前端用此消息回传决策
 - **HTTP cancel 兜底**：WS 不可达时（弱网），HTTP cancel 端点仍可工作——`SessionExecutor` 同时监听 WS cancel 消息和 HTTP cancel 调用
