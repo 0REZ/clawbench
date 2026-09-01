@@ -213,6 +213,7 @@ vi.mock('@/utils/fileManager.ts', () => ({
 
 vi.mock('@/utils/chatInputUtils.ts', () => ({
   computeRecentReferencedFiles: () => [],
+  isImeCompositionEvent: (e: any) => !!(e && e.isComposing) || (e && e.keyCode === 229),
 }))
 
 vi.mock('@/utils/fileIcon.ts', () => ({
@@ -1270,7 +1271,7 @@ describe('ChatInputBar', () => {
       wrapper.unmount()
     })
 
-    it('ArrowDown from the newest entry restores the original draft and resets navigation', async () => {
+    it('ArrowDown from the newest entry restores the original draft and stays there', async () => {
       const wrapper = mountBar({ currentSessionId: 's1', messages: HISTORY })
       wrapper.vm.inputText = 'draft in progress'
       await wrapper.vm.$nextTick()
@@ -1278,18 +1279,21 @@ describe('ChatInputBar', () => {
       expect(wrapper.vm.inputText).toBe('padded message')
       await pressArrow(wrapper, 'ArrowDown')
       expect(wrapper.vm.inputText).toBe('draft in progress')
-      // Navigation is reset: the next ArrowUp starts from the newest entry again
+      // A further ArrowDown must NOT clear the input — the draft stays put
+      await pressArrow(wrapper, 'ArrowDown')
+      expect(wrapper.vm.inputText).toBe('draft in progress')
+      // The next ArrowUp starts from the newest entry again
       await pressArrow(wrapper, 'ArrowUp')
       expect(wrapper.vm.inputText).toBe('padded message')
       wrapper.unmount()
     })
 
-    it('ArrowDown from fresh non-empty input clears it', async () => {
+    it('ArrowDown on fresh non-empty input does not clear it', async () => {
       const wrapper = mountBar({ currentSessionId: 's1', messages: HISTORY })
       wrapper.vm.inputText = 'typing'
       await wrapper.vm.$nextTick()
       await pressArrow(wrapper, 'ArrowDown')
-      expect(wrapper.vm.inputText).toBe('')
+      expect(wrapper.vm.inputText).toBe('typing')
       wrapper.unmount()
     })
 

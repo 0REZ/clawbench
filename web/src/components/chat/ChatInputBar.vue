@@ -949,11 +949,18 @@ function stepHistory(isUp, isGesture = false) {
     historyIndex.value = Math.min(historyIndex.value + 1, historyInputs.value.length - 1)
     applyHistoryText(historyInputs.value[historyIndex.value])
   } else {
+    if (historyIndex.value <= -1) {
+      // Already at (or below) the draft position: a further ArrowDown must not
+      // clear the input — the user's typed draft stays put so they can ArrowUp
+      // back into history again.
+      return false
+    }
     historyIndex.value -= 1
     if (historyIndex.value < 0) {
-      // Back to the fresh input: restore the captured draft if any.
+      // Back to the fresh-input position: restore the captured draft. Keep the
+      // draft intact (no reset) so the next ArrowDown stays here instead of
+      // clearing the input.
       applyHistoryText(historyDraft.value)
-      resetInputHistory()
     } else {
       applyHistoryText(historyInputs.value[historyIndex.value])
     }
