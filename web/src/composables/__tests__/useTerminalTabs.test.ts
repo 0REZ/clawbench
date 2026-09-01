@@ -890,6 +890,39 @@ describe('useTerminalTabs', () => {
       mgr.mountTabXterm(tab, container2)
       expect(tab.container).toBe(container2)
     })
+
+    it('patches the mouse service after open() so zoom compensation applies to live getCoords', () => {
+      const mgr = createTabManager()
+      const tab = mgr.tabs.value[0]
+      const container = document.createElement('div')
+
+      // 模拟 xterm open() 后惰性实例化的内部服务
+      const css = { cell: { width: 8.43, height: 16 }, canvas: { width: 759, height: 368 } }
+      const seen: number[] = []
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(tab.xterm as any)._core = {
+        _mouseService: {
+          getCoords: () => { seen.push(css.cell.width); return [1, 1] },
+          getMouseReportCoords: () => ({ col: 0, row: 0 }),
+        },
+        _renderService: { dimensions: { css } },
+      }
+
+      document.documentElement.style.zoom = '1.5'
+      try {
+        mgr.mountTabXterm(tab, container)
+        expect(tab.container).toBe(container)
+
+        // 调用被 patch 的 getCoords —— 内部应看到 ×1.5 的 cell 宽度
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(tab.xterm as any)._core._mouseService.getCoords({}, null, 80, 24, true)
+        expect(seen).toEqual([8.43 * 1.5])
+        // 调用后已还原
+        expect(css.cell.width).toBe(8.43)
+      } finally {
+        document.documentElement.style.zoom = ''
+      }
+    })
   })
 
   describe('closeTab — mixed connection states (session leak scenarios)', () => {
