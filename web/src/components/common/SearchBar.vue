@@ -23,6 +23,14 @@
             @click="emit('case-change', !caseSensitive)"
           >Aa</button>
           <button
+            name="word"
+            class="search-opt-btn search-opt-btn-word"
+            :class="{ active: wholeWord }"
+            :title="labels.byWord"
+            :aria-pressed="wholeWord"
+            @click="emit('word-change', !wholeWord)"
+          >ab</button>
+          <button
             name="regexp"
             class="search-opt-btn"
             :class="{ active: regexp }"
@@ -30,14 +38,6 @@
             :aria-pressed="regexp"
             @click="emit('regexp-change', !regexp)"
           >.*</button>
-          <button
-            name="word"
-            class="search-opt-btn"
-            :class="{ active: wholeWord }"
-            :title="labels.byWord"
-            :aria-pressed="wholeWord"
-            @click="emit('word-change', !wholeWord)"
-          >ab</button>
         </span>
       </span>
       <button name="prev" class="cm-button" :disabled="!canNav" :title="labels.previous" aria-label="Previous match" @click="emit('prev')"></button>

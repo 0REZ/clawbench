@@ -142,6 +142,11 @@
 .search-input-actions .search-opt-btn.active {
   color: var(--accent-color);
 }
+/* Whole-word icon: VS Code renders "ab" with a bottom underline. */
+.search-input-actions .search-opt-btn-word {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* ── Buttons ── */
 .cm-search .cm-button {
