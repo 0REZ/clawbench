@@ -100,6 +100,75 @@ Body`,
 			input:  "Some text before\n---\nname: test\ndescription: test\n---\nBody",
 			wantOK: false,
 		},
+		{
+			name: "folded multiline description",
+			input: `---
+name: minimax-docx
+description: >
+  Professional DOCX document creation, editing, and formatting using OpenXML SDK (.NET).
+  Three pipelines: (A) create new documents from scratch, (B) fill/edit content in existing
+---
+Body`,
+			wantName: "minimax-docx",
+			wantDesc: "Professional DOCX document creation, editing, and formatting using OpenXML SDK (.NET). Three pipelines: (A) create new documents from scratch, (B) fill/edit content in existing",
+			wantOK:   true,
+		},
+		{
+			name: "literal multiline description",
+			input: `---
+name: flutter-dev
+description: |
+  Flutter cross-platform development guide covering widget patterns,
+  Riverpod/Bloc state management, GoRouter navigation.
+---
+Body`,
+			wantName: "flutter-dev",
+			wantDesc: "Flutter cross-platform development guide covering widget patterns, Riverpod/Bloc state management, GoRouter navigation.",
+			wantOK:   true,
+		},
+		{
+			name: "description with pipe character inside",
+			input: `---
+name: docx
+description: "Create | edit | read Word documents"
+---
+Body`,
+			wantName: "docx",
+			wantDesc: "Create | edit | read Word documents",
+			wantOK:   true,
+		},
+		{
+			name: "invalid yaml frontmatter",
+			input: `---
+name: broken
+description: [
+---
+Body`,
+			wantOK: false,
+		},
+		{
+			name: "description is a non-string scalar",
+			input: `---
+name: numeric
+description: 42
+---
+Body`,
+			wantOK: false,
+		},
+		{
+			name: "name and description out of order with other keys",
+			input: `---
+license: MIT
+metadata:
+  version: "1.0.0"
+name: ordered-skill
+description: Appears after metadata block
+---
+Body`,
+			wantName: "ordered-skill",
+			wantDesc: "Appears after metadata block",
+			wantOK:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -309,6 +378,20 @@ func TestBuildSkillsSystemPrompt(t *testing.T) {
 			},
 			wantLen: 2,
 		},
+		{
+			name: "description with pipe is escaped",
+			skills: []SkillInfo{
+				{Name: "docx", Description: "Create | edit | read Word documents"},
+			},
+			wantLen: 1,
+		},
+		{
+			name: "description with newline is flattened",
+			skills: []SkillInfo{
+				{Name: "multi", Description: "line one\nline two"},
+			},
+			wantLen: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -320,9 +403,48 @@ func TestBuildSkillsSystemPrompt(t *testing.T) {
 				assert.Contains(t, got, "Skills")
 				for _, s := range tt.skills {
 					assert.Contains(t, got, s.Name)
-					assert.Contains(t, got, s.Description)
+					assert.Contains(t, got, escapeTableCell(s.Description))
 				}
 			}
+		})
+	}
+}
+
+func TestEscapeTableCell(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "pipe escaped",
+			in:   "Create | edit",
+			want: `Create \| edit`,
+		},
+		{
+			name: "backslash escaped",
+			in:   `a\b`,
+			want: `a\\b`,
+		},
+		{
+			name: "newline flattened",
+			in:   "line one\nline two",
+			want: "line one line two",
+		},
+		{
+			name: "empty string",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "plain text untouched",
+			in:   "just some text",
+			want: "just some text",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, escapeTableCell(tt.in))
 		})
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SkillInfo represents a discovered skill from ~/.codebuddy/skills/.
@@ -95,9 +97,10 @@ func scanSkillsFromDir(skillsDir string) []SkillInfo {
 //	description: "Some description text"
 //	---
 //
-// NOTE: This is a minimal frontmatter parser. It handles single-line
-// name and description values (quoted or unquoted). Multi-line YAML scalars
-// are not supported.
+// The frontmatter is parsed with yaml.v3, so multi-line YAML scalars
+// (folded ">" / literal "|" styles) and quoted values are fully supported.
+// Only the name and description keys are extracted; description is
+// normalized to a single line with inner whitespace collapsed.
 func parseSkillFrontmatter(data []byte) (string, string, bool) {
 	content := string(data)
 
@@ -114,26 +117,46 @@ func parseSkillFrontmatter(data []byte) (string, string, bool) {
 	}
 	frontmatter := afterOpen[:closeIdx]
 
-	var name, description string
-	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "name:") {
-			name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-			name = strings.Trim(name, "\"'")
-		} else if strings.HasPrefix(line, "description:") {
-			description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-			description = strings.Trim(description, "\"'")
-		}
+	var fm map[string]any
+	if err := yaml.Unmarshal([]byte(frontmatter), &fm); err != nil {
+		slog.Debug("acp skill scan: invalid YAML frontmatter", "error", err)
+		return "", "", false
 	}
 
-	if name == "" || description == "" {
+	name, ok := frontmatterString(fm, "name")
+	if !ok || name == "" {
+		return "", "", false
+	}
+	description, ok := frontmatterString(fm, "description")
+	if !ok || description == "" {
 		return "", "", false
 	}
 
 	return name, description, true
+}
+
+// frontmatterString extracts a string value from parsed frontmatter.
+// yaml.v3 unmarshals into map[string]any, so scalars arrive as concrete Go
+// types. Only string values are accepted; maps, lists, and numbers are
+// rejected (a numeric description is meaningless for a skill).
+func frontmatterString(fm map[string]any, key string) (string, bool) {
+	val, exists := fm[key]
+	if !exists {
+		return "", false
+	}
+	s, ok := val.(string)
+	if !ok {
+		return "", false
+	}
+	return collapseWhitespace(s), true
+}
+
+// collapseWhitespace trims the value and collapses internal runs of
+// whitespace (including newlines from folded/literal scalars) into single
+// spaces, so descriptions stay on one line for the markdown table and the
+// slash-command menu.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // SkillsToCommands converts SkillInfo slices to AvailableCommandInfo so skills
@@ -176,9 +199,18 @@ func buildSkillsSystemPrompt(skills []SkillInfo) string {
 		b.WriteString("| ")
 		b.WriteString(s.Name)
 		b.WriteString(" | ")
-		b.WriteString(s.Description)
+		b.WriteString(escapeTableCell(s.Description))
 		b.WriteString(" |\n")
 	}
 
 	return b.String()
+}
+
+// escapeTableCell escapes a value for use inside a markdown table cell:
+// pipes and backslashes are backslash-escaped, and newlines are replaced
+// with spaces so a description cannot break the table structure.
+func escapeTableCell(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return strings.ReplaceAll(s, "\n", " ")
 }
