@@ -119,7 +119,8 @@ function pdfScrollToPage(pageNum) {
 
 function focusSearchInput() {
   // FileViewer routes internally: CodeMirror views open the editor's own
-  // search panel, rendered markdown focuses the SearchDrawer bottom sheet.
+  // search panel, rendered markdown opens its inline search bar. The
+  // SearchDrawer is only touched when it is already open (legacy fallback).
   fileViewerRef.value?.focusSearchInput?.()
   searchDrawerRef.value?.focusSearchInput?.()
 }

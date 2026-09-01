@@ -132,6 +132,7 @@
         <!-- Rendered browse (not editing) -->
         <MarkdownPreview
           v-if="!editing && markdownViewMode === 'rendered'"
+          ref="mdPreviewRef"
           :file="file"
           :view-mode="markdownViewMode"
           :word-wrap="wordWrap"
@@ -368,6 +369,7 @@ const editing = fileEditor.editing
 const { saving, saveFile } = useCodeEditorSave()
 const cmEditorRef = ref(null)
 const excalidrawViewerRef = ref(null)
+const mdPreviewRef = ref(null)
 
 // The global back handler calls exitEdit() → run the active editor's exit flow,
 // which confirms save/discard/cancel when there are unsaved changes. For
@@ -415,21 +417,23 @@ async function handleSaveAndExit(content) {
 
 function handleToggleSearch() {
     // CodeMirror-rendered views (code, markdown raw/editing) use CodeMirror's
-    // own search panel; only the rendered markdown preview has no editor to
-    // search, so it falls back to the SearchDrawer bottom sheet.
+    // own search panel; the rendered markdown preview uses its inline search
+    // bar. Neither needs the SearchDrawer bottom sheet anymore.
     if (isCodeMirrorView.value) {
         cmEditorRef.value?.openSearch?.()
-    } else {
-        emit('toggleSearch')
+    } else if (isMarkdown.value && !editing.value && props.markdownViewMode === 'rendered') {
+        mdPreviewRef.value?.openSearch?.()
     }
 }
 
 function focusSearchInput() {
     // Focus (not toggle) the active search UI. CodeMirror views open the
     // editor's own search panel; the rendered markdown preview is focused by
-    // the SearchDrawer (via FileOverlay forwarding) — nothing to do here.
+    // its inline search bar.
     if (isCodeMirrorView.value) {
         cmEditorRef.value?.openSearch?.()
+    } else if (isMarkdown.value && !editing.value && props.markdownViewMode === 'rendered') {
+        mdPreviewRef.value?.openSearch?.()
     }
 }
 

@@ -1391,6 +1391,14 @@ const isCodeMirrorFileView = computed(() => {
     }
     return true
 })
+// Rendered markdown/HTML preview (not CodeMirror): has an inline search bar
+// instead of the SearchDrawer bottom sheet.
+const isMarkdownRenderedView = computed(() => {
+    const f = currentFile.value
+    if (!f || typeof f.content !== 'string') return false
+    const ft = getFileType(f.name || '')
+    return ft.isMarkdown && markdownViewMode.value === 'rendered'
+})
 const { entries: recentFileEntries } = useRecentFiles()
 const recentFilesCount = computed(() => recentFileEntries.value.length)
 const projectRoot = computed(() => store.state.projectRoot)
@@ -2326,10 +2334,14 @@ function openFileViewSearchDrawer() {
 }
 
 // Route the view-pane search request. CodeMirror-rendered files (code,
-// markdown raw/editing) use CodeMirror's built-in search panel; only the
-// rendered markdown preview opens the SearchDrawer bottom sheet.
+// markdown raw/editing) use CodeMirror's search panel, and the rendered
+// markdown preview uses its inline search bar — both are toggled/focused
+// through the FileViewer. The SearchDrawer bottom sheet is only used as a
+// last-resort fallback when no view-specific search UI exists.
 function openFileSearch() {
   if (isCodeMirrorFileView.value) {
+    fileOverlayRef.value?.focusSearchInput()
+  } else if (isMarkdownRenderedView.value) {
     fileOverlayRef.value?.focusSearchInput()
   } else {
     openFileViewSearchDrawer()

@@ -1145,6 +1145,9 @@ export default {
     matchCount: '{count} matches',
     clear: 'Clear',
     defaultPlaceholder: 'Search...',
+    previous: 'Previous match',
+    next: 'Next match',
+    close: 'Close search',
   },
   toc: {
     title: 'Table of Contents',

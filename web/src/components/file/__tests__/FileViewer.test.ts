@@ -642,13 +642,13 @@ describe('FileViewer', () => {
       expect(wrapper.emitted('toggleSearch')).toBeFalsy()
     })
 
-    it('emits toggleSearch for rendered markdown preview', async () => {
+    it('opens inline search for rendered markdown preview (no SearchDrawer emit)', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(false)
       ss.handleToggleSearch()
       expect(mockOpenSearch).not.toHaveBeenCalled()
-      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
+      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
     })
 
     it('opens CodeMirror search when editing from rendered markdown preview', async () => {
@@ -668,7 +668,7 @@ describe('FileViewer', () => {
       expect(mockOpenSearch).toHaveBeenCalledTimes(1)
     })
 
-    it('focusSearchInput does nothing for rendered markdown (drawer is focused by FileOverlay)', async () => {
+    it('focusSearchInput does nothing for rendered markdown (inline bar opened via MarkdownPreview)', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       ss.focusSearchInput()

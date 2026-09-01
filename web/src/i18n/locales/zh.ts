@@ -1145,6 +1145,9 @@ export default {
     matchCount: '{count} 处匹配',
     clear: '清除',
     defaultPlaceholder: '搜索...',
+    previous: '上一个匹配',
+    next: '下一个匹配',
+    close: '关闭搜索',
   },
   toc: {
     title: '目录',

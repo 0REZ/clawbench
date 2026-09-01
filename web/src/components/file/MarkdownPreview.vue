@@ -25,6 +25,10 @@
     @prev="tableRowPrev"
     @next="tableRowNext"
   />
+
+  <!-- Inline search bar (bottom of the preview), replacing the SearchDrawer
+       bottom sheet for rendered markdown. -->
+  <MarkdownSearchBar ref="searchBarRef" :open="searchOpen" @close="searchOpen = false" />
 </template>
 
 <script setup lang="ts">
@@ -40,6 +44,7 @@ import { store } from '@/stores/app.ts'
 import { dirName, splitPath, joinPath } from '@/utils/path.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import TableRowModal from '@/components/common/TableRowModal.vue'
+import MarkdownSearchBar from '@/components/file/MarkdownSearchBar.vue'
 import {
   diffMarkers,
   clearDiffMarkers,
@@ -59,6 +64,8 @@ const props = defineProps<{
 
 const renderedHtml = ref('')
 const bodyRef = ref<HTMLElement | null>(null)
+const searchBarRef = ref<InstanceType<typeof MarkdownSearchBar> | null>(null)
+const searchOpen = ref(false)
 const imageTimestamp = ref(Date.now())
 let currentRenderId = 0
 
@@ -358,6 +365,9 @@ watch(() => props.viewMode, () => {
 defineExpose({
     lastBlockList,
     bodyRef,
+    openSearch() {
+        searchOpen.value = true
+    },
 })
 </script>
 
