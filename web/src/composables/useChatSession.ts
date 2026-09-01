@@ -395,9 +395,10 @@ export function useChatSession(options: UseChatSessionOptions) {
   }
   // Plan C: compare non-queued loaded messages against non-queued total.
   // The queued messages in the messages array are pending bubbles, not loaded
-  // history. Using filter(!m.queueId) instead of `length - queuedCount` keeps
-  // the loaded count accurate even when queuedCount (a server snapshot) drifts
-  // from the rows actually present in the messages array.
+  // history. Filtering by (pending || queued) — NOT by queueId — keeps the
+  // loaded count accurate: every user row now carries a queueId (the backend
+  // persists it for direct-sent messages too), so a queueId filter would
+  // exclude ALL user messages and hasMore would stay true forever.
   //
   // Root-cause fix: hasMore is gated on oldestLoadedId != null. While no DB
   // history is loaded (session switch just cleared the array, or a brand-new
@@ -406,7 +407,7 @@ export function useChatSession(options: UseChatSessionOptions) {
   const hasMore = computed(() => {
     if (noMoreHistory.value) return false
     if (oldestLoadedId.value === null) return false
-    const loaded = messages.value.filter((m) => !(m as ChatMessage).queueId).length
+    const loaded = messages.value.filter((m) => !m.pending && !m.queued).length
     return loaded < totalMessages.value - queuedCount.value
   })
 

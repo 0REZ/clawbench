@@ -510,7 +510,7 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	msgID, err := service.AddChatMessage(projectPath, backendName, sessionID, "user", req.Message, allFiles, false, T(r, "FileMessage"))
+	msgID, err := service.AddChatMessage(projectPath, backendName, sessionID, "user", req.Message, allFiles, false, T(r, "FileMessage"), req.QueueID)
 	if err != nil {
 		service.SetSessionRunning(sessionID, false, true) // skipEvent: session never actually started
 		model.WriteError(w, model.Internal(fmt.Errorf("failed to save message")))
