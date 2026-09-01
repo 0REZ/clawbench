@@ -14,8 +14,14 @@
       />
       <button name="prev" class="cm-button" :disabled="!canNav" :title="t('search.previous')" aria-label="Previous match" @click="goPrev"></button>
       <button name="next" class="cm-button" :disabled="!canNav" :title="t('search.next')" aria-label="Next match" @click="goNext"></button>
+      <button name="select" class="cm-button" :disabled="!canNav" :title="t('search.all')" aria-label="Select all matches" @click="selectAll">{{ t('search.all') }}</button>
       <span class="cm-search-match-info">{{ countText }}</span>
       <button name="close" class="cm-button" :title="t('search.close')" aria-label="Close search" @click="close"></button>
+    </div>
+    <div class="cm-search-options">
+      <label><input v-model="caseSensitive" name="case" type="checkbox" @change="onInput">{{ t('search.matchCase') }}</label>
+      <label><input v-model="regexp" name="regexp" type="checkbox" @change="onInput">{{ t('search.regexp') }}</label>
+      <label><input v-model="wholeWord" name="word" type="checkbox" @change="onInput">{{ t('search.byWord') }}</label>
     </div>
   </div>
 </template>
@@ -23,7 +29,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BLOCK_TAGS, shouldCorrectAfterSettle } from '@/utils/searchUtils.ts'
+import { shouldCorrectAfterSettle } from '@/utils/searchUtils.ts'
 
 const { t } = useI18n()
 
@@ -34,6 +40,9 @@ const emit = defineEmits(['close'])
 
 const query = ref('')
 const inputRef = ref<HTMLInputElement | null>(null)
+const caseSensitive = ref(false)
+const regexp = ref(false)
+const wholeWord = ref(false)
 
 // Active match index (0-based) within matches list.
 const activeIndex = ref(0)
@@ -46,6 +55,10 @@ interface Match {
 
 const matches = ref<Match[]>([])
 
+// The highlight name for CSS Custom Highlight API (all matches + active one).
+const HIGHLIGHT_NAME = 'md-search-bar-matches'
+const ACTIVE_HIGHLIGHT_NAME = 'md-search-bar-active'
+
 watch(() => props.open, async (val) => {
     if (val) {
         activeIndex.value = 0
@@ -53,6 +66,8 @@ watch(() => props.open, async (val) => {
         inputRef.value?.focus()
         inputRef.value?.select()
         if (query.value) onInput()
+    } else {
+        clearHighlights()
     }
 })
 
@@ -60,28 +75,37 @@ watch(query, () => {
     activeIndex.value = 0
 })
 
-function findBlockAncestor(node: Node): Element {
-    let el = node.parentElement
-    while (el) {
-        if (BLOCK_TAGS.has(el.tagName) && el.closest('.markdown-body')) return el
-        el = el.parentElement
+function buildRegex(q: string): RegExp {
+    let source = regexp.value ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (wholeWord.value) source = `\\b${source}\\b`
+    try {
+        return new RegExp(source, caseSensitive.value ? 'g' : 'gi')
+    } catch {
+        // Invalid regexp — fall back to a literal that can never match.
+        return /(?!)/g
     }
-    return node.parentElement || (document.body as HTMLElement)
 }
 
 function collectMatches(q: string): Match[] {
     const container = document.querySelector('.markdown-body')
     if (!container || !q.trim()) return []
-    const lowerQ = q.toLowerCase()
+    let re: RegExp
+    try {
+        re = buildRegex(q)
+    } catch {
+        return []
+    }
     const out: Match[] = []
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null)
     while (walker.nextNode()) {
         const textNode = walker.currentNode as Text
         const text = textNode.textContent || ''
-        if (!text.toLowerCase().includes(lowerQ)) continue
-        findBlockAncestor(textNode) // keep block scoping consistent with the drawer
-        const offset = text.toLowerCase().indexOf(lowerQ)
-        out.push({ textNode, offset, length: q.length })
+        re.lastIndex = 0
+        let m
+        while ((m = re.exec(text)) !== null) {
+            if (m[0].length === 0) { re.lastIndex++; continue }
+            out.push({ textNode, offset: m.index, length: m[0].length })
+        }
     }
     return out
 }
@@ -89,6 +113,49 @@ function collectMatches(q: string): Match[] {
 function onInput() {
     matches.value = collectMatches(query.value)
     activeIndex.value = 0
+    highlightMatches()
+}
+
+function highlightMatches() {
+    if (typeof CSS === 'undefined' || !CSS.highlights) {
+        // Highlight API unsupported — no persistent match highlighting.
+        return
+    }
+    const ranges: Range[] = []
+    for (const m of matches.value) {
+        try {
+            const r = document.createRange()
+            const end = Math.min(m.offset + m.length, m.textNode.textContent?.length || 0)
+            r.setStart(m.textNode, m.offset)
+            r.setEnd(m.textNode, end)
+            ranges.push(r)
+        } catch { /* skip broken ranges */ }
+    }
+    try {
+        CSS.highlights.delete(HIGHLIGHT_NAME)
+        if (ranges.length) CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...ranges))
+    } catch { /* ignore */ }
+}
+
+function highlightActive(m: Match | null) {
+    if (typeof CSS === 'undefined' || !CSS.highlights) return
+    try {
+        CSS.highlights.delete(ACTIVE_HIGHLIGHT_NAME)
+        if (!m) return
+        const r = document.createRange()
+        const end = Math.min(m.offset + m.length, m.textNode.textContent?.length || 0)
+        r.setStart(m.textNode, m.offset)
+        r.setEnd(m.textNode, end)
+        CSS.highlights.set(ACTIVE_HIGHLIGHT_NAME, new Highlight(r))
+    } catch { /* ignore */ }
+}
+
+function clearHighlights() {
+    if (typeof CSS === 'undefined' || !CSS.highlights) return
+    try {
+        CSS.highlights.delete(HIGHLIGHT_NAME)
+        CSS.highlights.delete(ACTIVE_HIGHLIGHT_NAME)
+    } catch { /* ignore */ }
 }
 
 const canNav = computed(() => matches.value.length > 0)
@@ -124,6 +191,26 @@ function goPrev() {
     if (!matches.value.length) return
     activeIndex.value = (activeIndex.value - 1 + matches.value.length) % matches.value.length
     jumpTo(matches.value[activeIndex.value])
+}
+
+// Select all matches (mirrors CodeMirror's selectMatches). The rendered DOM
+// cannot hold a multi-range selection, so this selects the first match's text
+// while all matches stay highlighted via the CSS Highlight API.
+function selectAll() {
+    if (!matches.value.length) return
+    activeIndex.value = 0
+    const first = matches.value[0]
+    try {
+        const range = document.createRange()
+        const end = Math.min(first.offset + first.length, first.textNode.textContent?.length || 0)
+        range.setStart(first.textNode, first.offset)
+        range.setEnd(first.textNode, end)
+        const sel = window.getSelection()
+        sel?.removeAllRanges()
+        sel?.addRange(range)
+    } catch { /* ignore */ }
+    highlightMatches()
+    jumpTo(first)
 }
 
 // ── Jump: temporary anchor + center scroll + line-flash ─────────────────────
@@ -189,11 +276,13 @@ function correctAfterSettle(anchor: HTMLElement, scroller: HTMLElement | null, o
 onBeforeUnmount(() => {
     correctionTimers.forEach((t) => clearInterval(t))
     correctionTimers.clear()
+    clearHighlights()
 })
 
 function jumpTo(match: Match) {
     const { textNode, offset, length } = match
     if (!textNode || !textNode.parentElement) return
+    highlightActive(match)
     try {
         const range = document.createRange()
         const endOffset = Math.min(offset + length, textNode.textContent?.length || 0)
@@ -221,15 +310,16 @@ function jumpTo(match: Match) {
 }
 
 function close() {
+    clearHighlights()
     emit('close')
 }
 </script>
 
 <style scoped>
 /* Full-width search bar pinned to the bottom of the markdown preview.
-   Only a top separator line — no surrounding box — unlike the floating
-   CodeMirror search panel. The inner controls reuse the .cm-search class
-   names so their styling matches the CodeMirror search panel. */
+   Only a top separator line — no surrounding box. The inner controls share
+   the CodeMirror search-panel styles from the shared search-bar.css
+   (imported globally below), so only the container/layout lives here. */
 .md-search-bar {
   flex-shrink: 0;
   width: 100%;
@@ -245,7 +335,7 @@ function close() {
   --search-ctrl-h: 22px;
   width: 100%;
   box-sizing: border-box;
-  padding: 5px 8px;
+  padding: 5px 8px 0;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
   font-size: 13px;
   display: flex;
@@ -262,99 +352,32 @@ function close() {
   min-width: 0;
 }
 .md-search-bar .cm-search .cm-search-match-info {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  margin: 0 4px;
 }
 
-/* ── Control styling (mirrors the CodeMirror search panel) ── */
-.md-search-bar .cm-search .cm-textfield {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  color: var(--text-primary);
-  padding: 3px 8px;
-  outline: none;
-  font-family: inherit;
-  font-size: 13px;
-  min-height: var(--search-ctrl-h);
-  box-sizing: border-box;
-}
-.md-search-bar .cm-search .cm-textfield:focus {
-  border-color: var(--accent-color);
-}
-
-.md-search-bar .cm-search .cm-button {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  color: var(--text-primary);
-  padding: 3px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  min-height: var(--search-ctrl-h);
-  box-sizing: border-box;
-  line-height: 1;
-  white-space: nowrap;
-}
-.md-search-bar .cm-search .cm-button:hover:not(:disabled) {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  border-color: var(--accent-color);
-}
-.md-search-bar .cm-search .cm-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* prev / next — arrow icons only (like the CodeMirror panel). */
-.md-search-bar .cm-search .cm-button[name='next'],
-.md-search-bar .cm-search .cm-button[name='prev'] {
-  position: relative;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  padding: 0;
-  font-size: 0;
-  flex-shrink: 0;
-}
-.md-search-bar .cm-search .cm-button[name='next']::before,
-.md-search-bar .cm-search .cm-button[name='prev']::before {
-  content: '';
-  display: inline-block;
-  font-size: 12px;
-  line-height: 1;
-  border: solid var(--text-primary);
-  border-width: 0 1.5px 1.5px 0;
-  padding: 2.5px;
-}
-.md-search-bar .cm-search .cm-button[name='prev']::before {
-  transform: rotate(135deg); /* ← */
-  margin-right: -2px;
-}
-.md-search-bar .cm-search .cm-button[name='next']::before {
-  transform: rotate(-45deg); /* → */
-  margin-left: -2px;
-}
-
-/* close — borderless, muted, like the CodeMirror panel's corner close. */
-.md-search-bar .cm-search button[name='close'] {
-  background: transparent;
-  border: none;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  padding: 0;
-  display: inline-flex;
+/* Options row — layout only (label/checkbox visuals come from search-bar.css). */
+.md-search-bar .cm-search-options {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.15s, color 0.15s;
+  gap: 6px;
+  padding: 4px 8px 5px;
 }
-.md-search-bar .cm-search button[name='close']:hover {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  color: var(--text-primary);
+</style>
+
+<style>
+/* Shared search-panel control styles (`.cm-search` controls), single source
+   of truth for both the CodeMirror panel and this markdown search bar. */
+@import '@/assets/search-bar.css';
+
+/* Match highlighting via the CSS Custom Highlight API. These selectors must
+   be global because ::highlight() pseudo-elements apply to the whole document
+   (the .markdown-body content lives outside this component's scoped styles). */
+::highlight(md-search-bar-matches) {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 30%, transparent);
+  color: inherit;
+}
+::highlight(md-search-bar-active) {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 60%, transparent);
+  color: inherit;
 }
 </style>

@@ -787,6 +787,10 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
 </style>
 
 <style>
+/* Shared search-panel control styles (`.cm-search` controls) used by both the
+   CodeMirror panel and the markdown preview search bar. */
+@import '@/assets/search-bar.css';
+
 /* CodeMirror DOM (`.cm-editor`, `.cm-scroller`, `.cm-content`) is injected
    dynamically, so it lacks the scoped attribute — these rules MUST be global.
    Mirrors the browse-mode CodePreview styles. */
@@ -967,49 +971,41 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   font-weight: 600;
 }
 
-/* Search panel (custom-rendered) — compact, sharp-cornered, docked to the
-   bottom-right corner. The DOM is ours (see codeMirrorSearchPanel.ts), so a
-   simple two-row flex layout keeps the groups intact at any width:
-     row 1: input + prev(←) + next(→) + all + match info            + close
-     row 2: case + regexp + word + replace input + replace + replace-all */
+/* Search panel (custom-rendered) — full-width bar pinned to the bottom of
+   the editor with only a top separator line, matching the markdown preview's
+   inline search bar (MarkdownSearchBar.vue). The DOM is ours (see
+   codeMirrorSearchPanel.ts); the controls reuse the shared search-bar.css. */
 .cm-viewer .cm-panels {
   background: transparent;
   border: none;
 }
 .cm-viewer .cm-panels .cm-search {
   --search-ctrl-h: 22px;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border-top: 1px solid var(--border-color);
+  border-bottom: none;
+  border-left: none;
+  border-right: none;
   border-radius: 0;
-  padding: 6px 8px;
-  /* Room for the absolutely-positioned close button in the top-right corner. */
-  padding-right: 34px;
-  margin: 0 8px 8px 0;
-  /* Dock to the bottom-right corner instead of stretching across the
-     editor: let the panel size to its content and pin it right. */
-  position: relative;
-  width: fit-content;
-  max-width: calc(100% - 16px);
-  margin-left: auto;
+  padding: 5px 8px 0;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
   font-size: 13px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  z-index: 5;
-  /* Pick the native control rendering that matches the active theme so the
-     checkboxes don't stay stuck in the browser's light-mode colors. */
   color-scheme: light;
 }
 [data-theme-base="dark"] .cm-viewer .cm-panels .cm-search {
   color-scheme: dark;
 }
-/* ── Two-row grouping ────────────────────────────────────────────────────────
-   The option checkboxes and the replace group are wrapped in their own
-   containers (.cm-search-options / .cm-search-replace), so each group wraps
-   as a unit — the panel can never split a group across rows. */
-.cm-viewer .cm-panels .cm-search input[name='search'] { order: 1; }
+/* ── Layout (control styles come from the shared search-bar.css) ─────────────
+   Row 1: search input + prev(←) + next(→) + all + match info + close.
+   Row 2: .cm-search-options (case/regexp/word) + .cm-search-replace (editable).
+   The option/replace groups wrap as units via their containers. */
+.cm-viewer .cm-panels .cm-search input[name='search'] { order: 1; flex: 1; min-width: 0; }
 .cm-viewer .cm-panels .cm-search .cm-button[name='prev'] { order: 2; }
 .cm-viewer .cm-panels .cm-search .cm-button[name='next'] { order: 3; }
 .cm-viewer .cm-panels .cm-search .cm-button[name='select'] { order: 4; }
@@ -1017,163 +1013,20 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   order: 5;
   margin: 0 4px;
   align-self: center;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 .cm-viewer .cm-panels .cm-search button[name='close'] {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  background: transparent;
-  border: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-.cm-viewer .cm-panels .cm-search button[name='close']:hover {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  color: var(--text-primary);
+  order: 6;
+  margin-left: auto;
 }
 .cm-viewer .cm-panels .cm-search .cm-search-options { order: 10; }
 .cm-viewer .cm-panels .cm-search .cm-search-replace { order: 11; }
 .cm-viewer .cm-panels .cm-search .cm-search-options,
 .cm-viewer .cm-panels .cm-search .cm-search-replace {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  padding: 4px 0 5px;
 }
 .cm-viewer .cm-panels .cm-search .cm-search-options > label,
 .cm-viewer .cm-panels .cm-search .cm-search-replace > * {
   flex-shrink: 0;
-}
-.cm-viewer .cm-panels .cm-search .cm-textfield {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  color: var(--text-primary);
-  padding: 3px 8px;
-  outline: none;
-  font-family: inherit;
-  font-size: 13px;
-  min-height: var(--search-ctrl-h);
-  box-sizing: border-box;
-  min-width: 120px;
-}
-.cm-viewer .cm-panels .cm-search .cm-textfield:focus {
-  border-color: var(--accent-color);
-}
-.cm-viewer .cm-panels .cm-search .cm-button {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  color: var(--text-primary);
-  padding: 3px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  min-height: var(--search-ctrl-h);
-  box-sizing: border-box;
-  line-height: 1;
-  white-space: nowrap;
-}
-.cm-viewer .cm-panels .cm-search .cm-button:hover {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  border-color: var(--accent-color);
-}
-.cm-viewer .cm-panels .cm-search .cm-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-/* next / prev — arrow icons only. */
-.cm-viewer .cm-panels .cm-search .cm-button[name='next'],
-.cm-viewer .cm-panels .cm-search .cm-button[name='prev'] {
-  position: relative;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  padding: 0;
-  font-size: 0;
-  flex-shrink: 0;
-}
-.cm-viewer .cm-panels .cm-search .cm-button[name='next']::before,
-.cm-viewer .cm-panels .cm-search .cm-button[name='prev']::before {
-  content: '';
-  display: inline-block;
-  font-size: 12px;
-  line-height: 1;
-  border: solid var(--text-primary);
-  border-width: 0 1.5px 1.5px 0;
-  padding: 2.5px;
-}
-.cm-viewer .cm-panels .cm-search .cm-button[name='prev']::before {
-  transform: rotate(135deg); /* ← */
-  margin-right: -2px;
-}
-.cm-viewer .cm-panels .cm-search .cm-button[name='next']::before {
-  transform: rotate(-45deg); /* → */
-  margin-left: -2px;
-}
-.cm-viewer .cm-panels .cm-search label {
-  color: var(--text-muted);
-  font-size: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  cursor: pointer;
-  user-select: none;
-}
-.cm-viewer .cm-panels .cm-search label input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  margin: 0;
-  flex-shrink: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 0;
-  background: var(--bg-tertiary);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  cursor: pointer;
-  transition: border-color 0.15s, background-color 0.15s;
-}
-.cm-viewer .cm-panels .cm-search label input[type='checkbox']:hover {
-  border-color: var(--accent-color);
-}
-.cm-viewer .cm-panels .cm-search label input[type='checkbox']:checked {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-}
-.cm-viewer .cm-panels .cm-search label input[type='checkbox']:checked::after {
-  content: '';
-  /* Flex centering keeps the rotated checkmark centered in the box. The
-     checkmark's thick hook sits slightly low-right, so nudge it up-left. */
-  width: 5px;
-  height: 10px;
-  margin-top: -1px;
-  border: solid #fff;
-  border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
-}
-.cm-viewer .cm-panels .cm-search label input[type='checkbox']:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
-  outline-offset: 1px;
-}
-.cm-viewer .cm-panels .cm-search button[name='close']:hover {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  border-color: var(--accent-color);
-  color: var(--text-primary);
 }
 .cm-viewer .cm-textfield-autofill {
   color-scheme: dark;

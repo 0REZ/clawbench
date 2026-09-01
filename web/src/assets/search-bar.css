@@ -1,0 +1,176 @@
+/* ────────────────────────────────────────────────────────────────────────────
+ * Shared search-panel control styles (`.cm-search`).
+ *
+ * Single source of truth for the controls used by BOTH search UIs:
+ *   - CodeMirror search panel (codeMirrorSearchPanel.ts → CodeMirrorViewer.vue)
+ *   - Markdown preview search bar (MarkdownSearchBar.vue)
+ *
+ * Both render the same `.cm-search` inner structure:
+ *     input[name=search].cm-textfield · button.cm-button[name=prev|next|select]
+ *     span.cm-search-match-info · button.cm-button[name=close]
+ *     .cm-search-options (label + checkbox) · .cm-search-replace
+ *
+ * The *containers* differ (floating corner vs full-width bar) and are styled
+ * per-host; only the controls live here. Selectors use the bare `.cm-search`
+ * class so either host can reuse them without a parent prefix.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+.cm-search {
+  --search-ctrl-h: 22px;
+}
+
+/* ── Text inputs ── */
+.cm-search .cm-textfield {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  padding: 3px 8px;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
+}
+.cm-search .cm-textfield:focus {
+  border-color: var(--accent-color);
+}
+
+/* ── Buttons ── */
+.cm-search .cm-button {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  color: var(--text-primary);
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  min-height: var(--search-ctrl-h);
+  box-sizing: border-box;
+  line-height: 1;
+  white-space: nowrap;
+}
+.cm-search .cm-button:hover:not(:disabled) {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  border-color: var(--accent-color);
+}
+.cm-search .cm-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* prev / next — arrow icons only. */
+.cm-search .cm-button[name='next'],
+.cm-search .cm-button[name='prev'] {
+  position: relative;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  font-size: 0;
+  flex-shrink: 0;
+}
+.cm-search .cm-button[name='next']::before,
+.cm-search .cm-button[name='prev']::before {
+  content: '';
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  border: solid var(--text-primary);
+  border-width: 0 1.5px 1.5px 0;
+  padding: 2.5px;
+}
+.cm-search .cm-button[name='prev']::before {
+  transform: rotate(135deg); /* ← */
+  margin-right: -2px;
+}
+.cm-search .cm-button[name='next']::before {
+  transform: rotate(-45deg); /* → */
+  margin-left: -2px;
+}
+
+/* close — borderless, muted. */
+.cm-search button[name='close'] {
+  background: transparent;
+  border: none;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s, color 0.15s;
+}
+.cm-search button[name='close']:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  color: var(--text-primary);
+}
+
+/* ── Match counter ── */
+.cm-search .cm-search-match-info {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Option row (case / regexp / word) ── */
+.cm-search .cm-search-options,
+.cm-search .cm-search-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cm-search .cm-search-options label {
+  color: var(--text-muted);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.cm-search .cm-search-options label input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  margin: 0;
+  flex-shrink: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  background: var(--bg-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.cm-search .cm-search-options label input[type='checkbox']:hover {
+  border-color: var(--accent-color);
+}
+.cm-search .cm-search-options label input[type='checkbox']:checked {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+.cm-search .cm-search-options label input[type='checkbox']:checked::after {
+  content: '';
+  /* Flex centering keeps the rotated checkmark centered in the box. The
+     checkmark's thick hook sits slightly low-right, so nudge it up-left. */
+  width: 5px;
+  height: 10px;
+  margin-top: -1px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.cm-search .cm-search-options label input[type='checkbox']:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
+  outline-offset: 1px;
+}

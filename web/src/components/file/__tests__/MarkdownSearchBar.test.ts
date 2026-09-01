@@ -5,7 +5,20 @@ import { createI18n } from 'vue-i18n'
 const i18n = createI18n({
   legacy: false,
   locale: 'en',
-  messages: { en: { search: { placeholder: 'Search...', previous: 'Prev', next: 'Next', close: 'Close' } } },
+  messages: {
+    en: {
+      search: {
+        placeholder: 'Search...',
+        previous: 'Prev',
+        next: 'Next',
+        close: 'Close',
+        all: 'All',
+        matchCase: 'Match case',
+        regexp: 'Regexp',
+        byWord: 'By word',
+      },
+    },
+  },
 })
 
 import MarkdownSearchBar from '../MarkdownSearchBar.vue'
@@ -95,6 +108,50 @@ describe('MarkdownSearchBar', () => {
     expect(next.exists()).toBe(true)
     expect((prev.element as HTMLButtonElement).disabled).toBe(true)
     expect((next.element as HTMLButtonElement).disabled).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders select-all button and option checkboxes (case/regexp/word)', async () => {
+    const wrapper = mountBar({ open: true })
+    await sleep(20)
+    expect(wrapper.find('button[name=select]').exists()).toBe(true)
+    const boxes = wrapper.findAll('.cm-search-options input[type=checkbox]')
+    expect(boxes).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('case-sensitive option narrows the result set', async () => {
+    seedMarkdownBody('<p>Alpha alpha</p>')
+    const wrapper = mountBar({ open: true })
+    await sleep(20)
+    const input = wrapper.find('input')
+    input.element.value = 'alpha'
+    input.trigger('input')
+    await sleep(20)
+    const insensitive = wrapper.find('.cm-search-match-info').text()
+    expect(insensitive).toBe('1/2')
+    // Enable case-sensitive: only lowercase "alpha" matches → 1/1
+    wrapper.find('input[name=case]').setValue(true)
+    wrapper.find('input[name=case]').trigger('change')
+    await sleep(20)
+    expect(wrapper.find('.cm-search-match-info').text()).toBe('1/1')
+    wrapper.unmount()
+  })
+
+  it('whole-word option excludes substring matches', async () => {
+    seedMarkdownBody('<p>cat catalog</p>')
+    const wrapper = mountBar({ open: true })
+    await sleep(20)
+    const input = wrapper.find('input')
+    input.element.value = 'cat'
+    input.trigger('input')
+    await sleep(20)
+    expect(wrapper.find('.cm-search-match-info').text()).toBe('1/2')
+    wrapper.find('input[name=word]').setValue(true)
+    wrapper.find('input[name=word]').trigger('change')
+    await sleep(20)
+    // Whole-word: only the standalone "cat" matches.
+    expect(wrapper.find('.cm-search-match-info').text()).toBe('1/1')
     wrapper.unmount()
   })
 })
