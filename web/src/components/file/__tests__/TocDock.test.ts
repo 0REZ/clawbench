@@ -6,11 +6,12 @@ import TocDock from '@/components/file/TocDock.vue'
 // ── Mocks ──
 
 // Mutable width sink that stands in for the preference module
-const { setWidth, tocDockWidth } = vi.hoisted(() => {
+const { setWidth, tocDockWidth, toggleSide } = vi.hoisted(() => {
   const tocDockWidth = { value: 260 }
   return {
     tocDockWidth,
     setWidth: vi.fn((w: number) => { tocDockWidth.value = w }),
+    toggleSide: vi.fn(),
   }
 })
 
@@ -18,6 +19,7 @@ vi.mock('@/composables/useTocDockPreference', () => ({
   useTocDockPreference: () => ({
     tocDockWidth,
     setWidth,
+    toggleSide,
   }),
 }))
 
@@ -49,6 +51,7 @@ function mountDock(props: Record<string, any> = {}) {
 describe('TocDock', () => {
   beforeEach(() => {
     setWidth.mockClear()
+    toggleSide.mockClear()
     tocDockWidth.value = 260
   })
 
@@ -90,6 +93,14 @@ describe('TocDock', () => {
     const wrapper = mountDock()
     await wrapper.find('.toc-dock-close').trigger('click')
     expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('toggles the dock side when the side-toggle button is clicked', async () => {
+    const wrapper = mountDock({ side: 'left' })
+    const btn = wrapper.find('.toc-dock-side-toggle')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    expect(toggleSide).toHaveBeenCalledTimes(1)
   })
 
   it('applies the dock width from preference', () => {
@@ -135,6 +146,54 @@ describe('TocDock', () => {
     // Press at clientX=400, drag left to 350 (−50): the dock's left edge moves
     // left, widening the dock 260 → 310.
     window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, bubbles: true, clientX: 350 }))
+    await nextTick()
+
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+    await nextTick()
+
+    expect(setWidth).toHaveBeenCalled()
+    expect(setWidth.mock.calls[0][0]).toBe(310)
+  })
+
+  it('defaults to the right side with the right-edge divider styling', () => {
+    const wrapper = mountDock()
+    const dock = wrapper.find('.toc-dock')
+    expect(dock.classes()).toContain('toc-dock--right')
+  })
+
+  it('adds the left-side class when side="left"', () => {
+    const wrapper = mountDock({ side: 'left' })
+    const dock = wrapper.find('.toc-dock')
+    expect(dock.classes()).toContain('toc-dock--left')
+    expect(dock.classes()).not.toContain('toc-dock--right')
+  })
+
+  it('drags LEFT to narrow the left-side dock (divider follows pointer on right edge)', async () => {
+    const wrapper = mountDock({ side: 'left' })
+    const divider = wrapper.find('.toc-dock-divider')
+    pressDivider(divider, 300)
+
+    // Press at clientX=300, drag left to 260 (−40): the dock's RIGHT edge
+    // follows the pointer leftward, narrowing the dock 260 → 220.
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, bubbles: true, clientX: 260 }))
+    await nextTick()
+
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))
+    await nextTick()
+
+    expect(setWidth).toHaveBeenCalled()
+    const calledWidth = setWidth.mock.calls[0][0]
+    expect(calledWidth).toBe(220)
+  })
+
+  it('drags RIGHT to widen the left-side dock', async () => {
+    const wrapper = mountDock({ side: 'left' })
+    const divider = wrapper.find('.toc-dock-divider')
+    pressDivider(divider, 200)
+
+    // Press at clientX=200, drag right to 250 (+50): the dock's right edge moves
+    // right, widening the dock 260 → 310.
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, bubbles: true, clientX: 250 }))
     await nextTick()
 
     window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, bubbles: true }))

@@ -1156,6 +1156,8 @@ export default {
     noHeadings: 'No headings',
     loading: 'Loading headings...',
     dragResize: 'Drag to resize',
+    dockLeft: 'Move to left',
+    dockRight: 'Move to right',
   },
   quoteBar: {
     clear: 'Clear',

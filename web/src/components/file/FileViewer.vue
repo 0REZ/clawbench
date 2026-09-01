@@ -31,7 +31,7 @@
     />
 
     <!-- Content row: file content + (wide-screen) inline TOC dock -->
-    <div class="file-viewer-body">
+    <div class="file-viewer-body" :data-toc-side="tocDockSide">
       <div class="file-viewer-content" ref="contentRef">
         <!-- Loading (suppressed when external loading mask is active to avoid double flash) -->
         <div v-if="loading && !externalLoading" class="loading">
@@ -234,6 +234,7 @@
         :file="tocFile"
         :pdf-outline="pdfOutline"
         :code-view="isCodeMirrorView"
+        :side="tocDockSide"
         @close="emit('closeToc')"
         @jump="emit('jump', $event)"
         @jump-page="emit('jumpPage', $event)"
@@ -309,6 +310,7 @@ import { useAppMode } from '@/composables/useAppMode.ts'
 import { useFileNavStack } from '@/composables/useFileNavStack.ts'
 import { useTextSelectionActive } from '@/composables/useTextSelection.ts'
 import { useFileEditor } from '@/composables/useFileEditor.ts'
+import { useTocDockPreference } from '@/composables/useTocDockPreference.ts'
 import { exportRenderedHtml, imageIssueReasonKey } from '@/utils/exportHtml.ts'
 import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
 import { useToast } from '@/composables/useToast.ts'
@@ -545,6 +547,9 @@ const { localConfig, setLocalConfig } = useSettingsConfig()
 const wordWrap = computed(() => !!localConfig.wordWrap)
 const showLineNumbers = computed(() => localConfig.lineNumbers !== false)
 const stickyScroll = computed(() => localConfig.stickyScroll !== false)
+// Wide-screen inline TOC dock side (left/right). Toggled by a button in the
+// dock header; kept in sync with the dock via the shared preference module.
+const { tocDockSide } = useTocDockPreference()
 
 function toggleWordWrap() {
     setLocalConfig('wordWrap', !wordWrap.value)
@@ -911,6 +916,15 @@ defineExpose({
     flex-direction: column;
     min-height: 0;
     min-width: 0;
+}
+
+/* TOC dock side: reorder the flex children so the dock renders on the left
+   when the user chose that side (default right keeps the current order). */
+.file-viewer-body[data-toc-side="left"] .file-viewer-content {
+    order: 1;
+}
+.file-viewer-body[data-toc-side="left"] .toc-dock {
+    order: 0;
 }
 
 /* Floating history nav (back/forward) overlaid on the content area.

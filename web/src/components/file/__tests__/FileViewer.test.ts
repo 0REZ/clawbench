@@ -89,6 +89,14 @@ vi.mock('@/composables/useFileNavStack.ts', () => ({
   useFileNavStack: () => fileNavState,
 }))
 
+const tocDockPrefState = vi.hoisted(() => {
+  // `ref` isn't importable inside hoisted callbacks, so hold the ref in a
+  // lazily-created slot: the mock factory assigns it on first use, and the
+  // tests mutate it via tocDockPrefState.tocDockSide.value.
+  const state: { tocDockSide: { value: string } | null } = { tocDockSide: null }
+  return state
+})
+
 vi.mock('@/composables/useSettingsConfig', () => ({
   useSettingsConfig: () => ({
     localConfig: { wordWrap: true, lineNumbers: true },
@@ -97,6 +105,26 @@ vi.mock('@/composables/useSettingsConfig', () => ({
   localConfig: { wordWrap: true, lineNumbers: true, recentFilesCount: 10 },
   setLocalConfig: vi.fn(),
 }))
+
+vi.mock('@/composables/useTocDockPreference.ts', async () => {
+  // The real composable returns an actual ref; template `:side` unwraps it.
+  // Build a real ref here so the template binding receives the string value.
+  const vue = await import('vue')
+  const side = vue.ref('right')
+  tocDockPrefState.tocDockSide = side
+  return {
+    useTocDockPreference: () => ({
+      tocDockOpen: { value: false },
+      tocDockWidth: { value: 260 },
+      tocDockSide: side,
+      effectiveOpen: { value: false },
+      toggle: vi.fn(),
+      close: vi.fn(),
+      setWidth: vi.fn(),
+      toggleSide: vi.fn(),
+    }),
+  }
+})
 
 vi.mock('@/stores/app.ts', () => ({
   store: {
@@ -158,6 +186,7 @@ afterEach(() => {
   fileNavState.overlayOpen.value = false
   fileNavState.canGoBack.value = false
   fileNavState.canGoForward.value = false
+  tocDockPrefState.tocDockSide.value = 'right'
   mockOpenSearch.mockClear()
   for (const id of pendingTimers) { clearTimeout(id) }
   pendingTimers.length = 0
@@ -191,7 +220,7 @@ const stubs = {
   DiffDrawer: true,
   TocDock: {
     name: 'TocDock',
-    props: ['file', 'pdfOutline'],
+    props: ['file', 'pdfOutline', 'side'],
     emits: ['close', 'jump', 'jumpPage'],
     template: '<div class="toc-dock-stub"><button class="toc-dock-close-stub" @click="$emit(\'close\')" /></div>',
   },
@@ -754,6 +783,22 @@ describe('FileViewer — inline TOC dock', () => {
     const dock = wrapper.findComponent({ name: 'TocDock' })
     expect(dock.exists()).toBe(true)
     expect(dock.props('file')).toMatchObject({ name: 'readme.md' })
+  })
+
+  it('forwards the persisted TOC dock side to TocDock', async () => {
+    tocDockPrefState.tocDockSide.value = 'left'
+    const wrapper = mountViewerWithDock({ tocOpen: true, docked: true })
+    await nextTick()
+    const dock = wrapper.findComponent({ name: 'TocDock' })
+    expect(dock.props('side')).toBe('left')
+    // The body carries the side as a data attribute so CSS can flip the order.
+    expect(wrapper.find('.file-viewer-body').attributes('data-toc-side')).toBe('left')
+
+    tocDockPrefState.tocDockSide.value = 'right'
+    const wrapperRight = mountViewerWithDock({ tocOpen: true, docked: true })
+    await nextTick()
+    expect(wrapperRight.findComponent({ name: 'TocDock' }).props('side')).toBe('right')
+    expect(wrapperRight.find('.file-viewer-body').attributes('data-toc-side')).toBe('right')
   })
 
   it('does not render TocDock when docked but tocOpen is false', () => {

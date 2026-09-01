@@ -1156,6 +1156,8 @@ export default {
     noHeadings: '无标题',
     loading: '正在加载目录...',
     dragResize: '拖动调整宽度',
+    dockLeft: '移到左侧',
+    dockRight: '移到右侧',
   },
   quoteBar: {
     clear: '清空',
