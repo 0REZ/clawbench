@@ -113,11 +113,11 @@ describe('MarkdownSearchBar', () => {
     wrapper.unmount()
   })
 
-  it('wraps the active match in a flash span (no line-flash block flash)', async () => {
+  it('wraps every match in a mark and flashes the active one (no line-flash)', async () => {
     const md = seedMarkdownBody('<p>alpha one</p><p>alpha two</p>')
     // jsdom reports 0 scrollHeight/clientHeight, so getScrollParent can't find
-    // a scroller → correctAfterSettle unwraps instantly. Stub the dimensions
-    // so the flash wrapper stays long enough to assert.
+    // a scroller → correctAfterSettle returns instantly. Stub the dimensions
+    // so the flash class stays long enough to assert.
     Object.defineProperty(md, 'clientHeight', { value: 100, configurable: true })
     Object.defineProperty(md, 'scrollHeight', { value: 300, configurable: true })
     md.style.overflowY = 'auto'
@@ -127,17 +127,26 @@ describe('MarkdownSearchBar', () => {
     input.element.value = 'alpha'
     input.trigger('input')
     await sleep(20)
+    // Every match is wrapped in a <mark>.
+    const marks = document.querySelectorAll('.markdown-body mark.md-search-match')
+    expect(marks).toHaveLength(2)
+    // The first match is the active one (activeIndex starts at 0).
+    const active0 = document.querySelectorAll('.markdown-body mark.md-search-match-active')
+    expect(active0).toHaveLength(1)
+
     input.trigger('keydown', { key: 'Enter' })
     await sleep(20)
-    // The active match text is wrapped in a temporary anchor that flashes.
-    const flash = document.querySelector('.search-match-anchor.search-match-flash')
-    expect(flash).not.toBeNull()
-    expect(flash!.textContent).toBe('alpha')
+    // The active match is highlighted and flashes.
+    const active = document.querySelectorAll('.markdown-body mark.md-search-match-active')
+    expect(active).toHaveLength(1)
+    expect(active[0].classList.contains('search-match-flash')).toBe(true)
     // No whole-block flash remains.
     expect(document.querySelectorAll('.line-flash')).toHaveLength(0)
-    // Wait for the settle/unwrap timer chain to finish and the anchor to be removed.
+    // The flash class is removed after the settle timer chain.
     await sleep(2600)
-    expect(document.querySelector('.search-match-anchor')).toBeNull()
+    expect(document.querySelectorAll('.search-match-flash')).toHaveLength(0)
+    // Active highlight persists after the flash.
+    expect(document.querySelectorAll('.markdown-body mark.md-search-match-active')).toHaveLength(1)
     wrapper.unmount()
   })
 

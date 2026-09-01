@@ -240,9 +240,9 @@
    - CodeMirror panel (decorations added by codeMirrorSearchPanel.ts:
      .cm-searchMatch on every match, .cm-searchMatch-selected + flash on the
      active one)
-   - Markdown preview (MarkdownSearchBar.vue: all matches via the CSS Custom
-     Highlight API, the active match additionally gets the .search-match-flash
-     class on a temporary wrapper)
+   - Markdown preview (MarkdownSearchBar.vue: every match wrapped in a
+     <mark class="md-search-match">, the active one additionally gets the
+     .search-match-flash class to blink)
    The flash keyframes are reused verbatim by both hosts.
 
    Note: `.cm-editor` prefix outranks @codemirror/search's baseTheme rules
@@ -264,8 +264,8 @@
 .cm-editor.cm-editor .cm-searchMatch-flash {
   animation: search-match-flash 0.7s ease-out 1;
 }
-/* Markdown active-match wrapper reuses the same flash animation. */
-.search-match-anchor.search-match-flash {
+/* Markdown active-match <mark> reuses the same flash animation. */
+.search-match-flash {
   animation: search-match-flash 0.7s ease-out 1;
 }
 

@@ -1436,6 +1436,7 @@ watch(() => currentFile.value, (file, prevFile) => {
     tocDrawer.close()
     detailsDrawer.close()
     searchDrawer.close()
+    viewSearchActive.value = false
     markdownViewMode.value = 'rendered'
     // When the open file is closed while the user is on the file-view tab,
     // fall back to the file manager tab automatically.
@@ -1444,6 +1445,23 @@ watch(() => currentFile.value, (file, prevFile) => {
         if (currentTab === 'view') switchTab('browse')
     }
 })
+
+// The header search button highlight must track the *actual* visibility of a
+// search UI. Switching between the rendered markdown preview and the
+// CodeMirror view (raw / editing) unmounts the markdown search bar while the
+// CodeMirror panel starts closed, so a previously-active search state would
+// otherwise leave the header button stuck highlighted.
+watch(
+  () => [isCodeMirrorFileView.value, isMarkdownRenderedView.value, markdownViewMode.value],
+  ([cmNow, mdNow, _mode], [cmBefore, mdBefore, modeBefore]) => {
+    // Ignore the initial run and same-view transitions (e.g. raw->edit of the
+    // same CodeMirror view keeps its panel state).
+    if (modeBefore === undefined) return
+    if (cmNow === cmBefore && mdNow === mdBefore) return
+    viewSearchActive.value = false
+    searchDrawer.close()
+  },
+)
 
 function toggleHidden() {
     showHidden.value = !showHidden.value
