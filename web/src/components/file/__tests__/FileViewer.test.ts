@@ -653,41 +653,44 @@ describe('FileViewer', () => {
       tooLarge: false,
     }
 
-    it('opens CodeMirror search for a code file (CodeMirror view)', async () => {
+    it('routes search toggle upward for a code file (App drives highlight + open)', async () => {
       const wrapper = mountViewer({ file: codeFile })
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
-    it('opens CodeMirror search for markdown in source view', async () => {
+    it('routes search toggle upward for markdown in source view', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'source' })
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
-    it('opens inline search for rendered markdown preview (no SearchDrawer emit)', async () => {
+    it('routes search toggle upward for rendered markdown preview (App drives searchDrawer)', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(false)
       ss.handleToggleSearch()
       expect(mockOpenSearch).not.toHaveBeenCalled()
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      // The rendered-markdown search bar is driven by the App's searchDrawer
+      // state, so the toggle is forwarded upward instead of opened here.
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
-    it('opens CodeMirror search when editing from rendered markdown preview', async () => {
+    it('routes search toggle upward when editing from rendered markdown preview', async () => {
       const wrapper = mountViewer({ file: mdFile, markdownViewMode: 'rendered' })
       const ss = (wrapper.vm as any).$.setupState
       ss.handleToggleEdit()
       await nextTick()
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('focusSearchInput opens CodeMirror search for a code file', async () => {
@@ -705,7 +708,7 @@ describe('FileViewer', () => {
       expect(wrapper.emitted('toggleSearch')).toBeFalsy()
     })
 
-    it('opens CodeMirror search for HTML raw view', async () => {
+    it('routes search toggle upward for HTML raw view', async () => {
       const htmlFile = {
         name: 'page.html', path: '/tmp/page.html', content: '<h1>hi</h1>',
         isMarkdown: false, isHtml: true, isOpenapi: false,
@@ -716,8 +719,8 @@ describe('FileViewer', () => {
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('opens CodeMirror search for OpenAPI raw view', async () => {
@@ -732,8 +735,8 @@ describe('FileViewer', () => {
       const ss = (wrapper.vm as any).$.setupState
       expect(ss.isCodeMirrorView).toBe(true)
       ss.handleToggleSearch()
-      expect(mockOpenSearch).toHaveBeenCalledTimes(1)
-      expect(wrapper.emitted('toggleSearch')).toBeFalsy()
+      expect(mockOpenSearch).not.toHaveBeenCalled()
+      expect(wrapper.emitted('toggleSearch')).toBeTruthy()
     })
 
     it('does not treat media files as CodeMirror views (no search routing to CM)', async () => {

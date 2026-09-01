@@ -23,6 +23,8 @@
             @toggle-toc="emit('toggleToc')"
             @close-toc="emit('closeToc')"
             @toggle-search="emit('toggleSearch')"
+            @close-search="emit('closeSearch')"
+            @search-change="emit('searchChange', $event)"
             @toggle-view="emit('toggleView')"
             @refresh="emit('refresh')"
             @open-file="emit('openFile', $event)"
@@ -54,7 +56,7 @@
 
         <SearchDrawer
           ref="searchDrawerRef"
-          :open="searchOpen"
+          :open="searchDrawerOpen"
           :file="currentFile"
           :view-mode="markdownViewMode"
           @close="emit('closeSearch')"
@@ -90,6 +92,9 @@ const props = defineProps({
   fileLoading: Boolean,
   tocOpen: Boolean,
   searchOpen: Boolean,
+  /** Whether the SearchDrawer bottom sheet itself should be shown (fallback
+      views only — markdown/code use inline search UIs driven by searchOpen). */
+  searchDrawerOpen: Boolean,
   markdownViewMode: String,
   fileHistoryOpen: Boolean,
   tocFile: Object,
@@ -101,9 +106,9 @@ const docked = computed(() => isWideScreen.value)
 
 const emit = defineEmits([
   'delete', 'showDetails', 'openGitHistory',
-  'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh',
+  'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh',
   'jump', 'jumpPage', 'closeGitHistory', 'openFile',
-  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'closeSearch',
+  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal',
 ])
 
 const contentRef = ref(null)

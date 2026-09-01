@@ -39,10 +39,11 @@ describe('codeMirrorSearchPanel', () => {
 
     it('openSearchPanelCommand shows the panel', async () => {
         const v = makeView(false)
-        expect(document.querySelector('.cm-search')!.parentElement!.style.display).toBe('none')
+        // Panel is mounted but hidden by default.
+        expect(document.querySelector('.cm-panels')!.style.display).toBe('none')
         openSearchPanelCommand(v)
         await new Promise(r => setTimeout(r, 20))
-        expect(document.querySelector('.cm-search')!.parentElement!.style.display).not.toBe('none')
+        expect(document.querySelector('.cm-panels')!.style.display).not.toBe('none')
         expect(v.state.field(searchPanelField)).toBe(true)
         v.destroy()
     })
@@ -57,7 +58,7 @@ describe('codeMirrorSearchPanel', () => {
         await new Promise(r => setTimeout(r, 20))
         // Match info should show 3/1 or similar; and the panel must stay open.
         expect(document.querySelector('.cm-search')).not.toBeNull()
-        expect(document.querySelector('.cm-search')!.parentElement!.style.display).not.toBe('none')
+        expect(document.querySelector('.cm-panels')!.style.display).not.toBe('none')
         v.destroy()
     })
 

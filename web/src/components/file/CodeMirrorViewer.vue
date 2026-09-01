@@ -51,7 +51,7 @@ const props = defineProps({
     editable: { type: Boolean, default: false },
     saving: { type: Boolean, default: false },
 })
-const emit = defineEmits(['save', 'saveAndExit', 'cancel', 'exitEdit'])
+const emit = defineEmits(['save', 'saveAndExit', 'cancel', 'exitEdit', 'searchChange'])
 
 const { t, locale } = useI18n()
 const editorHost = ref(null)
@@ -480,6 +480,13 @@ function buildAllExtensions() {
                 { key: 'Mod-g', run: () => findNextSafe(), preventDefault: true },
                 { key: 'Mod-Shift-g', run: () => findPrevSafe(), preventDefault: true },
             ]),
+            // Report panel open/close so the header search button highlight
+            // stays in sync (see comment above; Vue can't watch this state).
+            EditorView.updateListener.of((update) => {
+                const now = update.state.field(searchPanelField, false)
+                const before = update.startState.field(searchPanelField, false)
+                if (now !== before) emit('searchChange', now)
+            }),
         ]),
         interactionExtension,
         selectionExtension,
@@ -661,6 +668,12 @@ function openSearch() {
     }
 }
 
+// Report the search panel open/close state so the header search button can
+// stay highlighted in sync (App drives the highlight via viewSearchActive).
+// A Vue watch can't track CodeMirror's searchPanelField (it's not a Vue
+// reactive), so this is driven by an EditorView.updateListener instead — see
+// the searchCompartment below.
+
 // Mod-g / Mod-Shift-g jump to the next/previous match only when a search query
 // exists; without one, opening the panel is more useful than a silent no-op.
 function findNextSafe() {
@@ -787,11 +800,12 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
 </style>
 
 <style>
-/* Shared search-panel control styles (`.cm-search` controls) used by both the
-   CodeMirror panel and the markdown preview search bar. */
-@import '@/assets/search-bar.css';
+/* Search-panel styles live in the shared SearchBar component
+   (components/common/SearchBar.vue → assets/search-bar.css), which both the
+   CodeMirror panel and the markdown preview render. Only the .cm-panels host
+   positioning is needed here.
 
-/* CodeMirror DOM (`.cm-editor`, `.cm-scroller`, `.cm-content`) is injected
+   CodeMirror DOM (`.cm-editor`, `.cm-scroller`, `.cm-content`) is injected
    dynamically, so it lacks the scoped attribute — these rules MUST be global.
    Mirrors the browse-mode CodePreview styles. */
 
@@ -971,62 +985,13 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   font-weight: 600;
 }
 
-/* Search panel (custom-rendered) — full-width bar pinned to the bottom of
-   the editor with only a top separator line, matching the markdown preview's
-   inline search bar (MarkdownSearchBar.vue). The DOM is ours (see
-   codeMirrorSearchPanel.ts); the controls reuse the shared search-bar.css. */
+/* Search panel (custom-rendered via the shared SearchBar component). The
+   .cm-panels host is appended to view.dom by codeMirrorSearchPanel.ts; the
+   SearchBar component (with its full-width bottom-bar layout and all control
+   styles) lives in components/common/SearchBar.vue + assets/search-bar.css. */
 .cm-viewer .cm-panels {
   background: transparent;
   border: none;
-}
-.cm-viewer .cm-panels .cm-search {
-  --search-ctrl-h: 22px;
-  width: 100%;
-  box-sizing: border-box;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  border-bottom: none;
-  border-left: none;
-  border-right: none;
-  border-radius: 0;
-  padding: 5px 8px 0;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
-  font-size: 13px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  color-scheme: light;
-}
-[data-theme-base="dark"] .cm-viewer .cm-panels .cm-search {
-  color-scheme: dark;
-}
-/* ── Layout (control styles come from the shared search-bar.css) ─────────────
-   Row 1: search input + prev(←) + next(→) + all + match info + close.
-   Row 2: .cm-search-options (case/regexp/word) + .cm-search-replace (editable).
-   The option/replace groups wrap as units via their containers. */
-.cm-viewer .cm-panels .cm-search input[name='search'] { order: 1; flex: 1; min-width: 0; }
-.cm-viewer .cm-panels .cm-search .cm-button[name='prev'] { order: 2; }
-.cm-viewer .cm-panels .cm-search .cm-button[name='next'] { order: 3; }
-.cm-viewer .cm-panels .cm-search .cm-button[name='select'] { order: 4; }
-.cm-viewer .cm-panels .cm-search .cm-search-match-info {
-  order: 5;
-  margin: 0 4px;
-  align-self: center;
-}
-.cm-viewer .cm-panels .cm-search button[name='close'] {
-  order: 6;
-  margin-left: auto;
-}
-.cm-viewer .cm-panels .cm-search .cm-search-options { order: 10; }
-.cm-viewer .cm-panels .cm-search .cm-search-replace { order: 11; }
-.cm-viewer .cm-panels .cm-search .cm-search-options,
-.cm-viewer .cm-panels .cm-search .cm-search-replace {
-  padding: 4px 0 5px;
-}
-.cm-viewer .cm-panels .cm-search .cm-search-options > label,
-.cm-viewer .cm-panels .cm-search .cm-search-replace > * {
-  flex-shrink: 0;
 }
 .cm-viewer .cm-textfield-autofill {
   color-scheme: dark;

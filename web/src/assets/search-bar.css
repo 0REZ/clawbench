@@ -1,22 +1,82 @@
 /* ────────────────────────────────────────────────────────────────────────────
- * Shared search-panel control styles (`.cm-search`).
+ * Shared search-panel styles (`.search-bar` / `.cm-search`).
  *
- * Single source of truth for the controls used by BOTH search UIs:
- *   - CodeMirror search panel (codeMirrorSearchPanel.ts → CodeMirrorViewer.vue)
- *   - Markdown preview search bar (MarkdownSearchBar.vue)
+ * Single source of truth for the search bar used by BOTH search UIs:
+ *   - CodeMirror search panel (codeMirrorSearchPanel.ts → SearchBar.vue)
+ *   - Markdown preview search bar (MarkdownSearchBar.vue → SearchBar.vue)
  *
- * Both render the same `.cm-search` inner structure:
+ * Both render the same SearchBar component (same `.cm-search` structure):
  *     input[name=search].cm-textfield · button.cm-button[name=prev|next|select]
  *     span.cm-search-match-info · button.cm-button[name=close]
  *     .cm-search-options (label + checkbox) · .cm-search-replace
  *
- * The *containers* differ (floating corner vs full-width bar) and are styled
- * per-host; only the controls live here. Selectors use the bare `.cm-search`
- * class so either host can reuse them without a parent prefix.
+ * The `.search-bar` host is a full-width bar pinned to the bottom with only a
+ * top separator line. Both CodeMirror and markdown share it, so the UIs are
+ * visually identical.
  * ──────────────────────────────────────────────────────────────────────────── */
 
 .cm-search {
   --search-ctrl-h: 22px;
+}
+
+/* ── Host layout (`.search-bar`): full-width bar pinned to the bottom with
+   only a top separator line. Both the CodeMirror panel and the markdown
+   preview render the same SearchBar component, so this layout lives here. ── */
+.search-bar {
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.search-bar .cm-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px 0;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-size: 13px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color-scheme: light;
+}
+[data-theme-base="dark"] .search-bar .cm-search {
+  color-scheme: dark;
+}
+
+/* ── Layout order ───────────────────────────────────────────────────────────
+   Row 1: search input + prev(←) + next(→) + all + match info + close.
+   Row 2: .cm-search-options (case/regexp/word) + .cm-search-replace (editable).
+   The option/replace groups wrap as units via their containers. */
+.search-bar .cm-search input[name='search'] { order: 1; flex: 1; min-width: 0; }
+.search-bar .cm-search .cm-button[name='prev'] { order: 2; }
+.search-bar .cm-search .cm-button[name='next'] { order: 3; }
+.search-bar .cm-search .cm-button[name='select'] { order: 4; }
+.search-bar .cm-search .cm-search-match-info {
+  order: 5;
+  margin: 0 4px;
+  align-self: center;
+}
+.search-bar .cm-search button[name='close'] {
+  order: 6;
+  margin-left: auto;
+}
+.search-bar .cm-search .cm-search-options {
+  order: 10;
+  /* Force the options+replace groups onto their own row so the close button
+     stays pinned to the far right of row 1 via margin-left:auto. */
+  flex-basis: 100%;
+}
+.search-bar .cm-search .cm-search-replace { order: 11; }
+.search-bar .cm-search .cm-search-options,
+.search-bar .cm-search .cm-search-replace {
+  padding: 4px 0 5px;
+}
+.search-bar .cm-search .cm-search-options > label,
+.search-bar .cm-search .cm-search-replace > * {
+  flex-shrink: 0;
 }
 
 /* ── Text inputs ── */

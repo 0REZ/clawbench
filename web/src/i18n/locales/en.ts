@@ -988,6 +988,7 @@ export default {
         matchCase: 'Match case',
         regexp: 'Regexp',
         byWord: 'By word',
+        replaceAction: 'Replace',
         replaceAll: 'Replace all',
         close: 'Close',
       },
@@ -1148,6 +1149,10 @@ export default {
     previous: 'Previous match',
     next: 'Next match',
     close: 'Close search',
+    all: 'All',
+    matchCase: 'Match case',
+    regexp: 'Regexp',
+    byWord: 'By word',
   },
   toc: {
     title: 'Table of Contents',

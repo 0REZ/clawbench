@@ -1,45 +1,38 @@
 <template>
-  <div class="md-search-bar" :class="{ 'is-open': open }">
-    <div class="cm-search">
-      <input
-        ref="inputRef"
-        v-model="query"
-        name="search"
-        class="cm-textfield"
-        :placeholder="t('search.placeholder')"
-        spellcheck="false"
-        autocomplete="off"
-        @input="onInput"
-        @keydown="onKeydown"
-      />
-      <button name="prev" class="cm-button" :disabled="!canNav" :title="t('search.previous')" aria-label="Previous match" @click="goPrev"></button>
-      <button name="next" class="cm-button" :disabled="!canNav" :title="t('search.next')" aria-label="Next match" @click="goNext"></button>
-      <button name="select" class="cm-button" :disabled="!canNav" :title="t('search.all')" aria-label="Select all matches" @click="selectAll">{{ t('search.all') }}</button>
-      <span class="cm-search-match-info">{{ countText }}</span>
-      <button name="close" class="cm-button" :title="t('search.close')" aria-label="Close search" @click="close"></button>
-    </div>
-    <div class="cm-search-options">
-      <label><input v-model="caseSensitive" name="case" type="checkbox" @change="onInput">{{ t('search.matchCase') }}</label>
-      <label><input v-model="regexp" name="regexp" type="checkbox" @change="onInput">{{ t('search.regexp') }}</label>
-      <label><input v-model="wholeWord" name="word" type="checkbox" @change="onInput">{{ t('search.byWord') }}</label>
-    </div>
-  </div>
+  <SearchBar
+    ref="sbRef"
+    :open="open"
+    :can-nav="canNav"
+    :match-text="countText"
+    :model-value="query"
+    :case-sensitive="caseSensitive"
+    :regexp="regexp"
+    :whole-word="wholeWord"
+    @input="onQueryInput"
+    @prev="goPrev"
+    @next="goNext"
+    @select="selectAll"
+    @close="close"
+    @enter="onEnter"
+    @escape="close"
+    @case-change="(v) => setOption('caseSensitive', v)"
+    @regexp-change="(v) => setOption('regexp', v)"
+    @word-change="(v) => setOption('wholeWord', v)"
+  />
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
-import { useI18n } from 'vue-i18n'
+import SearchBar from '@/components/common/SearchBar.vue'
 import { shouldCorrectAfterSettle } from '@/utils/searchUtils.ts'
-
-const { t } = useI18n()
 
 const props = defineProps<{
     open: boolean
 }>()
 const emit = defineEmits(['close'])
 
+const sbRef = ref<InstanceType<typeof SearchBar> | null>(null)
 const query = ref('')
-const inputRef = ref<HTMLInputElement | null>(null)
 const caseSensitive = ref(false)
 const regexp = ref(false)
 const wholeWord = ref(false)
@@ -63,17 +56,30 @@ watch(() => props.open, async (val) => {
     if (val) {
         activeIndex.value = 0
         await nextTick()
-        inputRef.value?.focus()
-        inputRef.value?.select()
+        sbRef.value?.focus()
         if (query.value) onInput()
     } else {
         clearHighlights()
     }
 })
 
-watch(query, () => {
+function setOption(key: 'caseSensitive' | 'regexp' | 'wholeWord', value: boolean) {
+    if (key === 'caseSensitive') caseSensitive.value = value
+    else if (key === 'regexp') regexp.value = value
+    else wholeWord.value = value
+    onInput()
+}
+
+function onEnter(shiftKey: boolean) {
+    if (shiftKey) goPrev()
+    else goNext()
+}
+
+function onQueryInput(value: string) {
+    query.value = value
     activeIndex.value = 0
-})
+    onInput()
+}
 
 function buildRegex(q: string): RegExp {
     let source = regexp.value ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -165,21 +171,6 @@ const countText = computed(() => {
     if (matches.value.length === 0) return '0/0'
     return `${activeIndex.value + 1}/${matches.value.length}`
 })
-
-function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
-        e.preventDefault()
-        if (e.shiftKey) goPrev()
-        else goNext()
-    } else if (e.key === 'Escape') {
-        e.preventDefault()
-        close()
-    } else if (e.key === 'ArrowDown') {
-        if (matches.value.length) { e.preventDefault(); goNext() }
-    } else if (e.key === 'ArrowUp') {
-        if (matches.value.length) { e.preventDefault(); goPrev() }
-    }
-}
 
 function goNext() {
     if (!matches.value.length) return
@@ -313,62 +304,15 @@ function close() {
     clearHighlights()
     emit('close')
 }
+
+defineExpose({
+    focus() {
+        sbRef.value?.focus()
+    },
+})
 </script>
 
-<style scoped>
-/* Full-width search bar pinned to the bottom of the markdown preview.
-   Only a top separator line — no surrounding box. The inner controls share
-   the CodeMirror search-panel styles from the shared search-bar.css
-   (imported globally below), so only the container/layout lives here. */
-.md-search-bar {
-  flex-shrink: 0;
-  width: 100%;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
-  display: none;
-}
-.md-search-bar.is-open {
-  display: block;
-}
-
-.md-search-bar .cm-search {
-  --search-ctrl-h: 22px;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 5px 8px 0;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color-scheme: light;
-}
-[data-theme-base="dark"] .md-search-bar .cm-search {
-  color-scheme: dark;
-}
-
-.md-search-bar .cm-search input[name='search'] {
-  flex: 1;
-  min-width: 0;
-}
-.md-search-bar .cm-search .cm-search-match-info {
-  margin: 0 4px;
-}
-
-/* Options row — layout only (label/checkbox visuals come from search-bar.css). */
-.md-search-bar .cm-search-options {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 5px;
-}
-</style>
-
 <style>
-/* Shared search-panel control styles (`.cm-search` controls), single source
-   of truth for both the CodeMirror panel and this markdown search bar. */
-@import '@/assets/search-bar.css';
-
 /* Match highlighting via the CSS Custom Highlight API. These selectors must
    be global because ::highlight() pseudo-elements apply to the whole document
    (the .markdown-body content lives outside this component's scoped styles). */

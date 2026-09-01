@@ -7,9 +7,14 @@
  * findNext/..., setSearchQuery). The panel renders into `view.dom` below the
  * scroller, mirroring where CodeMirror's own bottom panels live.
  *
- * The DOM intentionally keeps the same class names the built-in panel uses
- * (`.cm-panels`, `.cm-search`, `.cm-button`, `input[name=search]`, ...) so
- * tests and existing CSS selectors keep working, but the structure is ours.
+ * The panel is rendered by mounting the shared SearchBar component (see
+ * components/common/SearchBar.vue) — the exact same control the markdown
+ * preview uses, so both search UIs are visually identical.
+ *
+ * The SearchBar is mounted imperatively with Vue's `h()` + `render()`. Each
+ * update re-creates the vnode with fresh props (Vue patches in place, so the
+ * input element and its focus survive); `onXxx` props receive the component's
+ * emits (input / prev / next / close / …).
  */
 import { EditorView, ViewPlugin, ViewUpdate } from '@codemirror/view'
 import { StateEffect, StateField } from '@codemirror/state'
@@ -23,6 +28,8 @@ import {
     replaceAll,
     selectMatches,
 } from '@codemirror/search'
+import { h, render, type VNode } from 'vue'
+import SearchBar, { type SearchBarLabels } from '@/components/common/SearchBar.vue'
 
 /** Toggle the custom search panel open/closed. */
 export const searchPanelToggle = StateEffect.define<boolean>()
@@ -64,10 +71,6 @@ export interface SearchPanelSpec {
     readonly: boolean
 }
 
-function escapeHtml(s: string): string {
-    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string)
-}
-
 /**
  * Build the custom search panel extension.
  */
@@ -76,94 +79,92 @@ export function searchPanel(spec: SearchPanelSpec) {
         searchPanelField,
         ViewPlugin.fromClass(
             class {
-                dom: HTMLElement
-                private input: HTMLInputElement
-                private replaceInput: HTMLInputElement | null = null
-                private caseField: HTMLInputElement
-                private regexpField: HTMLInputElement
-                private wordField: HTMLInputElement
-                private matchInfo: HTMLElement
+                private panel: HTMLElement
+                private host: HTMLElement
+                private vnode: VNode | null = null
                 private wasOpen = false
 
+                // Panel state, pushed into SearchBar props on each render.
+                private open = false
+                private canNav = false
+                private matchText = ''
+                private modelValue = ''
+                private replaceValue = ''
+                private caseChecked = false
+                private regexpChecked = false
+                private wordChecked = false
+
                 constructor(readonly view: EditorView) {
-                    this.dom = document.createElement('div')
-                    this.dom.className = 'cm-panels'
-                    this.dom.style.display = 'none'
-                    view.dom.appendChild(this.dom)
+                    this.panel = document.createElement('div')
+                    this.panel.className = 'cm-panels'
+                    this.panel.style.display = 'none'
+                    view.dom.appendChild(this.panel)
 
-                    const panel = document.createElement('div')
-                    panel.className = 'cm-search'
-                    const p = spec.phrases
-                    panel.innerHTML =
-                        `<input name="search" class="cm-textfield" placeholder="${escapeHtml(p.find)}" ` +
-                        `aria-label="${escapeHtml(p.find)}" autocomplete="off">` +
-                        `<button name="prev" class="cm-button" title="${escapeHtml(p.previous)}" aria-label="${escapeHtml(p.previous)}">${escapeHtml(p.previous)}</button>` +
-                        `<button name="next" class="cm-button" title="${escapeHtml(p.next)}" aria-label="${escapeHtml(p.next)}">${escapeHtml(p.next)}</button>` +
-                        `<button name="select" class="cm-button" title="${escapeHtml(p.all)}">${escapeHtml(p.all)}</button>` +
-                        `<span class="cm-search-match-info"></span>` +
-                        `<button name="close" class="cm-button" title="${escapeHtml(p.close)}" aria-label="${escapeHtml(p.close)}">×</button>` +
-                        `<span class="cm-search-options">` +
-                        `<label><input name="case" type="checkbox">${escapeHtml(p.matchCase)}</label>` +
-                        `<label><input name="regexp" type="checkbox">${escapeHtml(p.regexp)}</label>` +
-                        `<label><input name="word" type="checkbox">${escapeHtml(p.byWord)}</label>` +
-                        `</span>` +
-                        (spec.readonly
-                            ? ''
-                            : `<span class="cm-search-replace">` +
-                              `<input name="replace" class="cm-textfield" placeholder="${escapeHtml(p.replace)}" ` +
-                              `aria-label="${escapeHtml(p.replace)}" autocomplete="off">` +
-                              `<button name="replace" class="cm-button">${escapeHtml(p.replaceAction)}</button>` +
-                              `<button name="replaceAll" class="cm-button">${escapeHtml(p.replaceAllAction)}</button>` +
-                              `</span>`)
-                    this.dom.appendChild(panel)
+                    // Mount point for the shared SearchBar component.
+                    this.host = document.createElement('div')
+                    this.host.style.display = 'contents'
+                    this.panel.appendChild(this.host)
 
-                    this.input = this.dom.querySelector<HTMLInputElement>('input[name=search]')!
-                    this.replaceInput = this.dom.querySelector<HTMLInputElement>('input[name=replace]')
-                    this.caseField = this.dom.querySelector<HTMLInputElement>('input[name=case]')!
-                    this.regexpField = this.dom.querySelector<HTMLInputElement>('input[name=regexp]')!
-                    this.wordField = this.dom.querySelector<HTMLInputElement>('input[name=word]')!
-                    this.matchInfo = this.dom.querySelector<HTMLElement>('.cm-search-match-info')!
-
-                    this.bindEvents()
-                    this.updateMatchInfo()
+                    // Mount eagerly (hidden) so the DOM is always present;
+                    // the SearchBar's open prop controls visibility.
+                    this.renderBar()
                 }
 
-                private bindEvents() {
-                    this.input.addEventListener('input', () => this.commit())
-                    this.input.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault()
-                            if (e.shiftKey) findPrevious(this.view)
+                private renderBar() {
+                    const labels = toSearchBarLabels(spec.phrases)
+                    this.vnode = h(SearchBar as never, {
+                        open: this.open,
+                        canNav: this.canNav,
+                        matchText: this.matchText,
+                        modelValue: this.modelValue,
+                        replaceText: this.replaceValue,
+                        caseSensitive: this.caseChecked,
+                        regexp: this.regexpChecked,
+                        wholeWord: this.wordChecked,
+                        showReplace: !spec.readonly,
+                        labels,
+                        onInput: (value: string) => {
+                            this.modelValue = value
+                            this.commit()
+                        },
+                        'onReplace-input': (value: string) => {
+                            this.replaceValue = value
+                            this.commit()
+                        },
+                        onPrev: () => findPrevious(this.view),
+                        onNext: () => findNext(this.view),
+                        onSelect: () => selectMatches(this.view),
+                        onClose: () => this.close(),
+                        onEnter: (shift: boolean) => {
+                            if (shift) findPrevious(this.view)
                             else findNext(this.view)
-                        } else if (e.key === 'Escape') {
-                            this.close()
-                        }
+                        },
+                        onEscape: () => this.close(),
+                        'onCase-change': (checked: boolean) => {
+                            this.caseChecked = checked
+                            this.commit()
+                        },
+                        'onRegexp-change': (checked: boolean) => {
+                            this.regexpChecked = checked
+                            this.commit()
+                        },
+                        'onWord-change': (checked: boolean) => {
+                            this.wordChecked = checked
+                            this.commit()
+                        },
+                        onReplace: () => replaceNext(this.view),
+                        'onReplace-all': () => replaceAll(this.view),
                     })
-                    this.replaceInput?.addEventListener('input', () => this.commit())
-                    this.replaceInput?.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault()
-                            replaceNext(this.view)
-                        }
-                    })
-                    for (const cb of [this.caseField, this.regexpField, this.wordField]) {
-                        cb.addEventListener('change', () => this.commit())
-                    }
-                    this.dom.querySelector<HTMLElement>('[name=prev]')!.addEventListener('click', () => findPrevious(this.view))
-                    this.dom.querySelector<HTMLElement>('[name=next]')!.addEventListener('click', () => findNext(this.view))
-                    this.dom.querySelector<HTMLElement>('[name=select]')!.addEventListener('click', () => selectMatches(this.view))
-                    this.dom.querySelector<HTMLElement>('[name=replace]')?.addEventListener('click', () => replaceNext(this.view))
-                    this.dom.querySelector<HTMLElement>('[name=replaceAll]')?.addEventListener('click', () => replaceAll(this.view))
-                    this.dom.querySelector<HTMLElement>('[name=close]')!.addEventListener('click', () => this.close())
+                    render(this.vnode, this.host)
                 }
 
                 private commit() {
                     const query = new SearchQuery({
-                        search: this.input.value,
-                        replace: this.replaceInput?.value ?? '',
-                        caseSensitive: this.caseField.checked,
-                        regexp: this.regexpField.checked,
-                        wholeWord: this.wordField.checked,
+                        search: this.modelValue,
+                        replace: this.replaceValue,
+                        caseSensitive: this.caseChecked,
+                        regexp: this.regexpChecked,
+                        wholeWord: this.wordChecked,
                     })
                     this.view.dispatch({ effects: setSearchQuery.of(query) })
                 }
@@ -177,19 +178,21 @@ export function searchPanel(spec: SearchPanelSpec) {
                     const wasOpen = this.wasOpen
                     this.wasOpen = open
                     if (open !== wasOpen) {
-                        this.dom.style.display = open ? '' : 'none'
+                        this.panel.style.display = open ? '' : 'none'
                         if (open) {
                             const q = getSearchQuery(update.state)
                             if (q) {
-                                this.input.value = q.search
-                                if (this.replaceInput) this.replaceInput.value = q.replace ?? ''
-                                this.caseField.checked = q.caseSensitive
-                                this.regexpField.checked = q.regexp
-                                this.wordField.checked = q.wholeWord
+                                this.modelValue = q.search
+                                this.replaceValue = q.replace ?? ''
+                                this.caseChecked = q.caseSensitive
+                                this.regexpChecked = q.regexp
+                                this.wordChecked = q.wholeWord
                             }
-                            // Focus the search box; select its text so typing replaces it.
-                            this.input.focus()
-                            this.input.select()
+                            this.open = true
+                            this.renderBar()
+                        } else {
+                            this.open = false
+                            this.renderBar()
                         }
                     }
                     if (
@@ -207,30 +210,58 @@ export function searchPanel(spec: SearchPanelSpec) {
 
                 private updateMatchInfo() {
                     const spec = getSearchQuery(this.view.state)
-                    this.matchInfo.textContent = ''
-                    if (!spec || !spec.valid || !spec.search) return
-                    // getSearchQuery returns the plain query *spec*; build a
-                    // SearchQuery instance to count matches via its cursor.
-                    const query = new SearchQuery(spec)
-                    const state = this.view.state
-                    const sel = state.selection.main
-                    let matches = 0
-                    let current = 0
-                    const cursor = query.getCursor(state)
-                    let step = cursor.next()
-                    while (!step.done) {
-                        matches++
-                        if (step.value.from <= sel.from) current++
-                        if (matches > 100000) break
-                        step = cursor.next()
+                    let text = ''
+                    let canNav = false
+                    if (spec && spec.valid && spec.search) {
+                        // getSearchQuery returns the plain query *spec*; build a
+                        // SearchQuery instance to count matches via its cursor.
+                        const query = new SearchQuery(spec)
+                        const state = this.view.state
+                        const sel = state.selection.main
+                        let matches = 0
+                        let current = 0
+                        const cursor = query.getCursor(state)
+                        let step = cursor.next()
+                        while (!step.done) {
+                            matches++
+                            if (step.value.from <= sel.from) current++
+                            if (matches > 100000) break
+                            step = cursor.next()
+                        }
+                        if (matches) {
+                            text = `${current}/${matches}`
+                            canNav = true
+                        }
                     }
-                    this.matchInfo.textContent = matches ? `${current}/${matches}` : ''
+                    this.matchText = text
+                    this.canNav = canNav
+                    if (this.open) this.renderBar()
                 }
 
                 destroy() {
-                    this.dom.remove()
+                    if (this.vnode) {
+                        render(null, this.host)
+                        this.vnode = null
+                    }
+                    this.panel.remove()
                 }
             }
         ),
     ]
+}
+
+function toSearchBarLabels(p: SearchPanelPhrases): SearchBarLabels {
+    return {
+        find: p.find,
+        replace: p.replace,
+        previous: p.previous,
+        next: p.next,
+        all: p.all,
+        matchCase: p.matchCase,
+        regexp: p.regexp,
+        byWord: p.byWord,
+        replaceAction: p.replaceAction,
+        replaceAll: p.replaceAllAction,
+        close: p.close,
+    }
 }

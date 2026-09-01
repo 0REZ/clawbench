@@ -135,11 +135,13 @@
           ref="mdPreviewRef"
           :file="file"
           :view-mode="markdownViewMode"
+          :search-open="searchOpen"
           :word-wrap="wordWrap"
           :show-line-numbers="showLineNumbers"
           @delete="handleDeleteRequest(file.path)"
           @show-details="emit('showDetails')"
           @open-git-history="emit('openGitHistory')"
+          @close-search="emit('closeSearch')"
         />
         <!-- Source/raw mode: a single CodeMirrorViewer for both browse and edit
              (editable toggles), so scroll survives the edit toggle. -->
@@ -158,6 +160,7 @@
           @save-and-exit="handleSaveAndExit"
           @cancel="editing = false"
           @exit-edit="editing = false"
+          @search-change="emit('searchChange', $event)"
         />
       </template>
 
@@ -180,6 +183,7 @@
           :show-line-numbers="showLineNumbers"
           :sticky-scroll="stickyScroll"
           :editable="false"
+          @search-change="emit('searchChange', $event)"
         />
       </template>
 
@@ -200,6 +204,7 @@
             :show-line-numbers="showLineNumbers"
             :sticky-scroll="stickyScroll"
             :editable="false"
+            @search-change="emit('searchChange', $event)"
           />
         </div>
       </template>
@@ -224,6 +229,7 @@
           @save-and-exit="handleSaveAndExit"
           @cancel="editing = false"
           @exit-edit="editing = false"
+          @search-change="emit('searchChange', $event)"
         />
       </div>
       </div>
@@ -335,7 +341,7 @@ const props = defineProps({
     /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
     docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()
@@ -418,24 +424,20 @@ async function handleSaveAndExit(content) {
 }
 
 function handleToggleSearch() {
-    // CodeMirror-rendered views (code, markdown raw/editing) use CodeMirror's
-    // own search panel; the rendered markdown preview uses its inline search
-    // bar. Neither needs the SearchDrawer bottom sheet anymore.
-    if (isCodeMirrorView.value) {
-        cmEditorRef.value?.openSearch?.()
-    } else if (isMarkdown.value && !editing.value && props.markdownViewMode === 'rendered') {
-        mdPreviewRef.value?.openSearch?.()
-    }
+    // Route the toggle upward: App's openFileSearch() sets the header-button
+    // highlight (viewSearchActive) and then focuses the active search UI
+    // (CodeMirror panel or the markdown preview inline bar) via focusSearchInput.
+    emit('toggleSearch')
 }
 
 function focusSearchInput() {
     // Focus (not toggle) the active search UI. CodeMirror views open the
-    // editor's own search panel; the rendered markdown preview is focused by
-    // its inline search bar.
+    // editor's own search panel; the rendered markdown preview focuses its
+    // inline search bar (opened via the searchOpen prop).
     if (isCodeMirrorView.value) {
         cmEditorRef.value?.openSearch?.()
-    } else if (isMarkdown.value && !editing.value && props.markdownViewMode === 'rendered') {
-        mdPreviewRef.value?.openSearch?.()
+    } else if (!editing.value && props.markdownViewMode === 'rendered' && isMarkdown.value) {
+        mdPreviewRef.value?.focusSearchInput?.()
     }
 }
 

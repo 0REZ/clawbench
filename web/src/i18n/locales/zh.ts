@@ -988,6 +988,7 @@ export default {
         matchCase: '区分大小写',
         regexp: '正则',
         byWord: '全词匹配',
+        replaceAction: '替换',
         replaceAll: '全部替换',
         close: '关闭',
       },
@@ -1148,6 +1149,10 @@ export default {
     previous: '上一个匹配',
     next: '下一个匹配',
     close: '关闭搜索',
+    all: '全部',
+    matchCase: '区分大小写',
+    regexp: '正则',
+    byWord: '全词匹配',
   },
   toc: {
     title: '目录',

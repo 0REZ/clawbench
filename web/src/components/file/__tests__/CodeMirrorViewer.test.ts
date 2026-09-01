@@ -527,12 +527,19 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     const zhInput = document.querySelector<HTMLInputElement>('.cm-viewer .cm-search input[name="search"]')
     expect(zhInput).toBeTruthy()
     expect(zhInput!.placeholder).toBe('查找')
-    // Button labels are translated as well.
+    // Button labels are translated as well. prev/next render as CSS arrows
+    // (empty text) with the label in the title attribute.
     const zhButtons = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
       .map((b) => b.textContent?.trim())
       .filter(Boolean)
-    expect(zhButtons).toContain('下一个')
-    expect(zhButtons).toContain('上一个')
+    expect(zhButtons).toContain('全部') // select-all button label
+    expect(zhButtons).toContain('×') // close button glyph
+    expect(zhButtons).toContain('替换') // replace action
+    const zhTitles = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
+      .map((b) => b.getAttribute('title'))
+      .filter(Boolean)
+    expect(zhTitles).toContain('下一个')
+    expect(zhTitles).toContain('上一个')
     zhWrapper.unmount()
   })
 

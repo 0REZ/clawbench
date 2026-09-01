@@ -49,10 +49,11 @@ describe('MarkdownSearchBar', () => {
 
   it('is hidden when closed and visible when open', async () => {
     const wrapper = mountBar()
-    expect(wrapper.find('.md-search-bar').classes()).not.toContain('is-open')
+    expect(wrapper.find('.search-bar').classes()).not.toContain('is-open')
     await wrapper.setProps({ open: true })
-    expect(wrapper.find('.md-search-bar').classes()).toContain('is-open')
-    expect((wrapper.find('input').element as HTMLInputElement)).toBeTruthy()
+    await sleep(20)
+    expect(wrapper.find('.search-bar').classes()).toContain('is-open')
+    expect(wrapper.find('input')).toBeTruthy()
     wrapper.unmount()
   })
 

@@ -99,7 +99,8 @@
                       :current-file="currentFile"
                       :file-loading="store.state.fileLoading"
                       :toc-open="effectiveTocOpen"
-                      :search-open="searchDrawer.effectiveOpen.value"
+                      :search-open="viewSearchActive"
+                      :search-drawer-open="searchDrawer.effectiveOpen.value"
                       :markdown-view-mode="markdownViewMode"
                       :file-history-open="fileHistoryDrawer.effectiveOpen.value"
                       :toc-file="tocFile"
@@ -109,8 +110,9 @@
                       @open-git-history="openFileHistory"
                       @toggle-toc="handleToggleToc"
                       @close-toc="tocDockPref.close()"
-                      @toggle-search="currentFile?.content && openFileSearch()"
-                      @close-search="searchDrawer.close()"
+                      @toggle-search="currentFile?.content && toggleViewSearch()"
+                      @close-search="closeViewSearch()"
+                      @search-change="viewSearchActive = !!$event"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
                       @refresh="handleRefresh"
                       @jump="scrollToLine"
@@ -797,6 +799,12 @@ const tocDrawer = useTabDrawer('view')
 const searchDrawer = useTabDrawer('view')
 const fileHistoryDrawer = useTabDrawer('view')
 const fileSearchDrawer = useTabDrawer('browse', { autoRestore: false })
+
+// Search-bar highlight state for the file header button. Separate from
+// searchDrawer (the SearchDrawer bottom sheet): the rendered markdown preview
+// and CodeMirror views have their own inline search UIs, which highlight the
+// button without opening the SearchDrawer.
+const viewSearchActive = ref(false)
 
 // Wide-screen inline TOC dock preference (open/width persisted, editing hides).
 const tocDockPref = useTocDockPreference()
@@ -2335,16 +2343,33 @@ function openFileViewSearchDrawer() {
 
 // Route the view-pane search request. CodeMirror-rendered files (code,
 // markdown raw/editing) use CodeMirror's search panel, and the rendered
-// markdown preview uses its inline search bar — both are toggled/focused
-// through the FileViewer. The SearchDrawer bottom sheet is only used as a
-// last-resort fallback when no view-specific search UI exists.
+// markdown preview uses its inline search bar. Both highlight the header
+// search button via viewSearchActive without opening the SearchDrawer; the
+// SearchDrawer bottom sheet is only used as a fallback.
 function openFileSearch() {
-  if (isCodeMirrorFileView.value) {
-    fileOverlayRef.value?.focusSearchInput()
-  } else if (isMarkdownRenderedView.value) {
+  if (isCodeMirrorFileView.value || isMarkdownRenderedView.value) {
+    viewSearchActive.value = true
     fileOverlayRef.value?.focusSearchInput()
   } else {
+    viewSearchActive.value = true
     openFileViewSearchDrawer()
+  }
+}
+function closeViewSearch() {
+  viewSearchActive.value = false
+  searchDrawer.close()
+}
+// Header search button click: toggle the search UI (CodeMirror panel or the
+// markdown preview inline bar) open/closed.
+function toggleViewSearch() {
+  if (viewSearchActive.value) {
+    // Close: focusSearchInput() toggles the CodeMirror panel closed (its
+    // searchChange event also clears viewSearchActive); the markdown bar is
+    // closed by clearing the state.
+    fileOverlayRef.value?.focusSearchInput()
+    closeViewSearch()
+  } else {
+    openFileSearch()
   }
 }
 function handleCtrlF(e) {
