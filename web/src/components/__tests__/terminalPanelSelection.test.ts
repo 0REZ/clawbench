@@ -103,6 +103,14 @@ describe('TerminalPanel xterm selection defaults', () => {
     }
   })
 
+  it('does not show the floating copy bar on PC (native selection/copy)', () => {
+    const source = readTerminalComponent('../terminal/TerminalPanelContent.vue')
+
+    // The selection copy bar is mobile-only: PC users get native Ctrl+C / right-click copy.
+    // Gating on !isPC (same platform flag already used for the virtual key toolbar).
+    expect(source).toContain('v-if="selectionActive && !isPC"')
+  })
+
   it('provides a help button that opens the terminal help drawer', () => {
     const source = readTerminalComponent('../terminal/TerminalPanelContent.vue')
 

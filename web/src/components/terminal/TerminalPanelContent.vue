@@ -97,7 +97,8 @@
     </div>
 
     <Transition name="copy-bar">
-      <div v-if="selectionActive" class="selection-copy-bar">
+      <!-- PC 模式用原生复制（Ctrl+C / 右键），不需要弹出复制栏；移动端保留悬浮复制栏 -->
+      <div v-if="selectionActive && !isPC" class="selection-copy-bar">
         <span class="selection-copy-count">{{ t('terminal.selectedChars', { n: selectedText.length }) }}</span>
         <button class="selection-copy-btn" @click="handleCopySelection" @contextmenu.prevent>{{ t('common.copy') }}</button>
         <button class="selection-copy-close" @click="handleDismissSelection" @contextmenu.prevent :aria-label="t('terminal.close')">✕</button>
