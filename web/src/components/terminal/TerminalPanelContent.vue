@@ -50,7 +50,7 @@
       </button>
       <template v-if="isPC">
       <button
-        class="terminal-tab-add terminal-theme-btn"
+        class="terminal-tab-add"
         @click="openThemeMenu"
         :title="t('terminal.theme')"
       >
@@ -1362,7 +1362,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   border: none;
   border-radius: 0;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--accent-color);
   cursor: pointer;
   flex-shrink: 0;
   margin: 0 6px 0 0;
@@ -1371,8 +1371,8 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
 
 @media (hover: hover) {
   .terminal-tab-add:hover:not(.disabled) {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+    color: var(--accent-color);
   }
 }
 
@@ -1385,7 +1385,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   cursor: not-allowed;
 }
 
-.terminal-theme-btn { color: var(--text-muted); }
+/* 冗余覆盖已移除：.terminal-tab-add 默认即主题色 */
 
 /* Symbol bar transition */
 .symbol-bar-enter-active {
