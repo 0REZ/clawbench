@@ -533,8 +533,11 @@ describe('CodeMirrorViewer (real CodeMirror)', () => {
     const zhButtons = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
       .map((b) => b.textContent?.trim())
       .filter(Boolean)
-    expect(zhButtons).toContain('×') // close button glyph
     expect(zhButtons).toContain('替换') // replace action
+    // Close is an SVG icon button (no text) with the label in its title.
+    const closeBtn = document.querySelector('.cm-viewer .cm-search button[name=close]')
+    expect(closeBtn?.querySelector('svg.search-close-icon')).not.toBeNull()
+    expect(closeBtn?.getAttribute('title')).toBe('关闭')
     const zhTitles = [...document.querySelectorAll('.cm-viewer .cm-search .cm-button')]
       .map((b) => b.getAttribute('title'))
       .filter(Boolean)

@@ -33,7 +33,7 @@
 .search-bar .cm-search {
   width: 100%;
   box-sizing: border-box;
-  padding: 5px 8px 0;
+  padding: 5px 8px 6px;
   font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
   font-size: 13px;
   display: flex;
@@ -61,7 +61,6 @@
 }
 .search-bar .cm-search button[name='close'] {
   order: 5;
-  margin-left: auto;
 }
 .search-bar .cm-search .cm-search-replace {
   order: 10;
@@ -171,6 +170,29 @@
   cursor: default;
 }
 
+/* close — square bordered button with an SVG × icon, same footprint as
+   prev/next. No margin-left:auto — the input flexes to absorb the width, so
+   the whole control group sits compactly after it (no dead space). */
+.cm-search button[name='close'] {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0;
+  width: var(--search-ctrl-h);
+  height: var(--search-ctrl-h);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.cm-search button[name='close']:hover {
+  background: var(--bg-quaternary, var(--bg-tertiary));
+  border-color: var(--accent-color);
+}
+
 /* prev / next — arrow icons only. */
 .cm-search .cm-button[name='next'],
 .cm-search .cm-button[name='prev'] {
@@ -198,28 +220,6 @@
 .cm-search .cm-button[name='next']::before {
   transform: rotate(-45deg); /* → */
   margin-left: -2px;
-}
-
-/* close — borderless, muted. */
-.cm-search button[name='close'] {
-  background: transparent;
-  border: none;
-  width: var(--search-ctrl-h);
-  height: var(--search-ctrl-h);
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.15s, color 0.15s;
-}
-.cm-search button[name='close']:hover {
-  background: var(--bg-quaternary, var(--bg-tertiary));
-  color: var(--text-primary);
 }
 
 /* ── Match counter ── */
