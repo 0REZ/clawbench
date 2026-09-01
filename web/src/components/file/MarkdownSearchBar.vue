@@ -204,7 +204,7 @@ function selectAll() {
     jumpTo(first)
 }
 
-// ── Jump: temporary anchor + center scroll + line-flash ─────────────────────
+// ── Jump: temporary anchor + center scroll + match-text flash ───────────────
 function getScrollParent(node: Node): HTMLElement | null {
     let el = node.parentElement
     while (el) {
@@ -281,22 +281,19 @@ function jumpTo(match: Match) {
         range.setEnd(textNode, endOffset)
 
         const anchor = document.createElement('span')
-        anchor.className = 'search-match-anchor'
+        anchor.className = 'search-match-anchor search-match-flash'
         range.surroundContents(anchor)
 
         const scroller = getScrollParent(anchor)
         anchor.scrollIntoView({ behavior: 'auto', block: 'center' })
-        anchor.classList.add('line-flash')
 
         correctAfterSettle(anchor, scroller, () => {
-            anchor.classList.remove('line-flash')
+            anchor.classList.remove('search-match-flash')
             unwrapAnchor(anchor)
         })
     } catch {
         const el = textNode.parentElement
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.classList.add('line-flash')
-        el.addEventListener('animationend', () => el.classList.remove('line-flash'), { once: true })
     }
 }
 
@@ -315,13 +312,15 @@ defineExpose({
 <style>
 /* Match highlighting via the CSS Custom Highlight API. These selectors must
    be global because ::highlight() pseudo-elements apply to the whole document
-   (the .markdown-body content lives outside this component's scoped styles). */
+   (the .markdown-body content lives outside this component's scoped styles).
+   The opacity values mirror the CodeMirror .cm-searchMatch / .cm-searchMatch-
+   selected styles in search-bar.css so both search UIs look identical. */
 ::highlight(md-search-bar-matches) {
-  background: color-mix(in srgb, var(--accent-color, #4a90d9) 30%, transparent);
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 28%, transparent);
   color: inherit;
 }
 ::highlight(md-search-bar-active) {
-  background: color-mix(in srgb, var(--accent-color, #4a90d9) 60%, transparent);
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
   color: inherit;
 }
 </style>

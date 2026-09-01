@@ -16,8 +16,8 @@
  * input element and its focus survive); `onXxx` props receive the component's
  * emits (input / prev / next / close / …).
  */
-import { EditorView, ViewPlugin, ViewUpdate } from '@codemirror/view'
-import { StateEffect, StateField } from '@codemirror/state'
+import { EditorView, ViewPlugin, ViewUpdate, Decoration, DecorationSet } from '@codemirror/view'
+import { Prec, RangeSetBuilder, StateEffect, StateField } from '@codemirror/state'
 import {
     SearchQuery,
     setSearchQuery,
@@ -71,12 +71,65 @@ export interface SearchPanelSpec {
     readonly: boolean
 }
 
+// ── Match highlighting ──────────────────────────────────────────────────────
+// @codemirror/search's own `searchHighlighter` only renders matches while its
+// *built-in* panel is open (it checks `searchState.panel`), so it never fires
+// with our custom panel (searchState.panel stays null). This plugin re-derives
+// the decorations from searchState itself, so all matches get a persistent
+// background highlight and the active (selected) match gets the flash class.
+// Prec.high beats the library's Prec.low searchHighlighter.
+const searchMatchDeco = Decoration.mark({ class: 'cm-searchMatch' })
+const selectedMatchDeco = Decoration.mark({ class: 'cm-searchMatch cm-searchMatch-selected cm-searchMatch-flash' })
+
+function buildSearchDecorations(view: EditorView): DecorationSet {
+    const spec = getSearchQuery(view.state)
+    if (!spec || !spec.valid || !spec.search) return Decoration.none
+    const query = new SearchQuery(spec)
+    const state = view.state
+    const sel = state.selection.main
+    const builder = new RangeSetBuilder<Decoration>()
+    const cursor = query.getCursor(state)
+    let step = cursor.next()
+    let count = 0
+    while (!step.done) {
+        const { from, to } = step.value
+        const active = sel.from === from && sel.to === to
+        builder.add(from, to, active ? selectedMatchDeco : searchMatchDeco)
+        count++
+        if (count > 100000) break
+        step = cursor.next()
+    }
+    return builder.finish()
+}
+
+const searchMatchHighlight = ViewPlugin.fromClass(
+    class {
+        decorations: DecorationSet
+        constructor(readonly view: EditorView) {
+            this.decorations = buildSearchDecorations(view)
+        }
+        update(update: ViewUpdate) {
+            if (
+                update.docChanged ||
+                update.selectionSet ||
+                update.viewportChanged ||
+                update.transactions.some((tr) => tr.effects.some((e) => e.is(setSearchQuery)))
+            ) {
+                this.decorations = buildSearchDecorations(update.view)
+            }
+        }
+    },
+    { decorations: (v) => v.decorations },
+)
+
 /**
  * Build the custom search panel extension.
  */
 export function searchPanel(spec: SearchPanelSpec) {
     return [
         searchPanelField,
+        // All-match highlighting + active-match flash (see above).
+        Prec.high(searchMatchHighlight),
         ViewPlugin.fromClass(
             class {
                 private panel: HTMLElement

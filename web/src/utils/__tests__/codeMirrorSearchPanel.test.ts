@@ -104,6 +104,60 @@ describe('codeMirrorSearchPanel', () => {
         v.destroy()
     })
 
+    it('highlights every match; the active one only after navigation', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        const content = document.querySelector<HTMLElement>('.cm-content')!
+        // All 3 'alpha' occurrences carry the match class.
+        expect(content.querySelectorAll('.cm-searchMatch')).toHaveLength(3)
+        // Selection still sits at the document start — no active match yet.
+        expect(content.querySelectorAll('.cm-searchMatch-selected')).toHaveLength(0)
+        // Navigate to the first match: it becomes the active (flash) one.
+        document.querySelector<HTMLElement>('.cm-search button[name=next]')!.click()
+        await new Promise(r => setTimeout(r, 20))
+        const selected = content.querySelectorAll('.cm-searchMatch-selected')
+        expect(selected.length).toBe(1)
+        expect(selected[0].classList.contains('cm-searchMatch-flash')).toBe(true)
+        v.destroy()
+    })
+
+    it('moves the selected/flash class to the new match on findNext', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        document.querySelector<HTMLElement>('.cm-search button[name=next]')!.click()
+        await new Promise(r => setTimeout(r, 20))
+        const content = document.querySelector<HTMLElement>('.cm-content')!
+        const selected = content.querySelectorAll('.cm-searchMatch-selected')
+        expect(selected.length).toBe(1)
+        expect(selected[0].classList.contains('cm-searchMatch-flash')).toBe(true)
+        v.destroy()
+    })
+
+    it('removes all match highlights when the query is cleared', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        input.value = ''
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        expect(document.querySelector<HTMLElement>('.cm-content')!.querySelectorAll('.cm-searchMatch')).toHaveLength(0)
+        v.destroy()
+    })
+
     it('close button hides the panel', async () => {
         const v = makeView(false)
         openSearchPanelCommand(v)

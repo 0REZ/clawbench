@@ -7,21 +7,34 @@ const i18n = createI18n({
   locale: 'en',
   messages: {
     en: {
-      search: {
-        placeholder: 'Search...',
-        previous: 'Prev',
-        next: 'Next',
-        close: 'Close',
-        all: 'All',
-        matchCase: 'Match case',
-        regexp: 'Regexp',
-        byWord: 'By word',
+      file: {
+        editor: {
+          searchPanel: {
+            find: 'Find',
+            replace: 'Replace',
+            previous: 'Prev',
+            next: 'Next',
+            all: 'All',
+            matchCase: 'Match case',
+            regexp: 'Regexp',
+            byWord: 'By word',
+            replaceAction: 'Replace',
+            replaceAll: 'Replace all',
+            close: 'Close',
+          },
+        },
       },
     },
   },
 })
 
 import MarkdownSearchBar from '../MarkdownSearchBar.vue'
+
+// jsdom's Element.prototype.scrollIntoView throws for options-object calls
+// ("Not implemented: scrollIntoView"), which aborts jumpTo's try/catch and
+// leaves the temporary flash anchor in the DOM. Stub it like the other search
+// component tests do.
+Element.prototype.scrollIntoView = () => {}
 
 function mountBar(props = {}) {
   return mount(MarkdownSearchBar, {
@@ -97,6 +110,34 @@ describe('MarkdownSearchBar', () => {
     await sleep(20)
     const after = wrapper.find('.cm-search-match-info').text()
     expect(after).not.toBe(before)
+    wrapper.unmount()
+  })
+
+  it('wraps the active match in a flash span (no line-flash block flash)', async () => {
+    const md = seedMarkdownBody('<p>alpha one</p><p>alpha two</p>')
+    // jsdom reports 0 scrollHeight/clientHeight, so getScrollParent can't find
+    // a scroller → correctAfterSettle unwraps instantly. Stub the dimensions
+    // so the flash wrapper stays long enough to assert.
+    Object.defineProperty(md, 'clientHeight', { value: 100, configurable: true })
+    Object.defineProperty(md, 'scrollHeight', { value: 300, configurable: true })
+    md.style.overflowY = 'auto'
+    const wrapper = mountBar({ open: true })
+    await sleep(20)
+    const input = wrapper.find('input')
+    input.element.value = 'alpha'
+    input.trigger('input')
+    await sleep(20)
+    input.trigger('keydown', { key: 'Enter' })
+    await sleep(20)
+    // The active match text is wrapped in a temporary anchor that flashes.
+    const flash = document.querySelector('.search-match-anchor.search-match-flash')
+    expect(flash).not.toBeNull()
+    expect(flash!.textContent).toBe('alpha')
+    // No whole-block flash remains.
+    expect(document.querySelectorAll('.line-flash')).toHaveLength(0)
+    // Wait for the settle/unwrap timer chain to finish and the anchor to be removed.
+    await sleep(2600)
+    expect(document.querySelector('.search-match-anchor')).toBeNull()
     wrapper.unmount()
   })
 

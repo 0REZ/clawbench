@@ -234,3 +234,38 @@
   outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
   outline-offset: 1px;
 }
+
+/* ── Match highlighting + active-match flash ─────────────────────────────────
+   Shared by BOTH search UIs:
+   - CodeMirror panel (decorations added by codeMirrorSearchPanel.ts:
+     .cm-searchMatch on every match, .cm-searchMatch-selected + flash on the
+     active one)
+   - Markdown preview (MarkdownSearchBar.vue: all matches via the CSS Custom
+     Highlight API, the active match additionally gets the .search-match-flash
+     class on a temporary wrapper)
+   The flash keyframes are reused verbatim by both hosts.
+
+   Note: `.cm-editor` prefix outranks @codemirror/search's baseTheme rules
+   (`.ͼ2 .cm-searchMatch`), which would otherwise paint matches yellow/orange. */
+.cm-editor.cm-editor .cm-searchMatch {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 28%, transparent);
+  border-radius: 2px;
+}
+.cm-editor.cm-editor .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
+}
+
+@keyframes search-match-flash {
+  0%, 100% { background-color: transparent; }
+  25% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 75%, transparent); }
+  50% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 40%, transparent); }
+  75% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 65%, transparent); }
+}
+.cm-editor.cm-editor .cm-searchMatch-flash {
+  animation: search-match-flash 0.7s ease-out 1;
+}
+/* Markdown active-match wrapper reuses the same flash animation. */
+.search-match-anchor.search-match-flash {
+  animation: search-match-flash 0.7s ease-out 1;
+}
+
