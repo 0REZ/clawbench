@@ -1240,5 +1240,172 @@ describe('useGlobalEvents', () => {
             // pull from here instead of replaying the whole history.
             expect(handler).toHaveBeenCalledTimes(0)
         })
+
+        it('整批 pending 事件分发期间 isReplayingEvents 全程为 true，结束后复位', async () => {
+            // 断线补偿批内每个事件都必须被标记为重放（App.vue 弹窗据此抑制），
+            // 不能因为循环内提前复位导致批内后续事件丢失标记。
+            _seedLastSeenEventIdForTesting('evt_seen')
+            const seenFlags: boolean[] = []
+            events.onEvent(() => seenFlags.push(events.isReplayingEvents.value))
+
+            mockPendingFetch([
+                userMessageRow('evt_b1', 1, { content: 'a' }),
+                userMessageRow('evt_b2', 2, { content: 'b' }),
+                userMessageRow('evt_b3', 3, { content: 'c' }),
+            ])
+            connectAndGetWs()
+
+            await vi.waitFor(() => expect(seenFlags.length).toBe(3))
+            // 批内每个事件分发时 isReplayingEvents 都为 true
+            expect(seenFlags).toEqual([true, true, true])
+            // 批结束后复位
+            expect(events.isReplayingEvents.value).toBe(false)
+        })
+    })
+
+    // ── WS replay buffer（断线后服务器握手即重放缓冲事件）──
+    // Bug：页面刷新后仍弹出历史会话完成通知。fetchPendingEvents 的空游标跳过
+    // 只保护了 pending 拉取路径；服务器 WS 握手后的 replay buffer（events.go
+    // GetBufferedEvents）把断线期间缓冲的 session_update completed 直接推送，
+    // 前端未区分 replay 与 live，导致 completion popover 弹出历史通知。
+    // 修复：后端给重放消息打 `replayed: true` 标记（events.go），前端按标记
+    // 置 isReplayingEvents，消费者（App.vue completion handler / 浏览器通知）
+    // 据此抑制。
+    describe('WS replay buffer (handshake replay)', () => {
+        let originalFetch: typeof globalThis.fetch
+
+        beforeEach(() => {
+            originalFetch = globalThis.fetch
+            // No pending events — replay comes purely from the WS buffer.
+            globalThis.fetch = vi.fn(async () => ({
+                ok: true,
+                json: async () => ({ events: [] }),
+            }) as Response)
+        })
+
+        afterEach(() => {
+            globalThis.fetch = originalFetch
+            _seedLastSeenEventIdForTesting('')
+        })
+
+        function replayedEvent(id: string, event: string, data: object): object {
+            // Mirrors the server's tagged replay (events.go sets Replayed=true).
+            return { type: 'event', id, event, replayed: true, data }
+        }
+
+        it('页面刷新后 WS 握手重放的历史 completed 事件被标记为重放', async () => {
+            _seedLastSeenEventIdForTesting('')
+            const handler = vi.fn()
+            events.onEvent(handler)
+            const ws = connectAndGetWs()
+
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe(''))
+
+            // 服务器握手后重放断线期间缓冲的历史 completed 事件（带 replayed 标记）
+            ws.receive(replayedEvent('evt_hist_completed', 'session_update', {
+                session_id: 'old-sess', status: 'completed',
+            }))
+
+            // replay 期间：isReplayingEvents 必须为 true（App.vue 弹窗据此抑制）
+            expect(events.isReplayingEvents.value).toBe(true)
+            // 浏览器通知被抑制（replay 是历史事件，即使页面未聚焦也不弹）
+            expect(mockShowBrowserNotification).not.toHaveBeenCalled()
+            // 游标仍正常推进（终态事件路径不受影响）
+            expect(_getLastSeenEventIdForTesting()).toBe('evt_hist_completed')
+
+            // 下一条 live 消息到达：标志复位，不再抑制
+            ws.receive({ type: 'event', id: nextId(), event: 'session_update', data: { status: 'running' } })
+            expect(events.isReplayingEvents.value).toBe(false)
+        })
+
+        it('刷新后重放窗口内的多个历史 completed 事件全部抑制', async () => {
+            _seedLastSeenEventIdForTesting('')
+            const handler = vi.fn()
+            events.onEvent(handler)
+            const ws = connectAndGetWs()
+
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe(''))
+
+            // 多个历史事件在握手重放中批量到达（全部带 replayed 标记）
+            ws.receive(replayedEvent('evt_h1', 'session_update', { session_id: 'a', status: 'completed' }))
+            ws.receive(replayedEvent('evt_h2', 'session_update', { session_id: 'b', status: 'completed' }))
+            ws.receive(replayedEvent('evt_h3', 'session_update', { session_id: 'c', status: 'completed' }))
+
+            expect(mockShowBrowserNotification).not.toHaveBeenCalled()
+            // 游标推进到最后一条历史事件
+            expect(_getLastSeenEventIdForTesting()).toBe('evt_h3')
+        })
+
+        it('replay 结束后（下一条 live 消息）后续 live 事件正常通知', async () => {
+            _seedLastSeenEventIdForTesting('')
+            const handler = vi.fn()
+            events.onEvent(handler)
+            const ws = connectAndGetWs()
+
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe(''))
+
+            // 握手重放：历史 completed（抑制）
+            ws.receive(replayedEvent('evt_hist', 'session_update', { session_id: 'old', status: 'completed' }))
+            expect(mockShowBrowserNotification).not.toHaveBeenCalled()
+
+            // 之后的 live 事件：标志已复位，正常弹浏览器通知（页面未聚焦）
+            ws.receive({ type: 'event', id: nextId(), event: 'session_update', data: { session_id: 'new', status: 'completed' } })
+            expect(events.isReplayingEvents.value).toBe(false)
+            expect(mockShowBrowserNotification).toHaveBeenCalledTimes(1)
+        })
+
+        it('页面刷新后不弹出历史完成通知（App.vue 弹窗依赖 isReplayingEvents）', async () => {
+            // 模拟 App.vue 的 completion popover handler：replay 阶段必须抑制弹窗。
+            _seedLastSeenEventIdForTesting('')
+            const popoverPush = vi.fn()
+            events.onEvent((event, data) => {
+                if (!data || data.status !== 'completed') return
+                if (event !== 'session_update' && event !== 'task_update') return
+                if (events.isReplayingEvents.value) return // App.vue 同款抑制逻辑
+                popoverPush(data)
+            })
+            const ws = connectAndGetWs()
+
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe(''))
+
+            // 握手重放历史 completed → 抑制
+            ws.receive(replayedEvent('evt_hist', 'session_update', { session_id: 'old', status: 'completed' }))
+            expect(popoverPush).not.toHaveBeenCalled()
+
+            // 之后的 live completed → 正常弹窗
+            ws.receive({ type: 'event', id: nextId(), event: 'session_update', data: { session_id: 'live', status: 'completed' } })
+            expect(popoverPush).toHaveBeenCalledTimes(1)
+        })
+
+        it('断线期间在页面停留（游标已存在）→ 握手重放补发的 completed 也抑制弹窗', async () => {
+            // 与"页面刷新"不同的场景：同一运行周期内 WS 断开又重连。
+            // 游标已在内存（已看过 evt_seen），断线期间产生的新 completed 事件
+            // 由服务器 replay buffer 在握手后补发——同样是"用户没看到的历史通知"，
+            // 必须抑制，不能因为游标非空就当作 live 事件弹出。
+            _seedLastSeenEventIdForTesting('evt_seen')
+            const popoverPush = vi.fn()
+            events.onEvent((event, data) => {
+                if (!data || data.status !== 'completed') return
+                if (event !== 'session_update' && event !== 'task_update') return
+                if (events.isReplayingEvents.value) return
+                popoverPush(data)
+            })
+            const ws = connectAndGetWs()
+
+            // 无 pending 事件，fetchPendingEvents 不置 isReplayingEvents
+            await vi.waitFor(() => expect(events.isReplayingEvents.value).toBe(false))
+
+            // 服务器 replay buffer 在握手后把断线期间缓冲的 completed 推来（带标记）
+            ws.receive(replayedEvent('evt_offline_completed', 'session_update', { session_id: 'offline', status: 'completed' }))
+            // 带 replayed 标记 → 抑制弹窗
+            expect(popoverPush).not.toHaveBeenCalled()
+            expect(events.isReplayingEvents.value).toBe(true)
+            expect(_getLastSeenEventIdForTesting()).toBe('evt_offline_completed')
+
+            // 同一批次的下一条继续抑制
+            ws.receive(replayedEvent('evt_offline2', 'session_update', { session_id: 'offline2', status: 'completed' }))
+            expect(popoverPush).not.toHaveBeenCalled()
+            expect(_getLastSeenEventIdForTesting()).toBe('evt_offline2')
+        })
     })
 })

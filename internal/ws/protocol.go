@@ -14,6 +14,11 @@ type ServerMessage struct {
 	ID    string `json:"id,omitempty"`    // event ID for ack (e.g., "evt_1706000000_1")
 	Event string `json:"event,omitempty"` // "session_update", "task_update", "summary_update"
 	Data  any    `json:"data,omitempty"`
+	// Replayed is set only when this message is replayed from the subscription
+	// replay buffer right after a WS reconnect (EventsHandler.GetBufferedEvents).
+	// The frontend uses it to distinguish caught-up history from live events and
+	// suppress stale completion popups/notifications after a page reload.
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 // ClientMessage is a message sent from client to server.

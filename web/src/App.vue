@@ -912,7 +912,7 @@ const { navigateToTaskSettings, openExecDetail, loadTasks } = useTaskTab()
 registerSwitchTab(switchTab)
 
 // Wire up WS global events
-const { onEvent, init: initGlobalEvents, destroy: destroyGlobalEvents } = useGlobalEvents()
+const { onEvent, isReplayingEvents, init: initGlobalEvents, destroy: destroyGlobalEvents } = useGlobalEvents()
 const removeTaskHandler = onEvent((event, data) => {
     if (event === 'task_update') {
         onTaskEvent(data)
@@ -929,10 +929,18 @@ function projectBaseName(path) {
 // AI 完成弹窗：任何会话/定时任务完成时，若用户当前未在查看该会话，入队弹出。
 // 后端 session_update/task_update 的 completed 事件已携带 session_title 与
 // response_preview（Markdown 原文）；useGlobalEvents 已按事件 ID 全局去重。
+//
+// 关键：重放事件（fetchPendingEvents 断线补偿 / WS 重连 replay buffer）必须跳过。
+// 页面刷新时 lastSeenEventId 内存游标为空，useGlobalEvents 会跳过历史事件，
+// 但服务端 replay buffer 里的旧 completed 事件仍会通过 WS 重放送达——
+// 那些是补发的历史通知，不是用户正在观看的实时完成，绝不能再弹窗。
 const completionPopover = useCompletionPopover()
-const removeCompletionHandler = onEvent((event, data) => {
+function handleCompletionEvent(event, data, skipReplay = false) {
     if (!data || data.status !== 'completed') return
     if (event !== 'session_update' && event !== 'task_update') return
+    // 重放阶段（页面刷新/断线重连补发的历史完成）不弹窗：
+    // isReplayingEvents 在 fetchPendingEvents 与 WS replay 窗口期间为 true。
+    if (skipReplay && isReplayingEvents.value) return
     const sessionId = data.session_id
     if (!sessionId) return
     // 聊天界面在前台激活且正是当前会话时，用户正看着结果，不弹；
@@ -969,6 +977,9 @@ const removeCompletionHandler = onEvent((event, data) => {
             projectName,
         })
     }
+}
+const removeCompletionHandler = onEvent((event, data) => {
+    handleCompletionEvent(event, data, true)
 })
 
 // WS reconnect: refresh all state that may have changed while disconnected.

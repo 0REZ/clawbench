@@ -96,10 +96,15 @@ func EventsHandler(w http.ResponseWriter, r *http.Request) {
 	// it), so events that arrived while this client was disconnected — or the
 	// rolling tail sent just before a connection replace — are replayed here.
 	// The frontend dedups by event ID, so replaying already-seen events is safe.
+	// Each replayed message is tagged Replayed=true so the frontend can
+	// distinguish caught-up history from live events — without this, a page
+	// reload would re-pop stale completion popups/notifications for sessions
+	// that finished while the page was reloading.
 	buffered := sub.GetBufferedEvents()
 	if len(buffered) > 0 {
 		slog.Debug("ws: replaying buffered events", "count", len(buffered), "client_id", clientID)
 		for _, msg := range buffered {
+			msg.Replayed = true
 			data, err := json.Marshal(msg)
 			if err != nil {
 				slog.Warn("ws: failed to marshal buffered event for replay", "error", err, "client_id", clientID)
