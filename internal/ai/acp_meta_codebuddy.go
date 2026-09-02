@@ -37,6 +37,32 @@ const (
 	metaKeyCodeBuddyAgentPhase   = "codebuddy.ai/agentPhase"
 )
 
+// tokenUsageFromCodeBuddyUsage builds a metaTokenUsage from the OpenAI-style
+// _meta.usage block that CodeBuddy reports.
+func tokenUsageFromCodeBuddyUsage(m map[string]any) *metaTokenUsage {
+	u := &metaTokenUsage{
+		InputTokens:         metaInt(m["prompt_tokens"]),
+		OutputTokens:        metaInt(m["completion_tokens"]),
+		TotalTokens:         metaInt(m["total_tokens"]),
+		ThoughtTokens:       metaInt(m["completion_thinking_tokens"]),
+		CachedReadTokens:    metaInt(m["prompt_cache_hit_tokens"]),
+		CachedWriteTokens:   metaInt(m["prompt_cache_write_tokens"]),
+		CacheCreationTokens: metaInt(m["cache_creation_input_tokens"]),
+		CacheHitTokens:      metaInt(m["prompt_cache_hit_tokens"]),
+		CacheMissTokens:     metaInt(m["prompt_cache_miss_tokens"]),
+		Credit:              metaFloat(m["credit"]),
+	}
+	// Also accept cache_read_input_tokens as a cache-read source.
+	u.CachedReadTokens = metaMaxInt(u.CachedReadTokens, metaInt(m["cache_read_input_tokens"]))
+	if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
+		u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 ||
+		u.CacheCreationTokens != 0 || u.CacheHitTokens != 0 || u.CacheMissTokens != 0 ||
+		u.ThoughtTokens != 0 || u.Credit != 0 {
+		u.Present = true
+	}
+	return u
+}
+
 // extractCodeBuddyMeta parses a CodeBuddy _meta payload.
 func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
 	if len(meta) == 0 {
@@ -46,27 +72,7 @@ func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
 
 	// OpenAI-style usage block.
 	if m, ok := meta[metaKeyCodeBuddyUsage].(map[string]any); ok {
-		u := &metaTokenUsage{
-			InputTokens:         metaInt(m["prompt_tokens"]),
-			OutputTokens:        metaInt(m["completion_tokens"]),
-			TotalTokens:         metaInt(m["total_tokens"]),
-			ThoughtTokens:       metaInt(m["completion_thinking_tokens"]),
-			CachedReadTokens:    metaInt(m["prompt_cache_hit_tokens"]),
-			CachedWriteTokens:   metaInt(m["prompt_cache_write_tokens"]),
-			CacheCreationTokens: metaInt(m["cache_creation_input_tokens"]),
-			CacheHitTokens:      metaInt(m["prompt_cache_hit_tokens"]),
-			CacheMissTokens:     metaInt(m["prompt_cache_miss_tokens"]),
-			Credit:              metaFloat(m["credit"]),
-		}
-		// Also accept cache_read_input_tokens as a cache-read source.
-		u.CachedReadTokens = metaMaxInt(u.CachedReadTokens, metaInt(m["cache_read_input_tokens"]))
-		if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
-			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 ||
-			u.CacheCreationTokens != 0 || u.CacheHitTokens != 0 || u.CacheMissTokens != 0 ||
-			u.ThoughtTokens != 0 || u.Credit != 0 {
-			u.Present = true
-		}
-		ext.Usage = u
+		ext.Usage = tokenUsageFromCodeBuddyUsage(m)
 	}
 
 	// Context-window breakdown.

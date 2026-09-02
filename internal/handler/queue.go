@@ -79,7 +79,7 @@ func handleQueueEnqueue(w http.ResponseWriter, r *http.Request) {
 	// silently fall back to the CLI backend and run with the wrong agent/config.
 	// Empty agentId keeps the existing default-agent behavior.
 	if req.AgentID != "" {
-		if _, _, _, _, ok := resolveAgentConfig(req.AgentID); !ok {
+		if _, _, _, _, agentOK := resolveAgentConfig(req.AgentID); !agentOK {
 			writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidAgentID")
 			return
 		}

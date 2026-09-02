@@ -254,6 +254,23 @@ func metaMergeExtraction(dst *metaExtraction, src *metaExtraction) {
 	}
 }
 
+// setIntIfNonZero overlays v onto *dst only when v != 0. Keeping the
+// non-zero guard in one place collapses the repetitive "if src != 0 { dst =
+// src }" chains into flat calls (identical overlay semantics for UsageState
+// and Metadata).
+func setIntIfNonZero(dst *int, v int) {
+	if v != 0 {
+		*dst = v
+	}
+}
+
+// setFloatIfNonZero is the float64 counterpart of setIntIfNonZero.
+func setFloatIfNonZero(dst *float64, v float64) {
+	if v != 0 {
+		*dst = v
+	}
+}
+
 // applyMetaExtractionToUsageState overlays a parsed _meta extraction onto a
 // UsageState (used for the usage_update event payload and cached state).
 func applyMetaExtractionToUsageState(state *UsageState, ext *metaExtraction) {
@@ -261,36 +278,10 @@ func applyMetaExtractionToUsageState(state *UsageState, ext *metaExtraction) {
 		return
 	}
 	if u := ext.Usage; u != nil {
-		if u.InputTokens != 0 {
-			state.InputTokens = u.InputTokens
-		}
-		if u.OutputTokens != 0 {
-			state.OutputTokens = u.OutputTokens
-		}
-		if u.TotalTokens != 0 {
-			state.TotalTokens = u.TotalTokens
-		}
-		if u.CachedReadTokens != 0 {
-			state.CachedReadTokens = u.CachedReadTokens
-		}
-		if u.CachedWriteTokens != 0 {
-			state.CachedWriteTokens = u.CachedWriteTokens
-		}
-		if u.ThoughtTokens != 0 {
-			state.ThoughtTokens = u.ThoughtTokens
-		}
-		if u.CacheCreationTokens != 0 {
-			state.CacheCreationTokens = u.CacheCreationTokens
-		}
-		if u.CacheHitTokens != 0 {
-			state.CacheHitTokens = u.CacheHitTokens
-		}
-		if u.CacheMissTokens != 0 {
-			state.CacheMissTokens = u.CacheMissTokens
-		}
-		if u.Credit != 0 {
-			state.Credit = u.Credit
-		}
+		applyTokenUsageTo(&state.InputTokens, &state.OutputTokens, &state.TotalTokens,
+			&state.CachedReadTokens, &state.CachedWriteTokens, &state.ThoughtTokens,
+			&state.CacheCreationTokens, &state.CacheHitTokens, &state.CacheMissTokens,
+			&state.Credit, u)
 	}
 	if cat := ext.Category; cat != nil && cat.Present {
 		state.UsageByCategory = cat.Categories
@@ -304,71 +295,69 @@ func applyMetaExtractionToMetadata(meta *Metadata, ext *metaExtraction) {
 		return
 	}
 	if u := ext.Usage; u != nil {
-		if u.InputTokens != 0 {
-			meta.InputTokens = u.InputTokens
-		}
-		if u.OutputTokens != 0 {
-			meta.OutputTokens = u.OutputTokens
-		}
-		if u.TotalTokens != 0 {
-			meta.TotalTokens = u.TotalTokens
-		}
-		if u.CachedReadTokens != 0 {
-			meta.CachedReadTokens = u.CachedReadTokens
-		}
-		if u.CachedWriteTokens != 0 {
-			meta.CachedWriteTokens = u.CachedWriteTokens
-		}
-		if u.ThoughtTokens != 0 {
-			meta.ThoughtTokens = u.ThoughtTokens
-		}
-		if u.CacheCreationTokens != 0 {
-			meta.CacheCreationTokens = u.CacheCreationTokens
-		}
-		if u.CacheHitTokens != 0 {
-			meta.CacheHitTokens = u.CacheHitTokens
-		}
-		if u.CacheMissTokens != 0 {
-			meta.CacheMissTokens = u.CacheMissTokens
-		}
-		if u.Credit != 0 {
-			meta.Credit = u.Credit
-		}
+		applyTokenUsageTo(&meta.InputTokens, &meta.OutputTokens, &meta.TotalTokens,
+			&meta.CachedReadTokens, &meta.CachedWriteTokens, &meta.ThoughtTokens,
+			&meta.CacheCreationTokens, &meta.CacheHitTokens, &meta.CacheMissTokens,
+			&meta.Credit, u)
 	}
 	if cat := ext.Category; cat != nil && cat.Present {
 		meta.UsageByCategory = cat.Categories
 	}
 	if tr := ext.Trace; tr != nil {
-		if tr.RequestID != "" {
-			meta.RequestID = tr.RequestID
-		}
-		if tr.TraceID != "" {
-			meta.TraceID = tr.TraceID
-		}
-		if tr.MessageID != "" {
-			meta.MessageID = tr.MessageID
-		}
-		if tr.MessageRequestID != "" {
-			meta.MessageRequestID = tr.MessageRequestID
-		}
-		if tr.RequestModelID != "" && meta.Model == "" {
-			meta.Model = tr.RequestModelID
-		}
-		if tr.RequestModelName != "" {
-			meta.RequestModelName = tr.RequestModelName
-		}
-		if tr.ResponseModelID != "" {
-			meta.ResponseModelID = tr.ResponseModelID
-		}
-		if tr.FinishReason != "" {
-			meta.FinishReason = tr.FinishReason
-		}
-		if tr.Outcome != "" {
-			meta.Outcome = tr.Outcome
-		}
-		if tr.AgentPhase != "" {
-			meta.AgentPhase = tr.AgentPhase
-		}
+		applyTraceToMetadata(meta, tr)
+	}
+}
+
+// applyTokenUsageTo overlays the non-zero token/cost fields of u onto the ten
+// destination pointers. The callees share field layout across UsageState and
+// Metadata, so one helper keeps both apply paths identical.
+func applyTokenUsageTo(input, output, total, cachedRead, cachedWrite, thought,
+	cacheCreation, cacheHit, cacheMiss *int, credit *float64, u *metaTokenUsage,
+) {
+	setIntIfNonZero(input, u.InputTokens)
+	setIntIfNonZero(output, u.OutputTokens)
+	setIntIfNonZero(total, u.TotalTokens)
+	setIntIfNonZero(cachedRead, u.CachedReadTokens)
+	setIntIfNonZero(cachedWrite, u.CachedWriteTokens)
+	setIntIfNonZero(thought, u.ThoughtTokens)
+	setIntIfNonZero(cacheCreation, u.CacheCreationTokens)
+	setIntIfNonZero(cacheHit, u.CacheHitTokens)
+	setIntIfNonZero(cacheMiss, u.CacheMissTokens)
+	setFloatIfNonZero(credit, u.Credit)
+}
+
+// applyTraceToMetadata overlays the non-empty trace/identity fields of tr
+// onto a message-level Metadata.
+func applyTraceToMetadata(meta *Metadata, tr *metaTrace) {
+	if tr.RequestID != "" {
+		meta.RequestID = tr.RequestID
+	}
+	if tr.TraceID != "" {
+		meta.TraceID = tr.TraceID
+	}
+	if tr.MessageID != "" {
+		meta.MessageID = tr.MessageID
+	}
+	if tr.MessageRequestID != "" {
+		meta.MessageRequestID = tr.MessageRequestID
+	}
+	if tr.RequestModelID != "" && meta.Model == "" {
+		meta.Model = tr.RequestModelID
+	}
+	if tr.RequestModelName != "" {
+		meta.RequestModelName = tr.RequestModelName
+	}
+	if tr.ResponseModelID != "" {
+		meta.ResponseModelID = tr.ResponseModelID
+	}
+	if tr.FinishReason != "" {
+		meta.FinishReason = tr.FinishReason
+	}
+	if tr.Outcome != "" {
+		meta.Outcome = tr.Outcome
+	}
+	if tr.AgentPhase != "" {
+		meta.AgentPhase = tr.AgentPhase
 	}
 }
 

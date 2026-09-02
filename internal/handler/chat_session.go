@@ -255,34 +255,7 @@ func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 		// destroy it. Fall back to a regular archive (soft delete).
 		slog.Error("archiving session: GetFinalizedMessageCount failed, falling back to soft archive", "session_id", sessionID, "err", err)
 	} else if msgCount == 0 {
-		slog.Info("archiving empty session → hard-delete", "session_id", sessionID)
-
-		// Close (but do NOT ACP-delete) the agent connection. The agent-side
-		// transcript stays on disk so the session remains recoverable from the
-		// external list. Closing alone is safe for empty sessions — their
-		// ephemeral mapping is dropped here, and re-discovery happens on the
-		// next session/list enumeration.
-		// 仅关闭（不 ACP 删除）agent 连接：磁盘上的 agent 会话文件保持原样，
-		// 会话仍可从外部列表重新发现。空会话的连接映射在此释放。
-		if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
-			slog.Info("acp: closing connection for empty archived session", "session_id", sessionID, "agent_id", agentID)
-			go ai.GetACPConnManager().CloseConn(sessionID)
-		}
-
-		// Delete RAG chunks (best-effort, no-op if RAG not initialized)
-		if chunksDeleted, err := service.PurgeRAGChunksBySessionIDs([]string{sessionID}); err != nil {
-			slog.Warn("failed to delete RAG chunks for empty archived session", "session_id", sessionID, "err", err)
-		} else if chunksDeleted > 0 {
-			slog.Info("deleted RAG chunks for empty archived session", "session_id", sessionID, "chunks", chunksDeleted)
-		}
-
-		if err := service.HardDeleteSession(sessionID); err != nil {
-			model.WriteError(w, model.Internal(fmt.Errorf("failed to destroy empty session")))
-			return
-		}
-
-		sessionCount, _ := service.GetSessionCount(projectPath)
-		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": true, "sessionCount": sessionCount})
+		archiveEmptySessionHardDelete(w, projectPath, sessionID, agentID)
 		return
 	}
 
@@ -299,6 +272,42 @@ func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 
 	sessionCount, _ := service.GetSessionCount(projectPath)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": false, "sessionCount": sessionCount})
+}
+
+// archiveEmptySessionHardDelete destroys an archived session that has no
+// finalized messages. It closes (but does NOT ACP-delete) the agent connection,
+// purges RAG chunks, hard-deletes the DB records, and writes the response. The
+// empty-session path always terminates the request, so the caller returns
+// immediately after invoking it.
+func archiveEmptySessionHardDelete(w http.ResponseWriter, projectPath, sessionID, agentID string) {
+	slog.Info("archiving empty session → hard-delete", "session_id", sessionID)
+
+	// Close (but do NOT ACP-delete) the agent connection. The agent-side
+	// transcript stays on disk so the session remains recoverable from the
+	// external list. Closing alone is safe for empty sessions — their
+	// ephemeral mapping is dropped here, and re-discovery happens on the
+	// next session/list enumeration.
+	// 仅关闭（不 ACP 删除）agent 连接：磁盘上的 agent 会话文件保持原样，
+	// 会话仍可从外部列表重新发现。空会话的连接映射在此释放。
+	if agent, ok := model.Agents[agentID]; ok && agent.SupportsACP() {
+		slog.Info("acp: closing connection for empty archived session", "session_id", sessionID, "agent_id", agentID)
+		go ai.GetACPConnManager().CloseConn(sessionID)
+	}
+
+	// Delete RAG chunks (best-effort, no-op if RAG not initialized)
+	if chunksDeleted, err := service.PurgeRAGChunksBySessionIDs([]string{sessionID}); err != nil {
+		slog.Warn("failed to delete RAG chunks for empty archived session", "session_id", sessionID, "err", err)
+	} else if chunksDeleted > 0 {
+		slog.Info("deleted RAG chunks for empty archived session", "session_id", sessionID, "chunks", chunksDeleted)
+	}
+
+	if err := service.HardDeleteSession(sessionID); err != nil {
+		model.WriteError(w, model.Internal(fmt.Errorf("failed to destroy empty session")))
+		return
+	}
+
+	sessionCount, _ := service.GetSessionCount(projectPath)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "destroyed": true, "sessionCount": sessionCount})
 }
 
 // DestroySession handles DELETE for physically removing a session and all its data.

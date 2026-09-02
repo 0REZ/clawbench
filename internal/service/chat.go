@@ -1756,7 +1756,7 @@ func buildContextStatePatch(event ai.StreamEvent) map[string]string {
 		if event.Usage == nil {
 			return nil
 		}
-		// UsageStatePersist is a type alias of ai.UsageState, so marshalling the
+		// UsageStatePersist is a type alias of ai.UsageState, so marshaling the
 		// event payload directly carries every field (including the per-agent
 		// _meta extensions: cache hit/miss/creation, credit, usageByCategory).
 		usageJSON, err := json.Marshal(event.Usage)

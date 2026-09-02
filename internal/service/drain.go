@@ -76,6 +76,61 @@ func abortDrain(cfg DrainConfig, cause error) {
 	})
 }
 
+// drainHandleTerminal emits the final event and reports true when the previous
+// stream run ended in a terminal state (user cancel / error / empty / other
+// cancel). The user-cancel branch clears the DB queue and emits queue_cancel so
+// the frontend can immediately remove pending bubbles.
+func drainHandleTerminal(cfg DrainConfig, result DrainResult) bool {
+	if result.CancelReason == cancelReasonUser {
+		// Collect queue IDs before clearing for queue_cancel event
+		queueIDs, _ := GetQueuedQueueIDs(cfg.SessionID)
+		_ = ClearQueuedMessages(cfg.SessionID)
+
+		// Emit queue_cancel so frontend can immediately remove pending messages
+		if len(queueIDs) > 0 {
+			emitDrainEvent(cfg.SessionID, ai.StreamEvent{
+				Type: "queue_cancel",
+				QueueEvent: &ai.QueueEventData{
+					SessionID: cfg.SessionID,
+					QueueIDs:  queueIDs,
+				},
+			})
+		}
+
+		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: statusCancelled})
+		return true
+	}
+	if result.Err != "" {
+		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: result.Err})
+		return true
+	}
+	if result.Empty {
+		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: "AI returned no content", Reason: ai.ReasonEmpty})
+		return true
+	}
+	if result.CancelReason != "" {
+		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: statusCancelled})
+		return true
+	}
+	return false
+}
+
+// retryDequeueAfterError accounts for one failed dequeue and reports whether
+// the drain loop may keep going. A real DB error must not exit as if the queue
+// were empty (that would silently lose messages): transient blips are retried
+// up to maxDequeueRetries; a persistent failure aborts the queue with an
+// explicit error instead of spinning forever.
+func retryDequeueAfterError(cfg DrainConfig, dequeueFailures *int, err error) bool {
+	*dequeueFailures++
+	slog.Error("drain: dequeue failed", slog.String("session", cfg.SessionID), slog.String("error", err.Error()))
+	if *dequeueFailures >= maxDequeueRetries {
+		abortDrain(cfg, err)
+		return false
+	}
+	time.Sleep(100 * time.Millisecond)
+	return true
+}
+
 // RunDrainLoop runs the complete drain loop after an initial stream execution.
 // It checks terminal conditions, dequeues messages from chat_history (queued=1),
 // and executes them. The loop continues until the queue is empty or a terminal
@@ -87,53 +142,16 @@ func RunDrainLoop(cfg DrainConfig, result DrainResult) {
 	dequeueFailures := 0
 
 	for {
-		// Check terminal conditions
-		if result.CancelReason == cancelReasonUser {
-			// Collect queue IDs before clearing for queue_cancel event
-			queueIDs, _ := GetQueuedQueueIDs(cfg.SessionID)
-			_ = ClearQueuedMessages(cfg.SessionID)
-
-			// Emit queue_cancel so frontend can immediately remove pending messages
-			if len(queueIDs) > 0 {
-				emitDrainEvent(cfg.SessionID, ai.StreamEvent{
-					Type: "queue_cancel",
-					QueueEvent: &ai.QueueEventData{
-						SessionID: cfg.SessionID,
-						QueueIDs:  queueIDs,
-					},
-				})
-			}
-
-			cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: statusCancelled})
-			return
-		}
-		if result.Err != "" {
-			cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: result.Err})
-			return
-		}
-		if result.Empty {
-			cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: "AI returned no content", Reason: ai.ReasonEmpty})
-			return
-		}
-		if result.CancelReason != "" {
-			cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: statusCancelled})
+		if drainHandleTerminal(cfg, result) {
 			return
 		}
 
 		// Normal completion — check DB queue for next message
 		msg, ok, err := dequeueQueuedMessage(cfg.SessionID)
 		if err != nil {
-			// Real DB error — don't exit as if empty (would silently lose the
-			// message). Retry briefly for transient DB blips; if the failure
-			// persists past the retry window, abort the queue with an explicit
-			// error instead of spinning forever.
-			dequeueFailures++
-			slog.Error("drain: dequeue failed", slog.String("session", cfg.SessionID), slog.String("error", err.Error()))
-			if dequeueFailures >= maxDequeueRetries {
-				abortDrain(cfg, err)
+			if !retryDequeueAfterError(cfg, &dequeueFailures, err) {
 				return
 			}
-			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		if !ok {
@@ -142,13 +160,9 @@ func RunDrainLoop(cfg DrainConfig, result DrainResult) {
 			if ok {
 				msg, ok, err = dequeueQueuedMessage(cfg.SessionID)
 				if err != nil {
-					dequeueFailures++
-					slog.Error("drain: dequeue failed", slog.String("session", cfg.SessionID), slog.String("error", err.Error()))
-					if dequeueFailures >= maxDequeueRetries {
-						abortDrain(cfg, err)
+					if !retryDequeueAfterError(cfg, &dequeueFailures, err) {
 						return
 					}
-					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 			}

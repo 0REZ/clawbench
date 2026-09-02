@@ -143,59 +143,52 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 			c.handlePromptCancel(conn)
 			return ctx.Err()
 		}
-
-		if !c.IsAlive() {
-			diag := c.collectCrashDiagnostics()
-			// See markDeadIfCurrent: only clear alive if this is still the
-			// active connection, so a stale prompt can't kill a respawned one.
-			c.markDeadIfCurrent(conn)
-
-			slog.Error("acp conn: prompt failed (peer disconnected)",
-				"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
-				"exit_code", diag.ExitCode, "signal", diag.Signal,
-				"ppid", diag.ParentPID, "rss_mb", diag.VMRSSKB/1024, "fds", diag.FDCount,
-				"stderr_tail", diag.StderrTail)
-
-			return fmt.Errorf("acp: prompt: %w%s", err, diag.String())
-		}
-
-		slog.Warn("acp conn: prompt failed but agent still alive",
-			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID, "error", err)
-		return fmt.Errorf("acp: prompt: %w", err)
+		return c.classifyPromptError(err, conn, acpSID)
 	}
 
-	// Refusal (stopReason="refusal"): the agent declined to answer — e.g. the
-	// requested model is unresolvable, the provider returned an upstream error,
-	// or the request was refused. The agent streams NO content blocks for a
-	// refusal, so without this check the executor would classify the turn as
-	// "AI returned no content" (reason=empty) — a misleading dead-end that
-	// hides the real cause and offers no actionable error code. Surface a
-	// warning event with the structured source + error code so the frontend
-	// can display it and offer a session reset.
-	if resp.StopReason == acp.StopReasonRefusal {
-		slog.Warn("acp conn: prompt refused by agent",
-			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
-			"stop_reason", resp.StopReason)
-		httpStatus := acpHTTPStatusFromMeta(resp.Meta)
-		forwardACPEvent(streamCh, StreamEvent{
-			Type:        "warning",
-			Content:     "AI request refused by the agent (model unavailable or upstream error)",
-			Reason:      ReasonRefused,
-			ErrorCode:   -32603, // JSON-RPC internal error (matches CodeBuddy refusal rpcCode)
-			HTTPStatus:  httpStatus,
-			ErrorSource: "agent",
-		})
-	}
+	c.emitRefusalWarningIfRefused(resp, streamCh, acpSID)
+	c.emitPromptTailMetadata(resp, streamCh)
 
-	// PromptResponse.Usage (UNSTABLE): emit metadata and usage_update events
-	// so input/output token counts are persisted and shown in the context chip.
-	// The stopReason travels with the metadata so the message-level record (and
-	// chat_metadata.stop_reason column) reflects why the turn ended — e.g.
-	// Claude/Codex report stopReason="end_turn" on the PromptResponse (the
-	// standard ACP field), not inside _meta.
+	return nil
+}
+
+// emitRefusalWarningIfRefused surfaces a structured warning event when the
+// agent refused the prompt (stopReason="refusal" — model unresolvable, upstream
+// error, or declined request). The agent streams NO content blocks for a
+// refusal, so without this check the executor would classify the turn as
+// "AI returned no content" (reason=empty) — a misleading dead-end that hides
+// the real cause and offers no actionable error code.
+func (c *ACPConn) emitRefusalWarningIfRefused(resp acp.PromptResponse, streamCh chan<- StreamEvent, acpSID string) {
+	if resp.StopReason != acp.StopReasonRefusal {
+		return
+	}
+	slog.Warn("acp conn: prompt refused by agent",
+		"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
+		"stop_reason", resp.StopReason)
+	httpStatus := acpHTTPStatusFromMeta(resp.Meta)
+	forwardACPEvent(streamCh, StreamEvent{
+		Type:        "warning",
+		Content:     "AI request refused by the agent (model unavailable or upstream error)",
+		Reason:      ReasonRefused,
+		ErrorCode:   -32603, // JSON-RPC internal error (matches CodeBuddy refusal rpcCode)
+		HTTPStatus:  httpStatus,
+		ErrorSource: "agent",
+	})
+}
+
+// emitPromptTailMetadata emits the turn-final metadata event from a successful
+// PromptResponse. PromptResponse.Usage (UNSTABLE) carries token counts and the
+// ACP-standard stopReason (Claude/Codex report it here, e.g. "end_turn"), so
+// when usage or _meta extensions are present the full metadata + usage_update
+// pair is emitted. Without PromptResponse usage/meta, the accumulated per-agent
+// _meta from session/update notifications (or the bare stopReason) is still
+// persisted so the message record reflects why the turn ended.
+func (c *ACPConn) emitPromptTailMetadata(resp acp.PromptResponse, streamCh chan<- StreamEvent) {
 	if resp.Usage != nil || len(resp.Meta) > 0 {
 		c.emitPromptResponseUsage(resp.Usage, resp.Meta, resp.StopReason, streamCh)
-	} else if acc := c.getAndClearMetaAccum(); acc != nil {
+		return
+	}
+	if acc := c.getAndClearMetaAccum(); acc != nil {
 		// No PromptResponse usage/meta, but the turn accumulated per-agent _meta
 		// extensions from session/update notifications (e.g. CodeBuddy usage).
 		// Persist them so the message-level metadata reflects the turn.
@@ -205,15 +198,39 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 			meta.StopReason = string(resp.StopReason)
 		}
 		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
-	} else if resp.StopReason != "" {
+		return
+	}
+	if resp.StopReason != "" {
 		// No usage/meta at all (rare), but still persist the stop reason so the
 		// message record is complete.
 		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: &Metadata{
 			StopReason: string(resp.StopReason),
 		}})
 	}
+}
 
-	return nil
+// classifyPromptError maps a conn.Prompt error to the appropriate wrapped
+// error. When the agent process is dead the crash diagnostics are collected
+// and appended so the caller can surface exit code/signal/stderr; a stale
+// prompt is prevented from killing a respawned connection via
+// markDeadIfCurrent (only clears alive if still the active connection).
+func (c *ACPConn) classifyPromptError(err error, conn *acp.ClientSideConnection, acpSID string) error {
+	if !c.IsAlive() {
+		diag := c.collectCrashDiagnostics()
+		c.markDeadIfCurrent(conn)
+
+		slog.Error("acp conn: prompt failed (peer disconnected)",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
+			"exit_code", diag.ExitCode, "signal", diag.Signal,
+			"ppid", diag.ParentPID, "rss_mb", diag.VMRSSKB/1024, "fds", diag.FDCount,
+			"stderr_tail", diag.StderrTail)
+
+		return fmt.Errorf("acp: prompt: %w%s", err, diag.String())
+	}
+
+	slog.Warn("acp conn: prompt failed but agent still alive",
+		"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID, "error", err)
+	return fmt.Errorf("acp: prompt: %w", err)
 }
 
 // acpHTTPStatusFromMeta scans a PromptResponse._meta map for an upstream HTTP

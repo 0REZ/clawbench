@@ -246,6 +246,64 @@ func TestArchiveSession_SessionWithMessagesSoftDeletes(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestArchiveSession_EmptySessionHardDelete_RAGPurgeErrorStillDestroys(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "rag-err", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Inject a RAG purge callback that reports an error. The empty-session
+	// hard-delete path must log the warning and still destroy the session.
+	service.SetPurgeRAGChunksFn(func(sessionIDs []string) (int64, error) {
+		return 0, assert.AnError
+	})
+	defer service.SetPurgeRAGChunksFn(nil)
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["destroyed"], "session must still be destroyed when RAG purge fails")
+
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestArchiveSession_EmptySessionHardDelete_RAGPurgeChunksLogged(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "rag-chunks", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Inject a RAG purge callback that reports deleted chunks. The hard-delete
+	// path logs the count and still destroys the session.
+	service.SetPurgeRAGChunksFn(func(sessionIDs []string) (int64, error) {
+		return 3, nil
+	})
+	defer service.SetPurgeRAGChunksFn(nil)
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["destroyed"])
+
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
 func TestArchiveSession_CountErrorFallsBackToSoftArchive(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()

@@ -24,6 +24,24 @@ const (
 	metaKeyModelUsage = "model_usage"
 )
 
+// tokenUsageFromClaudeTokenCount builds a metaTokenUsage from a Claude/Codex
+// _meta.quota.token_count map (shared aggregate and per-model breakdown shape).
+func tokenUsageFromClaudeTokenCount(tc map[string]any) *metaTokenUsage {
+	u := &metaTokenUsage{
+		InputTokens:       metaInt(tc["inputTokens"]),
+		OutputTokens:      metaInt(tc["outputTokens"]),
+		TotalTokens:       metaInt(tc["totalTokens"]),
+		CachedReadTokens:  metaInt(tc["cachedInputTokens"]),
+		CachedWriteTokens: metaInt(tc["cachedWriteTokens"]),
+		ThoughtTokens:     metaInt(tc["reasoningOutputTokens"]),
+	}
+	if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
+		u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.ThoughtTokens != 0 {
+		u.Present = true
+	}
+	return u
+}
+
 // extractClaudeMeta parses a Claude/Codex _meta payload.
 func extractClaudeMeta(meta map[string]any) *metaExtraction {
 	if len(meta) == 0 {
@@ -39,19 +57,7 @@ func extractClaudeMeta(meta map[string]any) *metaExtraction {
 	// _meta.quota.token_count = { cachedInputTokens, cachedWriteTokens,
 	// inputTokens, outputTokens, reasoningOutputTokens, totalTokens }
 	if tc, ok := quota[metaKeyTokenCount].(map[string]any); ok {
-		u := &metaTokenUsage{
-			InputTokens:       metaInt(tc["inputTokens"]),
-			OutputTokens:      metaInt(tc["outputTokens"]),
-			TotalTokens:       metaInt(tc["totalTokens"]),
-			CachedReadTokens:  metaInt(tc["cachedInputTokens"]),
-			CachedWriteTokens: metaInt(tc["cachedWriteTokens"]),
-			ThoughtTokens:     metaInt(tc["reasoningOutputTokens"]),
-		}
-		if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
-			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.ThoughtTokens != 0 {
-			u.Present = true
-		}
-		ext.Usage = u
+		ext.Usage = tokenUsageFromClaudeTokenCount(tc)
 	}
 
 	// Per-model breakdown. _meta.quota.model_usage = [ { model: "...",
@@ -75,20 +81,7 @@ func extractClaudeMeta(meta map[string]any) *metaExtraction {
 				if ext.Usage == nil {
 					ext.Usage = &metaTokenUsage{}
 				}
-				perModel := &metaTokenUsage{
-					InputTokens:       metaInt(tc["inputTokens"]),
-					OutputTokens:      metaInt(tc["outputTokens"]),
-					TotalTokens:       metaInt(tc["totalTokens"]),
-					CachedReadTokens:  metaInt(tc["cachedInputTokens"]),
-					CachedWriteTokens: metaInt(tc["cachedWriteTokens"]),
-					ThoughtTokens:     metaInt(tc["reasoningOutputTokens"]),
-				}
-				if perModel.InputTokens != 0 || perModel.OutputTokens != 0 ||
-					perModel.TotalTokens != 0 || perModel.CachedReadTokens != 0 ||
-					perModel.CachedWriteTokens != 0 || perModel.ThoughtTokens != 0 {
-					perModel.Present = true
-				}
-				metaMergeUsage(ext.Usage, perModel)
+				metaMergeUsage(ext.Usage, tokenUsageFromClaudeTokenCount(tc))
 			}
 		}
 		if trace.HasData() {

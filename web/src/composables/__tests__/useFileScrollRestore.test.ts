@@ -194,6 +194,112 @@ describe('useFileScrollRestore', () => {
         })
     })
 
+    describe('onFileChanged null / clear', () => {
+        it('clears the current path and pending restore when the file is cleared', () => {
+            const el = makeEl({ scrollHeight: 200, clientHeight: 50, scrollTop: 0 })
+            const ctx = makeContext({ contentRoot: () => el })
+            const s = useFileScrollRestore(ctx)
+            setFileScroll('a.go', 120)
+
+            s.onFileChanged({ path: 'a.go' }, true)
+            // Clear the file: path and pending restore reset.
+            s.onFileChanged(null, false)
+
+            // Simulate a stale scroll event on the old container: no cache write.
+            el.scrollTop = 77
+            el.fire('scroll')
+            expect(getFileScroll('a.go')).toBe(120)
+        })
+    })
+
+    describe('scrollElFor view-mode resolution', () => {
+        it('returns null for iframe-based viewers (html/openapi/excalidraw rendered)', () => {
+            const el = makeEl()
+            const mk = (isHtml: boolean, isOpenapi: boolean, isExcalidraw: boolean) =>
+                makeContext({
+                    contentRoot: () => el,
+                    isHtml: () => isHtml,
+                    isOpenapi: () => isOpenapi,
+                    file: () => (isExcalidraw ? { path: 'd.excalidraw', isExcalidraw: true } : { path: 'x' }),
+                })
+            const htmlCtx = mk(true, false, false)
+            const apiCtx = mk(false, true, false)
+            const drawCtx = mk(false, false, true)
+
+            const sHtml = useFileScrollRestore(htmlCtx)
+            const sApi = useFileScrollRestore(apiCtx)
+            const sDraw = useFileScrollRestore(drawCtx)
+
+            expect(sHtml.scrollElFor('rendered', false)).toBeNull()
+            expect(sApi.scrollElFor('rendered', false)).toBeNull()
+            expect(sDraw.scrollElFor('rendered', false)).toBeNull()
+            // html/openapi resolve the CM scroller in source mode.
+            expect(sHtml.scrollElFor('source', false)).toBe(el)
+            expect(sApi.scrollElFor('source', false)).toBe(el)
+        })
+
+        it('resolves markdown-body for rendered markdown and cm-scroller for raw', () => {
+            const previewEl = makeEl({ _classes: ['markdown-body'] })
+            const cmEl = makeEl({ _classes: ['cm-scroller'] })
+            const root: any = {
+                querySelector: (sel: string) => (sel === '.markdown-body' ? previewEl : cmEl),
+            }
+            const ctx = makeContext({
+                contentRoot: () => root,
+                isMarkdown: () => true,
+            })
+            const s = useFileScrollRestore(ctx)
+
+            expect(s.scrollElFor('rendered', false)).toBe(previewEl)
+            expect(s.scrollElFor('raw', false)).toBe(cmEl)
+            // Edit mode always uses the CM scroller.
+            expect(s.scrollElFor('rendered', true)).toBe(cmEl)
+        })
+    })
+
+    describe('captureScroll markdown anchor branches', () => {
+        it('captures a preview heading anchor from the markdown-body pane', () => {
+            // Heading sits at content top 40, viewport scrolled past it (top 50):
+            // pickPreviewAnchor returns the heading as the anchor.
+            const headingEl = { id: 'intro', getBoundingClientRect: () => ({ top: 40 } as DOMRect) }
+            const el = makeEl({
+                scrollHeight: 300,
+                clientHeight: 50,
+                scrollTop: 50,
+                _classes: ['markdown-body'],
+            })
+            el.querySelectorAll = (sel: string) => (sel.startsWith('h1') ? [headingEl] : [])
+            const ctx = makeContext({
+                contentRoot: () => el,
+                isMarkdown: () => true,
+                file: () => ({ path: 'a.md', content: '# Intro\n\nbody\n\n# Section 2' }),
+            })
+            const s = useFileScrollRestore(ctx)
+
+            const saved = s.captureScroll(el)
+            expect(saved).not.toBeNull()
+            // A heading is found at content top 40 (≤ scrollTop 50) → anchor.
+            expect(saved!.anchor).not.toBeNull()
+            expect(saved!.anchor!.id).toBe('intro')
+            expect(saved!.ratio).not.toBeNull()
+        })
+
+        it('returns only ratio when the markdown has no headings', () => {
+            const el = makeEl({ scrollHeight: 200, clientHeight: 50, scrollTop: 50, _classes: ['markdown-body'] })
+            el.querySelectorAll = () => []
+            const ctx = makeContext({
+                contentRoot: () => el,
+                isMarkdown: () => true,
+                file: () => ({ path: 'a.md', content: 'plain text without headings' }),
+            })
+            const s = useFileScrollRestore(ctx)
+
+            const saved = s.captureScroll(el)
+            expect(saved!.anchor).toBeNull()
+            expect(saved!.ratio).toEqual({ ratio: 50 / 150 })
+        })
+    })
+
     describe('anchor/ratio restore', () => {
         it('falls back to ratio when there is no heading anchor', () => {
             const el = makeEl({ scrollHeight: 200, clientHeight: 50, scrollTop: 0 })

@@ -443,12 +443,13 @@ func TestMapACPSessionUpdate_AgentMessageChunk_AccumulatesMeta(t *testing.T) {
 
 	// Content events emitted (thinking_done + content).
 	var types []string
+collectLoop:
 	for range 2 {
 		select {
 		case evt := <-ch:
 			types = append(types, evt.Type)
 		default:
-			break
+			break collectLoop
 		}
 	}
 	assert.Contains(t, types, "content")
