@@ -584,7 +584,15 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 			// Skip for cancelled: CancelSession already calls EmitSessionEvent("cancelled")
 			// which handles push. Skip for error: no meaningful push content.
 			if event.Type == "done" {
-				service.EmitSessionPushNotification(sessionID, "completed")
+				// Only the first terminal state may push + broadcast "completed".
+				// If a concurrent CancelSession already claimed the terminal guard
+				// (broadcasting "cancelled"), EmitSessionPushNotification returns
+				// false and we must NOT also broadcast "completed" — otherwise
+				// clients see cancelled followed by a contradictory completed
+				// (ISS-247 reverse race).
+				if !service.EmitSessionPushNotification(sessionID, "completed") {
+					return
+				}
 				// Broadcast the terminal status to ALL clients (not just the
 				// session's StreamHub subscribers). Clients that missed the
 				// stream-level "done" (WS blip, another device, scheduled run)

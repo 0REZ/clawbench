@@ -2131,6 +2131,138 @@ func TestFinalizeOrphanedStreamingMessages_WithInvalidJSON(t *testing.T) {
 	assert.Equal(t, invalidContent, firstBlock["text"])
 }
 
+// ensureChatThinkingTable creates the chat_thinking table (setupChatTestDB
+// builds chat_history only; persistThinkingToDB needs chat_thinking).
+func ensureChatThinkingTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS chat_thinking (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id INTEGER NOT NULL,
+		session_id TEXT NOT NULL,
+		think_id TEXT NOT NULL,
+		text TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(think_id, message_id)
+	)`)
+	require.NoError(t, err)
+}
+
+// TestFinalizeOrphanedStreamingMessages_ThinkingBackfilled verifies ISS-252:
+// an orphaned streaming message whose content still holds unslimmed thinking
+// text (no think_id) gets the thinking persisted into chat_thinking and a
+// slim think_id marker left in content — so the frontend can lazy-load it
+// after a crash/cancel that skipped Finalize.
+func TestFinalizeOrphanedStreamingMessages_ThinkingBackfilled(t *testing.T) {
+	db := setupChatTestDB(t)
+	ensureChatThinkingTable(t, db)
+	cleanup := SetDBForTest(db, db)
+	defer cleanup()
+
+	sessionID := "session-orphan-thinking"
+	content := `{"blocks":[{"type":"thinking","text":"deep reasoning..."},{"type":"text","text":"partial"}]}`
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, ?, ?, ?, 'claude', 1)",
+		"/test", "assistant", content, sessionID,
+	)
+	require.NoError(t, err)
+
+	finalizeOrphanedStreamingMessages(sessionID, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// Message finalized.
+	var updatedContent string
+	var streaming int
+	var msgID int64
+	err = db.QueryRow(
+		"SELECT id, content, streaming FROM chat_history WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&msgID, &updatedContent, &streaming)
+	require.NoError(t, err)
+	assert.Equal(t, 0, streaming)
+
+	// Content thinking block was slimmed to a think_id marker.
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updatedContent), &parsed))
+	assert.Equal(t, true, parsed["cancelled"])
+	blocks, ok := parsed["blocks"].([]any)
+	require.True(t, ok)
+	thinkingFound := false
+	var thinkID string
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok || block["type"] != "thinking" {
+			continue
+		}
+		thinkingFound = true
+		thinkID, _ = block["think_id"].(string)
+		// Slimmed: text removed, think_id present.
+		_, hasText := block["text"]
+		assert.False(t, hasText, "thinking text must be slimmed out of content")
+	}
+	require.True(t, thinkingFound, "slim thinking marker must remain in content")
+	require.NotEmpty(t, thinkID)
+
+	// Full thinking text persisted to chat_thinking under the marker.
+	var storedText string
+	err = db.QueryRow("SELECT text FROM chat_thinking WHERE message_id = ? AND think_id = ?", msgID, thinkID).Scan(&storedText)
+	require.NoError(t, err)
+	assert.Equal(t, "deep reasoning...", storedText)
+}
+
+// TestFinalizeOrphanedStreamingMessages_ThinkingAlreadySlimmed verifies
+// persistThinkingToDB is idempotent for orphan content that already carries a
+// think_id marker (e.g. periodic flush already wrote chat_thinking): no new
+// think_id is generated and the existing marker/text survive untouched.
+func TestFinalizeOrphanedStreamingMessages_ThinkingAlreadySlimmed(t *testing.T) {
+	db := setupChatTestDB(t)
+	ensureChatThinkingTable(t, db)
+	cleanup := SetDBForTest(db, db)
+	defer cleanup()
+
+	sessionID := "session-orphan-thinking-slim"
+	// Already slimmed: think_id present, no text. Simulates a crash AFTER the
+	// periodic flush wrote chat_thinking but BEFORE Finalize ran.
+	existingID := "think-orphan-1"
+	content := `{"blocks":[{"type":"thinking","think_id":"` + existingID + `"},{"type":"text","text":"partial"}]}`
+	_, err := db.Exec(
+		"INSERT INTO chat_history (project_path, role, content, session_id, backend, streaming) VALUES (?, ?, ?, ?, 'claude', 1)",
+		"/test", "assistant", content, sessionID,
+	)
+	require.NoError(t, err)
+	// The periodic flush already persisted the full text.
+	_, err = db.Exec(
+		"INSERT INTO chat_thinking (message_id, session_id, think_id, text) VALUES ((SELECT id FROM chat_history WHERE session_id = ?), ?, ?, 'already flushed')",
+		sessionID, sessionID, existingID,
+	)
+	require.NoError(t, err)
+
+	finalizeOrphanedStreamingMessages(sessionID, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// Content keeps the existing think_id — not regenerated.
+	var updatedContent string
+	err = db.QueryRow(
+		"SELECT content FROM chat_history WHERE session_id = ? AND role = 'assistant' ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&updatedContent)
+	require.NoError(t, err)
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(updatedContent), &parsed))
+	blocks, ok := parsed["blocks"].([]any)
+	require.True(t, ok)
+	found := false
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if !ok || block["type"] != "thinking" {
+			continue
+		}
+		found = true
+		id, _ := block["think_id"].(string)
+		assert.Equal(t, existingID, id, "existing think_id must not be regenerated")
+	}
+	require.True(t, found)
+}
+
 func TestFinalizeOrphanedStreamingMessages_UserCancelNoWarning(t *testing.T) {
 	db := setupChatTestDB(t)
 	cleanup := SetDBForTest(db, db)

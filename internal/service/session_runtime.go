@@ -157,21 +157,16 @@ func pushSessionEvent(sessionID, status string, msg ws.ServerMessage, data *ws.S
 // without going through the full EmitSessionEvent path (which broadcasts WS events).
 // Also stores a pending_event for Android offline replay (like EmitSessionEvent does),
 // and deletes it if push succeeds.
-// markTerminalPushDone atomically claims the single terminal push slot for a session.
-// Returns true if this call is the first to claim it (caller should send the push),
-// false if a push was already claimed. Prevents the done/cancel race from sending two
-// contradictory terminal notifications.
-func markTerminalPushDone(sessionID string) bool {
-	_, loaded := terminalPushDone.LoadOrStore(sessionID, struct{}{})
-	return !loaded
-}
-
-func EmitSessionPushNotification(sessionID, status string) {
+// Returns true when this call won the terminal guard and actually issued a push
+// (the first terminal state for the session), false when a terminal state was
+// already claimed — callers that must also broadcast a terminal session_update
+// (e.g. "completed") can use this to suppress a contradictory broadcast.
+func EmitSessionPushNotification(sessionID, status string) bool {
 	// Only the first terminal state to arrive sends a push. Guards against the
 	// race where CancelSession already pushed "cancelled" but the goroutine then
 	// completes and would otherwise push "completed".
 	if !markTerminalPushDone(sessionID) {
-		return
+		return false
 	}
 	title, err := GetSessionTitle(sessionID)
 	if err != nil {
@@ -211,6 +206,16 @@ func EmitSessionPushNotification(sessionID, status string) {
 			_ = DeletePendingEvent(msg.ID)
 		}
 	}
+	return true
+}
+
+// markTerminalPushDone atomically claims the single terminal push slot for a session.
+// Returns true if this call is the first to claim it (caller should send the push),
+// false if a push was already claimed. Prevents the done/cancel race from sending two
+// contradictory terminal notifications.
+func markTerminalPushDone(sessionID string) bool {
+	_, loaded := terminalPushDone.LoadOrStore(sessionID, struct{}{})
+	return !loaded
 }
 
 // getSessionResponsePreview returns a preview of the AI's final reply text.
@@ -377,8 +382,19 @@ func finalizeOrphanedStreamingMessages(sessionID string, cancelReason string) {
 	}
 
 	for _, m := range orphans {
+		// ISS-252: persist any still-unslimmed thinking text into chat_thinking
+		// BEFORE marking the message cancelled. The normal finalize path calls
+		// persistThinkingToDB (slims thinking out of content into chat_thinking
+		// and leaves a think_id marker the frontend lazy-loads). An orphaned
+		// streaming row skipped Finalize entirely, so without this the thinking
+		// text stays buried in content (or is lost if it was never flushed) and
+		// the frontend has no think_id marker to load it from. persistThinkingToDB
+		// is idempotent: already-slimmed blocks (think_id present, no text) and
+		// content without thinking blocks are returned unchanged.
+		slimContent := persistThinkingToDB(m.content, m.id, sessionID)
+
 		var contentMap map[string]any
-		if err := json.Unmarshal([]byte(m.content), &contentMap); err != nil {
+		if err := json.Unmarshal([]byte(slimContent), &contentMap); err != nil {
 			contentMap = map[string]any{
 				"blocks":    []any{map[string]any{"type": "text", "text": m.content}},
 				"cancelled": true,
