@@ -328,10 +328,10 @@ export default {
       cachedWriteTokens: 'Cache Write',
       thoughtTokens: 'Thought',
       compact: 'Compact context',
-      // Token detail section (per-agent _meta extensions).
-      tokenDetail: 'Token Detail',
+      // Per-agent _meta extension rows (cache write/creation, miss, credit).
+      // cacheHitTokens deliberately has no label: it duplicates cachedReadTokens
+      // ("Cache Read"), which is already displayed in the summary rows.
       cacheCreationTokens: 'Cache Create',
-      cacheHitTokens: 'Cache Hit',
       cacheMissTokens: 'Cache Miss',
       credit: 'Credit',
       // Context breakdown section (CodeBuddy usageByCategory).

@@ -235,34 +235,26 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedWriteTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedWriteTokens.toLocaleString() }}</span>
           </div>
+          <div v-if="contextCacheCreationTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheCreationTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheCreationTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="contextCacheMissTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheMissTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheMissTokens.toLocaleString() }}</span>
+          </div>
           <div v-if="contextThoughtTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.thoughtTokens') }}</span>
             <span class="usage-popup-value">{{ contextThoughtTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="contextCredit > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.credit') }}</span>
+            <span class="usage-popup-value">{{ contextCredit.toFixed(4) }}</span>
           </div>
           <div v-if="contextCost > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
             <span class="usage-popup-value">${{ contextCost.toFixed(2) }} {{ contextCurrency || 'USD' }}</span>
           </div>
-          <!-- Token detail section (per-agent _meta extensions — CodeBuddy) -->
-          <template v-if="hasTokenDetail">
-            <div class="usage-popup-section-title">{{ t('chat.sessionInfo.tokenDetail') }}</div>
-            <div v-if="contextCacheCreationTokens > 0" class="usage-popup-row">
-              <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheCreationTokens') }}</span>
-              <span class="usage-popup-value">{{ contextCacheCreationTokens.toLocaleString() }}</span>
-            </div>
-            <div v-if="contextCacheHitTokens > 0" class="usage-popup-row">
-              <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitTokens') }}</span>
-              <span class="usage-popup-value">{{ contextCacheHitTokens.toLocaleString() }}</span>
-            </div>
-            <div v-if="contextCacheMissTokens > 0" class="usage-popup-row">
-              <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheMissTokens') }}</span>
-              <span class="usage-popup-value">{{ contextCacheMissTokens.toLocaleString() }}</span>
-            </div>
-            <div v-if="contextCredit > 0" class="usage-popup-row">
-              <span class="usage-popup-label">{{ t('chat.sessionInfo.credit') }}</span>
-              <span class="usage-popup-value">{{ contextCredit.toFixed(4) }}</span>
-            </div>
-          </template>
           <!-- Context breakdown section (CodeBuddy usageByCategory) -->
           <template v-if="categoryRows.length">
             <div class="usage-popup-section-title">{{ t('chat.sessionInfo.categoryBreakdown') }}</div>
@@ -335,7 +327,7 @@ import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
-const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency, contextCacheCreationTokens, contextCacheHitTokens, contextCacheMissTokens, contextCredit, contextUsageByCategory } = useSessionIdentity()
+const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency, contextCacheCreationTokens, contextCacheMissTokens, contextCredit, contextUsageByCategory } = useSessionIdentity()
 const { supportsACP, hasPreferredMode } = useAgents()
 const toast = useToast()
 const { uploadAndAttach, pendingFiles, removeFile } = useFileUpload()
@@ -414,13 +406,6 @@ const usageColor = computed(() => {
   if (pct >= 75) return '#eab308'
   return '#22c55e'
 })
-// Token-detail section is shown only when any per-agent _meta detail is present
-// (CodeBuddy cache splits / credit). UI renders by value, so nothing shows for
-// agents that don't report it.
-const hasTokenDetail = computed(() =>
-  contextCacheCreationTokens.value > 0 || contextCacheHitTokens.value > 0 ||
-  contextCacheMissTokens.value > 0 || contextCredit.value > 0,
-)
 // Context breakdown rows from CodeBuddy usageByCategory (by value, i18n labels).
 const categoryRows = computed(() => {
   const cat = contextUsageByCategory.value
