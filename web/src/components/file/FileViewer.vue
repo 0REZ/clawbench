@@ -322,6 +322,7 @@ import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/dow
 import { useToast } from '@/composables/useToast.ts'
 import { useCodeEditorSave } from '@/composables/useCodeEditorSave.ts'
 import { getNative } from '@/utils/clawbenchNative'
+import { getFileScroll, setFileScroll } from '@/utils/fileScrollCache'
 
 const { t, locale } = useI18n()
 const { isAppMode } = useAppMode()
@@ -565,8 +566,9 @@ function toggleStickyScroll() {
     setLocalConfig('stickyScroll', !stickyScroll.value)
 }
 
-// Per-file scroll position cache
-const scrollPositions = new Map()
+// Per-file scroll position cache lives in the module-level fileScrollCache
+// singleton so it survives FileViewer unmount/remount (e.g. the file overlay
+// closing when switching to the file manager and reopening from recent files).
 let pendingRestore = null // { path, scrollTop }
 let restoreTimer = null
 let restoreAttempts = 0
@@ -721,7 +723,7 @@ function attachScrollListener() {
     if (!el || !currentFilePath) return
     scrollEl = el
     scrollHandler = () => {
-        scrollPositions.set(currentFilePath, el.scrollTop)
+        setFileScroll(currentFilePath, el.scrollTop)
     }
     el.addEventListener('scroll', scrollHandler, { passive: true })
 }
@@ -780,7 +782,7 @@ watch(() => props.file, (f, oldF) => {
     // Capture the pane being left synchronously. Relying only on scroll events
     // can miss the final position when navigation follows a smooth scroll.
     if (oldF?.path && scrollEl) {
-        scrollPositions.set(oldF.path, scrollEl.scrollTop)
+        setFileScroll(oldF.path, scrollEl.scrollTop)
     }
     // Stop listening on old scroll container
     detachScrollListener()
@@ -796,7 +798,7 @@ watch(() => props.file, (f, oldF) => {
         loading.value = f.content == null
     }
     if (f?.path !== oldF?.path) {
-        const savedScroll = scrollPositions.get(f.path)
+        const savedScroll = getFileScroll(f.path)
         pendingRestore = { path: f.path, scrollTop: savedScroll ?? 0 }
         // Poll until content is rendered and scrollable
         restoreAttempts = 0

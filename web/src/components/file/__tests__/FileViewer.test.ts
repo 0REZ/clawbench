@@ -3,6 +3,7 @@ import { nextTick } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import FileViewer from '../FileViewer.vue'
+import { _resetFileScrollCache } from '@/utils/fileScrollCache'
 
 const i18n = createI18n({
   legacy: false,
@@ -188,6 +189,7 @@ afterEach(() => {
   fileNavState.canGoForward.value = false
   tocDockPrefState.tocDockSide.value = 'right'
   mockOpenSearch.mockClear()
+  _resetFileScrollCache()
   for (const id of pendingTimers) { clearTimeout(id) }
   pendingTimers.length = 0
   for (const id of pendingIntervals) { clearInterval(id) }
