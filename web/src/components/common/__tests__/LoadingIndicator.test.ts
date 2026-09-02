@@ -9,6 +9,27 @@ describe('LoadingIndicator', () => {
     expect(status.find('.li-spinner').exists()).toBe(true)
   })
 
+  it('renders a classic single-ring spinner (no track, no svg arc)', () => {
+    const wrapper = mount(LoadingIndicator)
+    const spinner = wrapper.find('.li-spinner')
+    // The spinner IS the ring element — no nested track/arc/svg markup
+    expect(spinner.exists()).toBe(true)
+    expect(spinner.find('.li-track').exists()).toBe(false)
+    expect(spinner.find('svg').exists()).toBe(false)
+  })
+
+  it('arc color is driven by the --li-color custom property', () => {
+    const wrapper = mount(LoadingIndicator)
+    const root = wrapper.find('.loading-indicator')
+    // Default: no inline style, accent fallback applies via CSS var
+    expect(root.attributes('style')).toBeUndefined()
+    // Callers override via --li-color on the root
+    const styled = mount(LoadingIndicator, {
+      attrs: { style: { '--li-color': 'rgb(255, 255, 255)' } },
+    })
+    expect(styled.find('.loading-indicator').attributes('style')).toContain('--li-color')
+  })
+
   it('renders label text when provided', () => {
     const wrapper = mount(LoadingIndicator, { props: { label: '加载中...' } })
     expect(wrapper.find('.li-label').text()).toBe('加载中...')

@@ -6,6 +6,7 @@ vi.mock('lucide-vue-next', () => ({
   MessagesSquare: { name: 'MessagesSquareIcon', render: () => null },
   Split: { name: 'SplitIcon', render: () => null },
   MousePointerClick: { name: 'MousePointerClickIcon', render: () => null },
+  LoaderCircle: { name: 'LoaderCircleIcon', render: () => null },
 }))
 
 vi.mock('@/components/common/BottomSheet.vue', () => ({

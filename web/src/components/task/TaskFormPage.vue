@@ -8,7 +8,7 @@
     <!-- Scrollable form content -->
     <div class="form-scroll">
       <div v-if="saving" class="saving-indicator">
-        <Loader2 class="spin-icon" :size="14" />
+        <LoadingIndicator class="saving-spinner" size="sm" inline />
         {{ t('task.form.saving') }}
       </div>
 
@@ -197,7 +197,7 @@
       <button class="action-btn secondary" @click="$emit('close')">{{ t('common.cancel') }}</button>
       <button class="action-btn primary" :disabled="saving" @click="submit">
         <Save v-if="!saving" :size="14" />
-        <Loader2 v-else class="spin-icon" :size="14" />
+        <LoadingIndicator v-else class="action-btn-spinner" size="sm" inline />
         {{ mode === 'create' ? t('task.form.create') : t('task.form.save') }}
       </button>
     </div>
@@ -218,10 +218,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, Loader2, Save } from 'lucide-vue-next'
+import { ChevronDown, Save } from 'lucide-vue-next'
 import TaskBreadcrumb from '@/components/task/TaskBreadcrumb.vue'
 import AgentIcon from '@/components/common/AgentIcon.vue'
 import AgentSelectorDrawer from '@/components/common/AgentSelectorDrawer.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { useAgents } from '@/composables/useAgents'
 import { useTaskForm } from '@/composables/useTaskForm.ts'
 import { humanizeCron } from '@/utils/format.ts'
@@ -430,12 +431,14 @@ onMounted(() => {
   margin-bottom: 4px;
 }
 
-.spin-icon {
-  animation: spin 1s linear infinite;
+/* Accent (green) saving strip keeps its own tint; the primary button's
+   accent background needs the white arc override instead. */
+.saving-indicator .saving-spinner {
+  --li-color: #16a34a;
 }
 
-@keyframes spin {
-  100% { transform: rotate(360deg); }
+.action-btn.primary .action-btn-spinner {
+  --li-color: #fff;
 }
 
 .form-section {

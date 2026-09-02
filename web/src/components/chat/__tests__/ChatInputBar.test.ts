@@ -1995,7 +1995,7 @@ describe('ChatInputBar', () => {
       await wrapper.vm.$nextTick()
       const transBtn = wrapper.find('.chat-attach-btn.voice-rec-btn.transcribing')
       expect(transBtn.exists()).toBe(true)
-      expect(transBtn.find('.spin-icon').exists()).toBe(true)
+      expect(transBtn.find('.attach-btn-spinner').exists()).toBe(true)
       expect(wrapper.find('.voice-banner').exists()).toBe(false)
       wrapper.unmount()
     })

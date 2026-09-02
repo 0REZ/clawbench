@@ -78,6 +78,7 @@ vi.mock('lucide-vue-next', () => ({
   Minus: { template: '<div />' },
   ChevronUp: { template: '<div />' },
   ChevronDown: { template: '<div />' },
+  LoaderCircle: { template: '<div />' },
 }))
 vi.mock('@/composables/useEdgeSwipeBack', () => ({
   useFeatureBackHandler: vi.fn(),

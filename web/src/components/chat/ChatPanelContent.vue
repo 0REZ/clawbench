@@ -1453,7 +1453,7 @@ onUnmounted(() => {
   width: 20px;
   height: 20px;
   border: 2px solid var(--border-color, #e5e7eb);
-  border-top-color: var(--primary, #6366f1);
+  border-top-color: var(--accent-color, #6366f1);
   border-radius: 50%;
   animation: tool-call-spin 0.6s linear infinite;
 }

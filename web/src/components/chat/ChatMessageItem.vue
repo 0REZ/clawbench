@@ -44,7 +44,7 @@
 
     <!-- Pending hint for queued user messages -->
     <div v-if="msg.pending" class="pending-hint">
-      <span class="pending-spinner"></span>
+      <LoadingIndicator class="pending-spinner" size="sm" inline />
       {{ t('chat.pending.queuing') }}
       <button class="pending-remove" @click="$emit('remove-pending', msg.queueId || msg.id)" :title="t('common.remove')">×</button>
     </div>
@@ -506,13 +506,9 @@ function handleCopyMessage() {
     margin-top: 4px;
 }
 
-.pending-spinner {
-    width: 10px;
-    height: 10px;
-    border: 1.5px solid rgba(255, 255, 255, 0.3);
-    border-top-color: rgba(255, 255, 255, 0.8);
-    border-radius: 50%;
-    animation: pending-spin 0.6s linear infinite;
+/* Spinner sits on the translucent user-bubble background → keep it white */
+.pending-hint .pending-spinner {
+    --li-color: #fff;
 }
 
 .pending-remove {
@@ -530,10 +526,6 @@ function handleCopyMessage() {
   .pending-remove:hover {
     color: rgba(255, 255, 255, 1);
   }
-}
-
-@keyframes pending-spin {
-    to { transform: rotate(360deg); }
 }
 
 @keyframes pending-fade-in {

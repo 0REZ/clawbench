@@ -1,7 +1,7 @@
 <template>
   <div ref="listRef" class="task-history-tab">
     <div v-if="loading && allExecutions.length === 0" class="history-empty">
-      <Loader2 class="spin-icon" :size="20" />
+      <LoadingIndicator size="sm" inline />
       <span>{{ t('common.loading') }}</span>
     </div>
     <div v-else-if="allExecutions.length === 0" class="history-empty">
@@ -59,7 +59,7 @@
       <!-- Infinite scroll sentinel -->
       <div ref="sentinelRef" class="history-list-sentinel"></div>
       <div v-if="loadingMore" class="history-loading-more">
-        <Loader2 class="spin-icon" :size="14" />
+        <LoadingIndicator size="sm" inline />
         <span>{{ t('common.loading') }}</span>
       </div>
     </div>
@@ -69,9 +69,10 @@
 <script setup>
 import { ref, watch, onUnmounted, computed, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Square, Loader2, History, Trash2 } from 'lucide-vue-next'
+import { Square, History, Trash2 } from 'lucide-vue-next'
 import { useTaskHistory } from '@/composables/useTaskHistory.ts'
 import { formatDuration, formatDateTime } from '@/utils/format.ts'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 const props = defineProps({
   task: Object,
@@ -255,14 +256,6 @@ defineExpose({
   padding: 24px 0;
   color: var(--text-muted, #999);
   font-size: 14px;
-}
-
-.spin-icon {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  100% { transform: rotate(360deg); }
 }
 
 .empty-icon {

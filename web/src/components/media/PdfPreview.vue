@@ -16,8 +16,7 @@
 
     <!-- Global loading overlay -->
     <div v-if="loading" class="pdf-loading-overlay">
-      <Loader :size="32" />
-      <span class="pdf-loading-text">加载中...</span>
+      <LoadingIndicator size="lg" inline label="加载中..." />
     </div>
 
     <!-- Error -->
@@ -39,8 +38,9 @@
 
 <script setup>
 import {
-  Download, Loader, FileX,
+  Download, FileX,
 } from 'lucide-vue-next'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
@@ -516,17 +516,10 @@ defineExpose({
   z-index: 10;
 }
 
-.pdf-loading-overlay svg {
-  animation: pdf-spin 1s linear infinite;
-}
-
-.pdf-loading-text {
-  font-size: 14px;
-}
-
-@keyframes pdf-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+/* Unified loader sits on the dark PDF chrome → white arc + light ring */
+.pdf-loading-overlay .loading-indicator {
+  --li-color: #fff;
+  --li-track-color: rgba(255, 255, 255, 0.25);
 }
 
 /* Error */

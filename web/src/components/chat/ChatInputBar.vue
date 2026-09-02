@@ -75,7 +75,7 @@
       <!-- Paste overlay (dynamic feedback while uploading pasted files from clipboard) -->
       <Transition name="paste-fade">
         <div v-if="isPasteOver" class="paste-overlay">
-          <Loader2 :size="18" class="paste-spinner-icon" />
+          <LoadingIndicator class="paste-spinner" size="sm" inline />
           <span>{{ t('chat.attach.uploading') }}</span>
         </div>
       </Transition>
@@ -95,7 +95,7 @@
         <div class="attach-menu-wrapper" ref="attachMenuRef">
           <button v-if="voiceState === 'recording' || voiceState === 'transcribing'" class="chat-attach-btn voice-rec-btn" :class="{ recording: voiceState === 'recording', transcribing: voiceState === 'transcribing' }" disabled :title="voiceState === 'recording' ? t('chat.voice.recording') : t('chat.voice.transcribing')">
             <span v-if="voiceState === 'recording'" class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-            <Loader2 v-else :size="14" class="spin-icon" />
+            <LoadingIndicator v-else class="attach-btn-spinner" size="sm" inline />
           </button>
           <button v-else class="chat-attach-btn" @click.stop="toggleAttachMenu" :disabled="inputDisabled" :title="t('chat.actions.attachment')">
             <Paperclip :size="16" />
@@ -124,7 +124,7 @@
           <Send v-else :size="16" />
         </button>
         <button v-if="loading" class="chat-stop-btn" :class="{ primed: stopPrimed, cancelling: cancelling }" @click="handleStopClick" :title="stopPrimed ? t('chat.input.confirmStop') : t('chat.input.stopGenerating')" :disabled="cancelling">
-          <Loader2 v-if="cancelling" class="spin-icon" :size="16" />
+          <LoadingIndicator v-if="cancelling" class="stop-spinner" size="sm" inline />
           <Square v-else :size="16" fill="currentColor" />
         </button>
       </div>
@@ -306,7 +306,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles, isImeCompositionEvent } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
@@ -1954,12 +1954,15 @@ defineExpose({
   pointer-events: none;
 }
 
-.paste-spinner-icon {
-  animation: paste-spin 0.8s linear infinite;
+/* Voice transcribing state: replaced a rotating icon; use the unified loader.
+   currentColor → the arc picks up the button's own text color. */
+.chat-attach-btn .attach-btn-spinner {
+  --li-color: currentColor;
 }
 
-@keyframes paste-spin {
-  to { transform: rotate(360deg); }
+/* Cancelling state of the stop button — spinner inside the danger-tinted pill */
+.chat-stop-btn .stop-spinner {
+  --li-color: currentColor;
 }
 
 .paste-fade-enter-active,
@@ -2336,15 +2339,6 @@ defineExpose({
 @keyframes stop-heartbeat {
   0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.5); }
   50%      { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
-}
-
-.spin-icon {
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
 }
 
 /* Voice recording indicator — red circle with animation, shown in the attach slot */
