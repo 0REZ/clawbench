@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { ref, nextTick } from 'vue'
+import { ref, reactive, nextTick } from 'vue'
 
 // ── Mock dependencies ──
 
@@ -31,7 +31,7 @@ vi.mock('@/composables/useThinkingContent', () => ({
 
 vi.mock('@/stores/app', () => ({
   store: {
-    state: { tasks: [] },
+    state: { tasks: [] as unknown[] },
   },
 }))
 
@@ -87,6 +87,7 @@ vi.mock('@/utils/taskBlockStore', () => ({
 
 import { useChatRender } from '@/composables/useChatRender'
 import { renderMermaidInElement } from '@/composables/useMarkdownRenderer'
+import { store } from '@/stores/app'
 
 describe('useChatRender — updateRenderedContents', () => {
   let chatContainer: HTMLDivElement | null = null
@@ -113,6 +114,66 @@ describe('useChatRender — updateRenderedContents', () => {
       currentSessionId: ref('test-session'),
     })
   }
+
+  // ── store.state.tasks → blockTasks sync (ISS-219) ──
+  describe('store.state.tasks watch — deleted marking', () => {
+    let tasksState: { tasks: unknown[] }
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+      // Make store.state.tasks reactive so reassignment triggers the watch.
+      // The mock starts as a plain object; replace it with a reactive wrapper.
+      const storeMock = store as { state: { tasks: unknown[] } }
+      tasksState = reactive({ tasks: [] })
+      storeMock.state = tasksState
+    })
+
+    afterEach(() => {
+      // Restore a clean state for other tests
+      tasksState.tasks = []
+    })
+
+    it('does NOT mark blockTasks deleted when store.state.tasks is an empty array (initial / app reset / not yet populated)', async () => {
+      // Seed a task card in blockTasks (as taskBlockStore fetch would)
+      const render = createRender()
+      render.blockTasks['msg1-0-0'] = { taskId: 42, task: null, loading: true, deleted: false }
+
+      // Empty store list — the buggy path used to mark this card deleted
+      tasksState.tasks = []
+      await nextTick()
+
+      const entry = render.blockTasks['msg1-0-0'] as { deleted?: boolean }
+      expect(entry.deleted).toBe(false)
+      // Loading is left untouched by the empty-list branch (fetch still owns it)
+      expect(entry.loading).toBe(true)
+    })
+
+    it('marks a blockTask deleted when store.state.tasks is non-empty and lacks its taskId (real deletion signal)', async () => {
+      const render = createRender()
+      render.blockTasks['msg1-0-0'] = { taskId: 42, task: null, loading: true, deleted: false }
+
+      // Non-empty list without task 42 → authoritative "task deleted"
+      tasksState.tasks = [{ id: 99, name: 'KeepMe' }]
+      await nextTick()
+
+      const entry = render.blockTasks['msg1-0-0'] as { deleted?: boolean; loading?: boolean }
+      expect(entry.deleted).toBe(true)
+      expect(entry.loading).toBe(false)
+    })
+
+    it('keeps a blockTask alive (not deleted) when its taskId IS present in a non-empty store list', async () => {
+      const render = createRender()
+      render.blockTasks['msg1-0-0'] = { taskId: 42, task: null, loading: true, deleted: false }
+
+      tasksState.tasks = [{ id: 42, name: 'StillThere' }]
+      await nextTick()
+
+      const entry = render.blockTasks['msg1-0-0'] as { deleted?: boolean; loading?: boolean }
+      expect(entry.deleted).toBe(false)
+      expect(entry.loading).toBe(false)
+      expect(entry.task).toMatchObject({ id: 42, name: 'StillThere' })
+    })
+  })
 
   describe('forceFullRender=true', () => {
     it('should call renderMermaidInElement via nextTick', async () => {

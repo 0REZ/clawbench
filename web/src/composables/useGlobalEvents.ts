@@ -230,8 +230,11 @@ async function fetchPendingEvents() {
                     handler(msg.event!, msg.data)
                 }
 
-                // Show browser notification
-                showEventBrowserNotification(msg.event!, msg.data)
+                // Show browser notification. skipReplay=true: these events are
+                // caught-up history (WS was down while they happened), never
+                // live completions — the user didn't watch the session/task run,
+                // so no notification. Mirrors the WS replay path below.
+                showEventBrowserNotification(msg.event!, msg.data, true)
 
                 if (msg.id) latestId = msg.id
             }

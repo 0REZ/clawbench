@@ -29,7 +29,7 @@
   <!-- Inline search bar (bottom of the preview), replacing the SearchDrawer
        bottom sheet for rendered markdown. Its open state is driven by the
        searchDrawer state via props; closing is reported upward. -->
-  <MarkdownSearchBar ref="searchBarRef" :open="!!searchOpen" @close="emit('closeSearch')" /></template>
+  <MarkdownSearchBar ref="searchBarRef" :open="!!searchOpen" :container="bodyRef" @close="emit('closeSearch')" /></template>
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'

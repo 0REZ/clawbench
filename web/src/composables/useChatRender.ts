@@ -101,16 +101,16 @@ export function useChatRender(options: { messages: { value: Array<Record<string,
 
   // Sync blockTasks with latest task data from store (global polling updates store.state.tasks).
   // Use a tasks Map for O(1) lookup, and taskChanged() for semantic comparison.
+  // Deletion is owned by the authoritative /api/tasks list (via taskBlockStore / refreshTaskData);
+  // this watch only syncs status. It must NOT mark tasks deleted when the store list is empty —
+  // an empty list can be an app reset, a session switch, or a not-yet-populated store, not a real
+  // deletion. Only a non-empty list that lacks a taskId is a real "task deleted" signal.
   watch(() => store.state.tasks, (tasks) => {
     const keys = Object.keys(blockTasks)
     if (keys.length === 0) return
-    // Empty tasks list means all tasks were deleted — mark all blockTasks as deleted
     if (!tasks || tasks.length === 0) {
-      for (const key of keys) {
-        const e = blockTasks[key] as BlockTaskEntry
-        if (!e.deleted) e.deleted = true
-        e.loading = false
-      }
+      // Skip deletion marking: empty list is not authoritative. Keep loading as-is;
+      // taskBlockStore.fetchBatchData (ISS-013) and refreshTaskData own loading/deletion.
       return
     }
     const taskMap = new Map(tasks.map((t: Record<string, unknown>) => [t.id, t]))

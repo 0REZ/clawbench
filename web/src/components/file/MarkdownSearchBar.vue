@@ -45,6 +45,11 @@ const labels = computed<SearchBarLabels>(() => ({
 
 const props = defineProps<{
     open: boolean
+    // Optional scoped container. When set, search/highlight operations are
+    // confined to it. Without it we fall back to the first global
+    // .markdown-body (legacy behavior — wrong when multiple such containers
+    // coexist on the page, e.g. file preview + SessionSearchDrawer).
+    container?: HTMLElement | null
 }>()
 const emit = defineEmits(['close'])
 
@@ -109,8 +114,9 @@ function buildRegex(q: string): RegExp {
 }
 
 function collectMatches(q: string): Match[] {
-    const container = document.querySelector('.markdown-body')
+    const container = props.container ?? document.querySelector('.markdown-body')
     if (!container || !q.trim()) return []
+    const root = container as Element
     let re: RegExp
     try {
         re = buildRegex(q)
@@ -118,7 +124,7 @@ function collectMatches(q: string): Match[] {
         return []
     }
     const out: Match[] = []
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null)
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null)
     while (walker.nextNode()) {
         const textNode = walker.currentNode as Text
         const text = textNode.textContent || ''
@@ -149,15 +155,18 @@ function unwrapMark(mark: HTMLElement) {
 // Query the live DOM rather than trusting a cached array: wrapping mutates the
 // tree, so cached references can go stale between onInput calls.
 function unwrapAllMarks() {
-    const container = document.querySelector('.markdown-body')
-    for (const mark of document.querySelectorAll<HTMLElement>(`.markdown-body mark.${MARK_CLASS}`)) {
+    const container = props.container ?? document.querySelector('.markdown-body')
+    // Query marks within the resolved container only — never globally, so a
+    // sibling .markdown-body (SessionSearchDrawer, TaskOverviewTab, …) can't
+    // be touched.
+    for (const mark of (container as Element | null)?.querySelectorAll<HTMLElement>(`mark.${MARK_CLASS}`) ?? []) {
         unwrapMark(mark)
     }
     // Unwrapping splits a text node around each <mark> (e.g. "clawbench" →
     // "claw" + "bench"). Re-merge adjacent text nodes so the regex sees the
     // original text again — otherwise word-boundary matching misfires on the
     // split fragments ("\bclaw\b" would match a lone "claw" node).
-    container?.normalize()
+    ;(container as Element | null)?.normalize()
     marks.value = []
 }
 

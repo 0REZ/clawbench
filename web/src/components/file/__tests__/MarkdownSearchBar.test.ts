@@ -199,4 +199,22 @@ describe('MarkdownSearchBar', () => {
     expect(wrapper.find('.cm-search-match-info').text()).toBe('1/1')
     wrapper.unmount()
   })
+
+  it('highlights only inside the container prop, not sibling .markdown-body containers', async () => {
+    // Two .markdown-body containers coexist (e.g. file preview + SessionSearchDrawer).
+    const target = seedMarkdownBody('<p>alpha target</p>')
+    const other = seedMarkdownBody('<p>alpha sibling</p>')
+    const wrapper = mountBar({ open: true, container: target })
+    await sleep(20)
+    const input = wrapper.find('input')
+    input.element.value = 'alpha'
+    input.trigger('input')
+    await sleep(20)
+    // Highlights appear in the passed container only.
+    expect(target.querySelectorAll('mark.md-search-match')).toHaveLength(1)
+    expect(other.querySelectorAll('mark.md-search-match')).toHaveLength(0)
+    // The sibling container's text stays untouched (no mark wrappers split it).
+    expect(other.textContent).toContain('alpha sibling')
+    wrapper.unmount()
+  })
 })

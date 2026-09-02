@@ -207,4 +207,60 @@ describe('codeMirrorSearchPanel', () => {
         expect(document.querySelector<HTMLElement>('.cm-panels')!.style.display).toBe('none')
         v.destroy()
     })
+
+    it('closing the panel clears match highlights (WARN-301)', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        // Matches are highlighted while the panel is open.
+        const content = document.querySelector<HTMLElement>('.cm-content')!
+        expect(content.querySelectorAll('.cm-searchMatch').length).toBeGreaterThan(0)
+        // Close the panel — the highlight must disappear even though the
+        // @codemirror/search query may still linger in state.
+        document.querySelector<HTMLElement>('.cm-search button[name=close]')!.click()
+        await new Promise(r => setTimeout(r, 50))
+        expect(content.querySelectorAll('.cm-searchMatch')).toHaveLength(0)
+        v.destroy()
+    })
+
+    it('closing the panel clears the search query for a fresh reopen', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        document.querySelector<HTMLElement>('.cm-search button[name=close]')!.click()
+        await new Promise(r => setTimeout(r, 50))
+        // Reopen — the input must be empty (no stale query).
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        expect(document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!.value).toBe('')
+        v.destroy()
+    })
+
+    it('toggle close (raw dispatch) also clears highlights via the panel gate', async () => {
+        const v = makeView(false)
+        openSearchPanelCommand(v)
+        await new Promise(r => setTimeout(r, 20))
+        const input = document.querySelector<HTMLInputElement>('.cm-search input[name=search]')!
+        input.value = 'alpha'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise(r => setTimeout(r, 50))
+        const content = document.querySelector<HTMLElement>('.cm-content')!
+        expect(content.querySelectorAll('.cm-searchMatch').length).toBeGreaterThan(0)
+        // This is the raw toggle used by CodeMirrorViewer's openSearch() repeat
+        // click — it bypasses close(), but the highlight must still clear
+        // because buildSearchDecorations is gated on the panel state.
+        v.dispatch({ effects: searchPanelToggle.of(false) })
+        await new Promise(r => setTimeout(r, 50))
+        expect(v.state.field(searchPanelField)).toBe(false)
+        expect(content.querySelectorAll('.cm-searchMatch')).toHaveLength(0)
+        v.destroy()
+    })
 })

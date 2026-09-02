@@ -1261,6 +1261,32 @@ describe('useGlobalEvents', () => {
             // 批结束后复位
             expect(events.isReplayingEvents.value).toBe(false)
         })
+
+        it('pending 回放的 session_update completed 不弹浏览器通知（ISS-253）', async () => {
+            // 断线期间（游标已存在）会话完成 → 重连后 fetchPendingEvents 拉回
+            // 该终态事件。这是"用户没看到的历史完成"，即使页面在后台也绝不弹
+            // 浏览器通知——与 WS replay 路径行为一致。
+            vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+            vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+            _seedLastSeenEventIdForTesting('evt_seen_old')
+
+            mockPendingFetch([{
+                event_id: 'evt_pending_completed',
+                event_type: 'session_update',
+                payload: JSON.stringify({
+                    type: 'event',
+                    id: 'evt_pending_completed',
+                    event: 'session_update',
+                    data: { session_id: 's1', status: 'completed', project_path: '/p' },
+                }),
+            }])
+            connectAndGetWs()
+
+            // 事件被处理（游标推进）但不弹通知
+            await vi.waitFor(() => expect(_getLastSeenEventIdForTesting()).toBe('evt_pending_completed'))
+            expect(mockShowBrowserNotification).not.toHaveBeenCalled()
+            vi.restoreAllMocks()
+        })
     })
 
     // ── WS replay buffer（断线后服务器握手即重放缓冲事件）──
