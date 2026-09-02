@@ -294,7 +294,15 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	// this cannot be used to bypass access control.
 	if qp := r.URL.Query().Get("project_path"); qp != "" {
 		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
-			// Session belongs to the requested project; allow marking read.
+			// The session belongs to the requested project. Switch the working
+			// project to the session's owner so every subsequent write (user
+			// message insert, queued insert, the AI goroutine's streaming
+			// placeholder and drain-loop messages) persists under the session's
+			// project_path — NOT the current cookie project. Without this,
+			// replying from the completion popover while the user has switched
+			// to another project orphans the reply under the cookie project,
+			// making it invisible when the user returns to the session.
+			projectPath = qp
 		} else {
 			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 			return

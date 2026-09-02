@@ -637,4 +637,31 @@ describe('CompletionPopover', () => {
         expect(mockToastShow).toHaveBeenCalledTimes(1)
         expect(mockToastShow).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ type: 'success' }))
     })
+
+    it('sends cross-project replies with the owning project_path so the reply lands in that project', async () => {
+        // 弹窗里回复的是"另一个项目"的会话：handleSend 必须携带该会话所属
+        // 项目路径（project_path），后端据此覆盖 cookie 项目做归属校验，并把
+        // 消息持久化到会话所属项目下——否则切回原项目后回复会"丢失"（issue #420）。
+        mockState.active = ref(makeItem({ sessionId: 'ext-session', projectPath: '/path/to/project-a' }))
+        mountPopover()
+
+        const fetchMock = vi.fn().mockResolvedValue({ ok: true })
+        globalThis.fetch = fetchMock
+
+        const textarea = document.querySelector('.completion-popover-textarea') as HTMLTextAreaElement
+        textarea.value = '提交吧'
+        textarea.dispatchEvent(new Event('input'))
+        await nextTick()
+
+        const sendBtn = document.querySelector('.completion-popover-send')!
+        sendBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+        await vi.waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/api/ai/chat?session_id=ext-session&project_path=%2Fpath%2Fto%2Fproject-a',
+                expect.objectContaining({ method: 'POST' })
+            )
+            expect(mockState.dismiss).toHaveBeenCalledTimes(1)
+        })
+    })
 })
