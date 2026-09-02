@@ -367,13 +367,18 @@ export function updateUsageState(used: number, size: number, cost?: number, curr
   const isDefined = (x: number | undefined): x is number => x !== undefined && x !== null
   usageStateCache.set(key, {
     used, size,
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    totalTokens: totalTokens ?? 0,
-    cachedReadTokens: cachedReadTokens ?? 0,
-    cachedWriteTokens: cachedWriteTokens ?? 0,
-    thoughtTokens: thoughtTokens ?? 0,
-    cost: cost ?? 0,
+    // Token totals are only carried by the notifications that report usage
+    // (turn-final emitPromptResponseUsage / usage_update with usage block).
+    // Mid-stream partial notifications omit them — preserve the previous value
+    // so the rows don't flicker in and out of the Token Detail section. A new
+    // turn (used reset) drops the previous baseline.
+    inputTokens: isDefined(inputTokens) ? inputTokens : (baseline?.inputTokens ?? 0),
+    outputTokens: isDefined(outputTokens) ? outputTokens : (baseline?.outputTokens ?? 0),
+    totalTokens: isDefined(totalTokens) ? totalTokens : (baseline?.totalTokens ?? 0),
+    cachedReadTokens: isDefined(cachedReadTokens) ? cachedReadTokens : (baseline?.cachedReadTokens ?? 0),
+    cachedWriteTokens: isDefined(cachedWriteTokens) ? cachedWriteTokens : (baseline?.cachedWriteTokens ?? 0),
+    thoughtTokens: isDefined(thoughtTokens) ? thoughtTokens : (baseline?.thoughtTokens ?? 0),
+    cost: isDefined(cost) ? cost : (baseline?.cost ?? 0),
     currency: currency ?? '',
     // Extension fields: absent (undefined, i.e. not carried by this partial
     // notification) preserves the previous value; an explicit value — including

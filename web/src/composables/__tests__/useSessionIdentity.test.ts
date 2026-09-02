@@ -1321,19 +1321,26 @@ describe('useSessionIdentity', () => {
         it('preserves extension detail across partial usage_updates (CodeBuddy sequence)', () => {
             // CodeBuddy sends several usage_update notifications per turn, each
             // carrying only PART of the extension detail. A later partial update
-            // (missing cache/credit) or one with explicit zero-valued categories
-            // must NOT blank fields that earlier notifications populated —
-            // otherwise the panel flickers back to the minimal view mid-stream.
+            // (missing cache/credit/input/output/total) must NOT blank fields that
+            // earlier notifications populated — otherwise the panel flickers back
+            // to the minimal view mid-stream.
             const identity = useSessionIdentity()
             identity.currentSessionId.value = 'session-A'
 
             // Notification 1: full detail (usage + category).
             updateUsageState(31224, 200000, undefined, undefined, undefined, 31224, 3, 31227, 29184, 0, 0, 0, 29184, 2040, 1.57, { tools: 23293, conversation: 4959 })
+            expect(identity.contextInputTokens.value).toBe(31224)
+            expect(identity.contextOutputTokens.value).toBe(3)
+            expect(identity.contextTotalTokens.value).toBe(31227)
             expect(identity.contextCacheHitTokens.value).toBe(29184)
             expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 })
 
-            // Notification 2: only used/size + zero-valued category (no cache detail).
+            // Notification 2: only used/size + zero-valued category (no usage or
+            // cache detail). input/output/total + cache/credit must survive.
             updateUsageState(31224, 200000, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { tools: 0, conversation: 0 })
+            expect(identity.contextInputTokens.value).toBe(31224) // preserved
+            expect(identity.contextOutputTokens.value).toBe(3)    // preserved
+            expect(identity.contextTotalTokens.value).toBe(31227) // preserved
             expect(identity.contextCacheHitTokens.value).toBe(29184) // preserved
             expect(identity.contextCredit.value).toBe(1.57)          // preserved
             // Zero-only category is not meaningful → previous breakdown kept.
@@ -1365,6 +1372,9 @@ describe('useSessionIdentity', () => {
             // Turn 2 opens: used resets low/zero. The previous turn's category
             // must NOT linger — stale breakdown would misrepresent the new turn.
             updateUsageState(0, 200000)
+            expect(identity.contextInputTokens.value).toBe(0)
+            expect(identity.contextOutputTokens.value).toBe(0)
+            expect(identity.contextTotalTokens.value).toBe(0)
             expect(identity.contextUsageByCategory.value).toBeUndefined()
             expect(identity.contextCacheHitTokens.value).toBe(0)
             expect(identity.contextCredit.value).toBe(0)
