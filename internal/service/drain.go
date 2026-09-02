@@ -76,35 +76,51 @@ func abortDrain(cfg DrainConfig, cause error) {
 	})
 }
 
+// clearQueueAndEmitCancel drops the session's remaining queued messages and
+// emits queue_cancel so the frontend immediately removes its pending bubbles.
+// It is shared by every terminal branch that must not leave the queue alive:
+// user cancel, the drained message failing, or an empty result. Skipping this
+// on the error branch left later queued messages stuck at queued=1 forever —
+// the drain loop had already exited, so nothing would ever dequeue them and
+// the UI's pending bubbles could not be cancelled (ISS-239).
+func clearQueueAndEmitCancel(cfg DrainConfig) {
+	// Collect queue IDs before clearing for queue_cancel event
+	queueIDs, _ := GetQueuedQueueIDs(cfg.SessionID)
+	_ = ClearQueuedMessages(cfg.SessionID)
+
+	// Emit queue_cancel so frontend can immediately remove pending messages
+	if len(queueIDs) > 0 {
+		emitDrainEvent(cfg.SessionID, ai.StreamEvent{
+			Type: "queue_cancel",
+			QueueEvent: &ai.QueueEventData{
+				SessionID: cfg.SessionID,
+				QueueIDs:  queueIDs,
+			},
+		})
+	}
+}
+
 // drainHandleTerminal emits the final event and reports true when the previous
 // stream run ended in a terminal state (user cancel / error / empty / other
-// cancel). The user-cancel branch clears the DB queue and emits queue_cancel so
-// the frontend can immediately remove pending bubbles.
+// cancel). Every branch that abandons the queue (user cancel, error, empty)
+// clears the DB queue and emits queue_cancel so the frontend can immediately
+// remove pending bubbles — see clearQueueAndEmitCancel for why.
 func drainHandleTerminal(cfg DrainConfig, result DrainResult) bool {
 	if result.CancelReason == cancelReasonUser {
-		// Collect queue IDs before clearing for queue_cancel event
-		queueIDs, _ := GetQueuedQueueIDs(cfg.SessionID)
-		_ = ClearQueuedMessages(cfg.SessionID)
-
-		// Emit queue_cancel so frontend can immediately remove pending messages
-		if len(queueIDs) > 0 {
-			emitDrainEvent(cfg.SessionID, ai.StreamEvent{
-				Type: "queue_cancel",
-				QueueEvent: &ai.QueueEventData{
-					SessionID: cfg.SessionID,
-					QueueIDs:  queueIDs,
-				},
-			})
-		}
-
+		clearQueueAndEmitCancel(cfg)
 		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: statusCancelled})
 		return true
 	}
 	if result.Err != "" {
+		// A run failed — the queue must not keep later messages stuck as
+		// pending. Drop the rest and surface the error so the user sees why
+		// their queued messages were cancelled.
+		clearQueueAndEmitCancel(cfg)
 		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: result.Err})
 		return true
 	}
 	if result.Empty {
+		clearQueueAndEmitCancel(cfg)
 		cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeError, Error: "AI returned no content", Reason: ai.ReasonEmpty})
 		return true
 	}

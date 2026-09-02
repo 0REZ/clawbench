@@ -154,6 +154,11 @@ func TestDrainLoop_ErrorResult_EmitsErrorEvent(t *testing.T) {
 	setupDrainSession(t, sessionID)
 	defer ClearQueuedMessages(sessionID)
 
+	// Messages still queued when the run errors must be cleared (ISS-239),
+	// otherwise they stay queued=1 forever with no drain loop left to run them.
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "stuck1", nil, "q-e1", "")
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "stuck2", nil, "q-e2", "")
+
 	var finalEvent ai.StreamEvent
 	cfg := DrainConfig{
 		SessionID:   sessionID,
@@ -170,6 +175,8 @@ func TestDrainLoop_ErrorResult_EmitsErrorEvent(t *testing.T) {
 	RunDrainLoop(cfg, DrainResult{Err: "runtime failure"})
 	assert.Equal(t, "error", finalEvent.Type)
 	assert.Equal(t, "runtime failure", finalEvent.Error)
+	// The queued messages behind the failed run must not be left stuck.
+	assert.Equal(t, 0, GetQueuedCount(sessionID))
 }
 
 func TestDrainLoop_EmptyResult_EmitsErrorWithReason(t *testing.T) {
@@ -177,6 +184,9 @@ func TestDrainLoop_EmptyResult_EmitsErrorWithReason(t *testing.T) {
 	sessionID := "drain-test-empty"
 	setupDrainSession(t, sessionID)
 	defer ClearQueuedMessages(sessionID)
+
+	// An empty result aborts the queue just like an error.
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "stuck", nil, "q-emp", "")
 
 	var finalEvent ai.StreamEvent
 	cfg := DrainConfig{
@@ -195,6 +205,7 @@ func TestDrainLoop_EmptyResult_EmitsErrorWithReason(t *testing.T) {
 	assert.Equal(t, "error", finalEvent.Type)
 	assert.Equal(t, "AI returned no content", finalEvent.Error)
 	assert.Equal(t, ai.ReasonEmpty, finalEvent.Reason)
+	assert.Equal(t, 0, GetQueuedCount(sessionID))
 }
 
 func TestDrainLoop_NonUserCancelReason_EmitsCancelled(t *testing.T) {
@@ -275,21 +286,32 @@ func TestDrainLoop_QueueHasNextMessage_ExecutesAndLoops(t *testing.T) {
 	assert.Equal(t, "done", finalEvent.Type)
 }
 
-func TestDrainLoop_QueueMessageReturnsError_StopsLoop(t *testing.T) {
+// TestDrainLoop_QueueMessageReturnsError_StopsLoopAndClearsRest is the exact
+// ISS-239 reproduce: several messages queued, an intermediate run fails — the
+// remaining queued messages must be cleared (not left pending forever) and the
+// loop exits with an error event.
+func TestDrainLoop_QueueMessageReturnsError_StopsLoopAndClearsRest(t *testing.T) {
 	setupDrainTest()
 	sessionID := "drain-test-msg-error"
 	setupDrainSession(t, sessionID)
 	defer ClearQueuedMessages(sessionID)
 
-	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "will error", nil, "q1", "")
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "ok", nil, "q-ok", "")
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "will error", nil, "q-err", "")
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "behind error", nil, "q-later", "")
 
+	var executeCount int32
 	var finalEvent ai.StreamEvent
 	cfg := DrainConfig{
 		SessionID:   sessionID,
 		ProjectPath: "/test",
 		BackendName: "codebuddy",
 		ExecuteRunWithMessage: func(msg model.ChatMessage) DrainResult {
-			return DrainResult{Err: "execution failed"}
+			atomic.AddInt32(&executeCount, 1)
+			if msg.QueueID == "q-err" {
+				return DrainResult{Err: "execution failed"}
+			}
+			return DrainResult{}
 		},
 		MarkDoneAndSendFinal: func(event ai.StreamEvent) {
 			finalEvent = event
@@ -299,6 +321,10 @@ func TestDrainLoop_QueueMessageReturnsError_StopsLoop(t *testing.T) {
 	RunDrainLoop(cfg, DrainResult{})
 	assert.Equal(t, "error", finalEvent.Type)
 	assert.Equal(t, "execution failed", finalEvent.Error)
+	// The failing message ran, the one behind it must NOT run…
+	assert.Equal(t, int32(2), atomic.LoadInt32(&executeCount))
+	// …and the queue must be fully cleared so nothing is stuck pending.
+	assert.Equal(t, 0, GetQueuedCount(sessionID))
 }
 
 func TestDrainLoop_QueueMessageCancelled_StopsLoop(t *testing.T) {
