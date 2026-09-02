@@ -482,6 +482,16 @@ function handleScroll() {
   // stream's pin (the "scrolled far away but still dragged back" bug). User
   // drags are distinguished by the input flags (userTouching / wheelActive /
   // mouseDownActive) which programmatic pins never set.
+  // Direction detection needs the previous scroll position from EVERY event —
+  // including programmatic stream pins (which return early below and would
+  // otherwise skip updating lastScrollTop). If lastScrollTop froze at a stale
+  // pre-stream value (typically 0), every subsequent upward drag reads
+  // `el.scrollTop < lastScrollTop` as false, so the userLeftBottom latch never
+  // fires and streamed pins keep yanking the user back to the bottom — the
+  // "无论如何向上拖拽都会被拽回到底部" bug. Capture before any branch.
+  const prevScrollTop = lastScrollTop
+  lastScrollTop = el.scrollTop
+
   if (userTouching || wheelActive || mouseDownActive) {
     scrollOwner.value = 'user'
     lastScrollAt = Date.now()
@@ -496,7 +506,7 @@ function handleScroll() {
     // return), via updateUserLeftBottom.
     const prevUserLeftBottom = userLeftBottom
     userLeftBottom = updateUserLeftBottom(userLeftBottom, {
-      scrollingUp: el.scrollTop < lastScrollTop,
+      scrollingUp: el.scrollTop < prevScrollTop,
       distFromBottom,
     })
     if (userLeftBottom && !prevUserLeftBottom) {
@@ -537,9 +547,10 @@ function handleScroll() {
     clearTimeout(scrollDownTimer)
   }
 
-  // Determine scroll direction
-  const scrollDelta = el.scrollTop - lastScrollTop
-  lastScrollTop = el.scrollTop
+  // Determine scroll direction. lastScrollTop was already updated at the top
+  // of handleScroll (before any branch), so `prevScrollTop` is the previous
+  // position from the immediately-preceding event.
+  const scrollDelta = el.scrollTop - prevScrollTop
 
   // Ignore tiny scroll movements (e.g. finger tremor on mobile) to prevent accidental FAB appearance
   if (Math.abs(scrollDelta) < SCROLL_DELTA_THRESHOLD) return
