@@ -1015,10 +1015,10 @@ describe('ChatInputBar', () => {
     mockContextCredit.value = 0
   })
 
-  it('does not duplicate cache-hit values in the popup', async () => {
+  it('renders cache read and cache hit as separate rows (same value, distinct labels)', async () => {
     // CodeBuddy reports prompt_cache_hit_tokens once; cachedReadTokens and
-    // cacheHitTokens both carry it. The UI must render it ONCE (as the cache
-    // read summary row), not twice inside the Token Detail section.
+    // cacheHitTokens both carry it. The UI deliberately shows both rows with
+    // their distinct labels ("缓存读" vs "缓存命中") — user preference.
     mockContextSize.value = 200000
     mockContextUsed.value = 326400
     mockContextCachedReadTokens.value = 326400
@@ -1029,12 +1029,9 @@ describe('ChatInputBar', () => {
     await wrapper.find('.session-info-usage').trigger('click')
     await wrapper.vm.$nextTick()
 
-    // cacheHitTokens must not be rendered at all (its i18n label absent);
-    // the cache read label appears exactly once with the value.
-    expect(wrapper.text()).not.toContain('chat.sessionInfo.cacheHitTokens')
-    const cacheReadLabel = wrapper.findAll('.usage-popup-row').filter(w => w.text().includes('chat.sessionInfo.cachedReadTokens'))
-    expect(cacheReadLabel).toHaveLength(1)
-    expect(wrapper.text()).toContain('326,400')
+    // Both labels render, each with the value.
+    expect(wrapper.text()).toContain('chat.sessionInfo.cachedReadTokens')
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheHitTokens')
     expect(wrapper.text()).toContain('chat.sessionInfo.cacheMissTokens')
     expect(wrapper.text()).toContain('2,984')
 

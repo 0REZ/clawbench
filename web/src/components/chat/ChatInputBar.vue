@@ -236,6 +236,10 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedReadTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedReadTokens.toLocaleString() }}</span>
           </div>
+          <div v-if="contextCacheHitTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheHitTokens.toLocaleString() }}</span>
+          </div>
           <div v-if="cacheHitRate !== null" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitRate') }}</span>
             <span class="usage-popup-value">{{ cacheHitRate.toFixed(1) }}%</span>

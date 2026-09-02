@@ -27,6 +27,7 @@ const messages = {
         totalTokens: 'Total tokens:',
         cachedReadTokens: 'Cache read:',
         cachedWriteTokens: 'Cache write:',
+        cacheHitTokens: 'Cache hit:',
         cacheCreationTokens: 'Cache creation:',
         cacheMissTokens: 'Cache miss:',
         cacheHitRate: 'Cache hit rate:',
@@ -82,6 +83,7 @@ describe('ChatMetadataModal', () => {
         inputTokens: 31224,
         outputTokens: 3,
         totalTokens: 31227,
+        cacheHitTokens: 9216,
         cacheCreationTokens: 1200,
         cacheMissTokens: 22008,
         credit: 1.57,
@@ -90,6 +92,8 @@ describe('ChatMetadataModal', () => {
     const text = wrapper.text()
     expect(text).toContain('Cache creation:')
     expect(text).toContain('1,200')
+    expect(text).toContain('Cache hit:')
+    expect(text).toContain('9,216')
     expect(text).toContain('Cache miss:')
     expect(text).toContain('Credit:')
     expect(text).toContain('1.5700')

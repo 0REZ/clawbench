@@ -71,6 +71,10 @@
         <span class="metadata-label">{{ t('chat.metadata.cachedReadTokens') }}</span>
         <span class="metadata-value">{{ data.cachedReadTokens.toLocaleString() }}</span>
       </div>
+      <div v-if="data.cacheHitTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cacheHitTokens') }}</span>
+        <span class="metadata-value">{{ data.cacheHitTokens.toLocaleString() }}</span>
+      </div>
       <div v-if="data.cachedWriteTokens" class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.cachedWriteTokens') }}</span>
         <span class="metadata-value">{{ data.cachedWriteTokens.toLocaleString() }}</span>
