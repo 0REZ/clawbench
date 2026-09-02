@@ -238,6 +238,34 @@ describe('SessionList', () => {
     expect(wrapper.vm.sessions[0].id).toBe('s2')
   })
 
+  it('reload preserves the loaded depth instead of collapsing back to the first page', async () => {
+    // Two pages of sessions. Page 1 reports hasMore so loadMoreSessions can
+    // append page 2 — simulating a user who scrolled through more than one page.
+    const page1 = Array.from({ length: 10 }, (_, i) => ({ id: `s${i}`, title: `S${i}`, updatedAt: `2025-01-${String(i + 1).padStart(2, '0')}`, agentId: 'agent-1', backend: 'cli' }))
+    const page2 = Array.from({ length: 5 }, (_, i) => ({ id: `s1${i}`, title: `S1${i}`, updatedAt: `2025-01-${String(i + 11).padStart(2, '0')}`, agentId: 'agent-1', backend: 'cli' }))
+    mockFetch.mockImplementation((url: string) => {
+      const hasCursor = url.includes('cursor=')
+      const page = hasCursor ? page2 : page1
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ sessions: page, hasMore: hasCursor ? false : true }) })
+    })
+    const wrapper = await mountList()
+    expect(wrapper.vm.sessions.length).toBe(10)
+
+    // User scrolls: load the second page → 15 rows loaded.
+    await wrapper.vm.loadMoreSessions()
+    await flushPromises()
+    expect(wrapper.vm.sessions.length).toBe(15)
+
+    // A WS/version reload fires (e.g. running-session update). It must re-fetch
+    // enough pages to cover the 15 rows the user already sees — collapsing back
+    // to 10 would re-expose the load-more sentinel and cause the list (and the
+    // auto-sized drawer) to oscillate in height.
+    await wrapper.vm.reload()
+    await flushPromises()
+    expect(wrapper.vm.sessions.length).toBe(15)
+    expect(mockFetch.mock.calls.filter((c: unknown[]) => String(c[0]).includes('cursor=')).length).toBeGreaterThanOrEqual(1)
+  })
+
   it('exposes reload() and removes the WS listener on unmount', async () => {
     mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ sessions: [sessionsFixture().s1], hasMore: false }) })
     const wrapper = await mountList()
