@@ -494,8 +494,11 @@ describe('TocPanel — rendered markdown anchor scoping', () => {
       expect(item!.text()).not.toContain('MATH') // display text stays clean
       await item!.trigger('click')
 
-      expect(scrollSpy).toHaveBeenCalledTimes(1)
-      expect(scrollSpy.mock.instances[0]).toBe(current.querySelector('h2'))
+      // scrollTo scrolls the heading directly; the activeId watcher also keeps
+      // the highlighted list item visible (extra scrollIntoView calls).
+      expect(scrollSpy).toHaveBeenCalled()
+      const scrolledH2 = scrollSpy.mock.instances.find(i => i === current.querySelector('h2'))
+      expect(scrolledH2).toBeTruthy()
       wrapper.unmount()
     } finally {
       Element.prototype.scrollIntoView = orig
@@ -548,5 +551,49 @@ describe('TocPanel — click-jump highlight hold', () => {
 
     wrapper.unmount()
     vi.useRealTimers()
+  })
+})
+
+describe('TocPanel — scroll-follow keeps active item visible', () => {
+  it('scrolls the newly active list item into view when scroll-follow changes it', async () => {
+    const scrollSpy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    // jsdom has no scrollIntoView — install a spy so the follow-watch can run.
+    Element.prototype.scrollIntoView = scrollSpy
+
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    try {
+      const wrapper = mountPanel({
+        file: { name: 'main.go', content: 'package main', path: '/main.go' },
+        codeView: true,
+      })
+      await nextTick()
+      await new Promise(r => setTimeout(r, 50))
+      await nextTick()
+      scrollSpy.mockClear()
+
+      // Scroll-follow reports line 25 at the top → "Handler" becomes active.
+      window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 25 } }))
+      await nextTick()
+      await nextTick()
+
+      const items = wrapper.findAll('.toc-item')
+      const handlerItem = items.find(i => i.text().includes('Handler'))!
+      expect(handlerItem.classes()).toContain('active')
+      // The follow-watch scrolled the active list item into view.
+      const scrolledActive = scrollSpy.mock.instances.some(i => i === handlerItem.element)
+      expect(scrolledActive).toBe(true)
+      wrapper.unmount()
+    } finally {
+      Element.prototype.scrollIntoView = orig
+    }
   })
 })

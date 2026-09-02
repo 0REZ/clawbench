@@ -487,6 +487,7 @@ import { store } from './stores/app.ts'
 import { restoreProjectWorkspace as restoreProjectWorkspaceImpl } from './composables/useProjectWorkspace.ts'
 import { setPendingCommitNavigation } from './composables/useCommitNavigation.ts'
 import { getFileType } from './utils/fileType.ts'
+import { fileSupportsToc } from './utils/tocSupport.ts'
 import { formatBadgeCount } from './utils/format.ts'
 import { useChatContext } from './composables/useChatContext.ts'
 import { useFileUpload } from './composables/useFileUpload.ts'
@@ -812,14 +813,23 @@ const tocDockPref = useTocDockPreference()
 /**
  * Effective TOC visibility for the FileHeader button highlight: the inline
  * dock on wide screens, the bottom drawer otherwise.
+ * Gated on the current file actually supporting a TOC: office binaries and
+ * rendered HTML/OpenAPI previews must never show the panel even if a dock/drawer
+ * was left open from a previous file.
  */
-const effectiveTocOpen = computed(() => isWideScreen.value ? tocDockPref.effectiveOpen.value : tocDrawer.effectiveOpen.value)
+const currentFileSupportsToc = computed(() => fileSupportsToc(currentFile.value, markdownViewMode.value))
+const effectiveTocOpen = computed(() =>
+    isWideScreen.value
+        ? tocDockPref.effectiveOpen.value && currentFileSupportsToc.value
+        : tocDrawer.effectiveOpen.value && currentFileSupportsToc.value,
+)
 
 /**
  * TOC toggle: wide screens toggle the inline right-side dock; narrow screens
- * keep the bottom drawer.
+ * keep the bottom drawer. Ignored when the current file has no TOC support.
  */
 function handleToggleToc() {
+  if (!currentFileSupportsToc.value) return
   if (isWideScreen.value) {
     tocDockPref.toggle()
   } else {

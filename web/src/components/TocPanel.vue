@@ -1,7 +1,7 @@
 <template>
   <div class="toc-body">
     <SearchInput v-model="searchQuery" :placeholder="t('toc.searchPlaceholder')" @enter="listNav.confirm" @down="listNav.down" @up="listNav.up" @dblclick="clearSearch" />
-    <div class="toc-list">
+    <div class="toc-list" ref="listRef">
       <LoadingIndicator v-if="loading" :label="t('toc.loading')" size="md" />
       <div v-else-if="filteredToc.length === 0" class="toc-empty">{{ searchQuery ? t('toc.noMatch') : t('toc.noHeadings') }}</div>
       <a
@@ -87,6 +87,22 @@ const isPdfOutline = ref(false)
 const searchQuery = ref('')
 const filteredToc = ref([])
 const loading = ref(false)
+const listRef = ref(null)
+
+// Keep the highlight visible: when scroll-follow moves the active item off the
+// panel's visible area, scroll the list so the active .toc-item stays in view.
+// `block: 'nearest'` is a no-op when the item is already visible, so normal
+// scrolling produces no feedback loop.
+watch(activeId, () => {
+    nextTick(() => {
+        const list = listRef.value
+        if (!list) return
+        const el = list.querySelector('.toc-item.active')
+        if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+        }
+    })
+})
 
 watch([() => props.file, () => props.file?.content, () => props.pdfOutline], ([file, content, pdfOut], _, onCleanup) => {
     let cancelled = false
@@ -201,7 +217,9 @@ const listNav = useListNav({
 useListKeys({ isOpen: () => props.open, nav: listNav })
 
 function scrollActiveIntoView(index) {
-  const items = document.querySelectorAll('.toc-item')
+  const list = listRef.value
+  if (!list) return
+  const items = list.querySelectorAll('.toc-item')
   const el = items[index]
   if (el && typeof el.scrollIntoView === 'function') {
     el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
