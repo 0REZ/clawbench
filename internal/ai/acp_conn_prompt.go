@@ -48,6 +48,10 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 	// raw_output event after Prompt returns.
 	c.ResetRawOutput()
 
+	// Reset the per-turn _meta extension accumulator so stale metadata from a
+	// previous turn cannot leak into this one's message-level metadata.
+	c.getAndClearMetaAccum()
+
 	c.mu.Lock()
 	client := c.client
 	conn := c.conn
@@ -185,8 +189,15 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 
 	// PromptResponse.Usage (UNSTABLE): emit metadata and usage_update events
 	// so input/output token counts are persisted and shown in the context chip.
-	if resp.Usage != nil {
-		c.emitPromptResponseUsage(resp.Usage, streamCh)
+	if resp.Usage != nil || len(resp.Meta) > 0 {
+		c.emitPromptResponseUsage(resp.Usage, resp.Meta, streamCh)
+	} else if acc := c.getAndClearMetaAccum(); acc != nil {
+		// No PromptResponse usage/meta, but the turn accumulated per-agent _meta
+		// extensions from session/update notifications (e.g. CodeBuddy usage).
+		// Persist them so the message-level metadata reflects the turn.
+		meta := &Metadata{}
+		applyMetaExtractionToMetadata(meta, acc)
+		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
 	}
 
 	return nil
@@ -219,23 +230,48 @@ func acpHTTPStatusFromMeta(meta map[string]any) int {
 }
 
 // emitPromptResponseUsage emits metadata and usage_update events from a
-// PromptResponse.Usage (UNSTABLE ACP feature). The metadata event ensures
-// InputTokens/OutputTokens are persisted to chat_metadata and embedded in
+// PromptResponse.Usage (UNSTABLE ACP feature) and PromptResponse._meta
+// extensions. The metadata event ensures InputTokens/OutputTokens (and any
+// per-agent _meta detail) are persisted to chat_metadata and embedded in
 // chat_history.content JSON. The usage_update event updates the frontend's
 // context usage chip in real time.
-func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- StreamEvent) {
-	meta := &Metadata{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
+//
+// respMeta carries the per-agent _meta extensions from the PromptResponse
+// (Claude/Codex quota.token_count, CodeBuddy codebuddy.ai/* trace). The
+// accumulated turn-level _meta (from session/update notifications) is merged
+// in as well so the metadata event reflects the richest observed values.
+func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]any, streamCh chan<- StreamEvent) {
+	backendID := c.BackendID()
+
+	// Start from PromptResponse.Usage. usage may be nil when only _meta
+	// extensions are present (e.g. CodeBuddy reports no PromptResponse.Usage).
+	// Capture the turn-level accumulation once and reuse it for both the
+	// metadata event and the usage_update payload.
+	meta := &Metadata{}
+	acc := c.getAndClearMetaAccum()
+	if usage != nil {
+		meta.InputTokens = usage.InputTokens
+		meta.OutputTokens = usage.OutputTokens
 	}
+	// Apply per-agent _meta extensions from the PromptResponse (Claude/Codex
+	// quota, CodeBuddy trace) and the turn-level accumulation (CodeBuddy usage
+	// from session/update notifications).
+	if ext := extractMetaUsage(backendID, respMeta); ext != nil {
+		applyMetaExtractionToMetadata(meta, ext)
+	}
+	if acc != nil {
+		applyMetaExtractionToMetadata(meta, acc)
+	}
+
 	slog.Info("acp conn: PromptResponse.Usage",
 		"clawbench_sid", c.clawbenchSID,
-		"input_tokens", usage.InputTokens,
-		"output_tokens", usage.OutputTokens,
-		"total_tokens", usage.TotalTokens,
-		"cached_read_tokens", usage.CachedReadTokens,
-		"cached_write_tokens", usage.CachedWriteTokens,
-		"thought_tokens", usage.ThoughtTokens)
+		"has_usage", usage != nil,
+		"meta_input_tokens", meta.InputTokens,
+		"meta_output_tokens", meta.OutputTokens,
+		"meta_total_tokens", meta.TotalTokens,
+		"meta_cached_read_tokens", meta.CachedReadTokens,
+		"meta_cached_write_tokens", meta.CachedWriteTokens,
+		"meta_thought_tokens", meta.ThoughtTokens)
 
 	// Emit metadata event for persistence (SessionExecutor captures these)
 	forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
@@ -257,16 +293,26 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- Stre
 		currency = cached.Currency
 	}
 	usageState := &UsageState{
-		Used:              used,
-		Size:              size,
-		InputTokens:       usage.InputTokens,
-		OutputTokens:      usage.OutputTokens,
-		TotalTokens:       usage.TotalTokens,
-		CachedReadTokens:  ptrIntVal(usage.CachedReadTokens),
-		CachedWriteTokens: ptrIntVal(usage.CachedWriteTokens),
-		ThoughtTokens:     ptrIntVal(usage.ThoughtTokens),
-		Cost:              cost,
-		Currency:          currency,
+		Used:     used,
+		Size:     size,
+		Cost:     cost,
+		Currency: currency,
+	}
+	if usage != nil {
+		usageState.InputTokens = usage.InputTokens
+		usageState.OutputTokens = usage.OutputTokens
+		usageState.TotalTokens = usage.TotalTokens
+		usageState.CachedReadTokens = ptrIntVal(usage.CachedReadTokens)
+		usageState.CachedWriteTokens = ptrIntVal(usage.CachedWriteTokens)
+		usageState.ThoughtTokens = ptrIntVal(usage.ThoughtTokens)
+	}
+	// Merge per-agent _meta usage detail (e.g. Claude/Codex quota, CodeBuddy
+	// credit) into the usage_update payload so the frontend sees it live.
+	if ext := extractMetaUsage(backendID, respMeta); ext != nil {
+		applyMetaExtractionToUsageState(usageState, ext)
+	}
+	if acc != nil {
+		applyMetaExtractionToUsageState(usageState, acc)
 	}
 	forwardACPEvent(streamCh, StreamEvent{Type: "usage_update", Usage: usageState})
 	c.SetCachedUsageState(usageState)

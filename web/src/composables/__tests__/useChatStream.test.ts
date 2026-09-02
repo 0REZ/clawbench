@@ -2097,7 +2097,30 @@ describe('useChatStream', () => {
 
         simulateWsEvent('usage_update', { size: 200000, used: 50000, cost: 0.5, currency: 'USD', inputTokens: 100, outputTokens: 200 })
 
-        expect(updateUsageState).toHaveBeenCalledWith(50000, 200000, 0.5, 'USD', 'test-session-1', 100, 200, undefined, undefined, undefined, undefined)
+        expect(updateUsageState).toHaveBeenCalledWith(50000, 200000, 0.5, 'USD', 'test-session-1', 100, 200, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined)
+      })
+
+      it('should forward per-agent _meta extensions (CodeBuddy cache/credit/usageByCategory)', async () => {
+        const { updateUsageState } = await import('@/composables/useSessionIdentity')
+        ;(updateUsageState as any).mockClear()
+
+        const options = createOptions()
+        const { connectStream } = useChatStream(options)
+        connectStream('test-session-1')
+
+        simulateWsEvent('usage_update', {
+          size: 200000, used: 29495,
+          inputTokens: 29495, outputTokens: 3,
+          cacheHitTokens: 8192, cacheMissTokens: 21303, cacheCreationTokens: 0,
+          credit: 1.48,
+          usageByCategory: { tools: 22701, conversation: 3894 },
+        })
+
+        expect(updateUsageState).toHaveBeenCalledWith(
+          29495, 200000, undefined, undefined, 'test-session-1',
+          29495, 3, undefined, undefined, undefined, undefined,
+          0, 8192, 21303, 1.48, { tools: 22701, conversation: 3894 },
+        )
       })
 
       it('should skip when size is 0', async () => {

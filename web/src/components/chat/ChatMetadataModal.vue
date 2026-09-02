@@ -50,6 +50,64 @@
         <span class="metadata-label">{{ t('chat.metadata.outputTokens') }}</span>
         <span class="metadata-value">{{ data.outputTokens.toLocaleString() }}</span>
       </div>
+      <div v-if="data.totalTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.totalTokens') }}</span>
+        <span class="metadata-value">{{ data.totalTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.cachedReadTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cachedReadTokens') }}</span>
+        <span class="metadata-value">{{ data.cachedReadTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.cachedWriteTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cachedWriteTokens') }}</span>
+        <span class="metadata-value">{{ data.cachedWriteTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.thoughtTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.thoughtTokens') }}</span>
+        <span class="metadata-value">{{ data.thoughtTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.usageByCategory && Object.keys(data.usageByCategory).length" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.usageByCategory') }}</span>
+        <span class="metadata-value">
+          <span v-for="(val, key) in data.usageByCategory" :key="key" class="metadata-cat-chip">
+            {{ catLabel(key) }}: {{ val.toLocaleString() }}
+          </span>
+        </span>
+      </div>
+      <div v-if="data.requestId" class="metadata-item metadata-copyable" @click="copyValue(data.requestId, $event)">
+        <span class="metadata-label">{{ t('chat.metadata.requestId') }}</span>
+        <div class="metadata-value-wrap">
+          <span class="metadata-value metadata-session-id metadata-value-copyable">{{ data.requestId }}</span>
+          <button class="metadata-copy-btn" @click.stop="copyValue(data.requestId, $event)" :title="t('chat.metadata.copy')">
+            <Copy :size="13" />
+          </button>
+        </div>
+      </div>
+      <div v-if="data.traceId" class="metadata-item metadata-copyable" @click="copyValue(data.traceId, $event)">
+        <span class="metadata-label">{{ t('chat.metadata.traceId') }}</span>
+        <div class="metadata-value-wrap">
+          <span class="metadata-value metadata-session-id metadata-value-copyable">{{ data.traceId }}</span>
+          <button class="metadata-copy-btn" @click.stop="copyValue(data.traceId, $event)" :title="t('chat.metadata.copy')">
+            <Copy :size="13" />
+          </button>
+        </div>
+      </div>
+      <div v-if="data.responseModelId" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.responseModelId') }}</span>
+        <span class="metadata-value">{{ data.responseModelId }}</span>
+      </div>
+      <div v-if="data.finishReason" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.finishReason') }}</span>
+        <span class="metadata-value">{{ data.finishReason }}</span>
+      </div>
+      <div v-if="data.outcome" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.outcome') }}</span>
+        <span class="metadata-value">{{ data.outcome }}</span>
+      </div>
+      <div v-if="data.agentPhase" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.agentPhase') }}</span>
+        <span class="metadata-value">{{ data.agentPhase }}</span>
+      </div>
       <div v-if="data.wallMs" class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.wallDuration') }}</span>
         <span class="metadata-value">{{ formatDuration(data.wallMs) }}</span>
@@ -125,6 +183,20 @@ defineProps({
 defineEmits(['close'])
 
 const toast = useToast()
+
+// Map a usageByCategory key (CodeBuddy codebuddy.ai/usageByCategory) to a
+// localized label. Unknown future keys fall back to the raw key.
+function catLabel(key) {
+  const map = {
+    conversation: 'chat.sessionInfo.catConversation',
+    tools: 'chat.sessionInfo.catTools',
+    systemPrompt: 'chat.sessionInfo.catSystemPrompt',
+    skills: 'chat.sessionInfo.catSkills',
+    mcp: 'chat.sessionInfo.catMCP',
+  }
+  const i18nKey = map[key]
+  return i18nKey ? t(i18nKey) : key
+}
 
 function copyValue(value, event) {
   const wrap = event.currentTarget.closest('.metadata-value-wrap') || event.currentTarget
@@ -271,5 +343,15 @@ function copyValue(value, event) {
 
 .metadata-indexed-no {
     color: var(--text-muted, #999);
+}
+
+.metadata-cat-chip {
+    display: inline-block;
+    background: var(--bg-tertiary, #f0f0f0);
+    border-radius: 3px;
+    padding: 1px 6px;
+    margin-right: 6px;
+    margin-bottom: 2px;
+    font-size: 12px;
 }
 </style>

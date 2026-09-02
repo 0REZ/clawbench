@@ -1584,6 +1584,13 @@ func TestExecuteTask_SessionExecutor_CompletedWithTerminalEvent(t *testing.T) {
 		stop_reason TEXT DEFAULT '',
 		is_error INTEGER DEFAULT 0,
 		error_message TEXT DEFAULT '',
+		cached_read_tokens INTEGER DEFAULT 0,
+		cached_write_tokens INTEGER DEFAULT 0,
+		thought_tokens INTEGER DEFAULT 0,
+		total_tokens INTEGER DEFAULT 0,
+		request_id TEXT DEFAULT '',
+		trace_id TEXT DEFAULT '',
+		response_model_id TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 	cleanup := SetDBForTest(db, db)

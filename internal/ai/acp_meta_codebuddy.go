@@ -1,0 +1,102 @@
+package ai
+
+// ---------------------------------------------------------------------------
+// CodeBuddy ACP _meta adapter
+// ---------------------------------------------------------------------------
+//
+// CodeBuddy (`codebuddy --acp`) packs rich metadata into _meta:
+//
+//   - `_meta.usage` — OpenAI-style token usage:
+//     { prompt_tokens, completion_tokens, completion_thinking_tokens,
+//       prompt_cache_hit_tokens, prompt_cache_miss_tokens,
+//       prompt_cache_write_tokens, cache_read_input_tokens,
+//       cache_creation_input_tokens, completion_tokens_details, credit }
+//   - `_meta.codebuddy.ai/usageByCategory` — context-window breakdown:
+//     { conversation, tools, systemPrompt, skills, mcp, version }
+//   - `_meta.codebuddy.ai/*` — trace/identity:
+//     { requestId, traceId, traceparent, messageId, messageRequestId,
+//       requestModelId, requestModelName, responseModelId,
+//       finishReason, outcome, agentPhase, progress }
+//
+// These appear on both session/update notifications (on the per-variant
+// update._meta) and the PromptResponse._meta.
+
+const (
+	metaKeyCodeBuddyUsage        = "usage"
+	metaKeyCodeBuddyByCategory   = "codebuddy.ai/usageByCategory"
+	metaKeyCodeBuddyRequestID    = "codebuddy.ai/requestId"
+	metaKeyCodeBuddyTraceID      = "codebuddy.ai/traceId"
+	metaKeyCodeBuddyMessageID    = "codebuddy.ai/messageId"
+	metaKeyCodeBuddyReqModelID   = "codebuddy.ai/requestModelId"
+	metaKeyCodeBuddyReqModelName = "codebuddy.ai/requestModelName"
+	metaKeyCodeBuddyRespModelID  = "codebuddy.ai/responseModelId"
+	metaKeyCodeBuddyFinishReason = "codebuddy.ai/finishReason"
+	metaKeyCodeBuddyOutcome      = "codebuddy.ai/outcome"
+	metaKeyCodeBuddyAgentPhase   = "codebuddy.ai/agentPhase"
+)
+
+// extractCodeBuddyMeta parses a CodeBuddy _meta payload.
+func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
+	if len(meta) == 0 {
+		return nil
+	}
+	ext := &metaExtraction{}
+
+	// OpenAI-style usage block.
+	if m, ok := meta[metaKeyCodeBuddyUsage].(map[string]any); ok {
+		u := &metaTokenUsage{
+			InputTokens:         metaInt(m["prompt_tokens"]),
+			OutputTokens:        metaInt(m["completion_tokens"]),
+			TotalTokens:         metaInt(m["total_tokens"]),
+			ThoughtTokens:       metaInt(m["completion_thinking_tokens"]),
+			CachedReadTokens:    metaInt(m["prompt_cache_hit_tokens"]),
+			CachedWriteTokens:   metaInt(m["prompt_cache_write_tokens"]),
+			CacheCreationTokens: metaInt(m["cache_creation_input_tokens"]),
+			CacheHitTokens:      metaInt(m["prompt_cache_hit_tokens"]),
+			CacheMissTokens:     metaInt(m["prompt_cache_miss_tokens"]),
+			Credit:              metaFloat(m["credit"]),
+		}
+		// Also accept cache_read_input_tokens as a cache-read source.
+		u.CachedReadTokens = metaMaxInt(u.CachedReadTokens, metaInt(m["cache_read_input_tokens"]))
+		if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
+			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.Credit != 0 {
+			u.Present = true
+		}
+		ext.Usage = u
+	}
+
+	// Context-window breakdown.
+	if m, ok := meta[metaKeyCodeBuddyByCategory].(map[string]any); ok {
+		cat := &metaCategoryUsage{Categories: map[string]int64{}}
+		for _, k := range []string{"conversation", "tools", "systemPrompt", "skills", "mcp"} {
+			if v, ok := m[k]; ok {
+				cat.Categories[k] = int64(metaInt(v))
+			}
+		}
+		if len(cat.Categories) > 0 {
+			cat.Present = true
+		}
+		ext.Category = cat
+	}
+
+	// Trace/identity namespace.
+	t := &metaTrace{
+		RequestID:        metaString(meta[metaKeyCodeBuddyRequestID]),
+		TraceID:          metaString(meta[metaKeyCodeBuddyTraceID]),
+		MessageID:        metaString(meta[metaKeyCodeBuddyMessageID]),
+		RequestModelID:   metaString(meta[metaKeyCodeBuddyReqModelID]),
+		RequestModelName: metaString(meta[metaKeyCodeBuddyReqModelName]),
+		ResponseModelID:  metaString(meta[metaKeyCodeBuddyRespModelID]),
+		FinishReason:     metaString(meta[metaKeyCodeBuddyFinishReason]),
+		Outcome:          metaString(meta[metaKeyCodeBuddyOutcome]),
+		AgentPhase:       metaString(meta[metaKeyCodeBuddyAgentPhase]),
+	}
+	if t.HasData() {
+		ext.Trace = t
+	}
+
+	if !ext.HasData() {
+		return nil
+	}
+	return ext
+}

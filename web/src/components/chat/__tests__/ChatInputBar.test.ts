@@ -248,6 +248,11 @@ const mockContextInputTokens = ref(0)
 const mockContextOutputTokens = ref(0)
 const mockContextCost = ref(0)
 const mockContextCurrency = ref('USD')
+const mockContextCacheCreationTokens = ref(0)
+const mockContextCacheHitTokens = ref(0)
+const mockContextCacheMissTokens = ref(0)
+const mockContextCredit = ref(0)
+const mockContextUsageByCategory = ref<Record<string, number> | undefined>(undefined)
 vi.mock('@/composables/useSessionIdentity', () => ({
   useSessionIdentity: () => ({
     availableCommands: mockAvailableCommands,
@@ -261,6 +266,11 @@ vi.mock('@/composables/useSessionIdentity', () => ({
     contextOutputTokens: mockContextOutputTokens,
     contextCost: mockContextCost,
     contextCurrency: mockContextCurrency,
+    contextCacheCreationTokens: mockContextCacheCreationTokens,
+    contextCacheHitTokens: mockContextCacheHitTokens,
+    contextCacheMissTokens: mockContextCacheMissTokens,
+    contextCredit: mockContextCredit,
+    contextUsageByCategory: mockContextUsageByCategory,
   }),
 }))
 
@@ -963,6 +973,65 @@ describe('ChatInputBar', () => {
     const wrapper = mountBar({ currentModelName: 'gpt-4' })
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.session-info-usage').exists()).toBe(true)
+  })
+
+  it('token detail section shows only when per-agent _meta extensions present', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 29495
+    mockContextCacheCreationTokens.value = 0
+    mockContextCacheHitTokens.value = 8192
+    mockContextCacheMissTokens.value = 21303
+    mockContextCredit.value = 1.48
+
+    const wrapper = mountBar()
+    // Open the usage popup.
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.usage-popup-section-title').exists()).toBe(true)
+    // The test i18n mock returns the raw key; assert on stable values + keys.
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheHitTokens')
+    expect(wrapper.text()).toContain('8,192')
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheMissTokens')
+    expect(wrapper.text()).toContain('21,303')
+    expect(wrapper.text()).toContain('1.4800')
+
+    // Reset for other tests.
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+    mockContextCredit.value = 0
+  })
+
+  it('token detail section hidden when no per-agent _meta extensions', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    mockContextCacheCreationTokens.value = 0
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+    mockContextCredit.value = 0
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.usage-popup-section-title').exists()).toBe(false)
+  })
+
+  it('context breakdown section shows usageByCategory by value', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 29495
+    mockContextUsageByCategory.value = { tools: 22701, conversation: 3894 }
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('chat.sessionInfo.catTools')
+    expect(wrapper.text()).toContain('22,701')
+    expect(wrapper.text()).toContain('chat.sessionInfo.catConversation')
+    expect(wrapper.text()).toContain('3,894')
+
+    mockContextUsageByCategory.value = undefined
   })
 
   it('attached files render with file icon color', async () => {

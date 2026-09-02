@@ -60,6 +60,13 @@ interface UsageState {
   thoughtTokens: number
   cost: number
   currency: string
+  // Per-agent _meta extensions (CodeBuddy OpenAI-style cache detail + credit).
+  cacheCreationTokens: number
+  cacheHitTokens: number
+  cacheMissTokens: number
+  credit: number
+  // Context-window breakdown by component (CodeBuddy usageByCategory).
+  usageByCategory?: Record<string, number>
 }
 const usageStateCache = new Map<string, UsageState>()
 // Bumped on every mutation to usageStateCache so computed properties
@@ -75,6 +82,11 @@ const contextCachedWriteTokens = computed(() => { void usageStateVersion.value /
 const contextThoughtTokens = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.thoughtTokens ?? 0 })
 const contextCost = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.cost ?? 0 })
 const contextCurrency = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.currency ?? '' })
+const contextCacheCreationTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheCreationTokens ?? 0 })
+const contextCacheHitTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheHitTokens ?? 0 })
+const contextCacheMissTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheMissTokens ?? 0 })
+const contextCredit = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.credit ?? 0 })
+const contextUsageByCategory = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.usageByCategory })
 export const runningSessions = ref(new Set<string>())
 // Bumped on every mutation to runningSessions so computed properties
 // that depend on the set's contents re-evaluate correctly.
@@ -323,11 +335,29 @@ export function clearThinkingEffortState() {
 
 /** Update context usage state for a session (from SSE or REST).
  *  Writes to the per-session cache — does not affect the displayed
- *  values unless the target session is the current one. */
-export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number) {
+ *  values unless the target session is the current one.
+ *  Extended params cover per-agent _meta extensions (CodeBuddy cache detail
+ *  + credit + usageByCategory); undefined keeps the previous value. */
+export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number, cacheCreationTokens?: number, cacheHitTokens?: number, cacheMissTokens?: number, credit?: number, usageByCategory?: Record<string, number>) {
   const key = sessionId || currentSessionId.value
   if (!key) return
-  usageStateCache.set(key, { used, size, inputTokens: inputTokens ?? 0, outputTokens: outputTokens ?? 0, totalTokens: totalTokens ?? 0, cachedReadTokens: cachedReadTokens ?? 0, cachedWriteTokens: cachedWriteTokens ?? 0, thoughtTokens: thoughtTokens ?? 0, cost: cost ?? 0, currency: currency ?? '' })
+  const prev = usageStateCache.get(key)
+  usageStateCache.set(key, {
+    used, size,
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    totalTokens: totalTokens ?? 0,
+    cachedReadTokens: cachedReadTokens ?? 0,
+    cachedWriteTokens: cachedWriteTokens ?? 0,
+    thoughtTokens: thoughtTokens ?? 0,
+    cost: cost ?? 0,
+    currency: currency ?? '',
+    cacheCreationTokens: cacheCreationTokens ?? prev?.cacheCreationTokens ?? 0,
+    cacheHitTokens: cacheHitTokens ?? prev?.cacheHitTokens ?? 0,
+    cacheMissTokens: cacheMissTokens ?? prev?.cacheMissTokens ?? 0,
+    credit: credit ?? prev?.credit ?? 0,
+    usageByCategory: usageByCategory ?? prev?.usageByCategory,
+  })
   usageStateVersion.value++
 }
 
@@ -794,6 +824,11 @@ export function useSessionIdentity() {
     contextThoughtTokens,
     contextCost,
     contextCurrency,
+    contextCacheCreationTokens,
+    contextCacheHitTokens,
+    contextCacheMissTokens,
+    contextCredit,
+    contextUsageByCategory,
     agentHeaderTitle,
     // Global session drawer state (TabDrawer — use .open()/.close()/.effectiveOpen/.isOpen)
     sessionDrawer,

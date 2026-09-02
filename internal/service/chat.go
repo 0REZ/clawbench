@@ -1347,11 +1347,15 @@ func SaveMetadata(messageID int64, meta *ai.Metadata) error {
 		`
 		INSERT OR REPLACE INTO chat_metadata
 			(message_id, mode, thinking_effort, transport, model, input_tokens, output_tokens,
-			 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message,
+			 cached_read_tokens, cached_write_tokens, thought_tokens, total_tokens,
+			 request_id, trace_id, response_model_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		messageID, meta.Mode, meta.ThinkingEffort, meta.Transport, meta.Model,
 		meta.InputTokens, meta.OutputTokens, meta.DurationMs, meta.WallMs,
 		meta.CostUSD, meta.StopReason, isError, meta.ErrorMessage,
+		meta.CachedReadTokens, meta.CachedWriteTokens, meta.ThoughtTokens, meta.TotalTokens,
+		meta.RequestID, meta.TraceID, meta.ResponseModelID,
 	)
 	return err
 }

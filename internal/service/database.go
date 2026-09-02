@@ -455,6 +455,13 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			stop_reason TEXT DEFAULT '',
 			is_error INTEGER DEFAULT 0,
 			error_message TEXT DEFAULT '',
+			cached_read_tokens INTEGER DEFAULT 0,
+			cached_write_tokens INTEGER DEFAULT 0,
+			thought_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			request_id TEXT DEFAULT '',
+			trace_id TEXT DEFAULT '',
+			response_model_id TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (message_id) REFERENCES chat_history(id) ON DELETE CASCADE
 		);
@@ -568,6 +575,31 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 	if hasSummaryCards == 0 {
 		if _, err := WriteExec("ALTER TABLE summaries ADD COLUMN summary_cards TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("failed to add summary_cards column: %w", err)
+		}
+	}
+
+	// Migrate: chat_metadata extended token/trace columns (per-agent _meta
+	// extensions — CodeBuddy cache detail + trace identity, Claude/Codex
+	// reasoning tokens). All default to zero/empty so existing rows remain valid.
+	chatMetaCols := []struct {
+		name string
+		ddl  string
+	}{
+		{"cached_read_tokens", "ALTER TABLE chat_metadata ADD COLUMN cached_read_tokens INTEGER DEFAULT 0"},
+		{"cached_write_tokens", "ALTER TABLE chat_metadata ADD COLUMN cached_write_tokens INTEGER DEFAULT 0"},
+		{"thought_tokens", "ALTER TABLE chat_metadata ADD COLUMN thought_tokens INTEGER DEFAULT 0"},
+		{"total_tokens", "ALTER TABLE chat_metadata ADD COLUMN total_tokens INTEGER DEFAULT 0"},
+		{"request_id", "ALTER TABLE chat_metadata ADD COLUMN request_id TEXT DEFAULT ''"},
+		{"trace_id", "ALTER TABLE chat_metadata ADD COLUMN trace_id TEXT DEFAULT ''"},
+		{"response_model_id", "ALTER TABLE chat_metadata ADD COLUMN response_model_id TEXT DEFAULT ''"},
+	}
+	for _, col := range chatMetaCols {
+		var hasCol int
+		_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_metadata') WHERE name=?", col.name).Scan(&hasCol)
+		if hasCol == 0 {
+			if _, err := WriteExec(col.ddl); err != nil {
+				return fmt.Errorf("failed to add chat_metadata.%s column: %w", col.name, err)
+			}
 		}
 	}
 

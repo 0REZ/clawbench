@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS chat_metadata (
 	error_message TEXT DEFAULT '',
 	cache_creation_input_tokens INTEGER DEFAULT 0,
 	cache_read_input_tokens INTEGER DEFAULT 0,
+	cached_read_tokens INTEGER DEFAULT 0,
+	cached_write_tokens INTEGER DEFAULT 0,
+	thought_tokens INTEGER DEFAULT 0,
+	total_tokens INTEGER DEFAULT 0,
+	request_id TEXT DEFAULT '',
+	trace_id TEXT DEFAULT '',
+	response_model_id TEXT DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_tool_calls (

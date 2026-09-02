@@ -1306,6 +1306,18 @@ describe('useSessionIdentity', () => {
             expect(identity.contextCurrency.value).toBe('USD')
         })
 
+        it('stores per-agent _meta extensions (cache detail + usageByCategory)', () => {
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(29495, 200000, undefined, undefined, undefined, 29495, 3, 29498, 8192, 0, 0, 0, 8192, 21303, 1.48, { tools: 22701, conversation: 3894 })
+
+            expect(identity.contextCacheHitTokens.value).toBe(8192)
+            expect(identity.contextCacheMissTokens.value).toBe(21303)
+            expect(identity.contextCacheCreationTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(1.48)
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 22701, conversation: 3894 })
+        })
+
         it('defaults cost and currency when not provided', () => {
             const identity = useSessionIdentity()
             identity.currentSessionId.value = 'session-A'

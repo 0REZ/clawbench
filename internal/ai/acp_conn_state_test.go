@@ -1429,7 +1429,7 @@ func TestEmitPromptResponseUsage_NilCachedState(t *testing.T) {
 		ThoughtTokens:     &thought,
 	}
 
-	conn.emitPromptResponseUsage(usage, streamCh)
+	conn.emitPromptResponseUsage(usage, nil, streamCh)
 	close(streamCh)
 
 	var meta, usageUpdate *StreamEvent
@@ -1474,7 +1474,7 @@ func TestEmitPromptResponseUsage_WithCachedState(t *testing.T) {
 
 	streamCh := make(chan StreamEvent, 8)
 	usage := &acp.Usage{InputTokens: 10, OutputTokens: 20, TotalTokens: 30}
-	conn.emitPromptResponseUsage(usage, streamCh)
+	conn.emitPromptResponseUsage(usage, nil, streamCh)
 	close(streamCh)
 
 	var usageUpdate *StreamEvent
@@ -1490,6 +1490,40 @@ func TestEmitPromptResponseUsage_WithCachedState(t *testing.T) {
 	assert.Equal(t, 1000, u.Size)
 	assert.Equal(t, 1.5, u.Cost)
 	assert.Equal(t, "USD", u.Currency)
+}
+
+// TestEmitPromptResponseUsage_NilUsage verifies that a nil PromptResponse.Usage
+// with non-empty _meta (CodeBuddy pattern: no PromptResponse.Usage, but quota /
+// trace present) does not panic and still persists the meta detail. Regression
+// for the nil-dereference observed when the PromptResponse carried only _meta.
+func TestEmitPromptResponseUsage_NilUsage(t *testing.T) {
+	agent := &model.Agent{ID: "test-usage-nilusage", Backend: "codebuddy", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-usage-nilusage")
+
+	streamCh := make(chan StreamEvent, 8)
+	// CodeBuddy PromptResponse._meta carries codebuddy.ai/* trace but no usage.
+	respMeta := map[string]any{
+		"codebuddy.ai/requestId": "req-xyz",
+		"codebuddy.ai/outcome":   "SUCCESS",
+	}
+	conn.emitPromptResponseUsage(nil, respMeta, streamCh)
+	close(streamCh)
+
+	var metaEvt, usageEvt *StreamEvent
+	for ev := range streamCh {
+		if ev.Type == "metadata" {
+			metaEvt = &ev
+		}
+		if ev.Type == "usage_update" {
+			usageEvt = &ev
+		}
+	}
+	require.NotNil(t, metaEvt, "metadata event should be emitted even with nil usage")
+	assert.Equal(t, "req-xyz", metaEvt.Meta.RequestID)
+	assert.Equal(t, "SUCCESS", metaEvt.Meta.Outcome)
+
+	require.NotNil(t, usageEvt, "usage_update event should be emitted even with nil usage")
+	assert.Equal(t, 0, usageEvt.Usage.InputTokens)
 }
 
 // ---------------------------------------------------------------------------

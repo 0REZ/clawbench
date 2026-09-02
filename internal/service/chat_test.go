@@ -139,6 +139,13 @@ CREATE TABLE IF NOT EXISTS chat_metadata (
 	stop_reason TEXT DEFAULT '',
 	is_error INTEGER DEFAULT 0,
 	error_message TEXT DEFAULT '',
+	cached_read_tokens INTEGER DEFAULT 0,
+	cached_write_tokens INTEGER DEFAULT 0,
+	thought_tokens INTEGER DEFAULT 0,
+	total_tokens INTEGER DEFAULT 0,
+	request_id TEXT DEFAULT '',
+	trace_id TEXT DEFAULT '',
+	response_model_id TEXT DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_tool_calls (
@@ -2455,6 +2462,45 @@ func TestSaveMetadata(t *testing.T) {
 	assert.Equal(t, 50, outputTokens)
 	assert.Equal(t, 3200, wallMs)
 	assert.InDelta(t, 0.005, costUsd, 0.0001)
+}
+
+func TestSaveMetadata_ExtendedColumns(t *testing.T) {
+	db := setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "codebuddy", "MetaExt")
+	msgID, err := service.AddChatMessage("/project", "codebuddy", sid, "assistant", `{"blocks":[],"metadata":{}}`, nil, false, "")
+	assert.NoError(t, err)
+	assert.Greater(t, msgID, int64(0))
+
+	meta := &ai.Metadata{
+		Model:             "glm-5.1",
+		InputTokens:       29495,
+		OutputTokens:      3,
+		TotalTokens:       29498,
+		CachedReadTokens:  8192,
+		CachedWriteTokens: 0,
+		ThoughtTokens:     0,
+		RequestID:         "req-123",
+		TraceID:           "trace-456",
+		ResponseModelID:   "ep-b3mrev6r",
+	}
+	err = service.SaveMetadata(msgID, meta)
+	assert.NoError(t, err)
+
+	var totalTokens, cachedRead, cachedWrite, thought int
+	var requestID, traceID, responseModelID string
+	err = db.QueryRow(
+		"SELECT total_tokens, cached_read_tokens, cached_write_tokens, thought_tokens, request_id, trace_id, response_model_id FROM chat_metadata WHERE message_id = ?",
+		msgID,
+	).Scan(&totalTokens, &cachedRead, &cachedWrite, &thought, &requestID, &traceID, &responseModelID)
+	assert.NoError(t, err)
+	assert.Equal(t, 29498, totalTokens)
+	assert.Equal(t, 8192, cachedRead)
+	assert.Equal(t, 0, cachedWrite)
+	assert.Equal(t, 0, thought)
+	assert.Equal(t, "req-123", requestID)
+	assert.Equal(t, "trace-456", traceID)
+	assert.Equal(t, "ep-b3mrev6r", responseModelID)
 }
 
 func TestSaveMetadata_NilMeta(t *testing.T) {
