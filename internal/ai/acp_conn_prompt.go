@@ -189,15 +189,28 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 
 	// PromptResponse.Usage (UNSTABLE): emit metadata and usage_update events
 	// so input/output token counts are persisted and shown in the context chip.
+	// The stopReason travels with the metadata so the message-level record (and
+	// chat_metadata.stop_reason column) reflects why the turn ended — e.g.
+	// Claude/Codex report stopReason="end_turn" on the PromptResponse (the
+	// standard ACP field), not inside _meta.
 	if resp.Usage != nil || len(resp.Meta) > 0 {
-		c.emitPromptResponseUsage(resp.Usage, resp.Meta, streamCh)
+		c.emitPromptResponseUsage(resp.Usage, resp.Meta, resp.StopReason, streamCh)
 	} else if acc := c.getAndClearMetaAccum(); acc != nil {
 		// No PromptResponse usage/meta, but the turn accumulated per-agent _meta
 		// extensions from session/update notifications (e.g. CodeBuddy usage).
 		// Persist them so the message-level metadata reflects the turn.
 		meta := &Metadata{}
 		applyMetaExtractionToMetadata(meta, acc)
+		if resp.StopReason != "" {
+			meta.StopReason = string(resp.StopReason)
+		}
 		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
+	} else if resp.StopReason != "" {
+		// No usage/meta at all (rare), but still persist the stop reason so the
+		// message record is complete.
+		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: &Metadata{
+			StopReason: string(resp.StopReason),
+		}})
 	}
 
 	return nil
@@ -230,17 +243,19 @@ func acpHTTPStatusFromMeta(meta map[string]any) int {
 }
 
 // emitPromptResponseUsage emits metadata and usage_update events from a
-// PromptResponse.Usage (UNSTABLE ACP feature) and PromptResponse._meta
-// extensions. The metadata event ensures InputTokens/OutputTokens (and any
-// per-agent _meta detail) are persisted to chat_metadata and embedded in
-// chat_history.content JSON. The usage_update event updates the frontend's
-// context usage chip in real time.
+// PromptResponse.Usage (UNSTABLE ACP feature), the ACP-standard stopReason,
+// and PromptResponse._meta extensions. The metadata event ensures
+// InputTokens/OutputTokens (and any per-agent _meta detail) are persisted to
+// chat_metadata and embedded in chat_history.content JSON. The usage_update
+// event updates the frontend's context usage chip in real time.
 //
 // respMeta carries the per-agent _meta extensions from the PromptResponse
 // (Claude/Codex quota.token_count, CodeBuddy codebuddy.ai/* trace). The
 // accumulated turn-level _meta (from session/update notifications) is merged
 // in as well so the metadata event reflects the richest observed values.
-func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]any, streamCh chan<- StreamEvent) {
+// stopReason is the ACP-standard PromptResponse.stopReason (Claude/Codex
+// report it here, e.g. "end_turn"); it is persisted on the metadata record.
+func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]any, stopReason acp.StopReason, streamCh chan<- StreamEvent) {
 	backendID := c.BackendID()
 
 	// Start from PromptResponse.Usage. usage may be nil when only _meta
@@ -248,11 +263,16 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]
 	// Capture the turn-level accumulation once and reuse it for both the
 	// metadata event and the usage_update payload.
 	meta := &Metadata{}
-	acc := c.getAndClearMetaAccum()
 	if usage != nil {
 		meta.InputTokens = usage.InputTokens
 		meta.OutputTokens = usage.OutputTokens
 	}
+	// Persist the ACP-standard stop reason (Claude/Codex report it here, not in
+	// _meta) so the message record reflects why the turn ended.
+	if stopReason != "" {
+		meta.StopReason = string(stopReason)
+	}
+	acc := c.getAndClearMetaAccum()
 	// Apply per-agent _meta extensions from the PromptResponse (Claude/Codex
 	// quota, CodeBuddy trace) and the turn-level accumulation (CodeBuddy usage
 	// from session/update notifications).

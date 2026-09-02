@@ -1429,7 +1429,7 @@ func TestEmitPromptResponseUsage_NilCachedState(t *testing.T) {
 		ThoughtTokens:     &thought,
 	}
 
-	conn.emitPromptResponseUsage(usage, nil, streamCh)
+	conn.emitPromptResponseUsage(usage, nil, "", streamCh)
 	close(streamCh)
 
 	var meta, usageUpdate *StreamEvent
@@ -1474,7 +1474,7 @@ func TestEmitPromptResponseUsage_WithCachedState(t *testing.T) {
 
 	streamCh := make(chan StreamEvent, 8)
 	usage := &acp.Usage{InputTokens: 10, OutputTokens: 20, TotalTokens: 30}
-	conn.emitPromptResponseUsage(usage, nil, streamCh)
+	conn.emitPromptResponseUsage(usage, nil, "", streamCh)
 	close(streamCh)
 
 	var usageUpdate *StreamEvent
@@ -1506,7 +1506,7 @@ func TestEmitPromptResponseUsage_NilUsage(t *testing.T) {
 		"codebuddy.ai/requestId": "req-xyz",
 		"codebuddy.ai/outcome":   "SUCCESS",
 	}
-	conn.emitPromptResponseUsage(nil, respMeta, streamCh)
+	conn.emitPromptResponseUsage(nil, respMeta, "", streamCh)
 	close(streamCh)
 
 	var metaEvt, usageEvt *StreamEvent
@@ -1524,6 +1524,31 @@ func TestEmitPromptResponseUsage_NilUsage(t *testing.T) {
 
 	require.NotNil(t, usageEvt, "usage_update event should be emitted even with nil usage")
 	assert.Equal(t, 0, usageEvt.Usage.InputTokens)
+}
+
+// TestEmitPromptResponseUsage_PersistsStopReason verifies the ACP-standard
+// PromptResponse.stopReason (Claude/Codex report it at the top level, not in
+// _meta) is persisted onto the metadata record so chat_metadata.stop_reason
+// reflects why the turn ended.
+func TestEmitPromptResponseUsage_PersistsStopReason(t *testing.T) {
+	agent := &model.Agent{ID: "test-usage-stopreason", Backend: "claude", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-usage-stopreason")
+
+	streamCh := make(chan StreamEvent, 8)
+	usage := &acp.Usage{InputTokens: 142, OutputTokens: 18, TotalTokens: 41252}
+	conn.emitPromptResponseUsage(usage, nil, "end_turn", streamCh)
+	close(streamCh)
+
+	var metaEvt *StreamEvent
+	for ev := range streamCh {
+		if ev.Type == "metadata" {
+			metaEvt = &ev
+		}
+	}
+	require.NotNil(t, metaEvt, "metadata event should be emitted")
+	assert.Equal(t, "end_turn", metaEvt.Meta.StopReason)
+	assert.Equal(t, 142, metaEvt.Meta.InputTokens)
+	assert.Equal(t, 18, metaEvt.Meta.OutputTokens)
 }
 
 // ---------------------------------------------------------------------------
