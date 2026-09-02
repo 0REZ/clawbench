@@ -239,7 +239,10 @@ describe('ChatMessageList — stream-follow persistence', () => {
     // drag latches the "left" flag immediately — a user who stops mid-drag
     // inside the near-bottom band must stay locked, or the next streamed pin
     // yanks them (the snap-back jitter bug).
-    expect(source).toContain('scrollingUp: el.scrollTop < lastScrollTop')
+    // Direction uses prevScrollTop — captured before any branch so programmatic
+    // stream pins (which return early) cannot freeze lastScrollTop at a stale
+    // pre-stream value and poison upward-drag detection.
+    expect(source).toContain('scrollingUp: el.scrollTop < prevScrollTop')
     expect(source).toContain('updateUserLeftBottom(userLeftBottom, {')
     // Returning to the bottom (within RESUME_FOLLOW_PX) clears it
     expect(source).toContain('updateUserLeftBottom')
@@ -273,7 +276,7 @@ describe('ChatMessageList — stream-follow persistence', () => {
     const source = typeof mod.default === 'string' ? mod.default : ''
     // The latch decision delegates to the direction-driven pure function
     expect(source).toContain('userLeftBottom = updateUserLeftBottom(')
-    expect(source).toContain('scrollingUp: el.scrollTop < lastScrollTop')
+    expect(source).toContain('scrollingUp: el.scrollTop < prevScrollTop')
     // The old distance-only latch must be gone
     expect(source).not.toContain('if (distFromBottom > NEAR_BOTTOM_PX) {')
   })
@@ -301,6 +304,27 @@ describe('ChatMessageList — stream-follow persistence', () => {
     const source = typeof mod.default === 'string' ? mod.default : ''
     expect(source).toContain('if (userTouching || wheelActive || mouseDownActive) {')
     expect(source).not.toContain('if (!programmaticScrolling && (userTouching || wheelActive || mouseDownActive)) {')
+  })
+
+  it('lastScrollTop is captured before any branch so programmatic pins cannot freeze it', async () => {
+    // Regression: during streaming, every stream-pin scroll event takes the
+    // `if (programmaticScrolling)` early-return path. The old code updated
+    // lastScrollTop only AFTER that branch, so it froze at a stale pre-stream
+    // value (typically 0). Every subsequent upward drag then read
+    // `el.scrollTop < lastScrollTop` as false → the userLeftBottom latch never
+    // fired → streamed pins yanked the user back to the bottom no matter how
+    // far they dragged up ("无论如何向上拖拽都会被拽回到底部" bug; refresh fixed
+    // it only by resetting the frozen value).
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The previous position must be captured BEFORE the programmatic branch.
+    const capture = source.indexOf('const prevScrollTop = lastScrollTop')
+    expect(capture).toBeGreaterThan(-1)
+    expect(source.indexOf('lastScrollTop = el.scrollTop')).toBeGreaterThan(capture)
+    // Both the user-scroll latch and the FAB direction logic consume the
+    // pre-branch capture, not the (possibly frozen) module-level variable.
+    expect(source).toContain('scrollingUp: el.scrollTop < prevScrollTop')
+    expect(source).toContain('const scrollDelta = el.scrollTop - prevScrollTop')
   })
 })
 

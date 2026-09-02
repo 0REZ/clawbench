@@ -89,7 +89,6 @@ import { useAppMode } from '@/composables/useAppMode'
 import { startFlushTimer, stopFlushTimer } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { usePwaInstall } from '@/composables/usePwaInstall'
-import { useDesktopDownload } from '@/composables/useDesktopDownload'
 import { downloadByUrl } from '@/utils/download'
 import { categoryItems, isPanelOnlyCategory, getCategoryPanels, isDependsOnMet, isSubPageRoute, getSubPagePanel, type ItemSpec, type CategoryEntry, type GroupPanelConfig } from './settingsFieldMap'
 import { THEMES } from '@/utils/themeMeta'
@@ -112,7 +111,6 @@ const { localConfig, serverConfig, setLocalConfig, getServerValueWithDefault, se
 const { loadAgents } = useAgents()
 const { isAppMode } = useAppMode()
 const pwaInstall = usePwaInstall()
-const desktopDownload = useDesktopDownload()
 const activeKey = ref<string | null>(null)
 const showPasswordDialog = ref(false)
 const showIosSheet = ref(false)
@@ -120,7 +118,6 @@ const upgradeDialogRef = ref<InstanceType<typeof UpgradeDialog> | null>(null)
 const nativeAppVersion = ref('')
 
 onMounted(() => {
-  desktopDownload.loadLatest()
   void (async () => {
     try {
       const native = getNative()
@@ -161,7 +158,6 @@ const renderList = computed(() => {
       if (entry.spec.key === 'appVersion' && !isAppMode.value) continue
       if (entry.spec.key === 'addToHomeScreen' && !pwaInstall.showPwaInstall.value) continue
       if (entry.spec.key === 'downloadAndroidApp' && !pwaInstall.showApkDownload.value) continue
-      if (entry.spec.key === 'downloadDesktopApp' && !(desktopDownload.isDesktop && !!desktopDownload.currentDownloadUrl())) continue
       result.push(entry)
     } else {
       // Panel entries always render
@@ -331,9 +327,6 @@ function handleClick(item: ItemSpec) {
   }
   if (item.key === 'downloadAndroidApp') {
     downloadByUrl('/api/apk', 'clawbench-android.apk')
-  }
-  if (item.key === 'downloadDesktopApp') {
-    desktopDownload.downloadDesktop()
   }
   if (item.navigateTo) {
     emit('navigate', item.navigateTo)

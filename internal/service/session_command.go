@@ -220,10 +220,17 @@ func LaunchSessionExecution(cfg LaunchConfig) {
 			// Skip for cancelled: CancelSession already calls EmitSessionEvent("cancelled")
 			// which handles push. Skip for error: no meaningful push content.
 			if event.Type == eventTypeDone {
-				EmitSessionPushNotification(sessionID, statusCompleted)
+				// Only the first terminal state may push + broadcast "completed".
+				// If a concurrent CancelSession already claimed the terminal guard
+				// (broadcasting "cancelled"), EmitSessionPushNotification returns
+				// false and we must NOT also broadcast "completed" — otherwise
+				// clients see cancelled followed by a contradictory completed.
+				if !EmitSessionPushNotification(sessionID, statusCompleted) {
+					return
+				}
 				// Global WS broadcast so all clients (even ones that missed the
 				// stream "done") clear the session's running flag.
-				emitSessionEvent(sessionID, statusCompleted, false, false)
+				emitSessionEvent(sessionID, statusCompleted, false, false, true)
 			}
 		}
 
@@ -433,6 +440,17 @@ func BuildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		systemPrompt = appendMediaPrompt(systemPrompt)
 	}
 
+	// HasConversationHistory drives the amnesia-prevention fallback in
+	// acp_backend: true blocks silent fallback to NewSession when a session
+	// may hold history. On count failure, conservatively assume history exists
+	// rather than risk dropping the session context.
+	hasHistory := true
+	if count, err := GetChatMessageCount(sessionID); err == nil {
+		hasHistory = count > 0
+	} else {
+		slog.Warn("BuildChatRequest: GetChatMessageCount failed, assuming conversation history", "session_id", sessionID, "err", err)
+	}
+
 	return ai.ChatRequest{
 		Prompt:                 prompt,
 		SessionID:              effectiveSessionID,
@@ -446,7 +464,7 @@ func BuildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		Resume:                 resume,
 		HasAttachments:         hasAttachments,
 		AssistantMessageCount:  GetAssistantMessageCount(sessionID),
-		HasConversationHistory: GetChatMessageCount(sessionID) > 0,
+		HasConversationHistory: hasHistory,
 		ForkContext:            forkContext,
 	}
 }

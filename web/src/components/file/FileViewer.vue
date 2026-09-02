@@ -242,7 +242,7 @@
         :code-view="isCodeMirrorView"
         :side="tocDockSide"
         @close="emit('closeToc')"
-        @jump="emit('jump', $event)"
+        @jump="(line, anchorId) => emit('jump', line, anchorId)"
         @jump-page="emit('jumpPage', $event)"
       />
     </div>
@@ -305,12 +305,10 @@ const OpenApiPreview = defineAsyncComponent(buildAsyncComponentOptions({ loader:
 import DiffDrawer from './DiffDrawer.vue'
 import { useDiffDrawer } from '@/composables/useDiffDrawer.ts'
 import { diffDrawer } from '@/composables/useMarkdownDiff.ts'
+import { useFileScrollRestore } from '@/composables/useFileScrollRestore'
 import FileHeader from './FileHeader.vue'
 import TocDock from './TocDock.vue'
 import { getFileType, formatFileSize } from '@/utils/fileType.ts'
-import { EditorView } from '@codemirror/view'
-import { extractToc } from '@/utils/toc.ts'
-import { pickPreviewAnchor, pickCmAnchor, relTopFor, scrollTopFor } from '@/utils/markdownScroll.ts'
 import { store } from '@/stores/app.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { useFileNavStack } from '@/composables/useFileNavStack.ts'
@@ -447,9 +445,9 @@ function handleToggleEdit() {
         // (save/discard/cancel) exactly like the back gesture and navigation.
         return guardExitEdit(() => {})
     }
-    const saved = captureScrollFrom(getScrollEl())
+    const saved = scrollRestore.captureScroll(scrollRestore.currentScrollEl())
     editing.value = true
-    restoreScrollAfter(saved)
+    scrollRestore.restoreAfterContainerSwitch(saved)
 }
 
 // Confirm-and-exit edit mode before an action that would leave the current
@@ -517,23 +515,6 @@ function waitEditingCleared(timeoutMs = 5000) {
     })
 }
 
-// Restore the previously captured scroll anchor/ratio once the current scroll
-// container is ready. The browse/edit view can swap scroll containers that
-// mount async (CodeMirror is lazy-loaded), so retry until it is laid out.
-function restoreScrollAfter(saved) {
-    if (!saved) return
-    let attempts = 0
-    const timer = setInterval(() => {
-        const el = getScrollEl()
-        if (el && el.scrollHeight > el.clientHeight) {
-            clearInterval(timer)
-            restoreScroll(saved, el)
-        } else if (++attempts > 60) {
-            clearInterval(timer)
-        }
-    }, 50)
-}
-
 // Expose PDF outline and scrollToPage for TOC integration
 const pdfOutline = computed(() => pdfPreviewRef.value?.outline || [])
 const pdfScrollToPage = (pageNum) => pdfPreviewRef.value?.scrollToPage(pageNum)
@@ -565,244 +546,49 @@ function toggleStickyScroll() {
     setLocalConfig('stickyScroll', !stickyScroll.value)
 }
 
-// Per-file scroll position cache
-const scrollPositions = new Map()
-let pendingRestore = null // { path, scrollTop }
-let restoreTimer = null
-let restoreAttempts = 0
-const MAX_RESTORE_ATTEMPTS = 100 // 100 * 50ms = 5 seconds max
-let currentFilePath = null
-let scrollHandler = null
-let scrollEl = null // reference to the element we attached scroll listener to
+// Scroll-position save/restore (cross-file reopen + rendered↔raw pane swaps)
+// is delegated to the useFileScrollRestore composable; the viewer only declares
+// what content it renders. Positions persist in the module-level fileScrollCache
+// so they survive unmount/remount (overlay close → file manager → recent reopen).
+const scrollRestore = useFileScrollRestore({
+    contentRoot: () => contentRef.value,
+    file: () => props.file,
+    markdownViewMode: () => props.markdownViewMode,
+    editing: () => editing.value,
+    loading: () => loading.value,
+    isMarkdown: () => isMarkdown.value,
+    isHtml: () => isHtml.value,
+    isOpenapi: () => isOpenapi.value,
+})
 
-function clearRestoreTimer() {
-    if (restoreTimer) {
-        clearInterval(restoreTimer)
-        restoreTimer = null
-    }
-}
-
-// Find the actual scroll container based on file type & view state
-function getScrollEl() {
-    return scrollElFor(props.markdownViewMode, editing.value)
-}
-
-// Resolve the scroll container for an explicit view mode + edit state. Used to
-// capture from the pane being left (its DOM is still mounted during a pre-flush
-// watch, before the new pane swaps in).
-function scrollElFor(viewMode, isEditing) {
-    const el = contentRef.value
-    if (!el) return null
-    // Edit mode always renders the CodeMirror editor
-    if (isEditing) {
-        return el.querySelector('.cm-scroller')
-    }
-    if (isMarkdown.value) {
-        // Rendered markdown scrolls in .markdown-body; source view uses CM
-        return viewMode === 'rendered'
-            ? el.querySelector('.markdown-body')
-            : el.querySelector('.cm-scroller')
-    }
-    /* v8 ignore next - trivial prop access fix, tested via integration */
-    if (isHtml.value && viewMode === 'rendered') {
-        return null // iframe handles its own scrolling
-    }
-    if (isOpenapi.value && viewMode === 'rendered') {
-        return null // ReDoc iframe handles its own scrolling
-    }
-    if (props.file?.isExcalidraw) {
-        return null // Excalidraw iframe handles its own scrolling
-    }
-    // CodeMirror-based viewers scroll inside .cm-scroller
-    return el.querySelector('.cm-scroller')
-}
-
-// ─── Heading-anchored scroll sync (preview ↔ edit/raw) ──────────────────────
-// Capture a TOC heading anchor at the viewport top plus a percentage-ratio
-// fallback. On restore, heading alignment wins; percentage is the fallback.
-
-function capturePreviewAnchor(el) {
-    const toc = extractToc(props.file?.content || '', 'markdown')
-    if (toc.length === 0) return null
-    const idToMeta = new Map(toc.map((i) => [i.id, i]))
-    const headings = []
-    for (const h of el.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
-        const meta = h.id ? idToMeta.get(h.id) : undefined
-        if (!meta) continue
-        headings.push({
-            id: h.id,
-            line: meta.line,
-            contentTop: h.getBoundingClientRect().top - el.getBoundingClientRect().top,
-        })
-    }
-    return pickPreviewAnchor(headings, el.scrollTop)
-}
-
-function captureCmAnchor(el) {
-    const view = EditorView.findFromDOM(el)
-    if (!view) return null
-    const toc = extractToc(props.file?.content || '', 'markdown')
-    if (toc.length === 0) return null
-    let topBlock
-    try {
-        topBlock = view.lineBlockAtHeight(el.scrollTop + 1)
-    } catch {
-        return null
-    }
-    const topLine = view.state.doc.lineAt(topBlock.from).number
-    const item = pickCmAnchor(toc, topLine)
-    if (!item) return null
-    const line = view.state.doc.line(Math.min(Math.max(1, item.line), view.state.doc.lines))
-    let block
-    try {
-        block = view.lineBlockAt(line.from)
-    } catch {
-        return null
-    }
-    return { id: item.id, line: item.line, relTop: relTopFor(block.top, el.scrollTop) }
-}
-
-// Capture the current scroll position as { anchor, ratio } so it survives a
-// component switch (rendered markdown ↔ CodeMirror source/edit) with different
-// heights. Heading anchor is preferred; ratio is the fallback.
-function captureScrollFrom(el) {
-    if (!el) return null
-    const max = el.scrollHeight - el.clientHeight
-    const ratio = max > 0 ? { ratio: el.scrollTop / max } : null
-    let anchor = null
-    if (isMarkdown.value) {
-        if (el.classList.contains('markdown-body')) {
-            anchor = capturePreviewAnchor(el)
-        } else if (el.classList.contains('cm-scroller')) {
-            anchor = captureCmAnchor(el)
-        }
-    }
-    return { anchor, ratio }
-}
-
-function restorePreviewAnchor(el, anchor) {
-    const target = el.querySelector(`#${CSS.escape(anchor.id)}`)
-    if (!target) return false
-    const contentTop = target.getBoundingClientRect().top - el.getBoundingClientRect().top
-    el.scrollTop = scrollTopFor(contentTop, anchor.relTop)
-    return true
-}
-
-function restoreCmAnchor(el, anchor) {
-    const view = EditorView.findFromDOM(el)
-    if (!view) return false
-    const line = view.state.doc.line(Math.min(Math.max(1, anchor.line), view.state.doc.lines))
-    let block
-    try {
-        block = view.lineBlockAt(line.from)
-    } catch {
-        return false
-    }
-    el.scrollTop = scrollTopFor(block.top, anchor.relTop)
-    return true
-}
-
-function restoreScroll(saved, el) {
-    // TOC heading alignment first, percentage ratio as fallback.
-    if (saved.anchor && isMarkdown.value) {
-        if (el.classList.contains('markdown-body') && restorePreviewAnchor(el, saved.anchor)) return
-        if (el.classList.contains('cm-scroller') && restoreCmAnchor(el, saved.anchor)) return
-    }
-    if (saved.ratio) {
-        const max = el.scrollHeight - el.clientHeight
-        if (max > 0) el.scrollTop = Math.round(saved.ratio.ratio * max)
-    }
-}
-
-// Listen for scroll events on the actual scroll container and save position
-function attachScrollListener() {
-    detachScrollListener()
-    const el = getScrollEl()
-    if (!el || !currentFilePath) return
-    scrollEl = el
-    scrollHandler = () => {
-        scrollPositions.set(currentFilePath, el.scrollTop)
-    }
-    el.addEventListener('scroll', scrollHandler, { passive: true })
-}
-
-function detachScrollListener() {
-    if (scrollHandler && scrollEl) {
-        scrollEl.removeEventListener('scroll', scrollHandler)
-    }
-    scrollHandler = null
-    scrollEl = null
-}
-
-function tryRestoreOrAttach() {
-    restoreAttempts++
-    if (restoreAttempts > MAX_RESTORE_ATTEMPTS) {
-        clearRestoreTimer()
-        // Even if not scrollable, attach listener for future scroll events
-        attachScrollListener()
-        return
-    }
-    if (loading.value) return
-    const el = getScrollEl()
-    if (!el) return
-    // Content must be scrollable (scrollHeight > clientHeight)
-    if (el.scrollHeight <= el.clientHeight) return
-
-    // Restore scroll if needed
-    if (pendingRestore) {
-        el.scrollTop = pendingRestore.scrollTop
-        pendingRestore = null
-        clearRestoreTimer()
-    }
-    // Always attach listener once content is ready
-    attachScrollListener()
-}
-
-function handleCancelScrollRestore() {
-    pendingRestore = null
-}
+onMounted(() => {
+    scrollRestore.start()
+})
 
 onBeforeUnmount(() => {
-    detachScrollListener()
-    clearRestoreTimer()
-    window.removeEventListener('cancel-scroll-restore', handleCancelScrollRestore)
+    scrollRestore.dispose()
 })
 
-// When an explicit scroll-to-line is requested (e.g. clicking a file path
-// annotation with line numbers), cancel any pending scroll-position restore
-// so it doesn't override the line scroll.
-onMounted(() => {
-    window.addEventListener('cancel-scroll-restore', handleCancelScrollRestore)
-})
-
-// Save/restore scroll position when switching files
+// Save/restore scroll position when switching files. The watcher keeps the
+// viewer-level responsibilities (edit-mode reset, loading flags); the scroll
+// bookkeeping itself is delegated to the composable, preserving the original
+// ordering: save the outgoing file → reset edit mode → schedule a restore.
 watch(() => props.file, (f, oldF) => {
-    // Capture the pane being left synchronously. Relying only on scroll events
-    // can miss the final position when navigation follows a smooth scroll.
-    if (oldF?.path && scrollEl) {
-        scrollPositions.set(oldF.path, scrollEl.scrollTop)
-    }
-    // Stop listening on old scroll container
-    detachScrollListener()
+    scrollRestore.onFileWillChange()
 
     editing.value = false
 
-    clearRestoreTimer()
-    if (!f) { currentFilePath = null; loading.value = true; return }
-    currentFilePath = f.path
+    if (!f) {
+        loading.value = true
+        scrollRestore.onFileChanged(null, false)
+        return
+    }
     if (f.isImage || f.isPdf || f.isAudio || f.isVideo || f.isOffice || f.isExcalidraw || f.isBinary || f.tooLarge || f.error) {
         loading.value = false
     } else {
         loading.value = f.content == null
     }
-    if (f?.path !== oldF?.path) {
-        const savedScroll = scrollPositions.get(f.path)
-        pendingRestore = { path: f.path, scrollTop: savedScroll ?? 0 }
-        // Poll until content is rendered and scrollable
-        restoreAttempts = 0
-        restoreTimer = setInterval(tryRestoreOrAttach, 50)
-        tryRestoreOrAttach()
-    }
+    scrollRestore.onFileChanged(f, f?.path !== oldF?.path)
 }, { immediate: true })
 
 watch(() => props.file?.content, (content) => {
@@ -811,7 +597,7 @@ watch(() => props.file?.content, (content) => {
     loading.value = content == null
     // Content loaded, try restore or attach listener
     if (content != null) {
-        tryRestoreOrAttach()
+        scrollRestore.onContentReady()
     }
 })
 
@@ -820,9 +606,9 @@ watch(() => props.file?.content, (content) => {
 // capture its anchor before the new pane swaps in.
 watch(() => props.markdownViewMode, (newMode, oldMode) => {
     if (newMode === oldMode || !isMarkdown.value || !props.file?.content) return
-    const oldEl = scrollElFor(oldMode, editing.value)
-    const saved = captureScrollFrom(oldEl)
-    if (saved) restoreScrollAfter(saved)
+    const oldEl = scrollRestore.scrollElFor(oldMode, editing.value)
+    const saved = scrollRestore.captureScroll(oldEl)
+    if (saved) scrollRestore.restoreAfterContainerSwitch(saved)
 })
 
 function formatSize(bytes) {

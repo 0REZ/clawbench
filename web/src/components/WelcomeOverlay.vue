@@ -23,7 +23,7 @@
               <div class="backend-name">{{ b.name }}</div>
               <div class="backend-specialty">{{ b.specialty }}</div>
             </div>
-            <Loader2 v-if="loading" :size="12" class="spin backend-status-spinner" />
+            <LoadingIndicator v-if="loading" class="backend-status-spinner" size="sm" inline />
             <span
               v-else-if="detectedBackends.has(b.id)"
               class="backend-badge badge-installed"
@@ -47,10 +47,6 @@
             <Smartphone :size="16" />
             <span>{{ t('pwa.downloadAndroidApp') }}</span>
           </div>
-          <div v-if="desktopDownload.isDesktop && desktopDownload.currentDownloadUrl()" class="welcome-install-row" role="button" tabindex="0" @click="desktopDownload.downloadDesktop()" @keydown.enter="desktopDownload.downloadDesktop()">
-            <Monitor :size="16" />
-            <span>{{ t('pwa.downloadDesktopApp') }}</span>
-          </div>
         </div>
         <div class="welcome-footer">
           <button class="btn-ok" @click="close">
@@ -58,7 +54,7 @@
           </button>
           <div class="footer-secondary">
             <button class="btn-rescan refresh-spin" :class="{ 'refresh-spin--active': rescanning }" :disabled="rescanning" @click="rescan">
-              <Loader2 v-if="rescanning" :size="12" />
+              <LoadingIndicator v-if="rescanning" class="rescan-spinner" size="sm" inline />
               {{ rescanning ? t('welcomeInfo.rescanning') : t('welcomeInfo.rescan') }}
             </button>
             <button class="btn-dont-show" @click="dontShowAgain">
@@ -86,13 +82,13 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePwaInstall } from '@/composables/usePwaInstall'
-import { useDesktopDownload } from '@/composables/useDesktopDownload'
 import { useAgents } from '@/composables/useAgents'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
-import { MonitorSmartphone, Smartphone, Monitor, Loader2 } from 'lucide-vue-next'
+import { MonitorSmartphone, Smartphone } from 'lucide-vue-next'
 import IosInstallDrawer from './common/IosInstallDrawer.vue'
 import AgentInstallDialog from './AgentInstallDialog.vue'
 import AgentIcon from './common/AgentIcon.vue'
+import LoadingIndicator from './common/LoadingIndicator.vue'
 import { appLog } from '@/utils/appLog'
 import { downloadByUrl } from '@/utils/download'
 
@@ -115,7 +111,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const pwaInstall = usePwaInstall()
-const desktopDownload = useDesktopDownload()
 const { rescanAgents } = useAgents()
 const visible = ref(false)
 const backends = ref<BackendInfo[]>([])
@@ -136,7 +131,7 @@ const sortedBackends = computed(() => {
   })
 })
 
-const showInstallSection = computed(() => pwaInstall.showPwaInstall.value || pwaInstall.showApkDownload.value || (desktopDownload.isDesktop && !!desktopDownload.currentDownloadUrl()))
+const showInstallSection = computed(() => pwaInstall.showPwaInstall.value || pwaInstall.showApkDownload.value)
 
 async function loadBackends() {
   try {
@@ -225,7 +220,6 @@ watch(visible, (v) => {
 
 onMounted(() => {
   loadBackends()
-  desktopDownload.loadLatest()
   window.addEventListener('clawbench-show-welcome', forceShow)
 })
 
@@ -407,7 +401,7 @@ onUnmounted(() => {
 
 .backend-status-spinner {
   flex-shrink: 0;
-  color: var(--text-muted);
+  --li-color: var(--text-muted);
 }
 
 /* Install section */
@@ -522,14 +516,5 @@ onUnmounted(() => {
 .welcome-fade-enter-from,
 .welcome-fade-leave-to {
   opacity: 0;
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 </style>

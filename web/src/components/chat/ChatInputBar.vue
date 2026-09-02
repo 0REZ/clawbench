@@ -75,7 +75,7 @@
       <!-- Paste overlay (dynamic feedback while uploading pasted files from clipboard) -->
       <Transition name="paste-fade">
         <div v-if="isPasteOver" class="paste-overlay">
-          <Loader2 :size="18" class="paste-spinner-icon" />
+          <LoadingIndicator class="paste-spinner" size="sm" inline />
           <span>{{ t('chat.attach.uploading') }}</span>
         </div>
       </Transition>
@@ -95,7 +95,7 @@
         <div class="attach-menu-wrapper" ref="attachMenuRef">
           <button v-if="voiceState === 'recording' || voiceState === 'transcribing'" class="chat-attach-btn voice-rec-btn" :class="{ recording: voiceState === 'recording', transcribing: voiceState === 'transcribing' }" disabled :title="voiceState === 'recording' ? t('chat.voice.recording') : t('chat.voice.transcribing')">
             <span v-if="voiceState === 'recording'" class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
-            <Loader2 v-else :size="14" class="spin-icon" />
+            <LoadingIndicator v-else class="attach-btn-spinner" size="sm" inline />
           </button>
           <button v-else class="chat-attach-btn" @click.stop="toggleAttachMenu" :disabled="inputDisabled" :title="t('chat.actions.attachment')">
             <Paperclip :size="16" />
@@ -124,7 +124,7 @@
           <Send v-else :size="16" />
         </button>
         <button v-if="loading" class="chat-stop-btn" :class="{ primed: stopPrimed, cancelling: cancelling }" @click="handleStopClick" :title="stopPrimed ? t('chat.input.confirmStop') : t('chat.input.stopGenerating')" :disabled="cancelling">
-          <Loader2 v-if="cancelling" class="spin-icon" :size="16" />
+          <LoadingIndicator v-if="cancelling" class="stop-spinner" size="sm" inline />
           <Square v-else :size="16" fill="currentColor" />
         </button>
       </div>
@@ -215,6 +215,11 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.remaining') }}</span>
             <span class="usage-popup-value">{{ Math.max(contextSize - contextUsed, 0).toLocaleString() }}</span>
           </div>
+          <!-- Token detail section: every token/cost row grouped under one header.
+               used/size/remaining (matching the progress bar above) stay outside.
+               cacheHitTokens is deliberately not rendered — it duplicates
+               cachedReadTokens ("缓存读"), shown once below. -->
+          <div v-if="hasTokenDetail" class="usage-popup-section-title">{{ t('chat.sessionInfo.tokenDetail') }}</div>
           <div v-if="contextInputTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.inputTokens') }}</span>
             <span class="usage-popup-value">{{ contextInputTokens.toLocaleString() }}</span>
@@ -231,18 +236,46 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedReadTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedReadTokens.toLocaleString() }}</span>
           </div>
+          <div v-if="contextCacheHitTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheHitTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="cacheHitRate !== null" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitRate') }}</span>
+            <span class="usage-popup-value">{{ cacheHitRate.toFixed(1) }}%</span>
+          </div>
           <div v-if="contextCachedWriteTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedWriteTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedWriteTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="contextCacheCreationTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheCreationTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheCreationTokens.toLocaleString() }}</span>
+          </div>
+          <div v-if="contextCacheMissTokens > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheMissTokens') }}</span>
+            <span class="usage-popup-value">{{ contextCacheMissTokens.toLocaleString() }}</span>
           </div>
           <div v-if="contextThoughtTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.thoughtTokens') }}</span>
             <span class="usage-popup-value">{{ contextThoughtTokens.toLocaleString() }}</span>
           </div>
+          <div v-if="contextCredit > 0" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.credit') }}</span>
+            <span class="usage-popup-value">{{ contextCredit.toFixed(4) }}</span>
+          </div>
           <div v-if="contextCost > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
             <span class="usage-popup-value">${{ contextCost.toFixed(2) }} {{ contextCurrency || 'USD' }}</span>
           </div>
+          <!-- Context breakdown section (CodeBuddy usageByCategory) -->
+          <template v-if="categoryRows.length">
+            <div class="usage-popup-section-title">{{ t('chat.sessionInfo.categoryBreakdown') }}</div>
+            <div v-for="row in categoryRows" :key="row.key" class="usage-popup-row">
+              <span class="usage-popup-label">{{ row.label }}</span>
+              <span class="usage-popup-value">{{ row.value.toLocaleString() }}</span>
+            </div>
+          </template>
           <div class="usage-popup-compact">
             <button class="usage-popup-compact-btn" @click.stop="handleCompact(); showUsagePopup = false" :title="t('chat.sessionInfo.compact')" :aria-label="t('chat.sessionInfo.compact')">
               <Minimize2 :size="13" />
@@ -277,7 +310,7 @@
 <script setup>
 import { ref, computed, nextTick, watch, onBeforeUnmount, onMounted, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Loader2, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
+import { Code2, List, Plus, Search, Archive, Volume2, Paperclip, Inbox, Send, Square, Zap, Compass, Activity, MessagesSquare, Minimize2, Sparkles, ArrowRightLeft, Settings, TextCursorInput } from 'lucide-vue-next'
 import { highlightText } from '@/utils/searchUtils.ts'
 import { computeRecentReferencedFiles, isImeCompositionEvent } from '@/utils/chatInputUtils.ts'
 import { normalizeFileEntry } from '@/utils/fileAttachmentUtils.ts'
@@ -307,7 +340,7 @@ import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
-const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency } = useSessionIdentity()
+const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency, contextCacheCreationTokens, contextCacheHitTokens, contextCacheMissTokens, contextCredit, contextUsageByCategory } = useSessionIdentity()
 const { supportsACP, hasPreferredMode } = useAgents()
 const toast = useToast()
 const { uploadAndAttach, pendingFiles, removeFile } = useFileUpload()
@@ -385,6 +418,41 @@ const usageColor = computed(() => {
   if (pct >= 90) return '#f97316'
   if (pct >= 75) return '#eab308'
   return '#22c55e'
+})
+// Cache hit rate = hit / (hit + miss). Shown as a percentage when at least one
+// side is known. Returns null when neither is reported (no cache stats).
+const cacheHitRate = computed(() => {
+  const hit = contextCacheHitTokens.value
+  const miss = contextCacheMissTokens.value
+  if (hit <= 0 && miss <= 0) return null
+  const total = hit + miss
+  if (total <= 0) return 0
+  return (hit / total) * 100
+})
+// True when any token/cost row inside the Token Detail section has a value.
+// The section header only renders then — otherwise the popup would show an
+// empty header between used/size/remaining and the context breakdown.
+const hasTokenDetail = computed(() =>
+  contextInputTokens.value > 0 || contextOutputTokens.value > 0 ||
+  contextTotalTokens.value > 0 || contextCachedReadTokens.value > 0 ||
+  contextCachedWriteTokens.value > 0 || contextCacheCreationTokens.value > 0 ||
+  contextCacheHitTokens.value > 0 || contextCacheMissTokens.value > 0 ||
+  contextThoughtTokens.value > 0 || contextCredit.value > 0 || contextCost.value > 0,
+)
+// Context breakdown rows from CodeBuddy usageByCategory (by value, i18n labels).
+const categoryRows = computed(() => {
+  const cat = contextUsageByCategory.value
+  if (!cat) return []
+  const labels = {
+    conversation: 'chat.sessionInfo.catConversation',
+    tools: 'chat.sessionInfo.catTools',
+    systemPrompt: 'chat.sessionInfo.catSystemPrompt',
+    skills: 'chat.sessionInfo.catSkills',
+    mcp: 'chat.sessionInfo.catMCP',
+  }
+  return Object.entries(cat)
+    .filter(([, v]) => (v ?? 0) > 0)
+    .map(([key, value]) => ({ key, value: value ?? 0, label: labels[key] ? t(labels[key]) : key }))
 })
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
@@ -1890,12 +1958,15 @@ defineExpose({
   pointer-events: none;
 }
 
-.paste-spinner-icon {
-  animation: paste-spin 0.8s linear infinite;
+/* Voice transcribing state: replaced a rotating icon; use the unified loader.
+   currentColor → the arc picks up the button's own text color. */
+.chat-attach-btn .attach-btn-spinner {
+  --li-color: currentColor;
 }
 
-@keyframes paste-spin {
-  to { transform: rotate(360deg); }
+/* Cancelling state of the stop button — spinner inside the danger-tinted pill */
+.chat-stop-btn .stop-spinner {
+  --li-color: currentColor;
 }
 
 .paste-fade-enter-active,
@@ -2274,15 +2345,6 @@ defineExpose({
   50%      { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
 }
 
-.spin-icon {
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
 /* Voice recording indicator — red circle with animation, shown in the attach slot */
 .chat-attach-btn.voice-rec-btn {
   width: 26px;
@@ -2500,6 +2562,16 @@ defineExpose({
   font-weight: 600;
   color: var(--text-primary);
   margin-bottom: 8px;
+}
+
+.usage-popup-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  margin-bottom: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
 }
 
 .usage-popup-bar {

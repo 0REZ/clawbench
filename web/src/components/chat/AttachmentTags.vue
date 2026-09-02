@@ -10,7 +10,7 @@
           :src="pf.previewUrl" />
         <FileIcon v-else :path="pf.path || 'file'" :size="22" class="attachment-file-icon" />
         <div class="attachment-upload-overlay">
-          <span class="attachment-spinner"></span>
+          <LoadingIndicator class="attachment-spinner" size="sm" inline />
           <span class="attachment-progress-text">{{ pf.progress }}%</span>
         </div>
         <button class="attachment-close-btn" @click.stop="$emit('remove-pending', idx)" :title="t('common.remove')">×</button>
@@ -38,6 +38,7 @@ import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { buildPathThumbUrl } from '@/utils/fileIcon'
 import FileIcon from '@/components/common/FileIcon.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { isThumbableExt } from '@/utils/fileManager'
 import { isImageFile, type FileEntry } from '@/utils/fileAttachmentUtils'
 import { baseName } from '@/utils/path'
@@ -201,17 +202,9 @@ watch(() => props.files, (files) => {
   z-index: 1;
 }
 
-.attachment-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #ffffff;
-  border-radius: 50%;
-  animation: attach-spin 0.6s linear infinite;
-}
-
-@keyframes attach-spin {
-  to { transform: rotate(360deg); }
+/* Upload spinner on the dark overlay → keep the arc white */
+.attachment-upload-overlay .attachment-spinner {
+  --li-color: #fff;
 }
 
 .attachment-progress-text {

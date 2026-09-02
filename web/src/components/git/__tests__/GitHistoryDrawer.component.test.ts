@@ -149,6 +149,7 @@ vi.mock('lucide-vue-next', () => ({
   GitBranch: { template: '<svg />' },
   Plus: { template: '<svg />' },
   Minus: { template: '<svg />' },
+  LoaderCircle: { template: '<svg />' },
 }))
 
 import { createI18n } from 'vue-i18n'

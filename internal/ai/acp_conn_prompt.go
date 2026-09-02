@@ -48,6 +48,10 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 	// raw_output event after Prompt returns.
 	c.ResetRawOutput()
 
+	// Reset the per-turn _meta extension accumulator so stale metadata from a
+	// previous turn cannot leak into this one's message-level metadata.
+	c.getAndClearMetaAccum()
+
 	c.mu.Lock()
 	client := c.client
 	conn := c.conn
@@ -139,57 +143,94 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 			c.handlePromptCancel(conn)
 			return ctx.Err()
 		}
-
-		if !c.IsAlive() {
-			diag := c.collectCrashDiagnostics()
-			// See markDeadIfCurrent: only clear alive if this is still the
-			// active connection, so a stale prompt can't kill a respawned one.
-			c.markDeadIfCurrent(conn)
-
-			slog.Error("acp conn: prompt failed (peer disconnected)",
-				"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
-				"exit_code", diag.ExitCode, "signal", diag.Signal,
-				"ppid", diag.ParentPID, "rss_mb", diag.VMRSSKB/1024, "fds", diag.FDCount,
-				"stderr_tail", diag.StderrTail)
-
-			return fmt.Errorf("acp: prompt: %w%s", err, diag.String())
-		}
-
-		slog.Warn("acp conn: prompt failed but agent still alive",
-			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID, "error", err)
-		return fmt.Errorf("acp: prompt: %w", err)
+		return c.classifyPromptError(err, conn, acpSID)
 	}
 
-	// Refusal (stopReason="refusal"): the agent declined to answer — e.g. the
-	// requested model is unresolvable, the provider returned an upstream error,
-	// or the request was refused. The agent streams NO content blocks for a
-	// refusal, so without this check the executor would classify the turn as
-	// "AI returned no content" (reason=empty) — a misleading dead-end that
-	// hides the real cause and offers no actionable error code. Surface a
-	// warning event with the structured source + error code so the frontend
-	// can display it and offer a session reset.
-	if resp.StopReason == acp.StopReasonRefusal {
-		slog.Warn("acp conn: prompt refused by agent",
-			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
-			"stop_reason", resp.StopReason)
-		httpStatus := acpHTTPStatusFromMeta(resp.Meta)
-		forwardACPEvent(streamCh, StreamEvent{
-			Type:        "warning",
-			Content:     "AI request refused by the agent (model unavailable or upstream error)",
-			Reason:      ReasonRefused,
-			ErrorCode:   -32603, // JSON-RPC internal error (matches CodeBuddy refusal rpcCode)
-			HTTPStatus:  httpStatus,
-			ErrorSource: "agent",
-		})
-	}
-
-	// PromptResponse.Usage (UNSTABLE): emit metadata and usage_update events
-	// so input/output token counts are persisted and shown in the context chip.
-	if resp.Usage != nil {
-		c.emitPromptResponseUsage(resp.Usage, streamCh)
-	}
+	c.emitRefusalWarningIfRefused(resp, streamCh, acpSID)
+	c.emitPromptTailMetadata(resp, streamCh)
 
 	return nil
+}
+
+// emitRefusalWarningIfRefused surfaces a structured warning event when the
+// agent refused the prompt (stopReason="refusal" — model unresolvable, upstream
+// error, or declined request). The agent streams NO content blocks for a
+// refusal, so without this check the executor would classify the turn as
+// "AI returned no content" (reason=empty) — a misleading dead-end that hides
+// the real cause and offers no actionable error code.
+func (c *ACPConn) emitRefusalWarningIfRefused(resp acp.PromptResponse, streamCh chan<- StreamEvent, acpSID string) {
+	if resp.StopReason != acp.StopReasonRefusal {
+		return
+	}
+	slog.Warn("acp conn: prompt refused by agent",
+		"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
+		"stop_reason", resp.StopReason)
+	httpStatus := acpHTTPStatusFromMeta(resp.Meta)
+	forwardACPEvent(streamCh, StreamEvent{
+		Type:        "warning",
+		Content:     "AI request refused by the agent (model unavailable or upstream error)",
+		Reason:      ReasonRefused,
+		ErrorCode:   -32603, // JSON-RPC internal error (matches CodeBuddy refusal rpcCode)
+		HTTPStatus:  httpStatus,
+		ErrorSource: "agent",
+	})
+}
+
+// emitPromptTailMetadata emits the turn-final metadata event from a successful
+// PromptResponse. PromptResponse.Usage (UNSTABLE) carries token counts and the
+// ACP-standard stopReason (Claude/Codex report it here, e.g. "end_turn"), so
+// when usage or _meta extensions are present the full metadata + usage_update
+// pair is emitted. Without PromptResponse usage/meta, the accumulated per-agent
+// _meta from session/update notifications (or the bare stopReason) is still
+// persisted so the message record reflects why the turn ended.
+func (c *ACPConn) emitPromptTailMetadata(resp acp.PromptResponse, streamCh chan<- StreamEvent) {
+	if resp.Usage != nil || len(resp.Meta) > 0 {
+		c.emitPromptResponseUsage(resp.Usage, resp.Meta, resp.StopReason, streamCh)
+		return
+	}
+	if acc := c.getAndClearMetaAccum(); acc != nil {
+		// No PromptResponse usage/meta, but the turn accumulated per-agent _meta
+		// extensions from session/update notifications (e.g. CodeBuddy usage).
+		// Persist them so the message-level metadata reflects the turn.
+		meta := &Metadata{}
+		applyMetaExtractionToMetadata(meta, acc)
+		if resp.StopReason != "" {
+			meta.StopReason = string(resp.StopReason)
+		}
+		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
+		return
+	}
+	if resp.StopReason != "" {
+		// No usage/meta at all (rare), but still persist the stop reason so the
+		// message record is complete.
+		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: &Metadata{
+			StopReason: string(resp.StopReason),
+		}})
+	}
+}
+
+// classifyPromptError maps a conn.Prompt error to the appropriate wrapped
+// error. When the agent process is dead the crash diagnostics are collected
+// and appended so the caller can surface exit code/signal/stderr; a stale
+// prompt is prevented from killing a respawned connection via
+// markDeadIfCurrent (only clears alive if still the active connection).
+func (c *ACPConn) classifyPromptError(err error, conn *acp.ClientSideConnection, acpSID string) error {
+	if !c.IsAlive() {
+		diag := c.collectCrashDiagnostics()
+		c.markDeadIfCurrent(conn)
+
+		slog.Error("acp conn: prompt failed (peer disconnected)",
+			"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID,
+			"exit_code", diag.ExitCode, "signal", diag.Signal,
+			"ppid", diag.ParentPID, "rss_mb", diag.VMRSSKB/1024, "fds", diag.FDCount,
+			"stderr_tail", diag.StderrTail)
+
+		return fmt.Errorf("acp: prompt: %w%s", err, diag.String())
+	}
+
+	slog.Warn("acp conn: prompt failed but agent still alive",
+		"clawbench_sid", c.clawbenchSID, "acp_sid", acpSID, "error", err)
+	return fmt.Errorf("acp: prompt: %w", err)
 }
 
 // acpHTTPStatusFromMeta scans a PromptResponse._meta map for an upstream HTTP
@@ -219,23 +260,55 @@ func acpHTTPStatusFromMeta(meta map[string]any) int {
 }
 
 // emitPromptResponseUsage emits metadata and usage_update events from a
-// PromptResponse.Usage (UNSTABLE ACP feature). The metadata event ensures
-// InputTokens/OutputTokens are persisted to chat_metadata and embedded in
-// chat_history.content JSON. The usage_update event updates the frontend's
-// context usage chip in real time.
-func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- StreamEvent) {
-	meta := &Metadata{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
+// PromptResponse.Usage (UNSTABLE ACP feature), the ACP-standard stopReason,
+// and PromptResponse._meta extensions. The metadata event ensures
+// InputTokens/OutputTokens (and any per-agent _meta detail) are persisted to
+// chat_metadata and embedded in chat_history.content JSON. The usage_update
+// event updates the frontend's context usage chip in real time.
+//
+// respMeta carries the per-agent _meta extensions from the PromptResponse
+// (Claude/Codex quota.token_count, CodeBuddy codebuddy.ai/* trace). The
+// accumulated turn-level _meta (from session/update notifications) is merged
+// in as well so the metadata event reflects the richest observed values.
+// stopReason is the ACP-standard PromptResponse.stopReason (Claude/Codex
+// report it here, e.g. "end_turn"); it is persisted on the metadata record.
+func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]any, stopReason acp.StopReason, streamCh chan<- StreamEvent) {
+	backendID := c.BackendID()
+
+	// Start from PromptResponse.Usage. usage may be nil when only _meta
+	// extensions are present (e.g. CodeBuddy reports no PromptResponse.Usage).
+	// Capture the turn-level accumulation once and reuse it for both the
+	// metadata event and the usage_update payload.
+	meta := &Metadata{}
+	if usage != nil {
+		meta.InputTokens = usage.InputTokens
+		meta.OutputTokens = usage.OutputTokens
 	}
+	// Persist the ACP-standard stop reason (Claude/Codex report it here, not in
+	// _meta) so the message record reflects why the turn ended.
+	if stopReason != "" {
+		meta.StopReason = string(stopReason)
+	}
+	acc := c.getAndClearMetaAccum()
+	// Apply per-agent _meta extensions from the PromptResponse (Claude/Codex
+	// quota, CodeBuddy trace) and the turn-level accumulation (CodeBuddy usage
+	// from session/update notifications).
+	if ext := extractMetaUsage(backendID, respMeta); ext != nil {
+		applyMetaExtractionToMetadata(meta, ext)
+	}
+	if acc != nil {
+		applyMetaExtractionToMetadata(meta, acc)
+	}
+
 	slog.Info("acp conn: PromptResponse.Usage",
 		"clawbench_sid", c.clawbenchSID,
-		"input_tokens", usage.InputTokens,
-		"output_tokens", usage.OutputTokens,
-		"total_tokens", usage.TotalTokens,
-		"cached_read_tokens", usage.CachedReadTokens,
-		"cached_write_tokens", usage.CachedWriteTokens,
-		"thought_tokens", usage.ThoughtTokens)
+		"has_usage", usage != nil,
+		"meta_input_tokens", meta.InputTokens,
+		"meta_output_tokens", meta.OutputTokens,
+		"meta_total_tokens", meta.TotalTokens,
+		"meta_cached_read_tokens", meta.CachedReadTokens,
+		"meta_cached_write_tokens", meta.CachedWriteTokens,
+		"meta_thought_tokens", meta.ThoughtTokens)
 
 	// Emit metadata event for persistence (SessionExecutor captures these)
 	forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
@@ -257,16 +330,26 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, streamCh chan<- Stre
 		currency = cached.Currency
 	}
 	usageState := &UsageState{
-		Used:              used,
-		Size:              size,
-		InputTokens:       usage.InputTokens,
-		OutputTokens:      usage.OutputTokens,
-		TotalTokens:       usage.TotalTokens,
-		CachedReadTokens:  ptrIntVal(usage.CachedReadTokens),
-		CachedWriteTokens: ptrIntVal(usage.CachedWriteTokens),
-		ThoughtTokens:     ptrIntVal(usage.ThoughtTokens),
-		Cost:              cost,
-		Currency:          currency,
+		Used:     used,
+		Size:     size,
+		Cost:     cost,
+		Currency: currency,
+	}
+	if usage != nil {
+		usageState.InputTokens = usage.InputTokens
+		usageState.OutputTokens = usage.OutputTokens
+		usageState.TotalTokens = usage.TotalTokens
+		usageState.CachedReadTokens = ptrIntVal(usage.CachedReadTokens)
+		usageState.CachedWriteTokens = ptrIntVal(usage.CachedWriteTokens)
+		usageState.ThoughtTokens = ptrIntVal(usage.ThoughtTokens)
+	}
+	// Merge per-agent _meta usage detail (e.g. Claude/Codex quota, CodeBuddy
+	// credit) into the usage_update payload so the frontend sees it live.
+	if ext := extractMetaUsage(backendID, respMeta); ext != nil {
+		applyMetaExtractionToUsageState(usageState, ext)
+	}
+	if acc != nil {
+		applyMetaExtractionToUsageState(usageState, acc)
 	}
 	forwardACPEvent(streamCh, StreamEvent{Type: "usage_update", Usage: usageState})
 	c.SetCachedUsageState(usageState)

@@ -1398,3 +1398,18 @@ func TestPerformUpgrade_UnreachableRegistry(t *testing.T) {
 	assert.Equal(t, UpgradePhaseFailed, s.Phase)
 	assert.Contains(t, s.Error, "Failed to check version")
 }
+
+func TestRewriteTarballURL(t *testing.T) {
+	// Tarball not from npmjs → returned unchanged (fall-through branch).
+	assert.Equal(t,
+		"https://other.example.com/x.tgz",
+		rewriteTarballURL("https://other.example.com/x.tgz", "https://registry.npmmirror.com"))
+	// base == npmjs → returned unchanged.
+	assert.Equal(t,
+		"https://registry.npmjs.org/x.tgz",
+		rewriteTarballURL("https://registry.npmjs.org/x.tgz", "https://registry.npmjs.org"))
+	// npmjs tarball + non-npmjs base → rewritten to base (rewrite branch).
+	assert.Equal(t,
+		"https://registry.npmmirror.com/x.tgz",
+		rewriteTarballURL("https://registry.npmjs.org/x.tgz", "https://registry.npmmirror.com"))
+}

@@ -61,92 +61,12 @@ export interface RenderResult {
  * (e.g. `$a_{i}$` inside a backtick span) is never incorrectly extracted.
  */
 
-/** Pre-extracted math entry with display mode info */
-export interface MathEntry {
-    math: string
-    displayMode: boolean
-}
-
-// eslint-disable-next-line no-control-regex -- NUL bytes are intentional placeholder delimiters
-const MATH_PH_RE = /\x00MATH([DI])(\d+)\x00/g
-
-/**
- * Extract markdown code spans/blocks before math, so $...$ inside code
- * is not mistakenly treated as math delimiters.
- *
- * Matches:
- * - Fenced code blocks: ```...``` or ~~~...~~~ (with optional info string)
- * - Inline code spans: `...` (including backtick-escaped spans like ``...``)
- *
- * Placeholders use \x01 (SOH) — distinct from math placeholders (\x00)
- * so they don't interfere.
- */
-// eslint-disable-next-line no-control-regex -- SOH bytes are intentional placeholder delimiters
-const CODE_SPAN_PH_RE = /\x01CODE(\d+)\x01/g
-
-function extractCodeAndMath(markdown: string): {
-    protected: string
-    mathEntries: MathEntry[]
-} {
-    // Phase 1: Protect code spans/blocks
-    const codeBlocks: string[] = []
-    let codeIdx = 0
-
-    // 1a. Fenced code blocks: ```...``` or ~~~...~~~ (with optional info string)
-    //     Must match before inline code spans to avoid partial matches.
-    let result = markdown.replace(/(?:^|\n)(~~~+|```+)[^\n]*\n[\s\S]*?\n\1[ \t]*(?=\n|$)/g, (match) => {
-        const ph = `\x01CODE${codeIdx++}\x01`
-        codeBlocks.push(match)
-        return ph
-    })
-
-    // 1b. Inline code spans: one or more backticks, content between matching runs.
-    //     [^`] forbids backticks in content (standard markdown rule).
-    result = result.replace(/(`+)([^`]+?)\1/g, (match) => {
-        const ph = `\x01CODE${codeIdx++}\x01`
-        codeBlocks.push(match)
-        return ph
-    })
-
-    // Phase 2: Extract math blocks (same logic as before)
-    const mathEntries: MathEntry[] = []
-    let idx = 0
-
-    const ph = (displayMode: boolean) => {
-        const prefix = displayMode ? 'MATHD' : 'MATHI'
-        return `\x00${prefix}${idx++}\x00`
-    }
-
-    // 2a. Display math: $$...$$
-    result = result.replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => {
-        mathEntries.push({ math: math.trim(), displayMode: true })
-        return ph(true)
-    })
-
-    // 2b. Display math: \[...\]
-    result = result.replace(/\\\[([\s\S]+?)\\\]/g, (_, math) => {
-        mathEntries.push({ math: math.trim(), displayMode: true })
-        return ph(true)
-    })
-
-    // 2c. Inline math: $...$ (same exclusion rules as INLINE_MATH_RE)
-    result = result.replace(/(^|[^$\d\\])\$(?!\$)([^$\n]+?)\$(?!\d)/g, (_whole, pre, math) => {
-        mathEntries.push({ math: math.trim(), displayMode: false })
-        return pre + ph(false)
-    })
-
-    // 2d. Inline math: \(...\)
-    result = result.replace(/\\\(([^\\\n]+?)\\\)/g, (_, math) => {
-        mathEntries.push({ math: math.trim(), displayMode: false })
-        return ph(false)
-    })
-
-    // Phase 3: Restore code spans/blocks — they pass through marked.parse intact
-    // (the placeholders are plain text that marked won't transform)
-    result = result.replace(CODE_SPAN_PH_RE, (_, ci) => codeBlocks[parseInt(ci, 10)])
-
-    return { protected: result, mathEntries }
-}
+// The protection pipeline lives in the shared module; import it here for the
+// render pipeline and re-export for existing importers of `MathEntry` /
+// `extractCodeAndMath` / `MATH_PH_RE` from this file (kept unchanged).
+import { protectMarkdown, MATH_PH_RE, type MathEntry } from '@/utils/markdownProtect.ts'
+export type { MathEntry } from '@/utils/markdownProtect.ts'
+export { protectMarkdown as extractCodeAndMath, MATH_PH_RE }
 
 // ---------------------------------------------------------------------------
 // INLINE_MATH_RE — kept for backward compatibility (standalone renderKatexInString)
@@ -337,7 +257,7 @@ export function renderMarkdown(
 
     // 0. Extract code spans/blocks and math blocks BEFORE marked.parse
     //    to protect _ and * from emphasis parsing (issue #384)
-    const { protected: protectedMarkdown, mathEntries } = extractCodeAndMath(trimmed)
+    const { protected: protectedMarkdown, mathEntries } = protectMarkdown(trimmed)
 
     // 1. Parse markdown (reset heading ID counter for deduplication)
     resetHeadingIds()

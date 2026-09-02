@@ -34,6 +34,7 @@ vi.mock('lucide-vue-next', () => ({
   RotateCw: { template: '<svg />' },
   RotateCcw: { template: '<svg />' },
   GitBranch: { template: '<svg />' },
+  LoaderCircle: { template: '<svg />' },
 }))
 
 vi.mock('@/components/common/SearchInput.vue', () => ({

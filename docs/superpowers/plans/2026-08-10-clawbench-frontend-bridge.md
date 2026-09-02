@@ -8,8 +8,6 @@
 
 **Tech Stack:** TypeScript / Vue 3 / Vitest。
 
-参考 spec：`docs/superpowers/specs/2026-08-10-clawbench-electron-design.md` §4（桥层契约）与 §2.3（跳过清单）。
-
 ---
 
 ## 关键设计决策

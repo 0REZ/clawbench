@@ -139,6 +139,25 @@ CREATE TABLE IF NOT EXISTS chat_metadata (
 	stop_reason TEXT DEFAULT '',
 	is_error INTEGER DEFAULT 0,
 	error_message TEXT DEFAULT '',
+	cached_read_tokens INTEGER DEFAULT 0,
+	cached_write_tokens INTEGER DEFAULT 0,
+	thought_tokens INTEGER DEFAULT 0,
+	total_tokens INTEGER DEFAULT 0,
+	cache_creation_tokens INTEGER DEFAULT 0,
+	cache_hit_tokens INTEGER DEFAULT 0,
+	cache_miss_tokens INTEGER DEFAULT 0,
+	credit REAL DEFAULT 0,
+	usage_by_category TEXT DEFAULT '',
+	session_id TEXT DEFAULT '',
+	request_id TEXT DEFAULT '',
+	trace_id TEXT DEFAULT '',
+	agent_message_id TEXT DEFAULT '',
+	message_request_id TEXT DEFAULT '',
+	request_model_name TEXT DEFAULT '',
+	response_model_id TEXT DEFAULT '',
+	finish_reason TEXT DEFAULT '',
+	outcome TEXT DEFAULT '',
+	agent_phase TEXT DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_tool_calls (
@@ -1327,16 +1346,57 @@ func TestGetChatMessageCount(t *testing.T) {
 	setupDB(t)
 	sid := helperCreateSession(t, "/project", "claude", "Test")
 	// Initially 0
-	assert.Equal(t, 0, service.GetChatMessageCount(sid))
+	count, err := service.GetChatMessageCount(sid)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
 	// Add messages
 	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
 	service.AddChatMessage("/project", "claude", sid, "assistant", "Hi", nil, false, "NewSession")
-	assert.Equal(t, 2, service.GetChatMessageCount(sid))
+	count, err = service.GetChatMessageCount(sid)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, count)
 }
 
 func TestGetChatMessageCount_NonExistent(t *testing.T) {
 	setupDB(t)
-	assert.Equal(t, 0, service.GetChatMessageCount("non-existent"))
+	count, err := service.GetChatMessageCount("non-existent")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestGetChatMessageCount_DBError(t *testing.T) {
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Test")
+	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
+
+	origDB := service.UnsafeDBForTest()
+	closedDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	closedDB.Close()
+	cleanup := service.SetDBForTest(origDB, closedDB)
+
+	count, err := service.GetChatMessageCount(sid)
+	assert.Error(t, err, "count on a closed DB must surface the error, not silently return 0")
+	assert.Equal(t, 0, count)
+
+	cleanup()
+	assert.Same(t, origDB, service.UnsafeDBForTest(), "DB handles must be restored after the test")
+}
+
+func TestGetFinalizedMessageCount_DBError(t *testing.T) {
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Test")
+	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
+
+	closedDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	closedDB.Close()
+	cleanup := service.SetDBForTest(service.UnsafeDBForTest(), closedDB)
+	defer cleanup()
+
+	count, err := service.GetFinalizedMessageCount(sid)
+	assert.Error(t, err, "finalized count on a closed DB must surface the error, not silently return 0")
+	assert.Equal(t, 0, count)
 }
 
 // ---------- UpdateLastRead ----------
@@ -2416,6 +2476,80 @@ func TestSaveMetadata(t *testing.T) {
 	assert.InDelta(t, 0.005, costUsd, 0.0001)
 }
 
+func TestSaveMetadata_ExtendedColumns(t *testing.T) {
+	db := setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "codebuddy", "MetaExt")
+	msgID, err := service.AddChatMessage("/project", "codebuddy", sid, "assistant", `{"blocks":[],"metadata":{}}`, nil, false, "")
+	assert.NoError(t, err)
+	assert.Greater(t, msgID, int64(0))
+
+	meta := &ai.Metadata{
+		Model:               "glm-5.1",
+		InputTokens:         29495,
+		OutputTokens:        3,
+		TotalTokens:         29498,
+		CachedReadTokens:    8192,
+		CachedWriteTokens:   0,
+		ThoughtTokens:       0,
+		CacheCreationTokens: 1200,
+		CacheHitTokens:      8192,
+		CacheMissTokens:     21303,
+		Credit:              1.57,
+		UsageByCategory:     map[string]int64{"tools": 22701, "conversation": 3894},
+		SessionID:           "sess-xyz",
+		RequestID:           "req-123",
+		TraceID:             "trace-456",
+		MessageID:           "agent-msg-1",
+		MessageRequestID:    "msgreq-abc",
+		RequestModelName:    "GLM-5.1",
+		ResponseModelID:     "ep-b3mrev6r",
+		FinishReason:        "stop",
+		Outcome:             "SUCCESS",
+		AgentPhase:          "completing",
+	}
+	err = service.SaveMetadata(msgID, meta)
+	assert.NoError(t, err)
+
+	var totalTokens, cachedRead, cachedWrite, thought, cacheCreation, cacheHit, cacheMiss int
+	var credit float64
+	var categoryJSON, requestID, traceID, responseModelID, sessionID string
+	var agentMessageID, messageRequestID, requestModelName, finishReason, outcome, agentPhase string
+	err = db.QueryRow(
+		`SELECT total_tokens, cached_read_tokens, cached_write_tokens, thought_tokens,
+		        cache_creation_tokens, cache_hit_tokens, cache_miss_tokens, credit,
+		        usage_by_category, request_id, trace_id, response_model_id, session_id,
+		        agent_message_id, message_request_id, request_model_name,
+		        finish_reason, outcome, agent_phase
+		 FROM chat_metadata WHERE message_id = ?`,
+		msgID,
+	).Scan(&totalTokens, &cachedRead, &cachedWrite, &thought,
+		&cacheCreation, &cacheHit, &cacheMiss, &credit,
+		&categoryJSON, &requestID, &traceID, &responseModelID, &sessionID,
+		&agentMessageID, &messageRequestID, &requestModelName,
+		&finishReason, &outcome, &agentPhase)
+	assert.NoError(t, err)
+	assert.Equal(t, 29498, totalTokens)
+	assert.Equal(t, 8192, cachedRead)
+	assert.Equal(t, 0, cachedWrite)
+	assert.Equal(t, 0, thought)
+	assert.Equal(t, 1200, cacheCreation)
+	assert.Equal(t, 8192, cacheHit)
+	assert.Equal(t, 21303, cacheMiss)
+	assert.Equal(t, 1.57, credit)
+	assert.Equal(t, `{"conversation":3894,"tools":22701}`, categoryJSON)
+	assert.Equal(t, "req-123", requestID)
+	assert.Equal(t, "trace-456", traceID)
+	assert.Equal(t, "ep-b3mrev6r", responseModelID)
+	assert.Equal(t, "sess-xyz", sessionID)
+	assert.Equal(t, "agent-msg-1", agentMessageID)
+	assert.Equal(t, "msgreq-abc", messageRequestID)
+	assert.Equal(t, "GLM-5.1", requestModelName)
+	assert.Equal(t, "stop", finishReason)
+	assert.Equal(t, "SUCCESS", outcome)
+	assert.Equal(t, "completing", agentPhase)
+}
+
 func TestSaveMetadata_NilMeta(t *testing.T) {
 	_ = setupDB(t)
 	err := service.SaveMetadata(1, nil)
@@ -2426,6 +2560,59 @@ func TestSaveMetadata_ZeroMessageID(t *testing.T) {
 	_ = setupDB(t)
 	err := service.SaveMetadata(0, &ai.Metadata{Model: "test"})
 	assert.NoError(t, err)
+}
+
+func TestMigrateMetadataFromContent_BackfillsFullColumns(t *testing.T) {
+	db := setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "codebuddy", "MigrateMeta")
+	// Insert an assistant message whose content JSON carries the full metadata
+	// (token splits, category, trace identity), WITHOUT calling SaveMetadata —
+	// mimicking legacy rows that predate the chat_metadata backfill.
+	meta := ai.Metadata{
+		InputTokens:         100,
+		OutputTokens:        5,
+		TotalTokens:         105,
+		CachedReadTokens:    40,
+		CacheHitTokens:      40,
+		CacheMissTokens:     60,
+		CacheCreationTokens: 10,
+		Credit:              0.25,
+		UsageByCategory:     map[string]int64{"tools": 90, "conversation": 15},
+		SessionID:           sid,
+		RequestID:           "req-mig",
+		MessageID:           "agent-msg-mig",
+		ResponseModelID:     "ep-mig",
+		FinishReason:        "end_turn",
+		Outcome:             "SUCCESS",
+		AgentPhase:          "completing",
+	}
+	metaJSON, _ := json.Marshal(meta)
+	content := `{"blocks":[],"metadata":` + string(metaJSON) + `}`
+	msgID, err := service.AddChatMessage("/project", "codebuddy", sid, "assistant", content, nil, false, "")
+	assert.NoError(t, err)
+
+	service.MigrateMetadataFromContent()
+
+	var cacheHit, cacheMiss, cacheCreation int
+	var credit float64
+	var categoryJSON, requestID, agentMessageID, finishReason string
+	err = db.QueryRow(
+		`SELECT cache_hit_tokens, cache_miss_tokens, cache_creation_tokens, credit,
+		        usage_by_category, request_id, agent_message_id, finish_reason
+		 FROM chat_metadata WHERE message_id = ?`,
+		msgID,
+	).Scan(&cacheHit, &cacheMiss, &cacheCreation, &credit,
+		&categoryJSON, &requestID, &agentMessageID, &finishReason)
+	assert.NoError(t, err)
+	assert.Equal(t, 40, cacheHit)
+	assert.Equal(t, 60, cacheMiss)
+	assert.Equal(t, 10, cacheCreation)
+	assert.Equal(t, 0.25, credit)
+	assert.Equal(t, `{"conversation":15,"tools":90}`, categoryJSON)
+	assert.Equal(t, "req-mig", requestID)
+	assert.Equal(t, "agent-msg-mig", agentMessageID)
+	assert.Equal(t, "end_turn", finishReason)
 }
 
 func TestGetSessionInfo_NotFound(t *testing.T) {
@@ -3617,6 +3804,36 @@ func TestAddQueuedMessage_EmptyQueueID(t *testing.T) {
 	err = service.UnsafeDBForTest().QueryRow("SELECT queue_id FROM chat_history WHERE id = ?", id).Scan(&queueID)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, queueID, "auto-generated queue_id should not be empty")
+}
+
+// TestAddQueuedMessage_RollbackOnFailure verifies ISS-237: when the shared
+// transaction fails after the chat_history INSERT (simulated here by dropping
+// the table after enqueue, which breaks the follow-up UPDATE chat_sessions
+// statement), the whole insert is rolled back and NO orphan row (queued=0,
+// empty queue_id) is left behind as a normal user message. Before the fix,
+// AddChatMessage's INSERT committed first and a subsequent non-transactional
+// UPDATE failed, orphaning the row permanently.
+func TestAddQueuedMessage_RollbackOnFailure(t *testing.T) {
+	db := setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Queue Rollback")
+
+	// Drop the sessions table inside the test's raw DB connection. WAL
+	// semantics give the test connection its own snapshot: DDL issued here
+	// becomes visible to the next connection-level statement, so the UPDATE
+	// chat_sessions inside AddQueuedMessage's transaction fails with "no such
+	// table: chat_sessions" while the INSERT (only touching chat_history)
+	// still succeeds.
+	_, err := db.Exec("DROP TABLE chat_sessions")
+	require.NoError(t, err)
+
+	_, err = service.AddQueuedMessage("/project", "claude", sid, "orphan me", nil, "q-fail", "")
+	assert.Error(t, err, "AddQueuedMessage must surface the transaction failure")
+
+	// The chat_history row must not exist at all — no orphan with queued=0.
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sid).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count, "failed AddQueuedMessage must leave no orphan chat_history row")
 }
 
 // TestDequeueQueuedMessage_FIFO verifies messages are dequeued in insertion order.

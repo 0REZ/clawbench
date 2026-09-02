@@ -194,7 +194,9 @@ func TestArchiveSession_EmptySessionHardDeletes(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify it has zero finalized messages
-	assert.Equal(t, 0, service.GetFinalizedMessageCount(sessionID))
+	count, err := service.GetFinalizedMessageCount(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
 
 	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
 	req = withProjectCookie(req, env.ProjectDir)
@@ -208,7 +210,7 @@ func TestArchiveSession_EmptySessionHardDeletes(t *testing.T) {
 	assert.Equal(t, true, result["destroyed"], "empty session should be hard-deleted (destroyed=true)")
 
 	// Session should be physically gone — session count should be 0
-	count, err := service.GetSessionCount(env.ProjectDir)
+	count, err = service.GetSessionCount(env.ProjectDir)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count, "hard-deleted session should not count toward session total")
 }
@@ -223,7 +225,9 @@ func TestArchiveSession_SessionWithMessagesSoftDeletes(t *testing.T) {
 	// Add a message so it's not empty
 	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "hello", nil, false, "")
 	require.NoError(t, err)
-	assert.Equal(t, 1, service.GetFinalizedMessageCount(sessionID))
+	count, err := service.GetFinalizedMessageCount(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 
 	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
 	req = withProjectCookie(req, env.ProjectDir)
@@ -237,7 +241,107 @@ func TestArchiveSession_SessionWithMessagesSoftDeletes(t *testing.T) {
 	assert.Equal(t, false, result["destroyed"], "session with messages should be soft-archived (destroyed=false)")
 
 	// Session should still exist (archived=1), not hard-deleted — messages still accessible
-	assert.Equal(t, 1, service.GetChatMessageCount(sessionID))
+	count, err = service.GetChatMessageCount(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestArchiveSession_EmptySessionHardDelete_RAGPurgeErrorStillDestroys(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "rag-err", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Inject a RAG purge callback that reports an error. The empty-session
+	// hard-delete path must log the warning and still destroy the session.
+	service.SetPurgeRAGChunksFn(func(sessionIDs []string) (int64, error) {
+		return 0, assert.AnError
+	})
+	defer service.SetPurgeRAGChunksFn(nil)
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["destroyed"], "session must still be destroyed when RAG purge fails")
+
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestArchiveSession_EmptySessionHardDelete_RAGPurgeChunksLogged(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "rag-chunks", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Inject a RAG purge callback that reports deleted chunks. The hard-delete
+	// path logs the count and still destroys the session.
+	service.SetPurgeRAGChunksFn(func(sessionIDs []string) (int64, error) {
+		return 3, nil
+	})
+	defer service.SetPurgeRAGChunksFn(nil)
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["destroyed"])
+
+	count, err := service.GetSessionCount(env.ProjectDir)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestArchiveSession_CountErrorFallsBackToSoftArchive(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "count-error-session", "claude", "", "default", "chat")
+	require.NoError(t, err)
+	_, err = service.AddChatMessage(env.ProjectDir, "claude", sessionID, "user", "important content", nil, false, "")
+	require.NoError(t, err)
+
+	// Force the read pool (used by GetFinalizedMessageCount) to fail. The write
+	// pool stays healthy, so ArchiveSession's UPDATE/HardDeleteSession would
+	// succeed if the empty-session branch were wrongly taken.
+	closedDB, err := service.InitInMemoryDB()
+	require.NoError(t, err)
+	_ = closedDB.Close()
+	cleanup := service.SetDBForTest(service.UnsafeDBForTest(), closedDB)
+	defer cleanup()
+
+	req := newRequest(t, http.MethodDelete, "/api/ai/session/archive?session_id="+sessionID+"&backend=claude", nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ArchiveSession, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, false, result["destroyed"], "count failure must NOT hard-delete a session that may have content")
+
+	// The session must still exist with its messages intact.
+	cleanup()
+	count, err := service.GetChatMessageCount(sessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "session content must survive a count failure during archive")
+
+	var archived int
+	require.NoError(t, service.UnsafeDBForTest().QueryRow("SELECT archived FROM chat_sessions WHERE id = ?", sessionID).Scan(&archived))
+	assert.Equal(t, 1, archived, "session should be soft-archived when the count query fails")
 }
 
 func TestArchiveSession_RunningSessionCancelledBeforeArchive(t *testing.T) {

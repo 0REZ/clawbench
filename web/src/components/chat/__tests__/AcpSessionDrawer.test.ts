@@ -71,6 +71,7 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('lucide-vue-next', () => ({
   Import: { name: 'ImportIcon', render: () => null },
+  LoaderCircle: { name: 'LoaderCircleIcon', render: () => null },
 }))
 
 vi.mock('@/components/common/BottomSheet.vue', () => ({

@@ -463,6 +463,51 @@ describe('rebuildFromDb (live placeholder)', () => {
     expect(merged[0].streaming).toBe(true)
   })
 
+  // ── Bug regression (issue #419): session switch resets the streaming elapsed
+  //    timer. Switching back to a running session re-subscribes → the backend
+  //    emits stream_start, which recreates the placeholder stamped with the
+  //    SWITCH time (createdAt = now) while the REST db_load is still in flight.
+  //    rebuildFromDb keeps that placeholder object — its createdAt (the switch
+  //    moment) must be replaced by the DB streaming row's older created_at (the
+  //    true stream start), otherwise the "⋯ 45s" counter restarts from 0 on
+  //    every switch.
+  it('adopts the DB row created_at as the elapsed anchor when the live placeholder is newer (session-switch reset)', () => {
+    const state = [a({
+      id: 7,
+      streaming: true,
+      // stream_start fired by the re-subscribe raced ahead of db_load → the
+      // placeholder was stamped with the switch moment, well AFTER stream start.
+      createdAt: '2026-01-01T00:01:00Z',
+      seq: 1,
+    })]
+    const merged = rebuildFromDb(state, [
+      a({ id: 7, streaming: true, createdAt: '2026-01-01T00:00:00Z' }),
+    ])
+    expect(merged).toHaveLength(1)
+    expect(merged[0].id).toBe(7)
+    expect(merged[0].streaming).toBe(true)
+    // The elapsed timer anchor must be the stream start, not the switch moment.
+    expect(merged[0].createdAt).toBe('2026-01-01T00:00:00Z')
+  })
+
+  it('keeps the live placeholder createdAt when it is not newer than the DB row', () => {
+    const state = [a({ id: 7, streaming: true, createdAt: '2026-01-01T00:00:00Z', seq: 1 })]
+    const merged = rebuildFromDb(state, [
+      // DB row flushed slightly later (content flush lag) — placeholder time is
+      // already the true start, so it must NOT be bumped forward.
+      a({ id: 7, streaming: true, createdAt: '2026-01-01T00:00:01Z' }),
+    ])
+    expect(merged[0].createdAt).toBe('2026-01-01T00:00:00Z')
+  })
+
+  it('adopts the DB created_at when the live placeholder has no usable createdAt', () => {
+    const state = [a({ id: 7, streaming: true, createdAt: '', seq: 1 })]
+    const merged = rebuildFromDb(state, [
+      a({ id: 7, streaming: true, createdAt: '2026-01-01T00:00:00Z' }),
+    ])
+    expect(merged[0].createdAt).toBe('2026-01-01T00:00:00Z')
+  })
+
   it('drops the streaming placeholder when the DB snapshot has no streaming row for it (done was missed)', () => {
     const state = [a({ id: 'drain-1', streaming: true, seq: 1 })]
     const merged = rebuildFromDb(state, [u({ id: 1, content: '1' })])

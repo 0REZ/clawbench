@@ -74,10 +74,19 @@ export interface SearchPanelSpec {
 // the decorations from searchState itself, so all matches get a persistent
 // background highlight and the active (selected) match gets the flash class.
 // Prec.high beats the library's Prec.low searchHighlighter.
+//
+// Panel-close gating: closing the panel must clear the highlight. The library's
+// search state keeps the query around after the panel closes, so matching on
+// the query alone would leave every match highlighted forever. Instead we also
+// gate on searchPanelField — while the panel is closed no decorations render,
+// regardless of what the query is.
 const searchMatchDeco = Decoration.mark({ class: 'cm-searchMatch' })
 const selectedMatchDeco = Decoration.mark({ class: 'cm-searchMatch cm-searchMatch-selected cm-searchMatch-flash' })
 
 function buildSearchDecorations(view: EditorView): DecorationSet {
+    // No highlight while the search panel is closed (the query may linger in
+    // @codemirror/search state after close()).
+    if (!view.state.field(searchPanelField, false)) return Decoration.none
     const spec = getSearchQuery(view.state)
     if (!spec || !spec.valid || !spec.search) return Decoration.none
     const query = new SearchQuery(spec)
@@ -109,7 +118,11 @@ const searchMatchHighlight = ViewPlugin.fromClass(
                 update.docChanged ||
                 update.selectionSet ||
                 update.viewportChanged ||
-                update.transactions.some((tr) => tr.effects.some((e) => e.is(setSearchQuery)))
+                update.transactions.some((tr) => tr.effects.some((e) => e.is(setSearchQuery))) ||
+                // Rebuild when the panel opens/closes — the close transition
+                // has no setSearchQuery effect, so without this the highlight
+                // would not be cleared on close.
+                update.state.field(searchPanelField, false) !== update.startState.field(searchPanelField, false)
             ) {
                 this.decorations = buildSearchDecorations(update.view)
             }
@@ -243,7 +256,17 @@ export function searchPanel(spec: SearchPanelSpec) {
                 }
 
                 private close() {
-                    this.view.dispatch({ effects: searchPanelToggle.of(false) })
+                    // Clear the query too (not just hide the panel): the search
+                    // state survives a panel toggle, so a stale query would
+                    // otherwise resurface when the panel reopens. Clearing it
+                    // here also makes the highlight (which would otherwise be
+                    // gated off anyway) come back fresh on the next search.
+                    this.view.dispatch({
+                        effects: [
+                            searchPanelToggle.of(false),
+                            setSearchQuery.of(new SearchQuery({ search: '' })),
+                        ],
+                    })
                 }
 
                 update(update: ViewUpdate) {

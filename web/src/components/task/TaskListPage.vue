@@ -13,7 +13,7 @@
     </div>
     <div class="task-list-body">
       <div v-if="loading && tasks.length === 0" class="task-loading">
-        <Loader2 class="loading-icon" :size="20" />
+        <LoadingIndicator size="sm" inline />
         <span>{{ t('common.loading') }}</span>
       </div>
       <div v-else-if="tasks.length === 0" class="task-empty">
@@ -62,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { Plus, Loader2, CalendarX, Clock, Repeat, CheckCheck } from 'lucide-vue-next'
+import { Plus, CalendarX, Clock, Repeat, CheckCheck } from 'lucide-vue-next'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useTaskTab } from '@/composables/useTaskTab'
@@ -72,6 +72,7 @@ import { store } from '@/stores/app'
 import TaskBreadcrumb from '@/components/task/TaskBreadcrumb.vue'
 import RefreshButton from '@/components/common/RefreshButton.vue'
 import AgentIcon from '@/components/common/AgentIcon.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 const { t } = useI18n()
 const { loadTasks, markAllTasksRead } = useTaskTab()
@@ -226,14 +227,6 @@ onMounted(refresh)
   height: 100%;
   color: var(--text-muted, #999);
   font-size: 14px;
-}
-
-.loading-icon {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  100% { transform: rotate(360deg); }
 }
 
 .empty-icon {

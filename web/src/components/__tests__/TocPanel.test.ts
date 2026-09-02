@@ -201,10 +201,10 @@ describe('TocPanel — fetchCodeSymbols with results', () => {
     await new Promise(r => setTimeout(r, 50))
     await nextTick()
 
-    // No DOM element has id "toc-l10" — clicking must fall back to emit('jump', line)
+    // No DOM element has id "toc-l10" — clicking must fall back to emit('jump', line, anchorId)
     await wrapper.findAll('.toc-item')[0].trigger('click')
     expect(wrapper.emitted('jump')).toBeTruthy()
-    expect(wrapper.emitted('jump')![0]).toEqual([10])
+    expect(wrapper.emitted('jump')![0]).toEqual([10, 'toc-l10'])
   })
 
   it('falls back to extractToc when fetchCodeSymbols returns null', async () => {
@@ -466,5 +466,134 @@ describe('TocPanel — markdown source view scroll-follow (codeView)', () => {
     const intro = items.find(i => i.text().includes('Intro'))
     expect(intro?.classes()).not.toContain('active')
     wrapper.unmount()
+  })
+})
+
+describe('TocPanel — rendered markdown anchor scoping', () => {
+  it('math-heading TOC id matches a real rendered heading id and scrolls it', async () => {
+    const current = document.createElement('div')
+    current.setAttribute('data-file-path', '/m.md')
+    // The heading id is produced by marked's slug pipeline on PROTECTED text:
+    // math → placeholder → id "energy-mathi0" (same rule toc.ts now uses).
+    current.innerHTML = '<h2 id="能量公式-mathi0">能量公式</h2>'
+    document.body.appendChild(current)
+
+    const scrollSpy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollSpy
+
+    try {
+      const wrapper = mountPanel({
+        file: { name: 'm.md', content: '## 能量公式 $E=mc^2$', path: '/m.md' },
+      })
+      await nextTick()
+      await nextTick()
+
+      const item = wrapper.findAll('.toc-item').find(i => i.text().includes('能量公式'))
+      expect(item).toBeTruthy()
+      expect(item!.text()).not.toContain('MATH') // display text stays clean
+      await item!.trigger('click')
+
+      // scrollTo scrolls the heading directly; the activeId watcher also keeps
+      // the highlighted list item visible (extra scrollIntoView calls).
+      expect(scrollSpy).toHaveBeenCalled()
+      const scrolledH2 = scrollSpy.mock.instances.find(i => i === current.querySelector('h2'))
+      expect(scrolledH2).toBeTruthy()
+      wrapper.unmount()
+    } finally {
+      Element.prototype.scrollIntoView = orig
+      current.remove()
+    }
+  })
+})
+
+describe('TocPanel — click-jump highlight hold', () => {
+  it('keeps the clicked item highlighted while viewport-line events fire during the hold window', async () => {
+    vi.useFakeTimers()
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    const wrapper = mountPanel({
+      file: { name: 'main.go', content: 'package main', path: '/main.go' },
+      codeView: true,
+    })
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(50)
+    await nextTick()
+
+    // Click "Handler" (line 25).
+    const items = wrapper.findAll('.toc-item')
+    const handlerItem = items.find(i => i.text().includes('Handler'))!
+    await handlerItem.trigger('click')
+    await nextTick()
+    expect(handlerItem.classes()).toContain('active')
+
+    // A viewport-line event pointing at the OTHER symbol arrives while the
+    // smooth scroll would still be settling — it must NOT steal the highlight.
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 10 } }))
+    await nextTick()
+    expect(handlerItem.classes()).toContain('active')
+    const mainItem = items.find(i => i.text().includes('main'))!
+    expect(mainItem.classes()).not.toContain('active')
+
+    // After the hold window elapses, scroll-follow resumes normally.
+    await vi.advanceTimersByTimeAsync(1600)
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 10 } }))
+    await nextTick()
+    expect(mainItem.classes()).toContain('active')
+    expect(handlerItem.classes()).not.toContain('active')
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+})
+
+describe('TocPanel — scroll-follow keeps active item visible', () => {
+  it('scrolls the newly active list item into view when scroll-follow changes it', async () => {
+    const scrollSpy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    // jsdom has no scrollIntoView — install a spy so the follow-watch can run.
+    Element.prototype.scrollIntoView = scrollSpy
+
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    try {
+      const wrapper = mountPanel({
+        file: { name: 'main.go', content: 'package main', path: '/main.go' },
+        codeView: true,
+      })
+      await nextTick()
+      await new Promise(r => setTimeout(r, 50))
+      await nextTick()
+      scrollSpy.mockClear()
+
+      // Scroll-follow reports line 25 at the top → "Handler" becomes active.
+      window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 25 } }))
+      await nextTick()
+      await nextTick()
+
+      const items = wrapper.findAll('.toc-item')
+      const handlerItem = items.find(i => i.text().includes('Handler'))!
+      expect(handlerItem.classes()).toContain('active')
+      // The follow-watch scrolled the active list item into view.
+      const scrolledActive = scrollSpy.mock.instances.some(i => i === handlerItem.element)
+      expect(scrolledActive).toBe(true)
+      wrapper.unmount()
+    } finally {
+      Element.prototype.scrollIntoView = orig
+    }
   })
 })

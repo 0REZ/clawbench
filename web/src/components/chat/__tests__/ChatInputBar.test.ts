@@ -246,8 +246,17 @@ const mockContextUsed = ref(0)
 const mockContextSize = ref(0)
 const mockContextInputTokens = ref(0)
 const mockContextOutputTokens = ref(0)
+const mockContextTotalTokens = ref(0)
+const mockContextCachedReadTokens = ref(0)
+const mockContextCachedWriteTokens = ref(0)
+const mockContextThoughtTokens = ref(0)
 const mockContextCost = ref(0)
 const mockContextCurrency = ref('USD')
+const mockContextCacheCreationTokens = ref(0)
+const mockContextCacheHitTokens = ref(0)
+const mockContextCacheMissTokens = ref(0)
+const mockContextCredit = ref(0)
+const mockContextUsageByCategory = ref<Record<string, number> | undefined>(undefined)
 vi.mock('@/composables/useSessionIdentity', () => ({
   useSessionIdentity: () => ({
     availableCommands: mockAvailableCommands,
@@ -259,8 +268,17 @@ vi.mock('@/composables/useSessionIdentity', () => ({
     contextSize: mockContextSize,
     contextInputTokens: mockContextInputTokens,
     contextOutputTokens: mockContextOutputTokens,
+    contextTotalTokens: mockContextTotalTokens,
+    contextCachedReadTokens: mockContextCachedReadTokens,
+    contextCachedWriteTokens: mockContextCachedWriteTokens,
+    contextThoughtTokens: mockContextThoughtTokens,
     contextCost: mockContextCost,
     contextCurrency: mockContextCurrency,
+    contextCacheCreationTokens: mockContextCacheCreationTokens,
+    contextCacheHitTokens: mockContextCacheHitTokens,
+    contextCacheMissTokens: mockContextCacheMissTokens,
+    contextCredit: mockContextCredit,
+    contextUsageByCategory: mockContextUsageByCategory,
   }),
 }))
 
@@ -963,6 +981,138 @@ describe('ChatInputBar', () => {
     const wrapper = mountBar({ currentModelName: 'gpt-4' })
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.session-info-usage').exists()).toBe(true)
+  })
+
+  it('groups all token/cost rows under the Token Detail section header', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 29495
+    mockContextInputTokens.value = 29495
+    mockContextOutputTokens.value = 3
+    mockContextCacheCreationTokens.value = 0
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 21303
+    mockContextCredit.value = 1.48
+
+    const wrapper = mountBar()
+    // Open the usage popup.
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // Token Detail section header present; input/output rows grouped under it.
+    expect(wrapper.text()).toContain('chat.sessionInfo.tokenDetail')
+    // inputTokens/outputTokens are translated by the test i18n mock ("Input"/"Output");
+    // cacheMissTokens/credit fall back to raw keys.
+    expect(wrapper.text()).toContain('29,495')
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheMissTokens')
+    expect(wrapper.text()).toContain('21,303')
+    expect(wrapper.text()).toContain('chat.sessionInfo.credit')
+    expect(wrapper.text()).toContain('1.4800')
+
+    // Reset for other tests.
+    mockContextInputTokens.value = 0
+    mockContextOutputTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+    mockContextCredit.value = 0
+  })
+
+  it('renders cache read and cache hit as separate rows (same value, distinct labels)', async () => {
+    // CodeBuddy reports prompt_cache_hit_tokens once; cachedReadTokens and
+    // cacheHitTokens both carry it. The UI deliberately shows both rows with
+    // their distinct labels ("缓存读" vs "缓存命中") — user preference.
+    mockContextSize.value = 200000
+    mockContextUsed.value = 326400
+    mockContextCachedReadTokens.value = 326400
+    mockContextCacheHitTokens.value = 326400
+    mockContextCacheMissTokens.value = 2984
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // Both labels render, each with the value.
+    expect(wrapper.text()).toContain('chat.sessionInfo.cachedReadTokens')
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheHitTokens')
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheMissTokens')
+    expect(wrapper.text()).toContain('2,984')
+
+    // Reset for other tests.
+    mockContextCachedReadTokens.value = 0
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+  })
+
+  it('shows cache hit rate as hit/(hit+miss) percentage', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 326400
+    mockContextCacheHitTokens.value = 326400
+    mockContextCacheMissTokens.value = 2984
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // 326400 / (326400 + 2984) = 99.09%
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheHitRate')
+    expect(wrapper.text()).toContain('99.1%')
+
+    // Reset for other tests.
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+  })
+
+  it('hides cache hit rate when no cache stats are reported', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.cacheHitRate')
+  })
+
+  it('token detail section hidden when only used/size present', async () => {
+    // No token rows → no Token Detail header at all (only used/size/remaining).
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    mockContextInputTokens.value = 0
+    mockContextOutputTokens.value = 0
+    mockContextTotalTokens.value = 0
+    mockContextCachedReadTokens.value = 0
+    mockContextCachedWriteTokens.value = 0
+    mockContextCacheCreationTokens.value = 0
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+    mockContextCredit.value = 0
+    mockContextThoughtTokens.value = 0
+    mockContextCost.value = 0
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.tokenDetail')
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.cacheMissTokens')
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.credit')
+  })
+
+  it('context breakdown section shows usageByCategory by value', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 29495
+    mockContextUsageByCategory.value = { tools: 22701, conversation: 3894 }
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('chat.sessionInfo.catTools')
+    expect(wrapper.text()).toContain('22,701')
+    expect(wrapper.text()).toContain('chat.sessionInfo.catConversation')
+    expect(wrapper.text()).toContain('3,894')
+
+    mockContextUsageByCategory.value = undefined
   })
 
   it('attached files render with file icon color', async () => {
@@ -1842,7 +1992,7 @@ describe('ChatInputBar', () => {
       await wrapper.vm.$nextTick()
       const transBtn = wrapper.find('.chat-attach-btn.voice-rec-btn.transcribing')
       expect(transBtn.exists()).toBe(true)
-      expect(transBtn.find('.spin-icon').exists()).toBe(true)
+      expect(transBtn.find('.attach-btn-spinner').exists()).toBe(true)
       expect(wrapper.find('.voice-banner').exists()).toBe(false)
       wrapper.unmount()
     })

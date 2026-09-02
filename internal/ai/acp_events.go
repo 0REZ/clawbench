@@ -51,6 +51,12 @@ func mapACPSessionUpdate(update acp.SessionUpdate, ch chan<- StreamEvent, ctx co
 		if content.Text != nil {
 			forwardACPEvent(ch, StreamEvent{Type: "content", Content: content.Text.Text})
 		}
+		// Per-agent _meta on the chunk (e.g. CodeBuddy OpenAI-style usage +
+		// codebuddy.ai/* trace) — accumulate onto the connection so the
+		// turn-final metadata reflects the richest observed values.
+		if conn != nil {
+			mergeMetaExtractionToConn(conn, backendID, update.AgentMessageChunk.Meta)
+		}
 
 	case update.AgentThoughtChunk != nil:
 		content := update.AgentThoughtChunk.Content
@@ -277,6 +283,17 @@ func mapACPSessionUpdate(update acp.SessionUpdate, ch chan<- StreamEvent, ctx co
 		if update.UsageUpdate.Cost != nil {
 			usageState.Cost = update.UsageUpdate.Cost.Amount
 			usageState.Currency = update.UsageUpdate.Cost.Currency
+		}
+		// Per-agent _meta extensions on the usage_update (CodeBuddy packs the
+		// OpenAI-style token usage + usageByCategory here). Merge them into the
+		// state before forwarding so the frontend receives the full picture,
+		// and accumulate onto the connection so the turn-final message metadata
+		// event persists usageByCategory / trace as well.
+		if ext := extractMetaUsage(backendID, update.UsageUpdate.Meta); ext != nil {
+			applyMetaExtractionToUsageState(usageState, ext)
+			if conn != nil {
+				conn.mergeMetaExtraction(ext)
+			}
 		}
 		forwardACPEvent(ch, StreamEvent{Type: "usage_update", Usage: usageState})
 		if conn != nil {

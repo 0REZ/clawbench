@@ -75,6 +75,7 @@ const { runningSessionsVersion } = useSessionIdentity()
 const sessions = ref([])
 const loading = ref(false)
 const loadingMore = ref(false)
+const refreshing = ref(false) // a reload (loadSessions) is in flight
 const hasMore = ref(false)
 const listRef = ref(null)
 const sentinelRef = ref(null)
@@ -95,27 +96,78 @@ async function loadSessions() {
   // Keep the existing list on screen during background refreshes — only show
   // the loading spinner when there is nothing to render yet. This prevents the
   // "clear then refill" flash when a WS-triggered reload fires.
-  loading.value = sessions.value.length === 0
+  //
+  // Depth preservation: a reload must NOT collapse the list back to the first
+  // page when the user has already scrolled through more (loadMoreSessions
+  // appended pages). If it did, the shorter list would re-expose the load-more
+  // sentinel, the IntersectionObserver would immediately append again, and —
+  // while a running session keeps emitting session_update events — the list
+  // (and the auto-sized drawer around it) would oscillate in height forever.
+  // Instead, re-fetch pages until the fresh list covers the rows the user has
+  // already loaded, then swap in place.
+  const keepDepth = sessions.value.length
+  loading.value = keepDepth === 0
   hasMore.value = false
+  refreshing.value = true
   try {
-    const resp = await fetch(`/api/ai/sessions?limit=${pageSize.value}`)
-    const data = await resp.json()
-    sessions.value = data.sessions || []
+    const fresh = await fetchSessionsUpTo(keepDepth)
+    sessions.value = fresh
     reconcileRunningSessions(sessions.value)
-    hasMore.value = !!data.hasMore
-    if (typeof data.totalCount === 'number') store.state.sessionCount = data.totalCount
   } catch (err) {
     appLog.e('SessionList', 'Failed to load sessions:', err)
     sessions.value = []
   } finally {
     loading.value = false
+    refreshing.value = false
     await nextTick()
     setupObserver()
   }
 }
 
+/**
+ * Fetch session pages until at least `minCount` rows are covered (or the
+ * server reports no more), returning the accumulated list. A plain first load
+ * passes minCount=0 and behaves like before: one page of pageSize rows.
+ * Each page is fetched after the previous one's last row (cursor semantics
+ * identical to loadMoreSessions below).
+ */
+async function fetchSessionsUpTo(minCount) {
+  const limit = pageSize.value
+  const accumulated = []
+  let cursorTime = null
+  let cursorId = null
+  // Always fetch at least one page; afterwards keep going only when a reload
+  // must preserve a deeper list (minCount > pageSize). On a plain first load
+  // (minCount = 0) one page is exactly right — the remaining pages are loaded
+  // on demand by loadMoreSessions when the user scrolls.
+  // Cap the loop so a pathological cursor never spins forever; pageSize is
+  // small (default 10) and the depth to preserve is bounded by what the user
+  // actually scrolled through.
+  let serverHasMore
+  let pages = 0
+  for (;;) {
+    let url = `/api/ai/sessions?limit=${limit}`
+    if (cursorTime && cursorId) {
+      url += `&cursor=${encodeURIComponent(cursorTime)}&cursor_id=${encodeURIComponent(cursorId)}`
+    }
+    const resp = await fetch(url)
+    const data = await resp.json()
+    const list = data.sessions || []
+    accumulated.push(...list)
+    serverHasMore = !!data.hasMore
+    if (typeof data.totalCount === 'number') store.state.sessionCount = data.totalCount
+    const last = list[list.length - 1]
+    pages++
+    if (!last || !serverHasMore || accumulated.length >= minCount || pages >= 20) break
+    cursorTime = last.updatedAt
+    cursorId = last.id
+  }
+  hasMore.value = serverHasMore
+  return accumulated
+}
+
 async function loadMoreSessions() {
-  if (loadingMore.value || !hasMore.value) return
+  if (loadingMore.value || !hasMore.value || refreshing.value) return
   loadingMore.value = true
   try {
     const last = sessions.value[sessions.value.length - 1]
@@ -125,6 +177,7 @@ async function loadMoreSessions() {
     const more = data.sessions || []
     if (more.length > 0) sessions.value = [...sessions.value, ...more]
     hasMore.value = !!data.hasMore
+    if (typeof data.totalCount === 'number') store.state.sessionCount = data.totalCount
   } catch (err) {
     appLog.e('SessionList', 'Failed to load more sessions:', err)
   } finally {
@@ -136,7 +189,7 @@ function setupObserver() {
   if (observer) { observer.disconnect(); observer = null }
   if (!sentinelRef.value || !listRef.value) return
   observer = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting && hasMore.value && !loadingMore.value) loadMoreSessions()
+    if (entries[0].isIntersecting && hasMore.value && !loadingMore.value && !refreshing.value) loadMoreSessions()
   }, { threshold: 0.1, rootMargin: '100px', root: listRef.value })
   observer.observe(sentinelRef.value)
 }

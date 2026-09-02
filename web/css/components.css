@@ -3,23 +3,6 @@
    ========================================================================== */
 
 /* ==========================================================================
-   Loading State
-   ========================================================================== */
-
-.spinner {
-    width: 32px;
-    height: 32px;
-    border: 3px solid var(--border-color);
-    border-top-color: var(--accent-color);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-/* ==========================================================================
    Shared Context Menu
    Used by: FileManager.vue, ProjectDialog.vue
    ========================================================================== */

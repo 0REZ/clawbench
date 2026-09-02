@@ -58,7 +58,7 @@
             />
           </div>
           <button type="submit" :disabled="loading || (!showPasswordField && !password)" class="login-btn">
-            <span v-if="loading" class="btn-spinner"></span>
+            <LoadingIndicator v-if="loading" class="btn-spinner" size="sm" inline />
             <span>{{ loading ? t('login.verifying') : t('login.submit') }}</span>
           </button>
           <div v-if="error" class="error">
@@ -96,7 +96,7 @@
             />
           </div>
           <button type="submit" :disabled="loading || !newServerUrl" class="login-btn">
-            <span v-if="loading" class="btn-spinner"></span>
+            <LoadingIndicator v-if="loading" class="btn-spinner" size="sm" inline />
             <span>{{ loading ? t('login.verifying') : t('login.addServerSubmit') }}</span>
           </button>
           <button type="button" class="cancel-btn" @click="showAddForm = false">{{ t('common.cancel') }}</button>
@@ -151,6 +151,7 @@ import { useDialog } from '@/composables/useDialog'
 import { formatServerHost } from '@/utils/url'
 import { Server, X, Plus, MonitorSmartphone, Smartphone, ChevronRight } from 'lucide-vue-next'
 import IosInstallDrawer from './common/IosInstallDrawer.vue'
+import LoadingIndicator from './common/LoadingIndicator.vue'
 import { downloadByUrl } from '@/utils/download'
 import { getNative } from '@/utils/clawbenchNative'
 
@@ -635,17 +636,9 @@ input:focus {
     cursor: default;
 }
 
-.btn-spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(255, 255, 255, 0.3);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
+/* Unified loader inside the accent button → white arc */
+.login-btn .btn-spinner {
+    --li-color: #fff;
 }
 
 .cancel-btn {

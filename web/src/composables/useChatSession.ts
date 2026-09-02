@@ -339,9 +339,9 @@ export function useChatSession(options: UseChatSessionOptions) {
   // with cached data; CLI sessions and reaped ACP connections return nil.
   // Clearing on missing data would discard valid SSE-cached values, causing
   // the context progress bar to disappear when switching back to a running session.
-  function syncUsageFromData(usageStateData?: { used?: number; size?: number; cost?: number; currency?: string; inputTokens?: number; outputTokens?: number }, sessionId?: string) {
+  function syncUsageFromData(usageStateData?: { used?: number; size?: number; cost?: number; currency?: string; inputTokens?: number; outputTokens?: number; totalTokens?: number; cachedReadTokens?: number; cachedWriteTokens?: number; thoughtTokens?: number; cacheCreationTokens?: number; cacheHitTokens?: number; cacheMissTokens?: number; credit?: number; usageByCategory?: Record<string, number> }, sessionId?: string) {
     if (usageStateData && (usageStateData.size ?? 0) > 0) {
-      updateUsageState(usageStateData.used ?? 0, usageStateData.size ?? 0, usageStateData.cost, usageStateData.currency, sessionId, usageStateData.inputTokens, usageStateData.outputTokens)
+      updateUsageState(usageStateData.used ?? 0, usageStateData.size ?? 0, usageStateData.cost, usageStateData.currency, sessionId, usageStateData.inputTokens, usageStateData.outputTokens, usageStateData.totalTokens, usageStateData.cachedReadTokens, usageStateData.cachedWriteTokens, usageStateData.thoughtTokens, usageStateData.cacheCreationTokens, usageStateData.cacheHitTokens, usageStateData.cacheMissTokens, usageStateData.credit, usageStateData.usageByCategory)
     }
   }
 

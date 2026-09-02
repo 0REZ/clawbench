@@ -60,6 +60,13 @@ interface UsageState {
   thoughtTokens: number
   cost: number
   currency: string
+  // Per-agent _meta extensions (CodeBuddy OpenAI-style cache detail + credit).
+  cacheCreationTokens: number
+  cacheHitTokens: number
+  cacheMissTokens: number
+  credit: number
+  // Context-window breakdown by component (CodeBuddy usageByCategory).
+  usageByCategory?: Record<string, number>
 }
 const usageStateCache = new Map<string, UsageState>()
 // Bumped on every mutation to usageStateCache so computed properties
@@ -75,6 +82,11 @@ const contextCachedWriteTokens = computed(() => { void usageStateVersion.value /
 const contextThoughtTokens = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.thoughtTokens ?? 0 })
 const contextCost = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.cost ?? 0 })
 const contextCurrency = computed(() => { void usageStateVersion.value /* reactivity: Map mutations */; return usageStateCache.get(currentSessionId.value)?.currency ?? '' })
+const contextCacheCreationTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheCreationTokens ?? 0 })
+const contextCacheHitTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheHitTokens ?? 0 })
+const contextCacheMissTokens = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.cacheMissTokens ?? 0 })
+const contextCredit = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.credit ?? 0 })
+const contextUsageByCategory = computed(() => { void usageStateVersion.value; return usageStateCache.get(currentSessionId.value)?.usageByCategory })
 export const runningSessions = ref(new Set<string>())
 // Bumped on every mutation to runningSessions so computed properties
 // that depend on the set's contents re-evaluate correctly.
@@ -323,11 +335,60 @@ export function clearThinkingEffortState() {
 
 /** Update context usage state for a session (from SSE or REST).
  *  Writes to the per-session cache — does not affect the displayed
- *  values unless the target session is the current one. */
-export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number) {
+ *  values unless the target session is the current one.
+ *  Extended params cover per-agent _meta extensions (CodeBuddy cache detail
+ *  + credit + usageByCategory).
+ *
+ *  IMPORTANT — partial-update semantics for extension fields: CodeBuddy
+ *  distributes extension detail across MULTIPLE usage_update notifications
+ *  within one turn (one carries cache/credit, another usageByCategory, and the
+ *  turn's first notification often carries explicit zero-valued categories).
+ *  Each notification is therefore NOT a full snapshot. Extension fields are
+ *  only applied when they carry meaningful values (cache > 0, non-empty
+ *  category breakdown); otherwise the previous value is preserved so the UI
+ *  never flickers back to the minimal view mid-stream.
+ *
+ *  Note on zero values: the backend serializes UsageState with omitempty, so a
+ *  genuinely-zero cache/credit field never arrives as an explicit 0 — it is
+ *  absent. The `!== undefined` guard therefore treats it as "no new info" and
+ *  preserves the previous value. An explicit 0 (should a non-omitempty source
+ *  ever send one) IS applied, which is correct for a real zero result. */
+export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number, cacheCreationTokens?: number, cacheHitTokens?: number, cacheMissTokens?: number, credit?: number, usageByCategory?: Record<string, number>) {
   const key = sessionId || currentSessionId.value
   if (!key) return
-  usageStateCache.set(key, { used, size, inputTokens: inputTokens ?? 0, outputTokens: outputTokens ?? 0, totalTokens: totalTokens ?? 0, cachedReadTokens: cachedReadTokens ?? 0, cachedWriteTokens: cachedWriteTokens ?? 0, thoughtTokens: thoughtTokens ?? 0, cost: cost ?? 0, currency: currency ?? '' })
+  const prev = usageStateCache.get(key)
+  // A used-count drop marks a NEW TURN (CodeBuddy opens each turn with a
+  // usage_update whose used resets low/zero). Extension detail is turn-scoped:
+  // carrying last turn's cache/category into a fresh turn would show stale
+  // data. Reset the extension baseline whenever used falls back noticeably.
+  const newTurn = !!prev && used < prev.used * 0.5
+  const baseline = newTurn ? undefined : prev
+  const hasMeaningfulCategory = !!usageByCategory && Object.values(usageByCategory).some(v => v > 0)
+  const isDefined = (x: number | undefined): x is number => x !== undefined && x !== null
+  usageStateCache.set(key, {
+    used, size,
+    // Token totals are only carried by the notifications that report usage
+    // (turn-final emitPromptResponseUsage / usage_update with usage block).
+    // Mid-stream partial notifications omit them — preserve the previous value
+    // so the rows don't flicker in and out of the Token Detail section. A new
+    // turn (used reset) drops the previous baseline.
+    inputTokens: isDefined(inputTokens) ? inputTokens : (baseline?.inputTokens ?? 0),
+    outputTokens: isDefined(outputTokens) ? outputTokens : (baseline?.outputTokens ?? 0),
+    totalTokens: isDefined(totalTokens) ? totalTokens : (baseline?.totalTokens ?? 0),
+    cachedReadTokens: isDefined(cachedReadTokens) ? cachedReadTokens : (baseline?.cachedReadTokens ?? 0),
+    cachedWriteTokens: isDefined(cachedWriteTokens) ? cachedWriteTokens : (baseline?.cachedWriteTokens ?? 0),
+    thoughtTokens: isDefined(thoughtTokens) ? thoughtTokens : (baseline?.thoughtTokens ?? 0),
+    cost: isDefined(cost) ? cost : (baseline?.cost ?? 0),
+    currency: currency ?? '',
+    // Extension fields: absent (undefined, i.e. not carried by this partial
+    // notification) preserves the previous value; an explicit value — including
+    // 0 — overwrites. A new turn (used reset) drops the previous baseline.
+    cacheCreationTokens: isDefined(cacheCreationTokens) ? cacheCreationTokens : (baseline?.cacheCreationTokens ?? 0),
+    cacheHitTokens: isDefined(cacheHitTokens) ? cacheHitTokens : (baseline?.cacheHitTokens ?? 0),
+    cacheMissTokens: isDefined(cacheMissTokens) ? cacheMissTokens : (baseline?.cacheMissTokens ?? 0),
+    credit: isDefined(credit) ? credit : (baseline?.credit ?? 0),
+    usageByCategory: hasMeaningfulCategory ? usageByCategory : baseline?.usageByCategory,
+  })
   usageStateVersion.value++
 }
 
@@ -794,6 +855,11 @@ export function useSessionIdentity() {
     contextThoughtTokens,
     contextCost,
     contextCurrency,
+    contextCacheCreationTokens,
+    contextCacheHitTokens,
+    contextCacheMissTokens,
+    contextCredit,
+    contextUsageByCategory,
     agentHeaderTitle,
     // Global session drawer state (TabDrawer — use .open()/.close()/.effectiveOpen/.isOpen)
     sessionDrawer,

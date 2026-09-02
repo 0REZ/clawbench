@@ -257,6 +257,15 @@ func fetchUpgradeInfoFromBase(registryBase, pkg, currentVer string) (*UpgradeInf
 	}, nil
 }
 
+// rewriteTarballURL points the tarball at the same registry base used for the query.
+func rewriteTarballURL(tarball, base string) string {
+	const npmjs = "https://registry.npmjs.org"
+	if base != npmjs && len(tarball) > len(npmjs) && tarball[:len(npmjs)] == npmjs {
+		return base + tarball[len(npmjs):]
+	}
+	return tarball
+}
+
 // PerformUpgrade executes the full upgrade flow in a background goroutine.
 func PerformUpgrade() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

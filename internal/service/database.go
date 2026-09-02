@@ -455,6 +455,25 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			stop_reason TEXT DEFAULT '',
 			is_error INTEGER DEFAULT 0,
 			error_message TEXT DEFAULT '',
+			cached_read_tokens INTEGER DEFAULT 0,
+			cached_write_tokens INTEGER DEFAULT 0,
+			thought_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			cache_creation_tokens INTEGER DEFAULT 0,
+			cache_hit_tokens INTEGER DEFAULT 0,
+			cache_miss_tokens INTEGER DEFAULT 0,
+			credit REAL DEFAULT 0,
+			usage_by_category TEXT DEFAULT '',
+			session_id TEXT DEFAULT '',
+			request_id TEXT DEFAULT '',
+			trace_id TEXT DEFAULT '',
+			agent_message_id TEXT DEFAULT '',
+			message_request_id TEXT DEFAULT '',
+			request_model_name TEXT DEFAULT '',
+			response_model_id TEXT DEFAULT '',
+			finish_reason TEXT DEFAULT '',
+			outcome TEXT DEFAULT '',
+			agent_phase TEXT DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (message_id) REFERENCES chat_history(id) ON DELETE CASCADE
 		);
@@ -568,6 +587,45 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 	if hasSummaryCards == 0 {
 		if _, err := WriteExec("ALTER TABLE summaries ADD COLUMN summary_cards TEXT NOT NULL DEFAULT ''"); err != nil {
 			return fmt.Errorf("failed to add summary_cards column: %w", err)
+		}
+	}
+
+	// Migrate: chat_metadata extended token/trace columns (per-agent _meta
+	// extensions — CodeBuddy cache detail + trace identity, Claude/Codex
+	// reasoning tokens). All default to zero/empty so existing rows remain valid.
+	chatMetaCols := []struct {
+		name string
+		ddl  string
+	}{
+		{"cached_read_tokens", "ALTER TABLE chat_metadata ADD COLUMN cached_read_tokens INTEGER DEFAULT 0"},
+		{"cached_write_tokens", "ALTER TABLE chat_metadata ADD COLUMN cached_write_tokens INTEGER DEFAULT 0"},
+		{"thought_tokens", "ALTER TABLE chat_metadata ADD COLUMN thought_tokens INTEGER DEFAULT 0"},
+		{"total_tokens", "ALTER TABLE chat_metadata ADD COLUMN total_tokens INTEGER DEFAULT 0"},
+		{"request_id", "ALTER TABLE chat_metadata ADD COLUMN request_id TEXT DEFAULT ''"},
+		{"trace_id", "ALTER TABLE chat_metadata ADD COLUMN trace_id TEXT DEFAULT ''"},
+		{"response_model_id", "ALTER TABLE chat_metadata ADD COLUMN response_model_id TEXT DEFAULT ''"},
+		// Per-agent _meta cache splits, cost, category breakdown and full trace
+		// identity (added for statistics). All default so old rows stay valid.
+		{"cache_creation_tokens", "ALTER TABLE chat_metadata ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0"},
+		{"cache_hit_tokens", "ALTER TABLE chat_metadata ADD COLUMN cache_hit_tokens INTEGER DEFAULT 0"},
+		{"cache_miss_tokens", "ALTER TABLE chat_metadata ADD COLUMN cache_miss_tokens INTEGER DEFAULT 0"},
+		{"credit", "ALTER TABLE chat_metadata ADD COLUMN credit REAL DEFAULT 0"},
+		{"usage_by_category", "ALTER TABLE chat_metadata ADD COLUMN usage_by_category TEXT DEFAULT ''"},
+		{"session_id", "ALTER TABLE chat_metadata ADD COLUMN session_id TEXT DEFAULT ''"},
+		{"agent_message_id", "ALTER TABLE chat_metadata ADD COLUMN agent_message_id TEXT DEFAULT ''"},
+		{"message_request_id", "ALTER TABLE chat_metadata ADD COLUMN message_request_id TEXT DEFAULT ''"},
+		{"request_model_name", "ALTER TABLE chat_metadata ADD COLUMN request_model_name TEXT DEFAULT ''"},
+		{"finish_reason", "ALTER TABLE chat_metadata ADD COLUMN finish_reason TEXT DEFAULT ''"},
+		{"outcome", "ALTER TABLE chat_metadata ADD COLUMN outcome TEXT DEFAULT ''"},
+		{"agent_phase", "ALTER TABLE chat_metadata ADD COLUMN agent_phase TEXT DEFAULT ''"},
+	}
+	for _, col := range chatMetaCols {
+		var hasCol int
+		_ = db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_metadata') WHERE name=?", col.name).Scan(&hasCol)
+		if hasCol == 0 {
+			if _, err := WriteExec(col.ddl); err != nil {
+				return fmt.Errorf("failed to add chat_metadata.%s column: %w", col.name, err)
+			}
 		}
 	}
 
@@ -971,39 +1029,20 @@ func MigrateMetadataFromContent() {
 
 		for _, r := range batch {
 			var contentMap struct {
-				Metadata *struct {
-					Mode           string  `json:"mode,omitempty"`
-					ThinkingEffort string  `json:"thinkingEffort,omitempty"`
-					Transport      string  `json:"transport,omitempty"`
-					Model          string  `json:"model,omitempty"`
-					InputTokens    int     `json:"inputTokens,omitempty"`
-					OutputTokens   int     `json:"outputTokens,omitempty"`
-					DurationMs     int     `json:"durationMs,omitempty"`
-					WallMs         int     `json:"wallMs,omitempty"`
-					CostUSD        float64 `json:"costUsd,omitempty"`
-					StopReason     string  `json:"stopReason,omitempty"`
-					IsError        bool    `json:"isError,omitempty"`
-					ErrorMessage   string  `json:"errorMessage,omitempty"`
-				} `json:"metadata"`
+				Metadata *ai.Metadata `json:"metadata"`
 			}
 			if err := json.Unmarshal([]byte(r.Content), &contentMap); err != nil || contentMap.Metadata == nil {
 				continue
 			}
-			m := contentMap.Metadata
-			isError := 0
-			if m.IsError {
-				isError = 1
+			// SaveMetadata writes every chat_metadata column from the Metadata
+			// struct (token splits, cost, category breakdown, trace identity).
+			// INSERT OR IGNORE is implied: SaveMetadata uses INSERT OR REPLACE,
+			// which is safe here because the batch only picks rows NOT already
+			// present in chat_metadata (see migrateMetadataBatch predicate).
+			if err := SaveMetadata(r.ID, contentMap.Metadata); err != nil {
+				slog.Warn("metadata migration: insert failed", slog.Int64("message_id", r.ID), slog.String("err", err.Error()))
+				continue
 			}
-			_, _ = WriteExec(
-				`
-				INSERT OR IGNORE INTO chat_metadata
-					(message_id, mode, thinking_effort, transport, model, input_tokens, output_tokens,
-					 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				r.ID, m.Mode, m.ThinkingEffort, m.Transport, m.Model,
-				m.InputTokens, m.OutputTokens, m.DurationMs, m.WallMs,
-				m.CostUSD, m.StopReason, isError, m.ErrorMessage,
-			)
 			migrated++
 		}
 

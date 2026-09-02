@@ -63,8 +63,17 @@ func GetChatHistory(projectPath, backend, sessionID string) ([]model.ChatMessage
 // hasMore without counting pending bubbles as loaded history.
 func GetChatHistoryPaged(projectPath, backend, sessionID string, limit int, beforeID int) ([]model.ChatMessage, int, int, error) {
 	messages := []model.ChatMessage{}
-	totalCount := GetChatMessageCount(sessionID)
+	totalCount, countErr := GetChatMessageCount(sessionID)
 	queuedCount := GetQueuedCount(sessionID)
+	if countErr != nil {
+		// A count failure must not silently truncate pagination: fall back to
+		// "unknown total" (0). GetChatHistoryPaged callers that only use the
+		// count for hasMore treat 0 as "load everything", so nothing is lost;
+		// callers that expose the total to the UI surface it as 0 alongside
+		// the returned query error.
+		slog.Warn("GetChatHistoryPaged: GetChatMessageCount failed", "session_id", sessionID, "err", countErr)
+		totalCount = 0
+	}
 
 	if limit > 0 && beforeID > 0 {
 		// Cursor-based: load messages older than beforeID
@@ -141,18 +150,22 @@ func scanMessages(rows *sql.Rows, sessionID string) ([]model.ChatMessage, error)
 }
 
 // GetChatMessageCount returns the number of messages in a session (including streaming).
-func GetChatMessageCount(sessionID string) int {
+func GetChatMessageCount(sessionID string) (int, error) {
 	var count int
-	dbRead.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sessionID).Scan(&count)
-	return count
+	if err := dbRead.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sessionID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // GetFinalizedMessageCount returns the number of finalized (non-streaming) messages in a session.
 // Used to determine whether a session has real content worth preserving for RAG.
-func GetFinalizedMessageCount(sessionID string) int {
+func GetFinalizedMessageCount(sessionID string) (int, error) {
 	var count int
-	dbRead.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ? AND streaming = 0", sessionID).Scan(&count)
-	return count
+	if err := dbRead.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ? AND streaming = 0", sessionID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // GetUserMessageIndex returns lightweight {id, content, files, createdAt} for all user messages
@@ -558,12 +571,6 @@ func AddChatMessage(projectPath, backend, sessionID, role, content string, files
 		return 0, fmt.Errorf("cannot add message to archived session %s", sessionID)
 	}
 
-	var filesJSON string
-	if len(files) > 0 {
-		data, _ := json.Marshal(files)
-		filesJSON = string(data)
-	}
-
 	streamingInt := 0
 	if streaming {
 		streamingInt = 1
@@ -578,9 +585,44 @@ func AddChatMessage(projectPath, backend, sessionID, role, content string, files
 	defer writeMu.Unlock()
 	defer tx.Rollback()
 
+	msgID, txErr = insertChatMessageTx(tx, projectPath, backend, sessionID, role, content, files, streamingInt, replyQueueID, fallbackTitle, 0, 0)
+	if txErr != nil {
+		return 0, txErr
+	}
+
+	if txErr := tx.Commit(); txErr != nil {
+		return 0, txErr
+	}
+
+	slog.Info("chat: persisted message",
+		slog.String("session", sessionID),
+		slog.String("role", role),
+		slog.Int64("msgID", msgID),
+		slog.String("queueID", replyQueueID),
+		slog.Bool("streaming", streaming))
+	return msgID, nil
+}
+
+// insertChatMessageTx performs the chat_history INSERT plus the shared
+// session touches (updated_at refresh and first-user-message title generation)
+// inside the caller's transaction. queued/queueID are explicit so callers can
+// persist a queued message atomically in the same transaction that inserts the
+// row (ISS-237): queued=1 and queue_id are written on the INSERT itself, never
+// as a follow-up statement that could be lost to a crash between commits.
+// indexed is set by the caller too: normal messages use 0, queued messages use
+// 1 to skip RAG indexing until drained (M4).
+//
+// It returns the LastInsertId (msgID). The caller owns Commit/Rollback.
+func insertChatMessageTx(tx *sql.Tx, projectPath, backend, sessionID, role, content string, files []model.FileEntry, streamingInt int, queueID, fallbackTitle string, queued, indexed int) (int64, error) {
+	var filesJSON string
+	if len(files) > 0 {
+		data, _ := json.Marshal(files)
+		filesJSON = string(data)
+	}
+
 	result, txErr := tx.Exec(
-		"INSERT INTO chat_history (project_path, backend, session_id, role, content, files, streaming, indexed, queue_id) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
-		projectPath, backend, sessionID, role, content, filesJSON, streamingInt, replyQueueID,
+		"INSERT INTO chat_history (project_path, backend, session_id, role, content, files, streaming, indexed, queue_id, queued) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		projectPath, backend, sessionID, role, content, filesJSON, streamingInt, indexed, queueID, queued,
 	)
 	if txErr != nil {
 		return 0, txErr
@@ -612,37 +654,47 @@ func AddChatMessage(projectPath, backend, sessionID, role, content string, files
 		}
 	}
 
-	if txErr := tx.Commit(); txErr != nil {
-		return 0, txErr
-	}
-
-	msgID, _ = result.LastInsertId()
-	slog.Info("chat: persisted message",
-		slog.String("session", sessionID),
-		slog.String("role", role),
-		slog.Int64("msgID", msgID),
-		slog.String("queueID", replyQueueID),
-		slog.Bool("streaming", streaming))
-	return msgID, nil
+	return result.LastInsertId()
 }
 
 // AddQueuedMessage persists a user message to chat_history with queued=1 so it
-// waits for the drain loop. It reuses AddChatMessage for the archived-session
-// guard, session title generation on first message, and updated_at refresh
-// (B3). The message is marked indexed=1 to skip RAG indexing until it is
-// drained and finalized (M4).
+// waits for the drain loop. It performs the INSERT and the queue markers in a
+// single transaction: queued=1 and queue_id are written on the INSERT itself,
+// so a crash between the INSERT commit and a follow-up UPDATE can never leave
+// an orphan row (queued=0, empty queue_id) that is visible as a normal user
+// message but never drained and unreachable by drain/clear (ISS-237).
+//
+// It reuses the archived-session guard, session title generation on first
+// message, and updated_at refresh (B3) shared with AddChatMessage via
+// insertChatMessageTx. The message is marked indexed=1 on the INSERT to skip
+// RAG indexing until it is drained and finalized (M4).
 func AddQueuedMessage(projectPath, backend, sessionID, content string, files []model.FileEntry, queueID string, fallbackTitle string) (int64, error) {
 	if queueID == "" {
 		queueID = "q-" + time.Now().Format("20060102150405") + "-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	}
-	msgID, err := AddChatMessage(projectPath, backend, sessionID, "user", content, files, false, fallbackTitle)
+
+	// Guard: reject messages to archived sessions
+	var isArchived int
+	if err := dbRead.QueryRow("SELECT archived FROM chat_sessions WHERE id = ?", sessionID).Scan(&isArchived); err == nil && isArchived == 1 {
+		return 0, fmt.Errorf("cannot add message to archived session %s", sessionID)
+	}
+
+	streamingInt := 0
+
+	var msgID int64
+	tx, err := WriteBegin()
 	if err != nil {
 		return 0, err
 	}
-	if _, err := WriteExec(
-		"UPDATE chat_history SET queue_id = ?, queued = 1, indexed = 1 WHERE id = ?",
-		queueID, msgID,
-	); err != nil {
+	defer writeMu.Unlock()
+	defer tx.Rollback()
+
+	msgID, err = insertChatMessageTx(tx, projectPath, backend, sessionID, "user", content, files, streamingInt, queueID, fallbackTitle, 1, 1)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return msgID, nil
@@ -1291,15 +1343,32 @@ func SaveMetadata(messageID int64, meta *ai.Metadata) error {
 	if meta.IsError {
 		isError = 1
 	}
+	// usageByCategory is a map — persist as a JSON string column.
+	var categoryJSON string
+	if len(meta.UsageByCategory) > 0 {
+		if b, err := json.Marshal(meta.UsageByCategory); err == nil {
+			categoryJSON = string(b)
+		}
+	}
 	_, err := WriteExec(
 		`
 		INSERT OR REPLACE INTO chat_metadata
 			(message_id, mode, thinking_effort, transport, model, input_tokens, output_tokens,
-			 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message,
+			 cached_read_tokens, cached_write_tokens, thought_tokens, total_tokens,
+			 cache_creation_tokens, cache_hit_tokens, cache_miss_tokens, credit,
+			 usage_by_category, session_id,
+			 request_id, trace_id, agent_message_id, message_request_id, request_model_name,
+			 response_model_id, finish_reason, outcome, agent_phase)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		messageID, meta.Mode, meta.ThinkingEffort, meta.Transport, meta.Model,
 		meta.InputTokens, meta.OutputTokens, meta.DurationMs, meta.WallMs,
 		meta.CostUSD, meta.StopReason, isError, meta.ErrorMessage,
+		meta.CachedReadTokens, meta.CachedWriteTokens, meta.ThoughtTokens, meta.TotalTokens,
+		meta.CacheCreationTokens, meta.CacheHitTokens, meta.CacheMissTokens, meta.Credit,
+		categoryJSON, meta.SessionID,
+		meta.RequestID, meta.TraceID, meta.MessageID, meta.MessageRequestID, meta.RequestModelName,
+		meta.ResponseModelID, meta.FinishReason, meta.Outcome, meta.AgentPhase,
 	)
 	return err
 }
@@ -1687,18 +1756,10 @@ func buildContextStatePatch(event ai.StreamEvent) map[string]string {
 		if event.Usage == nil {
 			return nil
 		}
-		usageJSON, err := json.Marshal(UsageStatePersist{
-			Used:              event.Usage.Used,
-			Size:              event.Usage.Size,
-			InputTokens:       event.Usage.InputTokens,
-			OutputTokens:      event.Usage.OutputTokens,
-			TotalTokens:       event.Usage.TotalTokens,
-			CachedReadTokens:  event.Usage.CachedReadTokens,
-			CachedWriteTokens: event.Usage.CachedWriteTokens,
-			ThoughtTokens:     event.Usage.ThoughtTokens,
-			Cost:              event.Usage.Cost,
-			Currency:          event.Usage.Currency,
-		})
+		// UsageStatePersist is a type alias of ai.UsageState, so marshaling the
+		// event payload directly carries every field (including the per-agent
+		// _meta extensions: cache hit/miss/creation, credit, usageByCategory).
+		usageJSON, err := json.Marshal(event.Usage)
 		if err != nil {
 			slog.Warn("persist context state: marshal usage", "session", event.Usage.TotalTokens, "error", err)
 			return nil

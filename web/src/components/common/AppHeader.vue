@@ -217,7 +217,7 @@ import { ref, computed, onMounted, onUnmounted, inject, watch, nextTick } from '
 import { useI18n } from 'vue-i18n'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
 import { useAppMode } from '@/composables/useAppMode'
-import { baseName } from '@/utils/path.ts'
+import { baseName, dirName } from '@/utils/path.ts'
 import { store } from '@/stores/app.ts'
 import { setPendingManageNavigation } from '@/composables/useCommitNavigation.ts'
 import PopupMenu from '@/components/common/PopupMenu.vue'
@@ -341,11 +341,6 @@ function openFileManager() {
     fileDropdownOpen.value = false
     if (store.state.currentFile?.path) store.closeCurrentFile()
     switchTab?.('browse')
-}
-
-function dirName(path: string) {
-    const idx = path.lastIndexOf('/')
-    return idx > 0 ? path.substring(0, idx) : ''
 }
 
 // Branch quick-index dropdown

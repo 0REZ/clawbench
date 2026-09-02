@@ -1,7 +1,7 @@
 <template>
   <div class="toc-body">
     <SearchInput v-model="searchQuery" :placeholder="t('toc.searchPlaceholder')" @enter="listNav.confirm" @down="listNav.down" @up="listNav.up" @dblclick="clearSearch" />
-    <div class="toc-list">
+    <div class="toc-list" ref="listRef">
       <LoadingIndicator v-if="loading" :label="t('toc.loading')" size="md" />
       <div v-else-if="filteredToc.length === 0" class="toc-empty">{{ searchQuery ? t('toc.noMatch') : t('toc.noHeadings') }}</div>
       <a
@@ -35,6 +35,7 @@ import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { useListNav } from '@/composables/useListNav'
 import { useListKeys } from '@/composables/useListKeys'
 import { extractToc, slugify } from '@/utils/toc.ts'
+import { protectMarkdown } from '@/utils/markdownProtect.ts'
 import { getFileType } from '@/utils/fileType.ts'
 import { fetchCodeSymbols } from '@/composables/useCodeSymbols'
 import { useFileEditor } from '@/composables/useFileEditor'
@@ -86,6 +87,22 @@ const isPdfOutline = ref(false)
 const searchQuery = ref('')
 const filteredToc = ref([])
 const loading = ref(false)
+const listRef = ref(null)
+
+// Keep the highlight visible: when scroll-follow moves the active item off the
+// panel's visible area, scroll the list so the active .toc-item stays in view.
+// `block: 'nearest'` is a no-op when the item is already visible, so normal
+// scrolling produces no feedback loop.
+watch(activeId, () => {
+    nextTick(() => {
+        const list = listRef.value
+        if (!list) return
+        const el = list.querySelector('.toc-item.active')
+        if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+        }
+    })
+})
 
 watch([() => props.file, () => props.file?.content, () => props.pdfOutline], ([file, content, pdfOut], _, onCleanup) => {
     let cancelled = false
@@ -128,10 +145,26 @@ watch([() => props.file, () => props.file?.content, () => props.pdfOutline], ([f
                 // Convert backend symbols to TocItem format
                 // Deduplicate heading IDs to match markedConfig.ts logic
                 const headingIdCounts = {}
+                // For markdown headings, backend symbols carry the raw heading
+                // text. The render pipeline derives anchor ids from the SAME
+                // protected text toc.ts uses (math → \x00MATHI0\x00 placeholders),
+                // so recompute ids through protectMarkdown to stay in sync —
+                // otherwise math headings would get a mismatched slug.
+                const protectedByLine = new Map()
+                if (lang === 'markdown' && content) {
+                    const res = protectMarkdown(content)
+                    res.protected.split('\n').forEach((line, i) => protectedByLine.set(i + 1, line))
+                }
                 toc.value = result.symbols.map(s => {
                     let id
                     if (s.kind === 'heading') {
-                        const baseId = slugify(s.name)
+                        let baseId
+                        if (lang === 'markdown' && protectedByLine.size > 0) {
+                            const protLine = protectedByLine.get(s.line)
+                            baseId = protLine ? slugify(protLine.replace(/^\s*#+\s*/, '').trim()) : slugify(s.name)
+                        } else {
+                            baseId = slugify(s.name)
+                        }
                         const count = (headingIdCounts[baseId] || 0) + 1
                         headingIdCounts[baseId] = count
                         id = count > 1 ? `${baseId}-${count}` : baseId
@@ -184,7 +217,9 @@ const listNav = useListNav({
 useListKeys({ isOpen: () => props.open, nav: listNav })
 
 function scrollActiveIntoView(index) {
-  const items = document.querySelectorAll('.toc-item')
+  const list = listRef.value
+  if (!list) return
+  const items = list.querySelectorAll('.toc-item')
   const el = items[index]
   if (el && typeof el.scrollIntoView === 'function') {
     el.scrollIntoView({ behavior: 'auto', block: 'nearest' })
@@ -221,7 +256,16 @@ function scrollTo(item) {
         return
     }
 
-    const elById = document.getElementById(item.id)
+    // Hold the clicked highlight while the programmatic scroll settles, so the
+    // scroll-follow (observer / viewport-line) doesn't steal it to a nearby
+    // heading the smooth scroll sweeps across.
+    holdActiveHighlight()
+
+    // Find the heading element scoped to the CURRENT file's content container.
+    // A bare document.getElementById could hit the same id in another file
+    // stacked underneath an overlay (FileOverlay nav stack), scrolling a hidden
+    // container instead of the visible one.
+    const elById = findHeadingEl(item.id)
     if (elById) {
         elById.scrollIntoView({ behavior: 'smooth', block: 'start' })
         elById.classList.add('line-flash')
@@ -230,11 +274,78 @@ function scrollTo(item) {
         return
     }
     if (item.line) {
-        emit('jump', item.line)
+        // For CodeMirror-rendered views the scroll itself is driven upstream
+        // (scrollToLine) and viewport-line events will follow — set the clicked
+        // id now so it stays highlighted through the hold window.
+        activeId.value = item.id
+        emit('jump', item.line, item.id)
     }
 }
 
+/** Resolve a heading anchor scoped to the file this TOC belongs to. */
+function findHeadingEl(id) {
+    const filePath = props.file?.path
+    if (!id) return null
+    // 1. Markdown rendered preview: the container exposes its source path.
+    if (filePath) {
+        const containers = document.querySelectorAll(`[data-file-path="${escAttr(filePath)}"]`)
+        for (const c of containers) {
+            const el = c.querySelector(`#${escId(id)}`)
+            if (el) return el
+        }
+    }
+    // 2. Fallback: plain document lookup (CodeMirror views have no anchor DOM,
+    //    but headings in raw/other views may still match).
+    return document.getElementById(id)
+}
+
+/**
+ * Minimal CSS escaping without depending on global `CSS` (absent in jsdom).
+ * - `escId`: escape for `#<id>` selectors (id chars may need CSS escaping).
+ * - `escAttr`: escape for `[data-file-path="..."]` — the value inside the
+ *   quoted attribute is a literal string, so only quote/backslash need
+ *   escaping; CSS.escape must NOT be used here (it escapes `/` etc. that are
+ *   valid literal attribute characters).
+ */
+function escId(id) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(id)
+    return String(id).replace(/["'\\]/g, '')
+}
+function escAttr(value) {
+    return String(value).replace(/["\\]/g, '')
+}
+
 let observer = null
+
+// ── Click-jump highlight hold ──
+// After a TOC item is clicked, the programmatic smooth scroll that follows
+// sweeps the viewport across intervening headings, so the scroll-follow
+// observer/viewport-line would immediately steal the highlight to a *nearby*
+// (not the clicked) item. Hold the clicked highlight for a short window
+// (long enough for the smooth scroll to finish and settle), then let normal
+// scroll-follow resume on the user's next scroll.
+const FOLLOW_HOLD_MS = 1500
+let followHoldUntil = 0
+let followHoldTimer = null
+
+function holdActiveHighlight() {
+    followHoldUntil = Date.now() + FOLLOW_HOLD_MS
+    clearTimeout(followHoldTimer)
+    followHoldTimer = setTimeout(() => {
+        followHoldUntil = 0
+        followHoldTimer = null
+    }, FOLLOW_HOLD_MS)
+}
+
+function scrollFollowHeld() {
+    return Date.now() < followHoldUntil
+}
+
+function releaseFollowHold() {
+    clearTimeout(followHoldTimer)
+    followHoldUntil = 0
+    followHoldTimer = null
+}
 
 /** Set up IntersectionObserver to track the currently visible TOC item */
 function setupObserver() {
@@ -252,6 +363,7 @@ function setupObserver() {
         if (observer) return
         if (isCode.value) {
             observer = new IntersectionObserver((entries) => {
+                if (scrollFollowHeld()) return
                 for (const entry of entries) {
                     if (entry.isIntersecting) {
                         const line = entry.target.getAttribute('data-line')
@@ -267,6 +379,7 @@ function setupObserver() {
             })
         } else {
             observer = new IntersectionObserver((entries) => {
+                if (scrollFollowHeld()) return
                 for (const entry of entries) {
                     if (entry.isIntersecting) {
                         activeId.value = entry.target.id
@@ -294,6 +407,7 @@ watch(toc, () => {
 // deepest TOC symbol at or above that line.
 function onEditorViewportLine(e) {
     if (!props.codeView) return
+    if (scrollFollowHeld()) return
     const viewportLine = e.detail?.line
     if (typeof viewportLine !== 'number') return
     let match = null
@@ -355,6 +469,7 @@ onBeforeUnmount(() => {
     observer?.disconnect()
     observer = null
     stopDomObserver()
+    releaseFollowHold()
     window.removeEventListener('cm-editor-viewport-line', onEditorViewportLine)
 })
 </script>

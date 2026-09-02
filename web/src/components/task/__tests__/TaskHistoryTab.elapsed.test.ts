@@ -16,6 +16,7 @@ vi.mock('lucide-vue-next', () => {
   return {
     Square: stub('Square'),
     Loader2: stub('Loader2'),
+    LoaderCircle: stub('LoaderCircle'),
     History: stub('History'),
     Trash2: stub('Trash2'),
   }

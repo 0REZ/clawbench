@@ -4,7 +4,7 @@
       <div v-if="mode" class="connection-overlay">
         <div class="connection-overlay__content">
           <Server :size="40" class="connection-overlay__icon" />
-          <div class="connection-overlay__spinner"></div>
+          <LoadingIndicator class="connection-overlay__spinner" size="lg" inline />
           <div class="connection-overlay__text">{{ overlayText }}</div>
         </div>
       </div>
@@ -17,6 +17,7 @@ import { computed } from 'vue'
 import { Server } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useConnectionOverlay } from '@/composables/useConnectionOverlay'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 
 const { t } = useI18n()
 const { mode } = useConnectionOverlay()
@@ -56,25 +57,11 @@ const overlayText = computed(() =>
   color: var(--accent-color);
 }
 
-.connection-overlay__spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-color);
-  border-radius: 50%;
-  animation: overlay-spin 0.8s linear infinite;
-}
-
 .connection-overlay__text {
   font-size: 15px;
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
-}
-
-@keyframes overlay-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 /* Fade transition (teleported to body) */

@@ -895,6 +895,15 @@ type ACPConn struct {
 	rawOutputMu  sync.Mutex
 	rawOutputBuf strings.Builder
 
+	// metaMu guards accumulated per-agent _meta extensions for the current
+	// turn. Unlike c.mu, it is safe to acquire from the ACP notification
+	// goroutine (mapACPSessionUpdate) — it never interacts with RPC paths.
+	metaMu sync.Mutex
+	// metaAccum holds the merged _meta extensions observed during the turn
+	// (CodeBuddy usage/trace/category). Consumed when emitting the final
+	// metadata event in emitPromptResponseUsage and cleared each Prompt.
+	metaAccum *metaExtraction
+
 	// skillsPrompt is the pre-built system prompt section for CodeBuddy skills,
 	// injected into each prompt so CodeBuddy can auto-load skills. Populated
 	// during spawn for CodeBuddy backend. Empty if no skills found.
@@ -1368,6 +1377,38 @@ func (c *ACPConn) GetCachedUsageState() *UsageState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cachedUsageState
+}
+
+// mergeMetaExtraction accumulates per-agent _meta extensions observed during
+// the turn. Safe to call from the ACP notification goroutine (dedicated
+// metaMu, never c.mu).
+func (c *ACPConn) mergeMetaExtraction(ext *metaExtraction) {
+	if ext == nil {
+		return
+	}
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	if c.metaAccum == nil {
+		c.metaAccum = &metaExtraction{}
+	}
+	metaMergeExtraction(c.metaAccum, ext)
+}
+
+// getAndClearMetaAccum returns the accumulated _meta extensions and resets the
+// accumulator for the next turn.
+func (c *ACPConn) getAndClearMetaAccum() *metaExtraction {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	acc := c.metaAccum
+	c.metaAccum = nil
+	return acc
+}
+
+// getMetaAccum returns the accumulated _meta extensions without clearing.
+func (c *ACPConn) getMetaAccum() *metaExtraction {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	return c.metaAccum
 }
 
 // SetAutoApprove enables or disables hands-off mode for this connection.

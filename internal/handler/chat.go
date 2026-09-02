@@ -294,7 +294,15 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 	// this cannot be used to bypass access control.
 	if qp := r.URL.Query().Get("project_path"); qp != "" {
 		if sp := service.GetSessionProjectPath(sessionID); sp != "" && sp == qp {
-			// Session belongs to the requested project; allow marking read.
+			// The session belongs to the requested project. Switch the working
+			// project to the session's owner so every subsequent write (user
+			// message insert, queued insert, the AI goroutine's streaming
+			// placeholder and drain-loop messages) persists under the session's
+			// project_path — NOT the current cookie project. Without this,
+			// replying from the completion popover while the user has switched
+			// to another project orphans the reply under the cookie project,
+			// making it invisible when the user returns to the session.
+			projectPath = qp
 		} else {
 			writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 			return
@@ -584,7 +592,15 @@ func AIChat(w http.ResponseWriter, r *http.Request) {
 			// Skip for cancelled: CancelSession already calls EmitSessionEvent("cancelled")
 			// which handles push. Skip for error: no meaningful push content.
 			if event.Type == "done" {
-				service.EmitSessionPushNotification(sessionID, "completed")
+				// Only the first terminal state may push + broadcast "completed".
+				// If a concurrent CancelSession already claimed the terminal guard
+				// (broadcasting "cancelled"), EmitSessionPushNotification returns
+				// false and we must NOT also broadcast "completed" — otherwise
+				// clients see cancelled followed by a contradictory completed
+				// (ISS-247 reverse race).
+				if !service.EmitSessionPushNotification(sessionID, "completed") {
+					return
+				}
 				// Broadcast the terminal status to ALL clients (not just the
 				// session's StreamHub subscribers). Clients that missed the
 				// stream-level "done" (WS blip, another device, scheduled run)
@@ -927,6 +943,15 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		}
 	}
 
+	// HasConversationHistory: conservative on error (true = has history) so a
+	// DB hiccup can never silently reset the session via amnesia prevention.
+	hasConversationHistory := true
+	if count, err := service.GetChatMessageCount(sessionID); err == nil {
+		hasConversationHistory = count > 0
+	} else {
+		slog.Warn("buildChatRequest: GetChatMessageCount failed, assuming conversation history", "session_id", sessionID, "err", err)
+	}
+
 	return ai.ChatRequest{
 		Prompt:                 prompt,
 		SessionID:              effectiveSessionID,
@@ -940,7 +965,7 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		Resume:                 resume,
 		HasAttachments:         hasAttachments,
 		AssistantMessageCount:  service.GetAssistantMessageCount(sessionID),
-		HasConversationHistory: service.GetChatMessageCount(sessionID) > 0,
+		HasConversationHistory: hasConversationHistory,
 		ForkContext:            forkContext,
 	}
 }

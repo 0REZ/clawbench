@@ -119,17 +119,6 @@ vi.mock('@/composables/usePwaInstall', () => ({
   }),
 }))
 
-vi.mock('@/composables/useDesktopDownload', () => ({
-  useDesktopDownload: () => ({
-    latest: ref(null),
-    loading: ref(false),
-    isDesktop: false,
-    loadLatest: vi.fn(),
-    currentDownloadUrl: () => '',
-    downloadDesktop: vi.fn(),
-  }),
-}))
-
 vi.mock('@/utils/api', () => ({
   apiPost: vi.fn().mockResolvedValue({ needs_restart: true }),
 }))
@@ -278,8 +267,6 @@ const i18n = createI18n({
           localhostAuthExemptConfirm: '确定禁用？',
           addToHomeScreen: '添加到主屏幕',
           downloadAndroidApp: '下载APK',
-          downloadDesktopApp: '下载桌面版',
-          downloadDesktopAppDesc: '下载桌面版',
           showWelcome: '打开欢迎界面',
           showWelcomeDesc: '打开欢迎界面',
           checkUpgrade: '检查更新',

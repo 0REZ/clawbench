@@ -77,7 +77,7 @@
           <Brain :size="12" class="thinking-icon" />
           <span class="thinking-label">{{ t('chat.message.deepThinking') }}</span>
           <!-- Status indicators: right-aligned, same pattern as tool_use -->
-          <span v-if="isThinkingStreaming(block)" class="thinking-spinner"></span>
+          <LoadingIndicator v-if="isThinkingStreaming(block)" class="thinking-spinner" size="sm" inline />
           <!-- Cancelled marker: show inline in thinking header when this is the last block and message was cancelled.
                Prevents the cancelled mark from being visually hidden/trapped under the collapsed thinking chip. -->
           <span v-else-if="isLastBlock(bi) && cancelled" class="chat-cancelled-mark-inline">{{ t('chat.contentBlocks.cancelled') }}</span>
@@ -100,7 +100,7 @@
           <span class="tool-name">{{ toolDisplayName(block.name, block.input, block.display_name) }}</span>
           <span v-if="toolCallSummary(block)" class="tool-summary">{{ toolCallSummary(block) }}</span>
           <!-- Loading: spinner -->
-          <span v-if="!block.done" class="tool-spinner"></span>
+          <LoadingIndicator v-if="!block.done" class="tool-spinner" size="sm" inline />
           <!-- Done with error: red X -->
           <XCircle v-else-if="block.status === 'error'" :size="14" color="#ef4444" class="tool-error-icon" />
           <!-- Done (success or unknown): green check -->
@@ -215,6 +215,7 @@ import { handleToolAction, shouldAutoExpandTool, updateAskSubmitState } from '@/
 import { getToolIcon, toolDisplayName } from '@/utils/icons'
 import { Brain, ChevronRight, ChevronDown, ChevronUp, AlertCircle, AlertTriangle, XCircle, CheckCircle2, Clock, Archive } from 'lucide-vue-next'
 import AgentIcon from '@/components/common/AgentIcon.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { store } from '@/stores/app.ts'
 import { apiGet } from '@/utils/api'
@@ -1152,14 +1153,9 @@ onUnmounted(() => {
   letter-spacing: 0.02em;
 }
 
+/* Spinner (unified LoadingIndicator) — right-aligned, tinted by the local accent */
 .thinking-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid color-mix(in srgb, var(--thinking-accent) 20%, var(--border-color));
-  border-top-color: var(--thinking-accent);
-  border-radius: 50%;
-  animation: tool-spin 0.6s linear infinite;
-  flex-shrink: 0;
+  --li-color: var(--thinking-accent);
   margin-left: auto;
 }
 
@@ -1328,19 +1324,10 @@ onUnmounted(() => {
   cursor: default;
 }
 
+/* Spinner (unified LoadingIndicator) — right-aligned, tinted by the local tool accent */
 .tool-spinner {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid var(--border-color);
-  border-top-color: var(--tool-accent);
-  border-radius: 50%;
-  animation: tool-spin 0.6s linear infinite;
-  flex-shrink: 0;
+  --li-color: var(--tool-accent);
   margin-left: auto;
-}
-
-@keyframes tool-spin {
-  to { transform: rotate(360deg); }
 }
 
 .scheduled-task-card {

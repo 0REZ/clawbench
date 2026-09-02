@@ -291,6 +291,31 @@ func TestServeChatCount_WrongMethod(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
+func TestServeChatCount_DBError_ReturnsZero(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "Test", "claude", "", "default", "chat")
+	require.NoError(t, err)
+
+	// Drop the chat_history table after creating the session: the session
+	// backend lookup (chat_sessions) still succeeds, but the count query
+	// (chat_history) fails. The handler must still answer 200 with count=0
+	// instead of erroring — the badge count is best-effort.
+	_, err = service.UnsafeDBForTest().Exec("DROP TABLE chat_history")
+	require.NoError(t, err)
+
+	req := newRequest(t, http.MethodGet, "/api/ai/chat/count?session_id="+sessionID, nil)
+	req = withProjectCookie(req, env.ProjectDir)
+
+	w := callHandler(ServeChatCount, req)
+	assertOK(t, w)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	assert.Equal(t, float64(0), result["count"])
+}
+
 // --- ServeChatMessageUpdate ---
 
 func TestServeChatMessageUpdate_Success(t *testing.T) {

@@ -1708,11 +1708,22 @@ func TestAIChat_Post_SessionBelongsToDifferentProject(t *testing.T) {
 // ?project_path= (the session's owning project) succeeds for an external
 // project's session — backing the completion popover's quick reply to another
 // project's conversation. A mismatched project_path is still rejected.
+//
+// Regression: the reply must be persisted under the SESSION's project path,
+// not the requester's cookie project. The ownership override switches the
+// handler's working project so every subsequent write (user message, queued
+// insert, AI goroutine/drain persistence) lands under the session's owner.
+// Otherwise the reply is orphaned under the cookie project and becomes
+// invisible when the user switches back to the session's project (issue #420).
 func TestAIChat_Post_ExternalProjectPath(t *testing.T) {
 	env, teardown := setupTestEnv(t)
 	defer teardown()
 
-	otherProject := "/other-project-chat-post-ext"
+	// env.ProjectDir is the cookie project (the project the user is CURRENTLY
+	// viewing); otherProject owns the session being replied to. The session
+	// must live under watchDir to satisfy path validation — CreateSession
+	// itself does not enforce this, so use a sibling under env.WatchDir.
+	otherProject := filepath.Join(env.WatchDir, "other-project-chat-post-ext")
 	sessionID, err := service.CreateSession(otherProject, "claude", "Other Session", "claude", "", "default", "chat")
 	require.NoError(t, err)
 
@@ -1733,6 +1744,20 @@ func TestAIChat_Post_ExternalProjectPath(t *testing.T) {
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
 	assert.Equal(t, true, result["queued"])
+
+	// The reply must be readable from the session's OWNING project — this is
+	// what the frontend does when the user switches back to that project.
+	messages, err := service.GetChatHistory(otherProject, "claude", sessionID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1, "reply must persist under the session's owning project")
+	assert.Equal(t, "user", messages[0].Role)
+	assert.Equal(t, "hello from popover", messages[0].Content)
+
+	// ... and must NOT be orphaned under the cookie project (the bug: history
+	// there would be unreachable from the session's own project UI).
+	otherProjMessages, err := service.GetChatHistory(env.ProjectDir, "claude", sessionID)
+	require.NoError(t, err)
+	assert.Len(t, otherProjMessages, 0, "reply must not persist under the requester's cookie project")
 }
 
 // TestAIChat_Post_ExternalProjectPath_Mismatch verifies that a project_path

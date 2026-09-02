@@ -197,6 +197,7 @@ import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
 import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2 } from 'lucide-vue-next'
 import { getFileType } from '@/utils/fileType.ts'
+import { fileSupportsToc } from '@/utils/tocSupport.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
 import { useChatContext } from '@/composables/useChatContext.ts'
 import { useToast } from '@/composables/useToast.ts'
@@ -315,19 +316,7 @@ const isEditable = computed(() => {
     // Other templated types (HTML/OpenAPI) are only editable in source view
     return !isMarkdownRendered.value
 })
-const hasToc = computed(() => {
-    if (!props.file) return false
-    const ft = fileType.value
-    if (!ft) return false
-    // PDF: always show TOC button (outline may be available)
-    if (ft.isPdf) return true
-    // Other file types: need content
-    if (!props.file.content) return false
-    if (ft.isImage || ft.isAudio || ft.isVideo || ft.isExcalidraw) return false
-    // OpenAPI rendered mode: ReDoc has its own sidebar, TOC/Search would operate on raw text
-    if (isOpenapi.value && effectiveViewMode.value === 'rendered') return false
-    return true
-})
+const hasToc = computed(() => fileSupportsToc(props.file, effectiveViewMode.value))
 
 // Search button for any file with searchable text. For the rendered markdown
 // preview it opens the SearchDrawer bottom sheet; for CodeMirror-rendered

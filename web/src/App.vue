@@ -115,7 +115,7 @@
                       @search-change="viewSearchActive = !!$event"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
                       @refresh="handleRefresh"
-                      @jump="scrollToLine"
+                      @jump="(line, anchorId) => scrollToLine(line, undefined, store.state.currentFile?.path, anchorId)"
                       @jump-page="handleJumpPdfPage"
                       @close-git-history="fileHistoryDrawer.close()"
                       @open-file="handleOverlayOpenFile"
@@ -487,6 +487,7 @@ import { store } from './stores/app.ts'
 import { restoreProjectWorkspace as restoreProjectWorkspaceImpl } from './composables/useProjectWorkspace.ts'
 import { setPendingCommitNavigation } from './composables/useCommitNavigation.ts'
 import { getFileType } from './utils/fileType.ts'
+import { fileSupportsToc } from './utils/tocSupport.ts'
 import { formatBadgeCount } from './utils/format.ts'
 import { useChatContext } from './composables/useChatContext.ts'
 import { useFileUpload } from './composables/useFileUpload.ts'
@@ -812,14 +813,23 @@ const tocDockPref = useTocDockPreference()
 /**
  * Effective TOC visibility for the FileHeader button highlight: the inline
  * dock on wide screens, the bottom drawer otherwise.
+ * Gated on the current file actually supporting a TOC: office binaries and
+ * rendered HTML/OpenAPI previews must never show the panel even if a dock/drawer
+ * was left open from a previous file.
  */
-const effectiveTocOpen = computed(() => isWideScreen.value ? tocDockPref.effectiveOpen.value : tocDrawer.effectiveOpen.value)
+const currentFileSupportsToc = computed(() => fileSupportsToc(currentFile.value, markdownViewMode.value))
+const effectiveTocOpen = computed(() =>
+    isWideScreen.value
+        ? tocDockPref.effectiveOpen.value && currentFileSupportsToc.value
+        : tocDrawer.effectiveOpen.value && currentFileSupportsToc.value,
+)
 
 /**
  * TOC toggle: wide screens toggle the inline right-side dock; narrow screens
- * keep the bottom drawer.
+ * keep the bottom drawer. Ignored when the current file has no TOC support.
  */
 function handleToggleToc() {
+  if (!currentFileSupportsToc.value) return
   if (isWideScreen.value) {
     tocDockPref.toggle()
   } else {
@@ -2043,7 +2053,7 @@ function handleOpenTerminal(cwd) {
 let activeLineScrollCancel = null
 let lineScrollRequestId = 0
 
-function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
+function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, anchorId) {
     const startLine = Math.max(1, line)
     const endLine = Math.min(lineEnd && lineEnd > startLine ? lineEnd : startLine, startLine + 200)
     const selector = `.code-line[data-line="${startLine}"]`
@@ -2068,6 +2078,11 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
     activeLineScrollCancel = cleanup
     window.addEventListener('cm-scroll-to-line-handled', onHandled)
 
+    // Rendered-markdown fallback: when the view has no CodeMirror line DOM
+    // (a rendered markdown preview), a TOC click already tried getElementById
+    // and still fell through — the heading DOM may simply not be mounted yet
+    // (async render, stream). Retry the anchor id within the file's own
+    // content container before giving up.
     function tryScroll() {
         attempts++
         // CodeMirror may mount asynchronously when a rendered Markdown file is
@@ -2094,6 +2109,16 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
             cleanup()
             return
         }
+        // Rendered-markdown anchor fallback (no .code-line DOM exists there).
+        const anchorEl = anchorId && findVisibleAnchorEl(anchorId, path)
+        if (anchorEl) {
+            window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
+            anchorEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            anchorEl.classList.add('line-flash')
+            anchorEl.addEventListener('animationend', () => anchorEl.classList.remove('line-flash'), { once: true })
+            cleanup()
+            return
+        }
         if (attempts < maxAttempts) {
             requestAnimationFrame(tryScroll)
         } else {
@@ -2101,6 +2126,29 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
         }
     }
     requestAnimationFrame(tryScroll)
+}
+
+/** Find a heading anchor inside the content container for `path` (if any). */
+function findVisibleAnchorEl(id, path) {
+    if (!id) return null
+    if (path) {
+        const containers = document.querySelectorAll(`[data-file-path="${escAttr(path)}"]`)
+        for (const c of containers) {
+            const el = c.querySelector(`#${escId(id)}`)
+            if (el) return el
+        }
+    }
+    return document.getElementById(id)
+}
+
+/** Minimal CSS-identifier escaping without relying on global `CSS` (absent in jsdom). */
+function escId(id) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(id)
+    return String(id).replace(/["'\\]/g, '')
+}
+// For attribute selectors the value is literal — only quotes/backslashes matter.
+function escAttr(value) {
+    return String(value).replace(/["\\]/g, '')
 }
 
 

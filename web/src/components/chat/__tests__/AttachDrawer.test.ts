@@ -15,6 +15,7 @@ vi.mock('lucide-vue-next', () => ({
   ExternalLink: { name: 'ExternalLink', render: () => h('span', { class: 'icon-external-link' }) },
   Trash2: { name: 'Trash2', render: () => h('span', { class: 'icon-trash2' }) },
   Loader2: { name: 'Loader2', render: () => h('span', { class: 'icon-loader2' }) },
+  LoaderCircle: { name: 'LoaderCircle', render: () => h('span', { class: 'icon-loader-circle' }) },
   X: { name: 'X', render: () => h('span', { class: 'icon-x' }) },
 }))
 

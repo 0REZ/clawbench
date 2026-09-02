@@ -83,7 +83,7 @@ describe('TocDock', () => {
     const panel = wrapper.findComponent({ name: 'TocPanel' })
     panel.vm.$emit('jump', 12)
     panel.vm.$emit('jumpPage', 3)
-    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jump')).toEqual([[12, undefined]])
     expect(wrapper.emitted('jumpPage')).toEqual([[3]])
     // Docked mode keeps the panel open after jumping to an item.
     expect(wrapper.emitted('close')).toBeFalsy()

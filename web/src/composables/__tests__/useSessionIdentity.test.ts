@@ -1306,6 +1306,101 @@ describe('useSessionIdentity', () => {
             expect(identity.contextCurrency.value).toBe('USD')
         })
 
+        it('stores per-agent _meta extensions (cache detail + usageByCategory)', () => {
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(29495, 200000, undefined, undefined, undefined, 29495, 3, 29498, 8192, 0, 0, 0, 8192, 21303, 1.48, { tools: 22701, conversation: 3894 })
+
+            expect(identity.contextCacheHitTokens.value).toBe(8192)
+            expect(identity.contextCacheMissTokens.value).toBe(21303)
+            expect(identity.contextCacheCreationTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(1.48)
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 22701, conversation: 3894 })
+        })
+
+        it('preserves extension detail across partial usage_updates (CodeBuddy sequence)', () => {
+            // CodeBuddy sends several usage_update notifications per turn, each
+            // carrying only PART of the extension detail. A later partial update
+            // (missing cache/credit/input/output/total) must NOT blank fields that
+            // earlier notifications populated — otherwise the panel flickers back
+            // to the minimal view mid-stream.
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+
+            // Notification 1: full detail (usage + category).
+            updateUsageState(31224, 200000, undefined, undefined, undefined, 31224, 3, 31227, 29184, 0, 0, 0, 29184, 2040, 1.57, { tools: 23293, conversation: 4959 })
+            expect(identity.contextInputTokens.value).toBe(31224)
+            expect(identity.contextOutputTokens.value).toBe(3)
+            expect(identity.contextTotalTokens.value).toBe(31227)
+            expect(identity.contextCacheHitTokens.value).toBe(29184)
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 })
+
+            // Notification 2: only used/size + zero-valued category (no usage or
+            // cache detail). input/output/total + cache/credit must survive.
+            updateUsageState(31224, 200000, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { tools: 0, conversation: 0 })
+            expect(identity.contextInputTokens.value).toBe(31224) // preserved
+            expect(identity.contextOutputTokens.value).toBe(3)    // preserved
+            expect(identity.contextTotalTokens.value).toBe(31227) // preserved
+            expect(identity.contextCacheHitTokens.value).toBe(29184) // preserved
+            expect(identity.contextCredit.value).toBe(1.57)          // preserved
+            // Zero-only category is not meaningful → previous breakdown kept.
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 })
+
+            // Notification 3: cache detail only (no category) — the mid-turn update.
+            updateUsageState(31224, 200000, undefined, undefined, undefined, 31224, 3, 31227, 29184, 0, 0, 0, 31200, 24, 1.58)
+            expect(identity.contextCacheHitTokens.value).toBe(31200)
+            expect(identity.contextCacheMissTokens.value).toBe(24)
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 }) // still preserved
+        })
+
+        it('clears extension detail once a meaningful value is replaced by nothing meaningful after session switch', () => {
+            // A fresh session with no previous data starts clean.
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-B'
+            updateUsageState(1000, 100000)
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextUsageByCategory.value).toBeUndefined()
+        })
+
+        it('resets extension detail when used drops into a new turn', () => {
+            // Turn 1 populated the breakdown.
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(31224, 200000, undefined, undefined, undefined, 31224, 3, 31227, 29184, 0, 0, 0, 29184, 2040, 1.57, { tools: 23293, conversation: 4959 })
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 })
+
+            // Turn 2 opens: used resets low/zero. The previous turn's category
+            // must NOT linger — stale breakdown would misrepresent the new turn.
+            updateUsageState(0, 200000)
+            expect(identity.contextInputTokens.value).toBe(0)
+            expect(identity.contextOutputTokens.value).toBe(0)
+            expect(identity.contextTotalTokens.value).toBe(0)
+            expect(identity.contextUsageByCategory.value).toBeUndefined()
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(0)
+
+            // New turn then reports its own (zero-only) category — stays empty
+            // until a meaningful breakdown arrives.
+            updateUsageState(500, 200000, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { tools: 0, conversation: 0 })
+            expect(identity.contextUsageByCategory.value).toBeUndefined()
+        })
+
+        it('applies an explicit zero extension value (does not treat 0 as missing)', () => {
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(30000, 200000, undefined, undefined, undefined, 30000, 3, 30003, 0, 0, 0, 0, 0, 30000, 0.5, { tools: 20000, conversation: 10000 })
+            // Prev baseline starts at 0 — first turn applies the values.
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCacheMissTokens.value).toBe(30000)
+            expect(identity.contextCredit.value).toBe(0.5)
+
+            // Mid-turn notification carries a real zero cache-hit (new model run
+            // with no prompt cache): explicit 0 must overwrite, not be ignored.
+            updateUsageState(31000, 200000, undefined, undefined, undefined, 31000, 5, 31005, 0, 0, 0, 0, 0, 31000, 0.6)
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(0.6)
+        })
+
         it('defaults cost and currency when not provided', () => {
             const identity = useSessionIdentity()
             identity.currentSessionId.value = 'session-A'

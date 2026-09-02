@@ -40,7 +40,7 @@
           @error="imageLoading = false"
         />
         <div v-if="imageLoading" class="lb-loading-spinner">
-          <Loader :size="32" />
+          <LoadingIndicator size="lg" inline />
         </div>
         <div v-if="currentSvg" ref="svgContainerRef" :style="imgStyle" v-html="currentSvg" />
       </div>
@@ -60,9 +60,10 @@
 </template>
 
 <script setup>
-import { X, Loader, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
+import { X, ChevronLeft, ChevronRight, Download } from 'lucide-vue-next'
 import { ref, computed, provide, watch, onMounted, onUnmounted } from 'vue'
 import RefreshButton from '@/components/common/RefreshButton.vue'
+import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { store } from '@/stores/app.ts'
 import { baseName, joinPath } from '@/utils/path.ts'
 import { getFileType } from '@/utils/fileType.ts'
@@ -970,13 +971,10 @@ onUnmounted(() => {
     color: rgba(255,255,255,0.5);
 }
 
-.lb-loading-spinner svg {
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+/* Dark lightbox backdrop → white arc + light ring */
+.lb-loading-spinner .loading-indicator {
+    --li-color: #fff;
+    --li-track-color: rgba(255, 255, 255, 0.3);
 }
 
 .lightbox-content img {
