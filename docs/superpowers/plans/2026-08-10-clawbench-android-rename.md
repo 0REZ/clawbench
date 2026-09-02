@@ -8,8 +8,6 @@
 
 **Tech Stack:** Java / Android WebView / Gradle。
 
-参考 spec：`docs/superpowers/specs/2026-08-10-clawbench-electron-design.md` §5。前置：Plan 1 已完成（前端已读 `ClawBenchNative`）。
-
 ---
 
 ## 任务分解
