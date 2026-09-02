@@ -929,6 +929,19 @@ export function rebuildFromDb(state: ChatMessage[], dbMessages: ChatMessage[]): 
         live.id = db.id
         delete live.seq
       }
+      // Anchor the elapsed timer to the TRUE stream start. The live placeholder
+      // may have been recreated by a stream_start event fired on re-subscribe
+      // after a session switch (createdAt = switch time) — without this the
+      // streaming elapsed counter ("⋯ 45s") would reset to ~0 every time the
+      // user switches away from a running session and back. The DB row's
+      // created_at is the moment the stream actually began; when it is older
+      // than the placeholder's, adopt it so the counter keeps counting from
+      // the real start.
+      const liveTime = live.createdAt ? Date.parse(live.createdAt) : NaN
+      const dbTime = db.createdAt ? Date.parse(db.createdAt) : NaN
+      if (Number.isFinite(dbTime) && (!Number.isFinite(liveTime) || dbTime < liveTime)) {
+        live.createdAt = db.createdAt
+      }
       // If the matched DB row is already finalized (streaming=0 — the done
       // event was missed while the session went idle), finalize the placeholder
       // too so it renders as a normal reply (identical content, stable v-for
