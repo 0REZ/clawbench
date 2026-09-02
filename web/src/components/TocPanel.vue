@@ -238,6 +238,11 @@ function scrollTo(item) {
         return
     }
 
+    // Hold the clicked highlight while the programmatic scroll settles, so the
+    // scroll-follow (observer / viewport-line) doesn't steal it to a nearby
+    // heading the smooth scroll sweeps across.
+    holdActiveHighlight()
+
     // Find the heading element scoped to the CURRENT file's content container.
     // A bare document.getElementById could hit the same id in another file
     // stacked underneath an overlay (FileOverlay nav stack), scrolling a hidden
@@ -251,6 +256,10 @@ function scrollTo(item) {
         return
     }
     if (item.line) {
+        // For CodeMirror-rendered views the scroll itself is driven upstream
+        // (scrollToLine) and viewport-line events will follow — set the clicked
+        // id now so it stays highlighted through the hold window.
+        activeId.value = item.id
         emit('jump', item.line, item.id)
     }
 }
@@ -290,6 +299,36 @@ function escAttr(value) {
 
 let observer = null
 
+// ── Click-jump highlight hold ──
+// After a TOC item is clicked, the programmatic smooth scroll that follows
+// sweeps the viewport across intervening headings, so the scroll-follow
+// observer/viewport-line would immediately steal the highlight to a *nearby*
+// (not the clicked) item. Hold the clicked highlight for a short window
+// (long enough for the smooth scroll to finish and settle), then let normal
+// scroll-follow resume on the user's next scroll.
+const FOLLOW_HOLD_MS = 1500
+let followHoldUntil = 0
+let followHoldTimer = null
+
+function holdActiveHighlight() {
+    followHoldUntil = Date.now() + FOLLOW_HOLD_MS
+    clearTimeout(followHoldTimer)
+    followHoldTimer = setTimeout(() => {
+        followHoldUntil = 0
+        followHoldTimer = null
+    }, FOLLOW_HOLD_MS)
+}
+
+function scrollFollowHeld() {
+    return Date.now() < followHoldUntil
+}
+
+function releaseFollowHold() {
+    clearTimeout(followHoldTimer)
+    followHoldUntil = 0
+    followHoldTimer = null
+}
+
 /** Set up IntersectionObserver to track the currently visible TOC item */
 function setupObserver() {
     const prevObserver = observer
@@ -306,6 +345,7 @@ function setupObserver() {
         if (observer) return
         if (isCode.value) {
             observer = new IntersectionObserver((entries) => {
+                if (scrollFollowHeld()) return
                 for (const entry of entries) {
                     if (entry.isIntersecting) {
                         const line = entry.target.getAttribute('data-line')
@@ -321,6 +361,7 @@ function setupObserver() {
             })
         } else {
             observer = new IntersectionObserver((entries) => {
+                if (scrollFollowHeld()) return
                 for (const entry of entries) {
                     if (entry.isIntersecting) {
                         activeId.value = entry.target.id
@@ -348,6 +389,7 @@ watch(toc, () => {
 // deepest TOC symbol at or above that line.
 function onEditorViewportLine(e) {
     if (!props.codeView) return
+    if (scrollFollowHeld()) return
     const viewportLine = e.detail?.line
     if (typeof viewportLine !== 'number') return
     let match = null
@@ -409,6 +451,7 @@ onBeforeUnmount(() => {
     observer?.disconnect()
     observer = null
     stopDomObserver()
+    releaseFollowHold()
     window.removeEventListener('cm-editor-viewport-line', onEditorViewportLine)
 })
 </script>

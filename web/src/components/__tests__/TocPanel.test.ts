@@ -503,3 +503,50 @@ describe('TocPanel — rendered markdown anchor scoping', () => {
     }
   })
 })
+
+describe('TocPanel — click-jump highlight hold', () => {
+  it('keeps the clicked item highlighted while viewport-line events fire during the hold window', async () => {
+    vi.useFakeTimers()
+    const { fetchCodeSymbols } = await import('@/composables/useCodeSymbols')
+    vi.mocked(fetchCodeSymbols).mockResolvedValueOnce({
+      lang: 'go',
+      symbols: [
+        { name: 'main', kind: 'function', line: 10, endLine: 20, level: 1 },
+        { name: 'Handler', kind: 'struct', line: 25, endLine: 40, level: 1 },
+      ],
+    })
+
+    const wrapper = mountPanel({
+      file: { name: 'main.go', content: 'package main', path: '/main.go' },
+      codeView: true,
+    })
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(50)
+    await nextTick()
+
+    // Click "Handler" (line 25).
+    const items = wrapper.findAll('.toc-item')
+    const handlerItem = items.find(i => i.text().includes('Handler'))!
+    await handlerItem.trigger('click')
+    await nextTick()
+    expect(handlerItem.classes()).toContain('active')
+
+    // A viewport-line event pointing at the OTHER symbol arrives while the
+    // smooth scroll would still be settling — it must NOT steal the highlight.
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 10 } }))
+    await nextTick()
+    expect(handlerItem.classes()).toContain('active')
+    const mainItem = items.find(i => i.text().includes('main'))!
+    expect(mainItem.classes()).not.toContain('active')
+
+    // After the hold window elapses, scroll-follow resumes normally.
+    await vi.advanceTimersByTimeAsync(1600)
+    window.dispatchEvent(new CustomEvent('cm-editor-viewport-line', { detail: { line: 10 } }))
+    await nextTick()
+    expect(mainItem.classes()).toContain('active')
+    expect(handlerItem.classes()).not.toContain('active')
+
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+})
