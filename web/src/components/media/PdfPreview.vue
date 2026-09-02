@@ -58,9 +58,12 @@ const { isAppMode } = useAppMode()
 // PDF outline (bookmarks) for TOC
 const outline = ref([])
 
-// Flatten PDF outline tree into TocItem-like list
-function flattenOutline(items, level = 1) {
-  const result = []
+// Flatten PDF outline tree into TocItem-like list.
+// `out` is the shared accumulator passed down the recursion so every item gets
+// a globally unique id (`pdf-toc-N`). A per-call local array would restart the
+// counter at 0 for every sibling branch, producing duplicate ids — two TOC
+// entries then match the same active id and highlight together.
+function flattenOutline(items, level = 1, out = []) {
   for (const item of items) {
     const title = item.title || ''
     let page = 0
@@ -75,18 +78,18 @@ function flattenOutline(items, level = 1) {
       }
     }
     // pdfjs-dist: item.dest can be resolved via pdfDoc.getDestination()
-    result.push({
+    out.push({
       level,
       text: title,
-      id: `pdf-toc-${result.length}`,
+      id: `pdf-toc-${out.length}`,
       line: page, // reuse 'line' as page number for TocDrawer compatibility
       _dest: item.dest,
     })
     if (item.items && item.items.length > 0) {
-      result.push(...flattenOutline(item.items, level + 1))
+      flattenOutline(item.items, level + 1, out)
     }
   }
-  return result
+  return out
 }
 
 // Resolve page numbers for outline items

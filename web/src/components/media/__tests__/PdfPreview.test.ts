@@ -155,5 +155,45 @@ describe('PdfPreview', () => {
     await Promise.all([p1, p2].filter(Boolean))
   })
 
+  it('assigns globally unique ids across sibling outline branches (no duplicate pdf-toc-N)', async () => {
+    // Regression: flattenOutline used a per-call local array, so sibling
+    // branches each restarted the counter at 0 — child bookmarks of different
+    // top-level items shared ids, and two TOC entries would highlight together.
+    const fakePage = {
+      getViewport: vi.fn(() => ({ width: 100, height: 100 })),
+      render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
+    }
+    const fakeDoc = {
+      numPages: 3,
+      getPage: vi.fn(async () => fakePage),
+      getOutline: vi.fn(async () => [
+        { title: 'A', dest: [{ page: 1 }], items: [
+          { title: 'A1', dest: [{ page: 1 }] },
+          { title: 'A2', dest: [{ page: 2 }] },
+        ] },
+        { title: 'B', dest: [{ page: 3 }], items: [
+          { title: 'B1', dest: [{ page: 3 }] },
+        ] },
+      ]),
+      getPageIndex: vi.fn(async () => 0),
+      destroy: vi.fn(),
+    }
+
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    ;(pdfjs.getDocument as any).mockReturnValue({ promise: Promise.resolve(fakeDoc) })
+
+    const wrapper = mountPdf()
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    const flat = vm.outline
+    expect(flat.length).toBe(5)
+    const ids = flat.map((i: { id: string }) => i.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    // Depth order is preserved: A, A1, A2, B, B1 → B's child comes after A2.
+    expect(flat[3].text).toBe('B')
+    expect(flat[4].text).toBe('B1')
+  })
+
   // Zoom label removed with toolbar redesign
 })
