@@ -305,6 +305,7 @@ const OpenApiPreview = defineAsyncComponent(buildAsyncComponentOptions({ loader:
 import DiffDrawer from './DiffDrawer.vue'
 import { useDiffDrawer } from '@/composables/useDiffDrawer.ts'
 import { diffDrawer } from '@/composables/useMarkdownDiff.ts'
+import { getFileScroll, setFileScroll } from '@/utils/fileScrollCache'
 import FileHeader from './FileHeader.vue'
 import TocDock from './TocDock.vue'
 import { getFileType, formatFileSize } from '@/utils/fileType.ts'
@@ -565,8 +566,10 @@ function toggleStickyScroll() {
     setLocalConfig('stickyScroll', !stickyScroll.value)
 }
 
-// Per-file scroll position cache
-const scrollPositions = new Map()
+// Per-file scroll positions live in the module-level fileScrollCache singleton
+// (getFileScroll/setFileScroll) so they survive FileViewer unmount/remount —
+// e.g. closing the overlay to open the file manager, then reopening from the
+// recent-files list mounts a fresh viewer that must still find the position.
 let pendingRestore = null // { path, scrollTop }
 let restoreTimer = null
 let restoreAttempts = 0
@@ -721,7 +724,13 @@ function attachScrollListener() {
     if (!el || !currentFilePath) return
     scrollEl = el
     scrollHandler = () => {
-        scrollPositions.set(currentFilePath, el.scrollTop)
+        // Ignore scroll events fired while the container is hidden: when the
+        // view panel is left via v-show (e.g. switching to the file manager),
+        // the browser resets CodeMirror's scrollTop to 0 on display:none, and
+        // later re-measuring can fire spurious scroll events. Overwriting the
+        // saved position with 0 would permanently lose the user's place.
+        if (el.offsetParent === null) return
+        setFileScroll(currentFilePath, el.scrollTop)
     }
     el.addEventListener('scroll', scrollHandler, { passive: true })
 }
@@ -748,8 +757,15 @@ function tryRestoreOrAttach() {
     // Content must be scrollable (scrollHeight > clientHeight)
     if (el.scrollHeight <= el.clientHeight) return
 
-    // Restore scroll if needed
+    // Restore scroll if needed. Content can render asynchronously after a file
+    // switch (CodeMirror rebuilds its viewport, markdown loads images/code), so
+    // the scroll container height grows over a few ticks. If the target exceeds
+    // the current max scroll, applying it now would be silently clamped to the
+    // partial height and never corrected once the content finishes growing.
+    // Wait (the 50ms poll retries) until the content is tall enough to hold it.
     if (pendingRestore) {
+        const maxScroll = el.scrollHeight - el.clientHeight
+        if (pendingRestore.scrollTop > maxScroll) return
         el.scrollTop = pendingRestore.scrollTop
         pendingRestore = null
         clearRestoreTimer()
@@ -763,6 +779,15 @@ function handleCancelScrollRestore() {
 }
 
 onBeforeUnmount(() => {
+    // Persist the current position before the overlay tears us down (e.g.
+    // Header → "open file manager" closes the overlay via v-if). Component
+    // teardown does NOT run the props.file watcher, so without this a viewer
+    // that is unmounted rather than switched between files would lose its last
+    // position. Skip when the container is already hidden — its scrollTop has
+    // been reset to 0 and must not overwrite the trusted cached value.
+    if (currentFilePath && scrollEl && scrollEl.offsetParent !== null) {
+        setFileScroll(currentFilePath, scrollEl.scrollTop)
+    }
     detachScrollListener()
     clearRestoreTimer()
     window.removeEventListener('cancel-scroll-restore', handleCancelScrollRestore)
@@ -780,7 +805,15 @@ watch(() => props.file, (f, oldF) => {
     // Capture the pane being left synchronously. Relying only on scroll events
     // can miss the final position when navigation follows a smooth scroll.
     if (oldF?.path && scrollEl) {
-        scrollPositions.set(oldF.path, scrollEl.scrollTop)
+        // Only trust the DOM scroll offset while the container is actually
+        // visible. If the view panel was left (v-show) before this watcher
+        // runs — e.g. the user opened a new file from the file manager —
+        // CodeMirror's scrollTop has already been reset to 0 by display:none,
+        // and overwriting the saved position with 0 would lose the user's
+        // place. Keep the value recorded by the scroll listener instead.
+        if (scrollEl.offsetParent !== null) {
+            setFileScroll(oldF.path, scrollEl.scrollTop)
+        }
     }
     // Stop listening on old scroll container
     detachScrollListener()
@@ -796,7 +829,7 @@ watch(() => props.file, (f, oldF) => {
         loading.value = f.content == null
     }
     if (f?.path !== oldF?.path) {
-        const savedScroll = scrollPositions.get(f.path)
+        const savedScroll = getFileScroll(f.path)
         pendingRestore = { path: f.path, scrollTop: savedScroll ?? 0 }
         // Poll until content is rendered and scrollable
         restoreAttempts = 0
