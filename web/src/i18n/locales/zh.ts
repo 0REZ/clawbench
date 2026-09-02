@@ -328,9 +328,11 @@ export default {
       cachedWriteTokens: '缓存写',
       thoughtTokens: '思考',
       compact: '压缩上下文',
+      // Token detail section — all token/cost rows grouped under one header.
+      tokenDetail: 'Token 明细',
       // Per-agent _meta extension rows (cache write/creation, miss, credit).
       // cacheHitTokens deliberately has no label: it duplicates cachedReadTokens
-      // ("缓存读"), which is already displayed in the summary rows.
+      // ("缓存读"), which is already displayed in the same section.
       cacheCreationTokens: '缓存创建',
       cacheMissTokens: '缓存未命中',
       credit: '额度扣减',

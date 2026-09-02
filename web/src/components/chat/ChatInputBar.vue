@@ -215,6 +215,11 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.remaining') }}</span>
             <span class="usage-popup-value">{{ Math.max(contextSize - contextUsed, 0).toLocaleString() }}</span>
           </div>
+          <!-- Token detail section: every token/cost row grouped under one header.
+               used/size/remaining (matching the progress bar above) stay outside.
+               cacheHitTokens is deliberately not rendered — it duplicates
+               cachedReadTokens ("缓存读"), shown once below. -->
+          <div v-if="hasTokenDetail" class="usage-popup-section-title">{{ t('chat.sessionInfo.tokenDetail') }}</div>
           <div v-if="contextInputTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.inputTokens') }}</span>
             <span class="usage-popup-value">{{ contextInputTokens.toLocaleString() }}</span>
@@ -406,6 +411,16 @@ const usageColor = computed(() => {
   if (pct >= 75) return '#eab308'
   return '#22c55e'
 })
+// True when any token/cost row inside the Token Detail section has a value.
+// The section header only renders then — otherwise the popup would show an
+// empty header between used/size/remaining and the context breakdown.
+const hasTokenDetail = computed(() =>
+  contextInputTokens.value > 0 || contextOutputTokens.value > 0 ||
+  contextTotalTokens.value > 0 || contextCachedReadTokens.value > 0 ||
+  contextCachedWriteTokens.value > 0 || contextCacheCreationTokens.value > 0 ||
+  contextCacheMissTokens.value > 0 || contextThoughtTokens.value > 0 ||
+  contextCredit.value > 0 || contextCost.value > 0,
+)
 // Context breakdown rows from CodeBuddy usageByCategory (by value, i18n labels).
 const categoryRows = computed(() => {
   const cat = contextUsageByCategory.value

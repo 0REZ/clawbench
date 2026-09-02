@@ -983,9 +983,11 @@ describe('ChatInputBar', () => {
     expect(wrapper.find('.session-info-usage').exists()).toBe(true)
   })
 
-  it('shows cache miss and credit inline in the usage popup (no separate token-detail section)', async () => {
+  it('groups all token/cost rows under the Token Detail section header', async () => {
     mockContextSize.value = 200000
     mockContextUsed.value = 29495
+    mockContextInputTokens.value = 29495
+    mockContextOutputTokens.value = 3
     mockContextCacheCreationTokens.value = 0
     mockContextCacheHitTokens.value = 0
     mockContextCacheMissTokens.value = 21303
@@ -996,14 +998,19 @@ describe('ChatInputBar', () => {
     await wrapper.find('.session-info-usage').trigger('click')
     await wrapper.vm.$nextTick()
 
-    // No "Token Detail" section header — fields are inline summary rows.
-    expect(wrapper.text()).not.toContain('chat.sessionInfo.tokenDetail')
+    // Token Detail section header present; input/output rows grouped under it.
+    expect(wrapper.text()).toContain('chat.sessionInfo.tokenDetail')
+    // inputTokens/outputTokens are translated by the test i18n mock ("Input"/"Output");
+    // cacheMissTokens/credit fall back to raw keys.
+    expect(wrapper.text()).toContain('29,495')
     expect(wrapper.text()).toContain('chat.sessionInfo.cacheMissTokens')
     expect(wrapper.text()).toContain('21,303')
     expect(wrapper.text()).toContain('chat.sessionInfo.credit')
     expect(wrapper.text()).toContain('1.4800')
 
     // Reset for other tests.
+    mockContextInputTokens.value = 0
+    mockContextOutputTokens.value = 0
     mockContextCacheMissTokens.value = 0
     mockContextCredit.value = 0
   })
@@ -1011,7 +1018,7 @@ describe('ChatInputBar', () => {
   it('does not duplicate cache-hit values in the popup', async () => {
     // CodeBuddy reports prompt_cache_hit_tokens once; cachedReadTokens and
     // cacheHitTokens both carry it. The UI must render it ONCE (as the cache
-    // read summary row), not twice under a separate token-detail section.
+    // read summary row), not twice inside the Token Detail section.
     mockContextSize.value = 200000
     mockContextUsed.value = 326400
     mockContextCachedReadTokens.value = 326400
@@ -1037,20 +1044,27 @@ describe('ChatInputBar', () => {
     mockContextCacheMissTokens.value = 0
   })
 
-  it('token detail fields hidden when no per-agent _meta extensions', async () => {
+  it('token detail section hidden when only used/size present', async () => {
+    // No token rows → no Token Detail header at all (only used/size/remaining).
     mockContextSize.value = 200000
     mockContextUsed.value = 5000
+    mockContextInputTokens.value = 0
+    mockContextOutputTokens.value = 0
+    mockContextTotalTokens.value = 0
+    mockContextCachedReadTokens.value = 0
+    mockContextCachedWriteTokens.value = 0
     mockContextCacheCreationTokens.value = 0
     mockContextCacheHitTokens.value = 0
     mockContextCacheMissTokens.value = 0
     mockContextCredit.value = 0
-    mockContextInputTokens.value = 0
+    mockContextThoughtTokens.value = 0
+    mockContextCost.value = 0
 
     const wrapper = mountBar()
     await wrapper.find('.session-info-usage').trigger('click')
     await wrapper.vm.$nextTick()
 
-    // No per-agent _meta detail rows render when everything is zero.
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.tokenDetail')
     expect(wrapper.text()).not.toContain('chat.sessionInfo.cacheMissTokens')
     expect(wrapper.text()).not.toContain('chat.sessionInfo.credit')
   })

@@ -328,9 +328,11 @@ export default {
       cachedWriteTokens: 'Cache Write',
       thoughtTokens: 'Thought',
       compact: 'Compact context',
+      // Token detail section — all token/cost rows grouped under one header.
+      tokenDetail: 'Token Detail',
       // Per-agent _meta extension rows (cache write/creation, miss, credit).
       // cacheHitTokens deliberately has no label: it duplicates cachedReadTokens
-      // ("Cache Read"), which is already displayed in the summary rows.
+      // ("Cache Read"), which is already displayed in the same section.
       cacheCreationTokens: 'Cache Create',
       cacheMissTokens: 'Cache Miss',
       credit: 'Credit',
