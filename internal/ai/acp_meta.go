@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,20 +48,24 @@ type metaTokenUsage struct {
 
 // metaTrace is the canonical trace/identity detail extracted from a _meta payload.
 type metaTrace struct {
-	RequestID       string
-	TraceID         string
-	MessageID       string
-	RequestModelID  string
-	ResponseModelID string
-	FinishReason    string
-	Outcome         string
-	AgentPhase      string
+	RequestID        string
+	TraceID          string
+	TraceParent      string
+	MessageID        string
+	MessageRequestID string
+	RequestModelID   string
+	RequestModelName string
+	ResponseModelID  string
+	FinishReason     string
+	Outcome          string
+	AgentPhase       string
 }
 
 // HasData reports whether any trace field was found.
 func (t *metaTrace) HasData() bool {
-	return t != nil && (t.RequestID != "" || t.TraceID != "" || t.MessageID != "" ||
-		t.RequestModelID != "" || t.ResponseModelID != "" || t.FinishReason != "" ||
+	return t != nil && (t.RequestID != "" || t.TraceID != "" || t.TraceParent != "" ||
+		t.MessageID != "" || t.MessageRequestID != "" || t.RequestModelID != "" ||
+		t.RequestModelName != "" || t.ResponseModelID != "" || t.FinishReason != "" ||
 		t.Outcome != "" || t.AgentPhase != "")
 }
 
@@ -130,6 +135,12 @@ func metaString(v any) string {
 	return ""
 }
 
+// splitTraceParent splits a W3C traceparent header
+// ("00-<traceid>-<spanid>-<flags>") into its dash-separated components.
+func splitTraceParent(tp string) []string {
+	return strings.Split(tp, "-")
+}
+
 // metaMaxInt returns the maximum of base and vals (used to keep the richest
 // value across multiple notifications).
 func metaMaxInt(base int, vals ...int) int {
@@ -173,11 +184,20 @@ func metaMergeTrace(dst *metaTrace, src *metaTrace) {
 	if dst.TraceID == "" {
 		dst.TraceID = src.TraceID
 	}
+	if dst.TraceParent == "" {
+		dst.TraceParent = src.TraceParent
+	}
 	if dst.MessageID == "" {
 		dst.MessageID = src.MessageID
 	}
+	if dst.MessageRequestID == "" {
+		dst.MessageRequestID = src.MessageRequestID
+	}
 	if dst.RequestModelID == "" {
 		dst.RequestModelID = src.RequestModelID
+	}
+	if dst.RequestModelName == "" {
+		dst.RequestModelName = src.RequestModelName
 	}
 	if dst.ResponseModelID == "" {
 		dst.ResponseModelID = src.ResponseModelID
@@ -328,8 +348,14 @@ func applyMetaExtractionToMetadata(meta *Metadata, ext *metaExtraction) {
 		if tr.MessageID != "" {
 			meta.MessageID = tr.MessageID
 		}
+		if tr.MessageRequestID != "" {
+			meta.MessageRequestID = tr.MessageRequestID
+		}
 		if tr.RequestModelID != "" && meta.Model == "" {
 			meta.Model = tr.RequestModelID
+		}
+		if tr.RequestModelName != "" {
+			meta.RequestModelName = tr.RequestModelName
 		}
 		if tr.ResponseModelID != "" {
 			meta.ResponseModelID = tr.ResponseModelID

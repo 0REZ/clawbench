@@ -65,14 +65,16 @@ func TestExtractCodeBuddyMeta_UsageByCategory(t *testing.T) {
 
 func TestExtractCodeBuddyMeta_Trace(t *testing.T) {
 	meta := map[string]any{
-		"codebuddy.ai/requestId":       "req-123",
-		"codebuddy.ai/traceId":         "trace-456",
-		"codebuddy.ai/messageId":       "msg-789",
-		"codebuddy.ai/requestModelId":  "glm-5.1",
-		"codebuddy.ai/responseModelId": "ep-b3mrev6r",
-		"codebuddy.ai/finishReason":    "stop",
-		"codebuddy.ai/outcome":         "SUCCESS",
-		"codebuddy.ai/agentPhase":      "completing",
+		"codebuddy.ai/requestId":        "req-123",
+		"codebuddy.ai/traceId":          "trace-456",
+		"codebuddy.ai/messageId":        "msg-789",
+		"codebuddy.ai/messageRequestId": "msgreq-abc",
+		"codebuddy.ai/requestModelId":   "glm-5.1",
+		"codebuddy.ai/requestModelName": "GLM-5.1",
+		"codebuddy.ai/responseModelId":  "ep-b3mrev6r",
+		"codebuddy.ai/finishReason":     "stop",
+		"codebuddy.ai/outcome":          "SUCCESS",
+		"codebuddy.ai/agentPhase":       "completing",
 	}
 	ext := extractCodeBuddyMeta(meta)
 	require.NotNil(t, ext)
@@ -82,11 +84,29 @@ func TestExtractCodeBuddyMeta_Trace(t *testing.T) {
 	assert.Equal(t, "req-123", tr.RequestID)
 	assert.Equal(t, "trace-456", tr.TraceID)
 	assert.Equal(t, "msg-789", tr.MessageID)
+	assert.Equal(t, "msgreq-abc", tr.MessageRequestID)
 	assert.Equal(t, "glm-5.1", tr.RequestModelID)
+	assert.Equal(t, "GLM-5.1", tr.RequestModelName)
 	assert.Equal(t, "ep-b3mrev6r", tr.ResponseModelID)
 	assert.Equal(t, "stop", tr.FinishReason)
 	assert.Equal(t, "SUCCESS", tr.Outcome)
 	assert.Equal(t, "completing", tr.AgentPhase)
+}
+
+func TestExtractCodeBuddyMeta_TraceParentFallsBackToTraceID(t *testing.T) {
+	// When the dedicated traceId key is absent, the W3C traceparent header's
+	// second component carries the root trace id.
+	meta := map[string]any{
+		"codebuddy.ai/requestId":   "req-123",
+		"codebuddy.ai/messageId":   "msg-789",
+		"codebuddy.ai/traceparent": "00-fa10f96dcc82d9db346922057b96c706-97fb1ee7db62a4ab-01",
+	}
+	ext := extractCodeBuddyMeta(meta)
+	require.NotNil(t, ext)
+	require.NotNil(t, ext.Trace)
+	tr := ext.Trace
+	assert.Equal(t, "fa10f96dcc82d9db346922057b96c706", tr.TraceID)
+	assert.Equal(t, "00-fa10f96dcc82d9db346922057b96c706-97fb1ee7db62a4ab-01", tr.TraceParent)
 }
 
 func TestExtractCodeBuddyMeta_Empty(t *testing.T) {
@@ -148,8 +168,73 @@ func TestExtractClaudeMeta_ReasoningTokens(t *testing.T) {
 func TestExtractClaudeMeta_MissingQuota(t *testing.T) {
 	assert.Nil(t, extractClaudeMeta(nil))
 	assert.Nil(t, extractClaudeMeta(map[string]any{"goal": map[string]any{"supported": true}}))
-	// quota without token_count → nil.
+	// quota without token_count or model_usage → nil.
 	assert.Nil(t, extractClaudeMeta(map[string]any{"quota": map[string]any{"model_usage": []any{}}}))
+}
+
+func TestExtractClaudeMeta_ModelUsage(t *testing.T) {
+	// Real Codex wire shape: model_usage[].model reveals the actually-executed
+	// model (an alias can route to a concrete model), which must surface as
+	// the trace's ResponseModelID.
+	meta := map[string]any{
+		"quota": map[string]any{
+			"model_usage": []any{
+				map[string]any{
+					"model": "deepseek-v4-flash",
+					"token_count": map[string]any{
+						"cachedInputTokens": 12672,
+						"inputTokens":       105,
+						"outputTokens":      2,
+						"totalTokens":       12779,
+					},
+				},
+			},
+			"token_count": map[string]any{
+				"cachedInputTokens": 12672,
+				"inputTokens":       105,
+				"outputTokens":      2,
+				"totalTokens":       12779,
+			},
+		},
+	}
+	ext := extractClaudeMeta(meta)
+	require.NotNil(t, ext)
+	// Aggregate usage extracted from token_count.
+	require.NotNil(t, ext.Usage)
+	assert.Equal(t, 105, ext.Usage.InputTokens)
+	assert.Equal(t, 2, ext.Usage.OutputTokens)
+	assert.Equal(t, 12779, ext.Usage.TotalTokens)
+	assert.Equal(t, 12672, ext.Usage.CachedReadTokens)
+	// Model name surfaced as ResponseModelID.
+	require.NotNil(t, ext.Trace)
+	assert.Equal(t, "deepseek-v4-flash", ext.Trace.ResponseModelID)
+}
+
+func TestExtractClaudeMeta_ModelUsage_NoAggregate(t *testing.T) {
+	// model_usage present but no top-level token_count: usage still extracted
+	// from the per-model entries, model name still surfaced.
+	meta := map[string]any{
+		"quota": map[string]any{
+			"model_usage": []any{
+				map[string]any{
+					"model": "claude-sonnet-4-6",
+					"token_count": map[string]any{
+						"inputTokens":  142,
+						"outputTokens": 44,
+						"totalTokens":  40904,
+					},
+				},
+			},
+		},
+	}
+	ext := extractClaudeMeta(meta)
+	require.NotNil(t, ext)
+	require.NotNil(t, ext.Usage)
+	assert.Equal(t, 142, ext.Usage.InputTokens)
+	assert.Equal(t, 44, ext.Usage.OutputTokens)
+	assert.Equal(t, 40904, ext.Usage.TotalTokens)
+	require.NotNil(t, ext.Trace)
+	assert.Equal(t, "claude-sonnet-4-6", ext.Trace.ResponseModelID)
 }
 
 // ---------------------------------------------------------------------------
@@ -261,14 +346,16 @@ func TestApplyMetaExtractionToMetadata(t *testing.T) {
 			ThoughtTokens:     30,
 		},
 		Trace: &metaTrace{
-			RequestID:       "req-1",
-			TraceID:         "trace-1",
-			MessageID:       "msg-1",
-			RequestModelID:  "glm-5.1",
-			ResponseModelID: "ep-x",
-			FinishReason:    "stop",
-			Outcome:         "SUCCESS",
-			AgentPhase:      "completing",
+			RequestID:        "req-1",
+			TraceID:          "trace-1",
+			MessageID:        "msg-1",
+			MessageRequestID: "msgreq-1",
+			RequestModelID:   "glm-5.1",
+			RequestModelName: "GLM-5.1",
+			ResponseModelID:  "ep-x",
+			FinishReason:     "stop",
+			Outcome:          "SUCCESS",
+			AgentPhase:       "completing",
 		},
 		Category: &metaCategoryUsage{Present: true, Categories: map[string]int64{"conversation": 3894}},
 	}
@@ -282,8 +369,10 @@ func TestApplyMetaExtractionToMetadata(t *testing.T) {
 	assert.Equal(t, "req-1", meta.RequestID)
 	assert.Equal(t, "trace-1", meta.TraceID)
 	assert.Equal(t, "msg-1", meta.MessageID)
+	assert.Equal(t, "msgreq-1", meta.MessageRequestID)
 	// Existing model preserved — RequestModelID only fills when empty.
 	assert.Equal(t, "preset-model", meta.Model)
+	assert.Equal(t, "GLM-5.1", meta.RequestModelName)
 	assert.Equal(t, "ep-x", meta.ResponseModelID)
 	assert.Equal(t, "stop", meta.FinishReason)
 	assert.Equal(t, "SUCCESS", meta.Outcome)

@@ -26,8 +26,11 @@ const (
 	metaKeyCodeBuddyByCategory   = "codebuddy.ai/usageByCategory"
 	metaKeyCodeBuddyRequestID    = "codebuddy.ai/requestId"
 	metaKeyCodeBuddyTraceID      = "codebuddy.ai/traceId"
+	metaKeyCodeBuddyTraceParent  = "codebuddy.ai/traceparent"
 	metaKeyCodeBuddyMessageID    = "codebuddy.ai/messageId"
+	metaKeyCodeBuddyMsgRequestID = "codebuddy.ai/messageRequestId"
 	metaKeyCodeBuddyReqModelID   = "codebuddy.ai/requestModelId"
+	metaKeyCodeBuddyReqModelName = "codebuddy.ai/requestModelName"
 	metaKeyCodeBuddyRespModelID  = "codebuddy.ai/responseModelId"
 	metaKeyCodeBuddyFinishReason = "codebuddy.ai/finishReason"
 	metaKeyCodeBuddyOutcome      = "codebuddy.ai/outcome"
@@ -82,14 +85,24 @@ func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
 
 	// Trace/identity namespace.
 	t := &metaTrace{
-		RequestID:       metaString(meta[metaKeyCodeBuddyRequestID]),
-		TraceID:         metaString(meta[metaKeyCodeBuddyTraceID]),
-		MessageID:       metaString(meta[metaKeyCodeBuddyMessageID]),
-		RequestModelID:  metaString(meta[metaKeyCodeBuddyReqModelID]),
-		ResponseModelID: metaString(meta[metaKeyCodeBuddyRespModelID]),
-		FinishReason:    metaString(meta[metaKeyCodeBuddyFinishReason]),
-		Outcome:         metaString(meta[metaKeyCodeBuddyOutcome]),
-		AgentPhase:      metaString(meta[metaKeyCodeBuddyAgentPhase]),
+		RequestID:        metaString(meta[metaKeyCodeBuddyRequestID]),
+		TraceID:          metaString(meta[metaKeyCodeBuddyTraceID]),
+		TraceParent:      metaString(meta[metaKeyCodeBuddyTraceParent]),
+		MessageID:        metaString(meta[metaKeyCodeBuddyMessageID]),
+		MessageRequestID: metaString(meta[metaKeyCodeBuddyMsgRequestID]),
+		RequestModelID:   metaString(meta[metaKeyCodeBuddyReqModelID]),
+		RequestModelName: metaString(meta[metaKeyCodeBuddyReqModelName]),
+		ResponseModelID:  metaString(meta[metaKeyCodeBuddyRespModelID]),
+		FinishReason:     metaString(meta[metaKeyCodeBuddyFinishReason]),
+		Outcome:          metaString(meta[metaKeyCodeBuddyOutcome]),
+		AgentPhase:       metaString(meta[metaKeyCodeBuddyAgentPhase]),
+	}
+	// The traceparent header (when the dedicated traceId key is absent) also
+	// carries the root trace id as its first component (00-<traceid>-<spanid>-01).
+	if t.TraceID == "" && t.TraceParent != "" {
+		if parts := splitTraceParent(t.TraceParent); len(parts) >= 2 {
+			t.TraceID = parts[1]
+		}
 	}
 	if t.HasData() {
 		ext.Trace = t

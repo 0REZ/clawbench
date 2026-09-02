@@ -90,13 +90,15 @@ type Metadata struct {
 
 	// Trace/identity fields — populated from per-agent _meta extensions
 	// (CodeBuddy codebuddy.ai/* namespace; Claude/Codex PromptResponse._meta).
-	RequestID       string `json:"requestId,omitempty"`
-	TraceID         string `json:"traceId,omitempty"`
-	MessageID       string `json:"messageId,omitempty"`
-	ResponseModelID string `json:"responseModelId,omitempty"`
-	FinishReason    string `json:"finishReason,omitempty"`
-	Outcome         string `json:"outcome,omitempty"`
-	AgentPhase      string `json:"agentPhase,omitempty"`
+	RequestID        string `json:"requestId,omitempty"`
+	TraceID          string `json:"traceId,omitempty"`
+	MessageID        string `json:"messageId,omitempty"`
+	MessageRequestID string `json:"messageRequestId,omitempty"` // CodeBuddy request-scoped ID (differs from messageId which carries the session prefix)
+	RequestModelName string `json:"requestModelName,omitempty"` // CodeBuddy human-readable request model (e.g. "GLM-5.1"), paired with Model
+	ResponseModelID  string `json:"responseModelId,omitempty"`
+	FinishReason     string `json:"finishReason,omitempty"`
+	Outcome          string `json:"outcome,omitempty"`
+	AgentPhase       string `json:"agentPhase,omitempty"`
 }
 
 // Warning reason codes — used by frontend for i18n lookup and visual severity
