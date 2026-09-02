@@ -56,9 +56,10 @@ func extractClaudeMeta(meta map[string]any) *metaExtraction {
 
 	// Per-model breakdown. _meta.quota.model_usage = [ { model: "...",
 	// token_count: {...} } ]. The model name reveals which model actually ran
-	// (Codex can route an alias to a concrete model, e.g. deepseek-v4-flash),
-	// so surface it as the trace's ResponseModelID when no _meta trace provides
-	// one. The per-model token_count is aggregated into the usage totals.
+	// (Codex can route an alias to a concrete model, e.g. deepseek-v4-flash).
+	// It maps to ResponseModelID — "the model that actually responded" — the
+	// same semantic as CodeBuddy's codebuddy.ai/responseModelId (its actual
+	// serving endpoint, ep-*), so the two agents populate one consistent field.
 	if mus, ok := quota[metaKeyModelUsage].([]any); ok && len(mus) > 0 {
 		trace := &metaTrace{}
 		for _, m := range mus {

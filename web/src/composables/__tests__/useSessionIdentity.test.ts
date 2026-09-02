@@ -1355,6 +1355,42 @@ describe('useSessionIdentity', () => {
             expect(identity.contextUsageByCategory.value).toBeUndefined()
         })
 
+        it('resets extension detail when used drops into a new turn', () => {
+            // Turn 1 populated the breakdown.
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(31224, 200000, undefined, undefined, undefined, 31224, 3, 31227, 29184, 0, 0, 0, 29184, 2040, 1.57, { tools: 23293, conversation: 4959 })
+            expect(identity.contextUsageByCategory.value).toEqual({ tools: 23293, conversation: 4959 })
+
+            // Turn 2 opens: used resets low/zero. The previous turn's category
+            // must NOT linger — stale breakdown would misrepresent the new turn.
+            updateUsageState(0, 200000)
+            expect(identity.contextUsageByCategory.value).toBeUndefined()
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(0)
+
+            // New turn then reports its own (zero-only) category — stays empty
+            // until a meaningful breakdown arrives.
+            updateUsageState(500, 200000, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { tools: 0, conversation: 0 })
+            expect(identity.contextUsageByCategory.value).toBeUndefined()
+        })
+
+        it('applies an explicit zero extension value (does not treat 0 as missing)', () => {
+            const identity = useSessionIdentity()
+            identity.currentSessionId.value = 'session-A'
+            updateUsageState(30000, 200000, undefined, undefined, undefined, 30000, 3, 30003, 0, 0, 0, 0, 0, 30000, 0.5, { tools: 20000, conversation: 10000 })
+            // Prev baseline starts at 0 — first turn applies the values.
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCacheMissTokens.value).toBe(30000)
+            expect(identity.contextCredit.value).toBe(0.5)
+
+            // Mid-turn notification carries a real zero cache-hit (new model run
+            // with no prompt cache): explicit 0 must overwrite, not be ignored.
+            updateUsageState(31000, 200000, undefined, undefined, undefined, 31000, 5, 31005, 0, 0, 0, 0, 0, 31000, 0.6)
+            expect(identity.contextCacheHitTokens.value).toBe(0)
+            expect(identity.contextCredit.value).toBe(0.6)
+        })
+
         it('defaults cost and currency when not provided', () => {
             const identity = useSessionIdentity()
             identity.currentSessionId.value = 'session-A'

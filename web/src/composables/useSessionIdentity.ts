@@ -346,12 +346,25 @@ export function clearThinkingEffortState() {
  *  Each notification is therefore NOT a full snapshot. Extension fields are
  *  only applied when they carry meaningful values (cache > 0, non-empty
  *  category breakdown); otherwise the previous value is preserved so the UI
- *  never flickers back to the minimal view mid-stream. */
+ *  never flickers back to the minimal view mid-stream.
+ *
+ *  Note on zero values: the backend serializes UsageState with omitempty, so a
+ *  genuinely-zero cache/credit field never arrives as an explicit 0 — it is
+ *  absent. The `!== undefined` guard therefore treats it as "no new info" and
+ *  preserves the previous value. An explicit 0 (should a non-omitempty source
+ *  ever send one) IS applied, which is correct for a real zero result. */
 export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number, cacheCreationTokens?: number, cacheHitTokens?: number, cacheMissTokens?: number, credit?: number, usageByCategory?: Record<string, number>) {
   const key = sessionId || currentSessionId.value
   if (!key) return
   const prev = usageStateCache.get(key)
+  // A used-count drop marks a NEW TURN (CodeBuddy opens each turn with a
+  // usage_update whose used resets low/zero). Extension detail is turn-scoped:
+  // carrying last turn's cache/category into a fresh turn would show stale
+  // data. Reset the extension baseline whenever used falls back noticeably.
+  const newTurn = !!prev && used < prev.used * 0.5
+  const baseline = newTurn ? undefined : prev
   const hasMeaningfulCategory = !!usageByCategory && Object.values(usageByCategory).some(v => v > 0)
+  const isDefined = (x: number | undefined): x is number => x !== undefined && x !== null
   usageStateCache.set(key, {
     used, size,
     inputTokens: inputTokens ?? 0,
@@ -362,13 +375,14 @@ export function updateUsageState(used: number, size: number, cost?: number, curr
     thoughtTokens: thoughtTokens ?? 0,
     cost: cost ?? 0,
     currency: currency ?? '',
-    // Extension fields: only meaningful values overwrite; zero/absent keeps
-    // the previous value so partial usage_updates can't blank the panel.
-    cacheCreationTokens: cacheCreationTokens ? cacheCreationTokens : (prev?.cacheCreationTokens ?? 0),
-    cacheHitTokens: cacheHitTokens ? cacheHitTokens : (prev?.cacheHitTokens ?? 0),
-    cacheMissTokens: cacheMissTokens ? cacheMissTokens : (prev?.cacheMissTokens ?? 0),
-    credit: credit ? credit : (prev?.credit ?? 0),
-    usageByCategory: hasMeaningfulCategory ? usageByCategory : prev?.usageByCategory,
+    // Extension fields: absent (undefined, i.e. not carried by this partial
+    // notification) preserves the previous value; an explicit value — including
+    // 0 — overwrites. A new turn (used reset) drops the previous baseline.
+    cacheCreationTokens: isDefined(cacheCreationTokens) ? cacheCreationTokens : (baseline?.cacheCreationTokens ?? 0),
+    cacheHitTokens: isDefined(cacheHitTokens) ? cacheHitTokens : (baseline?.cacheHitTokens ?? 0),
+    cacheMissTokens: isDefined(cacheMissTokens) ? cacheMissTokens : (baseline?.cacheMissTokens ?? 0),
+    credit: isDefined(credit) ? credit : (baseline?.credit ?? 0),
+    usageByCategory: hasMeaningfulCategory ? usageByCategory : baseline?.usageByCategory,
   })
   usageStateVersion.value++
 }
