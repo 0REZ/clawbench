@@ -1343,19 +1343,32 @@ func SaveMetadata(messageID int64, meta *ai.Metadata) error {
 	if meta.IsError {
 		isError = 1
 	}
+	// usageByCategory is a map — persist as a JSON string column.
+	var categoryJSON string
+	if len(meta.UsageByCategory) > 0 {
+		if b, err := json.Marshal(meta.UsageByCategory); err == nil {
+			categoryJSON = string(b)
+		}
+	}
 	_, err := WriteExec(
 		`
 		INSERT OR REPLACE INTO chat_metadata
 			(message_id, mode, thinking_effort, transport, model, input_tokens, output_tokens,
 			 duration_ms, wall_ms, cost_usd, stop_reason, is_error, error_message,
 			 cached_read_tokens, cached_write_tokens, thought_tokens, total_tokens,
-			 request_id, trace_id, response_model_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 cache_creation_tokens, cache_hit_tokens, cache_miss_tokens, credit,
+			 usage_by_category, session_id,
+			 request_id, trace_id, agent_message_id, message_request_id, request_model_name,
+			 response_model_id, finish_reason, outcome, agent_phase)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		messageID, meta.Mode, meta.ThinkingEffort, meta.Transport, meta.Model,
 		meta.InputTokens, meta.OutputTokens, meta.DurationMs, meta.WallMs,
 		meta.CostUSD, meta.StopReason, isError, meta.ErrorMessage,
 		meta.CachedReadTokens, meta.CachedWriteTokens, meta.ThoughtTokens, meta.TotalTokens,
-		meta.RequestID, meta.TraceID, meta.ResponseModelID,
+		meta.CacheCreationTokens, meta.CacheHitTokens, meta.CacheMissTokens, meta.Credit,
+		categoryJSON, meta.SessionID,
+		meta.RequestID, meta.TraceID, meta.MessageID, meta.MessageRequestID, meta.RequestModelName,
+		meta.ResponseModelID, meta.FinishReason, meta.Outcome, meta.AgentPhase,
 	)
 	return err
 }

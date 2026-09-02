@@ -1588,9 +1588,21 @@ func TestExecuteTask_SessionExecutor_CompletedWithTerminalEvent(t *testing.T) {
 		cached_write_tokens INTEGER DEFAULT 0,
 		thought_tokens INTEGER DEFAULT 0,
 		total_tokens INTEGER DEFAULT 0,
+		cache_creation_tokens INTEGER DEFAULT 0,
+		cache_hit_tokens INTEGER DEFAULT 0,
+		cache_miss_tokens INTEGER DEFAULT 0,
+		credit REAL DEFAULT 0,
+		usage_by_category TEXT DEFAULT '',
+		session_id TEXT DEFAULT '',
 		request_id TEXT DEFAULT '',
 		trace_id TEXT DEFAULT '',
+		agent_message_id TEXT DEFAULT '',
+		message_request_id TEXT DEFAULT '',
+		request_model_name TEXT DEFAULT '',
 		response_model_id TEXT DEFAULT '',
+		finish_reason TEXT DEFAULT '',
+		outcome TEXT DEFAULT '',
+		agent_phase TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 	cleanup := SetDBForTest(db, db)

@@ -143,9 +143,21 @@ CREATE TABLE IF NOT EXISTS chat_metadata (
 	cached_write_tokens INTEGER DEFAULT 0,
 	thought_tokens INTEGER DEFAULT 0,
 	total_tokens INTEGER DEFAULT 0,
+	cache_creation_tokens INTEGER DEFAULT 0,
+	cache_hit_tokens INTEGER DEFAULT 0,
+	cache_miss_tokens INTEGER DEFAULT 0,
+	credit REAL DEFAULT 0,
+	usage_by_category TEXT DEFAULT '',
+	session_id TEXT DEFAULT '',
 	request_id TEXT DEFAULT '',
 	trace_id TEXT DEFAULT '',
+	agent_message_id TEXT DEFAULT '',
+	message_request_id TEXT DEFAULT '',
+	request_model_name TEXT DEFAULT '',
 	response_model_id TEXT DEFAULT '',
+	finish_reason TEXT DEFAULT '',
+	outcome TEXT DEFAULT '',
+	agent_phase TEXT DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS chat_tool_calls (
@@ -2473,34 +2485,69 @@ func TestSaveMetadata_ExtendedColumns(t *testing.T) {
 	assert.Greater(t, msgID, int64(0))
 
 	meta := &ai.Metadata{
-		Model:             "glm-5.1",
-		InputTokens:       29495,
-		OutputTokens:      3,
-		TotalTokens:       29498,
-		CachedReadTokens:  8192,
-		CachedWriteTokens: 0,
-		ThoughtTokens:     0,
-		RequestID:         "req-123",
-		TraceID:           "trace-456",
-		ResponseModelID:   "ep-b3mrev6r",
+		Model:               "glm-5.1",
+		InputTokens:         29495,
+		OutputTokens:        3,
+		TotalTokens:         29498,
+		CachedReadTokens:    8192,
+		CachedWriteTokens:   0,
+		ThoughtTokens:       0,
+		CacheCreationTokens: 1200,
+		CacheHitTokens:      8192,
+		CacheMissTokens:     21303,
+		Credit:              1.57,
+		UsageByCategory:     map[string]int64{"tools": 22701, "conversation": 3894},
+		SessionID:           "sess-xyz",
+		RequestID:           "req-123",
+		TraceID:             "trace-456",
+		MessageID:           "agent-msg-1",
+		MessageRequestID:    "msgreq-abc",
+		RequestModelName:    "GLM-5.1",
+		ResponseModelID:     "ep-b3mrev6r",
+		FinishReason:        "stop",
+		Outcome:             "SUCCESS",
+		AgentPhase:          "completing",
 	}
 	err = service.SaveMetadata(msgID, meta)
 	assert.NoError(t, err)
 
-	var totalTokens, cachedRead, cachedWrite, thought int
-	var requestID, traceID, responseModelID string
+	var totalTokens, cachedRead, cachedWrite, thought, cacheCreation, cacheHit, cacheMiss int
+	var credit float64
+	var categoryJSON, requestID, traceID, responseModelID, sessionID string
+	var agentMessageID, messageRequestID, requestModelName, finishReason, outcome, agentPhase string
 	err = db.QueryRow(
-		"SELECT total_tokens, cached_read_tokens, cached_write_tokens, thought_tokens, request_id, trace_id, response_model_id FROM chat_metadata WHERE message_id = ?",
+		`SELECT total_tokens, cached_read_tokens, cached_write_tokens, thought_tokens,
+		        cache_creation_tokens, cache_hit_tokens, cache_miss_tokens, credit,
+		        usage_by_category, request_id, trace_id, response_model_id, session_id,
+		        agent_message_id, message_request_id, request_model_name,
+		        finish_reason, outcome, agent_phase
+		 FROM chat_metadata WHERE message_id = ?`,
 		msgID,
-	).Scan(&totalTokens, &cachedRead, &cachedWrite, &thought, &requestID, &traceID, &responseModelID)
+	).Scan(&totalTokens, &cachedRead, &cachedWrite, &thought,
+		&cacheCreation, &cacheHit, &cacheMiss, &credit,
+		&categoryJSON, &requestID, &traceID, &responseModelID, &sessionID,
+		&agentMessageID, &messageRequestID, &requestModelName,
+		&finishReason, &outcome, &agentPhase)
 	assert.NoError(t, err)
 	assert.Equal(t, 29498, totalTokens)
 	assert.Equal(t, 8192, cachedRead)
 	assert.Equal(t, 0, cachedWrite)
 	assert.Equal(t, 0, thought)
+	assert.Equal(t, 1200, cacheCreation)
+	assert.Equal(t, 8192, cacheHit)
+	assert.Equal(t, 21303, cacheMiss)
+	assert.Equal(t, 1.57, credit)
+	assert.Equal(t, `{"conversation":3894,"tools":22701}`, categoryJSON)
 	assert.Equal(t, "req-123", requestID)
 	assert.Equal(t, "trace-456", traceID)
 	assert.Equal(t, "ep-b3mrev6r", responseModelID)
+	assert.Equal(t, "sess-xyz", sessionID)
+	assert.Equal(t, "agent-msg-1", agentMessageID)
+	assert.Equal(t, "msgreq-abc", messageRequestID)
+	assert.Equal(t, "GLM-5.1", requestModelName)
+	assert.Equal(t, "stop", finishReason)
+	assert.Equal(t, "SUCCESS", outcome)
+	assert.Equal(t, "completing", agentPhase)
 }
 
 func TestSaveMetadata_NilMeta(t *testing.T) {
@@ -2513,6 +2560,59 @@ func TestSaveMetadata_ZeroMessageID(t *testing.T) {
 	_ = setupDB(t)
 	err := service.SaveMetadata(0, &ai.Metadata{Model: "test"})
 	assert.NoError(t, err)
+}
+
+func TestMigrateMetadataFromContent_BackfillsFullColumns(t *testing.T) {
+	db := setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "codebuddy", "MigrateMeta")
+	// Insert an assistant message whose content JSON carries the full metadata
+	// (token splits, category, trace identity), WITHOUT calling SaveMetadata —
+	// mimicking legacy rows that predate the chat_metadata backfill.
+	meta := ai.Metadata{
+		InputTokens:         100,
+		OutputTokens:        5,
+		TotalTokens:         105,
+		CachedReadTokens:    40,
+		CacheHitTokens:      40,
+		CacheMissTokens:     60,
+		CacheCreationTokens: 10,
+		Credit:              0.25,
+		UsageByCategory:     map[string]int64{"tools": 90, "conversation": 15},
+		SessionID:           sid,
+		RequestID:           "req-mig",
+		MessageID:           "agent-msg-mig",
+		ResponseModelID:     "ep-mig",
+		FinishReason:        "end_turn",
+		Outcome:             "SUCCESS",
+		AgentPhase:          "completing",
+	}
+	metaJSON, _ := json.Marshal(meta)
+	content := `{"blocks":[],"metadata":` + string(metaJSON) + `}`
+	msgID, err := service.AddChatMessage("/project", "codebuddy", sid, "assistant", content, nil, false, "")
+	assert.NoError(t, err)
+
+	service.MigrateMetadataFromContent()
+
+	var cacheHit, cacheMiss, cacheCreation int
+	var credit float64
+	var categoryJSON, requestID, agentMessageID, finishReason string
+	err = db.QueryRow(
+		`SELECT cache_hit_tokens, cache_miss_tokens, cache_creation_tokens, credit,
+		        usage_by_category, request_id, agent_message_id, finish_reason
+		 FROM chat_metadata WHERE message_id = ?`,
+		msgID,
+	).Scan(&cacheHit, &cacheMiss, &cacheCreation, &credit,
+		&categoryJSON, &requestID, &agentMessageID, &finishReason)
+	assert.NoError(t, err)
+	assert.Equal(t, 40, cacheHit)
+	assert.Equal(t, 60, cacheMiss)
+	assert.Equal(t, 10, cacheCreation)
+	assert.Equal(t, 0.25, credit)
+	assert.Equal(t, `{"conversation":15,"tools":90}`, categoryJSON)
+	assert.Equal(t, "req-mig", requestID)
+	assert.Equal(t, "agent-msg-mig", agentMessageID)
+	assert.Equal(t, "end_turn", finishReason)
 }
 
 func TestGetSessionInfo_NotFound(t *testing.T) {
