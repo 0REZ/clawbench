@@ -739,6 +739,13 @@ func TestCodebuddyACP_MetadataE2E(t *testing.T) {
 		if evt.Meta == nil {
 			continue
 		}
+		md := evt.Meta
+		t.Logf("metadata event: input=%d output=%d total=%d cachedRead=%d cachedWrite=%d cacheCreation=%d cacheHit=%d cacheMiss=%d thought=%d credit=%v stopReason=%q requestId=%q traceId=%q messageId=%q messageRequestId=%q reqModel=%q reqModelName=%q respModel=%q finishReason=%q outcome=%q phase=%q category=%v",
+			md.InputTokens, md.OutputTokens, md.TotalTokens, md.CachedReadTokens, md.CachedWriteTokens,
+			md.CacheCreationTokens, md.CacheHitTokens, md.CacheMissTokens, md.ThoughtTokens, md.Credit,
+			md.StopReason, md.RequestID, md.TraceID, md.MessageID, md.MessageRequestID,
+			md.Model, md.RequestModelName, md.ResponseModelID, md.FinishReason, md.Outcome, md.AgentPhase,
+			md.UsageByCategory)
 		if len(evt.Meta.UsageByCategory) > 0 || evt.Meta.InputTokens != 0 || evt.Meta.RequestID != "" {
 			metaWithData++
 		}

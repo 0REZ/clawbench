@@ -42,6 +42,19 @@
         <span class="metadata-label">{{ t('chat.metadata.model') }}</span>
         <span class="metadata-value">{{ data.model }}</span>
       </div>
+      <div v-if="data.requestModelName" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.requestModelName') }}</span>
+        <span class="metadata-value">{{ data.requestModelName }}</span>
+      </div>
+      <div v-if="data.messageRequestId" class="metadata-item metadata-copyable" @click="copyValue(data.messageRequestId, $event)">
+        <span class="metadata-label">{{ t('chat.metadata.messageRequestId') }}</span>
+        <div class="metadata-value-wrap">
+          <span class="metadata-value metadata-session-id metadata-value-copyable">{{ data.messageRequestId }}</span>
+          <button class="metadata-copy-btn" @click.stop="copyValue(data.messageRequestId, $event)" :title="t('chat.metadata.copy')">
+            <Copy :size="13" />
+          </button>
+        </div>
+      </div>
       <div v-if="data.inputTokens" class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.inputTokens') }}</span>
         <span class="metadata-value">{{ data.inputTokens.toLocaleString() }}</span>
@@ -61,6 +74,22 @@
       <div v-if="data.cachedWriteTokens" class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.cachedWriteTokens') }}</span>
         <span class="metadata-value">{{ data.cachedWriteTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.cacheCreationTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cacheCreationTokens') }}</span>
+        <span class="metadata-value">{{ data.cacheCreationTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="data.cacheMissTokens" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cacheMissTokens') }}</span>
+        <span class="metadata-value">{{ data.cacheMissTokens.toLocaleString() }}</span>
+      </div>
+      <div v-if="metadataCacheHitRate !== null" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.cacheHitRate') }}</span>
+        <span class="metadata-value">{{ metadataCacheHitRate.toFixed(1) }}%</span>
+      </div>
+      <div v-if="data.credit" class="metadata-item">
+        <span class="metadata-label">{{ t('chat.metadata.credit') }}</span>
+        <span class="metadata-value">{{ Number(data.credit).toFixed(4) }}</span>
       </div>
       <div v-if="data.thoughtTokens" class="metadata-item">
         <span class="metadata-label">{{ t('chat.metadata.thoughtTokens') }}</span>
@@ -159,6 +188,7 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { Copy, Info } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import ModalDialog from '@/components/common/ModalDialog.vue'
@@ -167,7 +197,7 @@ import { formatDuration, formatRelativeTime } from '@/utils/format.ts'
 
 const { t } = useI18n()
 
-defineProps({
+const props = defineProps({
   show: Boolean,
   data: { type: Object, default: () => ({}) },
   backend: String,
@@ -197,6 +227,16 @@ function catLabel(key) {
   const i18nKey = map[key]
   return i18nKey ? t(i18nKey) : key
 }
+
+// Cache hit rate = hit / (hit + miss). Null when neither side is reported.
+const metadataCacheHitRate = computed(() => {
+  const hit = Number(props.data?.cacheHitTokens) || 0
+  const miss = Number(props.data?.cacheMissTokens) || 0
+  if (hit <= 0 && miss <= 0) return null
+  const total = hit + miss
+  if (total <= 0) return 0
+  return (hit / total) * 100
+})
 
 function copyValue(value, event) {
   const wrap = event.currentTarget.closest('.metadata-value-wrap') || event.currentTarget
