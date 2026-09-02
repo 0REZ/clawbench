@@ -901,7 +901,7 @@ type ACPConn struct {
 	metaMu sync.Mutex
 	// metaAccum holds the merged _meta extensions observed during the turn
 	// (CodeBuddy usage/trace/category). Consumed when emitting the final
-	// metadata event in emitTurnMetadata and cleared each Prompt.
+	// metadata event in emitPromptResponseUsage and cleared each Prompt.
 	metaAccum *metaExtraction
 
 	// skillsPrompt is the pre-built system prompt section for CodeBuddy skills,

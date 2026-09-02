@@ -337,11 +337,11 @@ export function clearThinkingEffortState() {
  *  Writes to the per-session cache — does not affect the displayed
  *  values unless the target session is the current one.
  *  Extended params cover per-agent _meta extensions (CodeBuddy cache detail
- *  + credit + usageByCategory); undefined keeps the previous value. */
+ *  + credit + usageByCategory); a missing value resets the field (each
+ *  usage_update is a full snapshot). */
 export function updateUsageState(used: number, size: number, cost?: number, currency?: string, sessionId?: string, inputTokens?: number, outputTokens?: number, totalTokens?: number, cachedReadTokens?: number, cachedWriteTokens?: number, thoughtTokens?: number, cacheCreationTokens?: number, cacheHitTokens?: number, cacheMissTokens?: number, credit?: number, usageByCategory?: Record<string, number>) {
   const key = sessionId || currentSessionId.value
   if (!key) return
-  const prev = usageStateCache.get(key)
   usageStateCache.set(key, {
     used, size,
     inputTokens: inputTokens ?? 0,
@@ -352,11 +352,15 @@ export function updateUsageState(used: number, size: number, cost?: number, curr
     thoughtTokens: thoughtTokens ?? 0,
     cost: cost ?? 0,
     currency: currency ?? '',
-    cacheCreationTokens: cacheCreationTokens ?? prev?.cacheCreationTokens ?? 0,
-    cacheHitTokens: cacheHitTokens ?? prev?.cacheHitTokens ?? 0,
-    cacheMissTokens: cacheMissTokens ?? prev?.cacheMissTokens ?? 0,
-    credit: credit ?? prev?.credit ?? 0,
-    usageByCategory: usageByCategory ?? prev?.usageByCategory,
+    // Per-agent _meta extensions: each usage_update is a full snapshot, so a
+    // missing field resets to zero/empty (same semantics as the fields above).
+    // Otherwise stale cache/credit/category from a previous turn would linger
+    // and the "render by value" UI would show outdated data.
+    cacheCreationTokens: cacheCreationTokens ?? 0,
+    cacheHitTokens: cacheHitTokens ?? 0,
+    cacheMissTokens: cacheMissTokens ?? 0,
+    credit: credit ?? 0,
+    usageByCategory: usageByCategory,
   })
   usageStateVersion.value++
 }

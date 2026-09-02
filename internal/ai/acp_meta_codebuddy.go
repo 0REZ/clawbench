@@ -28,7 +28,6 @@ const (
 	metaKeyCodeBuddyTraceID      = "codebuddy.ai/traceId"
 	metaKeyCodeBuddyMessageID    = "codebuddy.ai/messageId"
 	metaKeyCodeBuddyReqModelID   = "codebuddy.ai/requestModelId"
-	metaKeyCodeBuddyReqModelName = "codebuddy.ai/requestModelName"
 	metaKeyCodeBuddyRespModelID  = "codebuddy.ai/responseModelId"
 	metaKeyCodeBuddyFinishReason = "codebuddy.ai/finishReason"
 	metaKeyCodeBuddyOutcome      = "codebuddy.ai/outcome"
@@ -59,7 +58,9 @@ func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
 		// Also accept cache_read_input_tokens as a cache-read source.
 		u.CachedReadTokens = metaMaxInt(u.CachedReadTokens, metaInt(m["cache_read_input_tokens"]))
 		if u.InputTokens != 0 || u.OutputTokens != 0 || u.TotalTokens != 0 ||
-			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.Credit != 0 {
+			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 ||
+			u.CacheCreationTokens != 0 || u.CacheHitTokens != 0 || u.CacheMissTokens != 0 ||
+			u.ThoughtTokens != 0 || u.Credit != 0 {
 			u.Present = true
 		}
 		ext.Usage = u
@@ -81,15 +82,14 @@ func extractCodeBuddyMeta(meta map[string]any) *metaExtraction {
 
 	// Trace/identity namespace.
 	t := &metaTrace{
-		RequestID:        metaString(meta[metaKeyCodeBuddyRequestID]),
-		TraceID:          metaString(meta[metaKeyCodeBuddyTraceID]),
-		MessageID:        metaString(meta[metaKeyCodeBuddyMessageID]),
-		RequestModelID:   metaString(meta[metaKeyCodeBuddyReqModelID]),
-		RequestModelName: metaString(meta[metaKeyCodeBuddyReqModelName]),
-		ResponseModelID:  metaString(meta[metaKeyCodeBuddyRespModelID]),
-		FinishReason:     metaString(meta[metaKeyCodeBuddyFinishReason]),
-		Outcome:          metaString(meta[metaKeyCodeBuddyOutcome]),
-		AgentPhase:       metaString(meta[metaKeyCodeBuddyAgentPhase]),
+		RequestID:       metaString(meta[metaKeyCodeBuddyRequestID]),
+		TraceID:         metaString(meta[metaKeyCodeBuddyTraceID]),
+		MessageID:       metaString(meta[metaKeyCodeBuddyMessageID]),
+		RequestModelID:  metaString(meta[metaKeyCodeBuddyReqModelID]),
+		ResponseModelID: metaString(meta[metaKeyCodeBuddyRespModelID]),
+		FinishReason:    metaString(meta[metaKeyCodeBuddyFinishReason]),
+		Outcome:         metaString(meta[metaKeyCodeBuddyOutcome]),
+		AgentPhase:      metaString(meta[metaKeyCodeBuddyAgentPhase]),
 	}
 	if t.HasData() {
 		ext.Trace = t

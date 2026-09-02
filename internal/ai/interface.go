@@ -69,10 +69,19 @@ type Metadata struct {
 	// Extended token usage — populated from per-agent _meta extensions and the
 	// (UNSTABLE) PromptResponse.Usage. Mirrors UsageState so the message-level
 	// metadata JSON and chat_metadata table can persist the full picture.
-	TotalTokens       int   `json:"totalTokens,omitempty"`
-	CachedReadTokens  int   `json:"cachedReadTokens,omitempty"`
-	CachedWriteTokens int   `json:"cachedWriteTokens,omitempty"`
-	ThoughtTokens     int   `json:"thoughtTokens,omitempty"`
+	TotalTokens       int `json:"totalTokens,omitempty"`
+	CachedReadTokens  int `json:"cachedReadTokens,omitempty"`
+	CachedWriteTokens int `json:"cachedWriteTokens,omitempty"`
+	ThoughtTokens     int `json:"thoughtTokens,omitempty"`
+
+	// Cache split detail + credit — CodeBuddy OpenAI-style _meta.usage fields
+	// (prompt_cache_hit_tokens / prompt_cache_miss_tokens /
+	// cache_creation_input_tokens / credit). Message-level counterpart of the
+	// UsageState fields; other agents leave them zero.
+	CacheCreationTokens int     `json:"cacheCreationTokens,omitempty"`
+	CacheHitTokens      int     `json:"cacheHitTokens,omitempty"`
+	CacheMissTokens     int     `json:"cacheMissTokens,omitempty"`
+	Credit              float64 `json:"credit,omitempty"`
 
 	// UsageByCategory breaks the context window down by component. Currently
 	// only CodeBuddy reports it (_meta.codebuddy.ai/usageByCategory); other
@@ -291,10 +300,10 @@ type UsageState struct {
 	// Extended cache/credit details — populated from per-agent _meta extensions.
 	// CodeBuddy reports these inside session/update._meta.usage (OpenAI-style);
 	// other agents leave them zero.
-	CacheCreationTokens int `json:"cacheCreationTokens,omitempty"` // cache_creation_input_tokens
-	CacheHitTokens      int `json:"cacheHitTokens,omitempty"`      // prompt_cache_hit_tokens
-	CacheMissTokens     int `json:"cacheMissTokens,omitempty"`     // prompt_cache_miss_tokens
-	Credit              float64 `json:"credit,omitempty"`          // CodeBuddy credit consumed for the turn
+	CacheCreationTokens int     `json:"cacheCreationTokens,omitempty"` // cache_creation_input_tokens
+	CacheHitTokens      int     `json:"cacheHitTokens,omitempty"`      // prompt_cache_hit_tokens
+	CacheMissTokens     int     `json:"cacheMissTokens,omitempty"`     // prompt_cache_miss_tokens
+	Credit              float64 `json:"credit,omitempty"`              // CodeBuddy credit consumed for the turn
 
 	// UsageByCategory breaks the context window down by component. Currently
 	// only CodeBuddy reports it (_meta.codebuddy.ai/usageByCategory).

@@ -47,15 +47,14 @@ type metaTokenUsage struct {
 
 // metaTrace is the canonical trace/identity detail extracted from a _meta payload.
 type metaTrace struct {
-	RequestID        string
-	TraceID          string
-	MessageID        string
-	RequestModelID   string
-	RequestModelName string
-	ResponseModelID  string
-	FinishReason     string
-	Outcome          string
-	AgentPhase       string
+	RequestID       string
+	TraceID         string
+	MessageID       string
+	RequestModelID  string
+	ResponseModelID string
+	FinishReason    string
+	Outcome         string
+	AgentPhase      string
 }
 
 // HasData reports whether any trace field was found.
@@ -180,9 +179,6 @@ func metaMergeTrace(dst *metaTrace, src *metaTrace) {
 	if dst.RequestModelID == "" {
 		dst.RequestModelID = src.RequestModelID
 	}
-	if dst.RequestModelName == "" {
-		dst.RequestModelName = src.RequestModelName
-	}
 	if dst.ResponseModelID == "" {
 		dst.ResponseModelID = src.ResponseModelID
 	}
@@ -305,6 +301,18 @@ func applyMetaExtractionToMetadata(meta *Metadata, ext *metaExtraction) {
 		}
 		if u.ThoughtTokens != 0 {
 			meta.ThoughtTokens = u.ThoughtTokens
+		}
+		if u.CacheCreationTokens != 0 {
+			meta.CacheCreationTokens = u.CacheCreationTokens
+		}
+		if u.CacheHitTokens != 0 {
+			meta.CacheHitTokens = u.CacheHitTokens
+		}
+		if u.CacheMissTokens != 0 {
+			meta.CacheMissTokens = u.CacheMissTokens
+		}
+		if u.Credit != 0 {
+			meta.Credit = u.Credit
 		}
 	}
 	if cat := ext.Category; cat != nil && cat.Present {

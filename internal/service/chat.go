@@ -1743,18 +1743,10 @@ func buildContextStatePatch(event ai.StreamEvent) map[string]string {
 		if event.Usage == nil {
 			return nil
 		}
-		usageJSON, err := json.Marshal(UsageStatePersist{
-			Used:              event.Usage.Used,
-			Size:              event.Usage.Size,
-			InputTokens:       event.Usage.InputTokens,
-			OutputTokens:      event.Usage.OutputTokens,
-			TotalTokens:       event.Usage.TotalTokens,
-			CachedReadTokens:  event.Usage.CachedReadTokens,
-			CachedWriteTokens: event.Usage.CachedWriteTokens,
-			ThoughtTokens:     event.Usage.ThoughtTokens,
-			Cost:              event.Usage.Cost,
-			Currency:          event.Usage.Currency,
-		})
+		// UsageStatePersist is a type alias of ai.UsageState, so marshalling the
+		// event payload directly carries every field (including the per-agent
+		// _meta extensions: cache hit/miss/creation, credit, usageByCategory).
+		usageJSON, err := json.Marshal(event.Usage)
 		if err != nil {
 			slog.Warn("persist context state: marshal usage", "session", event.Usage.TotalTokens, "error", err)
 			return nil
