@@ -3,6 +3,7 @@ package handler
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"clawbench/internal/model"
@@ -128,7 +129,11 @@ func ServeChatCount(w http.ResponseWriter, r *http.Request) {
 		writeLocalizedError(w, r, model.Forbidden(nil, "AccessDenied"))
 		return
 	}
-	count := service.GetChatMessageCount(sessionID)
+	count, err := service.GetChatMessageCount(sessionID)
+	if err != nil {
+		slog.Warn("ServeChatCount: GetChatMessageCount failed, returning 0", "session_id", sessionID, "err", err)
+		count = 0
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": count})
 }
 

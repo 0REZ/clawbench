@@ -257,7 +257,7 @@ func (p *StreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 		state := p.toolState()
 		events := parseClaudeAssistantToolUse(&msg, &state)
 		for _, ev := range events {
-			ch <- ev
+			emitStreamEvent(ch, "cli", ev)
 		}
 		p.syncToolState(state)
 		if msg.Message != nil {
@@ -336,7 +336,7 @@ func (p *StreamParser) ParseLine(line string, ch chan<- StreamEvent) {
 	case "user":
 		events := parseClaudeUserToolResult(&msg)
 		for _, ev := range events {
-			ch <- ev
+			emitStreamEvent(ch, "cli", ev)
 		}
 
 	case "stream_event":

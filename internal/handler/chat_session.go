@@ -248,8 +248,13 @@ func ArchiveSession(w http.ResponseWriter, r *http.Request) {
 	// Use GetFinalizedMessageCount to exclude streaming placeholder rows,
 	// so a session with only a streaming row (e.g. interrupted mid-generation)
 	// is still considered empty.
-	msgCount := service.GetFinalizedMessageCount(sessionID)
-	if msgCount == 0 {
+	msgCount, err := service.GetFinalizedMessageCount(sessionID)
+	if err != nil {
+		// Count failure must NOT fall through to the hard-delete branch — the
+		// session may have real content and an error returning 0 must never
+		// destroy it. Fall back to a regular archive (soft delete).
+		slog.Error("archiving session: GetFinalizedMessageCount failed, falling back to soft archive", "session_id", sessionID, "err", err)
+	} else if msgCount == 0 {
 		slog.Info("archiving empty session → hard-delete", "session_id", sessionID)
 
 		// Close (but do NOT ACP-delete) the agent connection. The agent-side

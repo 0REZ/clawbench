@@ -75,6 +75,16 @@ func handleQueueEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the agent override (ISS-246): an unknown agentId would otherwise
+	// silently fall back to the CLI backend and run with the wrong agent/config.
+	// Empty agentId keeps the existing default-agent behavior.
+	if req.AgentID != "" {
+		if _, _, _, _, ok := resolveAgentConfig(req.AgentID); !ok {
+			writeLocalizedErrorf(w, r, http.StatusBadRequest, "InvalidAgentID")
+			return
+		}
+	}
+
 	// Validate file paths: reject traversal outside the project and resolve to
 	// absolute paths with isDir from os.Stat, matching the POST /api/ai/chat
 	// path. Without this the unified endpoint would persist raw (possibly

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"clawbench/internal/model"
 	"clawbench/internal/service"
 	"clawbench/internal/ws"
 
@@ -476,6 +477,61 @@ func TestQueueHandler_Enqueue_MissingProjectCookie(t *testing.T) {
 	w := callHandler(QueueHandler, req)
 
 	assertStatus(t, w, http.StatusForbidden)
+}
+
+// TestQueueHandler_Enqueue_InvalidAgentID verifies that POST /api/ai/queue
+// rejects an unknown agentId with 400 instead of silently falling back to the
+// CLI backend with the wrong agent/config (ISS-246).
+func TestQueueHandler_Enqueue_InvalidAgentID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	sessionID := "q-enqueue-bad-agent"
+	createQueueSession(t, env, sessionID)
+	defer service.ClearQueuedMessages(sessionID)
+
+	body := map[string]any{
+		"message": "hello",
+		"agentId": "nonexistent-agent",
+	}
+	req := newRequest(t, http.MethodPost, "/api/ai/queue?session_id="+sessionID, body)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(QueueHandler, req)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	// The message must not be persisted (nothing enqueued).
+	assert.Zero(t, service.GetQueuedCount(sessionID))
+}
+
+// TestQueueHandler_Enqueue_ValidAgentID verifies that POST /api/ai/queue
+// accepts a registered agentId and runs the normal enqueue flow (ISS-246).
+func TestQueueHandler_Enqueue_ValidAgentID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Register an agent so resolveAgentConfig succeeds, mirroring
+	// TestServeForkSession_WithAgentID.
+	model.Agents["queue-test-agent"] = &model.Agent{ID: "queue-test-agent", Backend: "claude"}
+	t.Cleanup(func() { delete(model.Agents, "queue-test-agent") })
+
+	sessionID := "q-enqueue-good-agent"
+	createQueueSession(t, env, sessionID)
+	defer service.ClearQueuedMessages(sessionID)
+
+	body := map[string]any{
+		"message": "hello",
+		"agentId": "queue-test-agent",
+	}
+	req := newRequest(t, http.MethodPost, "/api/ai/queue?session_id="+sessionID, body)
+	req = withProjectCookie(req, env.ProjectDir)
+	w := callHandler(QueueHandler, req)
+
+	assertOK(t, w)
+	var result map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &result)
+	assert.Equal(t, true, result["ok"])
+
+	service.CancelSession(sessionID)
 }
 
 func TestQueueHandler_Get_MissingProjectCookie(t *testing.T) {

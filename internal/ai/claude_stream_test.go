@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // parseLine is a test helper that creates a StreamParser, parses one line, and returns the events.
@@ -1664,4 +1665,59 @@ func TestStreamParser_ResumeDedup_AssistantVerboseWithoutDelta(t *testing.T) {
 	if contentCount != 2 {
 		t.Errorf("expected 2 content events, got %d", contentCount)
 	}
+}
+
+// assertParseLineDoesNotBlock calls ParseLine with a full (capacity-0) channel
+// and asserts it returns within the timeout — a regression guard for the
+// assistant/user branches that used to send with a blocking `ch <- ev`.
+func assertParseLineDoesNotBlock(t *testing.T, line string) {
+	t.Helper()
+	ch := make(chan StreamEvent) // unbuffered — a blocking send would hang here
+	parser := &StreamParser{}
+	done := make(chan struct{})
+	go func() {
+		parser.ParseLine(line, ch)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ParseLine blocked on full stream channel (still uses blocking send?)")
+	}
+}
+
+func TestStreamParser_AssistantFullChannelDoesNotBlock(t *testing.T) {
+	// assistant message with a text + tool_use block → the events loop must use
+	// the non-blocking emitStreamEvent (drop + WARN) instead of `ch <- ev`.
+	msg := ClaudeStreamMessage{
+		Type: "assistant",
+		Message: &ClaudeStreamMessageBody{
+			Content: []ClaudeContentBlock{
+				{Type: "text", Text: "Hello"},
+				{Type: "tool_use", ID: "t1", Name: "Read", Input: json.RawMessage(`{"path":"a.go"}`)},
+			},
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	assertParseLineDoesNotBlock(t, string(data))
+}
+
+func TestStreamParser_UserFullChannelDoesNotBlock(t *testing.T) {
+	// user message with a tool_result block → same non-blocking guarantee.
+	msg := ClaudeStreamMessage{
+		Type: "user",
+		Message: &ClaudeStreamMessageBody{
+			Content: []ClaudeContentBlock{
+				{Type: "tool_result", ToolUseID: "t1", Content: json.RawMessage(`[{"type":"text","text":"result"}]`)},
+			},
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	assertParseLineDoesNotBlock(t, string(data))
 }

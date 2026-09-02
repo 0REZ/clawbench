@@ -2697,6 +2697,106 @@ func TestCancelSession_PushesWhenFirst(t *testing.T) {
 	assert.False(t, IsSessionRunning("session-cancel-first"))
 }
 
+// TestCancelSession_NoBroadcastAfterGoroutineCompleted verifies the ISS-247 fix:
+// when the session goroutine completes first (claiming the terminal guard and
+// broadcasting "completed"), a subsequent CancelSession must NOT broadcast a
+// contradictory "cancelled" session_update over WS — only the completed state may
+// reach the clients. Push dedup is unchanged (no second push either).
+func TestCancelSession_NoBroadcastAfterGoroutineCompleted(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-cancel-no-bc")
+	_ = db
+
+	require.True(t, TrySetSessionRunning("session-cancel-no-bc"))
+	t.Cleanup(func() { SetSessionRunning("session-cancel-no-bc", false, true) })
+	_, cancel := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-cancel-no-bc", cancel)
+	t.Cleanup(func() {
+		cancel()
+		UnregisterSessionCancel("session-cancel-no-bc")
+	})
+
+	mgr := ws.NewManagerForTest()
+	ws.SetManagerForTest(mgr)
+	t.Cleanup(func() { ws.SetManagerForTest(nil) })
+	// Disconnected subscription: broadcasts are captured in its replay buffer
+	// (within the 10s disconnected window), like other emit tests.
+	var writeMu sync.Mutex
+	sub := mgr.Subscribe(nil, &writeMu, "test-client-no-bc", "")
+	mgr.DisconnectClient("test-client-no-bc")
+
+	// Simulate the goroutine completing first: claim the terminal guard (the
+	// same claim the completed path makes) and broadcast "completed" exactly as
+	// markDoneAndSendFinal does — push enabled here so a pending_event is stored
+	// and the broadcast reaches the client buffer.
+	require.True(t, markTerminalPushDone("session-cancel-no-bc"))
+	emitSessionEvent("session-cancel-no-bc", statusCompleted, false, true, true)
+
+	// CancelSession after completion: must not broadcast "cancelled".
+	require.True(t, CancelSession("session-cancel-no-bc"))
+
+	buffered := sub.GetBufferedEvents()
+	require.NotEmpty(t, buffered, "expected the 'completed' broadcast to be buffered")
+	statuses := make([]string, 0, len(buffered))
+	for _, ev := range buffered {
+		if ev.Event != "session_update" {
+			continue
+		}
+		data, ok := ev.Data.(*ws.SessionUpdateData)
+		require.True(t, ok, "expected SessionUpdateData")
+		statuses = append(statuses, data.Status)
+	}
+	assert.Equal(t, []string{"completed"}, statuses,
+		"only the terminal 'completed' broadcast may reach clients; 'cancelled' must be suppressed")
+	assert.False(t, IsSessionRunning("session-cancel-no-bc"))
+}
+
+// TestCancelSession_BroadcastsAndPushesWhenFirst verifies the ISS-247 fix does
+// not regress normal cancellation: when CancelSession claims the terminal guard
+// (no goroutine completion first), the "cancelled" session_update IS broadcast
+// over WS and the push fires (one pending_event).
+func TestCancelSession_BroadcastsAndPushesWhenFirst(t *testing.T) {
+	db := setupPushNotificationTest(t, "session-cancel-first-bc")
+	_ = db
+
+	require.True(t, TrySetSessionRunning("session-cancel-first-bc"))
+	t.Cleanup(func() { SetSessionRunning("session-cancel-first-bc", false, true) })
+	_, cancel := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-cancel-first-bc", cancel)
+	t.Cleanup(func() {
+		cancel()
+		UnregisterSessionCancel("session-cancel-first-bc")
+	})
+
+	mgr := ws.NewManagerForTest()
+	ws.SetManagerForTest(mgr)
+	t.Cleanup(func() { ws.SetManagerForTest(nil) })
+	var writeMu sync.Mutex
+	sub := mgr.Subscribe(nil, &writeMu, "test-client-first-bc", "")
+	mgr.DisconnectClient("test-client-first-bc")
+
+	require.True(t, CancelSession("session-cancel-first-bc"))
+
+	// Push still fires for the first terminal state.
+	assert.Equal(t, 1, pendingEventCount(t, db), "CancelSession as the first terminal state must push 'cancelled'")
+
+	// The "cancelled" session_update IS broadcast.
+	buffered := sub.GetBufferedEvents()
+	require.NotEmpty(t, buffered, "expected the 'cancelled' broadcast to be buffered")
+	var found bool
+	for _, ev := range buffered {
+		if ev.Event != "session_update" {
+			continue
+		}
+		data, ok := ev.Data.(*ws.SessionUpdateData)
+		require.True(t, ok, "expected SessionUpdateData")
+		if data.Status == "cancelled" {
+			found = true
+		}
+	}
+	assert.True(t, found, "a normal cancel must broadcast 'cancelled' over WS")
+	assert.False(t, IsSessionRunning("session-cancel-first-bc"))
+}
+
 // --- getSessionResponsePreview: query error path (lines 93-96) ---
 
 func TestGetSessionResponsePreview_QueryError(t *testing.T) {

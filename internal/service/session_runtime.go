@@ -50,7 +50,7 @@ const previewAssistantContentLimit = 20
 // EmitSessionEvent broadcasts a session_update event to connected clients.
 // toolName and toolInput are optional and only used for "permission_pending" status.
 func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolNameAndInput ...string) {
-	emitSessionEvent(sessionID, status, hasNewMessages, true, toolNameAndInput...)
+	emitSessionEvent(sessionID, status, hasNewMessages, true, true, toolNameAndInput...)
 }
 
 // EmitSessionEventWSOnly broadcasts a session_update event to connected clients
@@ -60,14 +60,18 @@ func EmitSessionEvent(sessionID, status string, hasNewMessages bool, toolNameAnd
 // client (including ones that missed the stream-level "done" event) can clear the
 // session's running flag.
 func EmitSessionEventWSOnly(sessionID, status string, hasNewMessages bool) {
-	emitSessionEvent(sessionID, status, hasNewMessages, false)
+	emitSessionEvent(sessionID, status, hasNewMessages, false, true)
 }
 
-// emitSessionEvent is EmitSessionEvent with an explicit push control. Callers
-// that manage their own terminal-push guard (e.g. CancelSession) pass pushEnabled
-// based on whether they won the guard, so a duplicate "cancelled" push is avoided
-// while the WS broadcast always happens.
-func emitSessionEvent(sessionID, status string, hasNewMessages bool, pushEnabled bool, toolNameAndInput ...string) {
+// emitSessionEvent is EmitSessionEvent with explicit push/broadcast control.
+// Callers that manage their own terminal-push guard (e.g. CancelSession) pass
+// pushEnabled based on whether they won the guard, so a duplicate "cancelled" push
+// is avoided. wsBroadcastEnabled additionally gates the live WS broadcast (the
+// replay/pending-event buffer path is unaffected — it is only used when pushEnabled
+// is true). CancelSession turns the broadcast OFF when it loses the terminal guard
+// (the goroutine already broadcast "completed"), so clients never see a stale
+// "cancelled" overwriting a terminal "completed".
+func emitSessionEvent(sessionID, status string, hasNewMessages bool, pushEnabled bool, wsBroadcastEnabled bool, toolNameAndInput ...string) {
 	mgr := ws.GetManager()
 	if mgr == nil {
 		return
@@ -125,7 +129,9 @@ func emitSessionEvent(sessionID, status string, hasNewMessages bool, pushEnabled
 	if model.ConfigInstance.PushMode != "disabled" && pushEnabled {
 		StoreNotifiableEvent(msg)
 	}
-	mgr.BroadcastEvent(msg)
+	if wsBroadcastEnabled {
+		mgr.BroadcastEvent(msg)
+	}
 
 	if !pushEnabled {
 		return
@@ -567,9 +573,12 @@ func CancelSession(sessionID string) bool {
 	// Claim the terminal push slot BEFORE emitting. If a concurrent terminal path
 	// (the goroutine's done) already claimed it, we lose the guard — suppress the
 	// "cancelled" push (which would otherwise contradict the "completed" push the
-	// goroutine already sent) while still broadcasting "cancelled" over WS.
+	// goroutine already sent). Losing the guard also means a terminal "completed"
+	// session_update was already broadcast, so the WS "cancelled" broadcast is
+	// suppressed too: broadcasting it would overwrite the client's terminal
+	// "completed" state with a contradictory "cancelled" (ISS-247).
 	wonPush := markTerminalPushDone(sessionID)
-	emitSessionEvent(sessionID, "cancelled", false, wonPush)
+	emitSessionEvent(sessionID, "cancelled", false, wonPush, wonPush)
 
 	// Mark session as not running (skip completed event — we already sent "cancelled")
 	SetSessionRunning(sessionID, false, true)

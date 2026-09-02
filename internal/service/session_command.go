@@ -223,7 +223,7 @@ func LaunchSessionExecution(cfg LaunchConfig) {
 				EmitSessionPushNotification(sessionID, statusCompleted)
 				// Global WS broadcast so all clients (even ones that missed the
 				// stream "done") clear the session's running flag.
-				emitSessionEvent(sessionID, statusCompleted, false, false)
+				emitSessionEvent(sessionID, statusCompleted, false, false, true)
 			}
 		}
 
@@ -433,6 +433,17 @@ func BuildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		systemPrompt = appendMediaPrompt(systemPrompt)
 	}
 
+	// HasConversationHistory drives the amnesia-prevention fallback in
+	// acp_backend: true blocks silent fallback to NewSession when a session
+	// may hold history. On count failure, conservatively assume history exists
+	// rather than risk dropping the session context.
+	hasHistory := true
+	if count, err := GetChatMessageCount(sessionID); err == nil {
+		hasHistory = count > 0
+	} else {
+		slog.Warn("BuildChatRequest: GetChatMessageCount failed, assuming conversation history", "session_id", sessionID, "err", err)
+	}
+
 	return ai.ChatRequest{
 		Prompt:                 prompt,
 		SessionID:              effectiveSessionID,
@@ -446,7 +457,7 @@ func BuildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		Resume:                 resume,
 		HasAttachments:         hasAttachments,
 		AssistantMessageCount:  GetAssistantMessageCount(sessionID),
-		HasConversationHistory: GetChatMessageCount(sessionID) > 0,
+		HasConversationHistory: hasHistory,
 		ForkContext:            forkContext,
 	}
 }

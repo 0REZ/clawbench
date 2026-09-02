@@ -1327,16 +1327,57 @@ func TestGetChatMessageCount(t *testing.T) {
 	setupDB(t)
 	sid := helperCreateSession(t, "/project", "claude", "Test")
 	// Initially 0
-	assert.Equal(t, 0, service.GetChatMessageCount(sid))
+	count, err := service.GetChatMessageCount(sid)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
 	// Add messages
 	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
 	service.AddChatMessage("/project", "claude", sid, "assistant", "Hi", nil, false, "NewSession")
-	assert.Equal(t, 2, service.GetChatMessageCount(sid))
+	count, err = service.GetChatMessageCount(sid)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, count)
 }
 
 func TestGetChatMessageCount_NonExistent(t *testing.T) {
 	setupDB(t)
-	assert.Equal(t, 0, service.GetChatMessageCount("non-existent"))
+	count, err := service.GetChatMessageCount("non-existent")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestGetChatMessageCount_DBError(t *testing.T) {
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Test")
+	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
+
+	origDB := service.UnsafeDBForTest()
+	closedDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	closedDB.Close()
+	cleanup := service.SetDBForTest(origDB, closedDB)
+
+	count, err := service.GetChatMessageCount(sid)
+	assert.Error(t, err, "count on a closed DB must surface the error, not silently return 0")
+	assert.Equal(t, 0, count)
+
+	cleanup()
+	assert.Same(t, origDB, service.UnsafeDBForTest(), "DB handles must be restored after the test")
+}
+
+func TestGetFinalizedMessageCount_DBError(t *testing.T) {
+	setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Test")
+	service.AddChatMessage("/project", "claude", sid, "user", "Hello", nil, false, "NewSession")
+
+	closedDB, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	closedDB.Close()
+	cleanup := service.SetDBForTest(service.UnsafeDBForTest(), closedDB)
+	defer cleanup()
+
+	count, err := service.GetFinalizedMessageCount(sid)
+	assert.Error(t, err, "finalized count on a closed DB must surface the error, not silently return 0")
+	assert.Equal(t, 0, count)
 }
 
 // ---------- UpdateLastRead ----------
@@ -3617,6 +3658,36 @@ func TestAddQueuedMessage_EmptyQueueID(t *testing.T) {
 	err = service.UnsafeDBForTest().QueryRow("SELECT queue_id FROM chat_history WHERE id = ?", id).Scan(&queueID)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, queueID, "auto-generated queue_id should not be empty")
+}
+
+// TestAddQueuedMessage_RollbackOnFailure verifies ISS-237: when the shared
+// transaction fails after the chat_history INSERT (simulated here by dropping
+// the table after enqueue, which breaks the follow-up UPDATE chat_sessions
+// statement), the whole insert is rolled back and NO orphan row (queued=0,
+// empty queue_id) is left behind as a normal user message. Before the fix,
+// AddChatMessage's INSERT committed first and a subsequent non-transactional
+// UPDATE failed, orphaning the row permanently.
+func TestAddQueuedMessage_RollbackOnFailure(t *testing.T) {
+	db := setupDB(t)
+	sid := helperCreateSession(t, "/project", "claude", "Queue Rollback")
+
+	// Drop the sessions table inside the test's raw DB connection. WAL
+	// semantics give the test connection its own snapshot: DDL issued here
+	// becomes visible to the next connection-level statement, so the UPDATE
+	// chat_sessions inside AddQueuedMessage's transaction fails with "no such
+	// table: chat_sessions" while the INSERT (only touching chat_history)
+	// still succeeds.
+	_, err := db.Exec("DROP TABLE chat_sessions")
+	require.NoError(t, err)
+
+	_, err = service.AddQueuedMessage("/project", "claude", sid, "orphan me", nil, "q-fail", "")
+	assert.Error(t, err, "AddQueuedMessage must surface the transaction failure")
+
+	// The chat_history row must not exist at all — no orphan with queued=0.
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM chat_history WHERE session_id = ?", sid).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count, "failed AddQueuedMessage must leave no orphan chat_history row")
 }
 
 // TestDequeueQueuedMessage_FIFO verifies messages are dequeued in insertion order.

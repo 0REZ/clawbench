@@ -39,11 +39,53 @@ func emitDrainEvent(sessionID string, event ai.StreamEvent) {
 	ws.EmitToSession(sessionID, event)
 }
 
+// maxDequeueRetries bounds how many consecutive DB dequeue failures the drain
+// loop tolerates (5 × 100ms ≈ 500ms) before giving up on the queue. A brief
+// transient DB hiccup is retried without losing messages; a persistent failure
+// aborts the loop so the session is not stuck in "loading" forever with the
+// queue silently dead.
+const maxDequeueRetries = 5
+
+// dequeueQueuedMessage is an indirection over DequeueQueuedMessage so tests can
+// inject persistent/transient failures into the drain loop.
+var dequeueQueuedMessage = DequeueQueuedMessage
+
+// abortDrain is the drain loop's failure exit after dequeue keeps failing past
+// the retry window. It mirrors the user-cancel branch: collect queue IDs,
+// clear the queue so nothing is left stuck, emit queue_cancel so the frontend
+// removes pending bubbles, then send a terminal error event so the session
+// leaves the loading state with a visible failure instead of hanging.
+func abortDrain(cfg DrainConfig, cause error) {
+	queueIDs, _ := GetQueuedQueueIDs(cfg.SessionID)
+	_ = ClearQueuedMessages(cfg.SessionID)
+	if len(queueIDs) > 0 {
+		emitDrainEvent(cfg.SessionID, ai.StreamEvent{
+			Type: "queue_cancel",
+			QueueEvent: &ai.QueueEventData{
+				SessionID: cfg.SessionID,
+				QueueIDs:  queueIDs,
+			},
+		})
+	}
+	slog.Error("drain: dequeue kept failing past retry window, aborting queue",
+		slog.String("session", cfg.SessionID),
+		slog.String("error", cause.Error()))
+	cfg.MarkDoneAndSendFinal(ai.StreamEvent{
+		Type:  eventTypeError,
+		Error: "drain: dequeue failed: " + cause.Error(),
+	})
+}
+
 // RunDrainLoop runs the complete drain loop after an initial stream execution.
 // It checks terminal conditions, dequeues messages from chat_history (queued=1),
 // and executes them. The loop continues until the queue is empty or a terminal
 // condition is met.
 func RunDrainLoop(cfg DrainConfig, result DrainResult) {
+	// Consecutive dequeue failures since the last successful drain. Reset on
+	// every successful dequeue (or empty-queue done), so transient DB blips
+	// that recover are retried without losing messages.
+	dequeueFailures := 0
+
 	for {
 		// Check terminal conditions
 		if result.CancelReason == cancelReasonUser {
@@ -79,11 +121,18 @@ func RunDrainLoop(cfg DrainConfig, result DrainResult) {
 		}
 
 		// Normal completion — check DB queue for next message
-		msg, ok, err := DequeueQueuedMessage(cfg.SessionID)
+		msg, ok, err := dequeueQueuedMessage(cfg.SessionID)
 		if err != nil {
 			// Real DB error — don't exit as if empty (would silently lose the
-			// message). Brief retry window, then check queue again.
+			// message). Retry briefly for transient DB blips; if the failure
+			// persists past the retry window, abort the queue with an explicit
+			// error instead of spinning forever.
+			dequeueFailures++
 			slog.Error("drain: dequeue failed", slog.String("session", cfg.SessionID), slog.String("error", err.Error()))
+			if dequeueFailures >= maxDequeueRetries {
+				abortDrain(cfg, err)
+				return
+			}
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
@@ -91,9 +140,14 @@ func RunDrainLoop(cfg DrainConfig, result DrainResult) {
 			// Wait for enqueue signal instead of blind sleep
 			ok = WaitForEnqueue(cfg.SessionID, 100*time.Millisecond)
 			if ok {
-				msg, ok, err = DequeueQueuedMessage(cfg.SessionID)
+				msg, ok, err = dequeueQueuedMessage(cfg.SessionID)
 				if err != nil {
+					dequeueFailures++
 					slog.Error("drain: dequeue failed", slog.String("session", cfg.SessionID), slog.String("error", err.Error()))
+					if dequeueFailures >= maxDequeueRetries {
+						abortDrain(cfg, err)
+						return
+					}
 					time.Sleep(100 * time.Millisecond)
 					continue
 				}
@@ -104,6 +158,10 @@ func RunDrainLoop(cfg DrainConfig, result DrainResult) {
 			cfg.MarkDoneAndSendFinal(ai.StreamEvent{Type: eventTypeDone})
 			return
 		}
+
+		// A message was successfully dequeued — the DB recovered, reset the
+		// failure counter.
+		dequeueFailures = 0
 
 		// Queue has next message — drain it (row already persisted with queued=0)
 		slog.Info("drain: draining queued message",

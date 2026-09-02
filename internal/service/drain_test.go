@@ -444,3 +444,87 @@ func TestClearQueuedMessages_DeletesRows(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Zero(t, remaining, "cleared queued messages must be deleted, not kept as queued=0")
 }
+
+func TestDrainLoop_PersistentDequeueError_AbortsAfterRetryWindow(t *testing.T) {
+	setupDrainTest()
+	sessionID := "drain-test-persistent-err"
+	setupDrainSession(t, sessionID)
+	defer ClearQueuedMessages(sessionID)
+
+	// A queued message exists so the abort path has a queue to clear.
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "pending", nil, "q-err", "")
+
+	// Replace the dequeue with one that always fails.
+	origDequeue := dequeueQueuedMessage
+	dequeueQueuedMessage = func(sessionID string) (model.ChatMessage, bool, error) {
+		return model.ChatMessage{}, false, assert.AnError
+	}
+	defer func() { dequeueQueuedMessage = origDequeue }()
+
+	var finalEvent ai.StreamEvent
+	cfg := DrainConfig{
+		SessionID:   sessionID,
+		ProjectPath: "/test",
+		BackendName: "codebuddy",
+		ExecuteRunWithMessage: func(msg model.ChatMessage) DrainResult {
+			return DrainResult{}
+		},
+		MarkDoneAndSendFinal: func(event ai.StreamEvent) {
+			finalEvent = event
+		},
+	}
+
+	start := time.Now()
+	RunDrainLoop(cfg, DrainResult{})
+
+	// Must terminate with an error event instead of spinning forever.
+	assert.Equal(t, eventTypeError, finalEvent.Type)
+	assert.Contains(t, finalEvent.Error, "dequeue failed")
+	// Bounded: 5 retries × 100ms ≈ 500ms, far below an infinite loop.
+	assert.Less(t, time.Since(start), 5*time.Second, "drain loop must not spin forever on persistent dequeue failure")
+	// Queue was cleared by the abort path so no stuck pending message survives.
+	assert.Equal(t, 0, GetQueuedCount(sessionID))
+}
+
+func TestDrainLoop_TransientDequeueError_RetriesAndRecovers(t *testing.T) {
+	setupDrainTest()
+	sessionID := "drain-test-transient-err"
+	setupDrainSession(t, sessionID)
+	defer ClearQueuedMessages(sessionID)
+
+	_, _ = AddQueuedMessage("/test", "codebuddy", sessionID, "msg", nil, "q-tx", "")
+
+	// Fail the first 2 dequeue calls, then succeed — simulating a brief DB blip.
+	origDequeue := dequeueQueuedMessage
+	var calls int
+	dequeueQueuedMessage = func(sid string) (model.ChatMessage, bool, error) {
+		calls++
+		if calls <= 2 {
+			return model.ChatMessage{}, false, assert.AnError
+		}
+		return origDequeue(sid)
+	}
+	defer func() { dequeueQueuedMessage = origDequeue }()
+
+	var executeCount int32
+	var finalEvent ai.StreamEvent
+	cfg := DrainConfig{
+		SessionID:   sessionID,
+		ProjectPath: "/test",
+		BackendName: "codebuddy",
+		ExecuteRunWithMessage: func(msg model.ChatMessage) DrainResult {
+			atomic.AddInt32(&executeCount, 1)
+			return DrainResult{}
+		},
+		MarkDoneAndSendFinal: func(event ai.StreamEvent) {
+			finalEvent = event
+		},
+	}
+
+	RunDrainLoop(cfg, DrainResult{})
+
+	// Transient failures are absorbed; the queued message still executes and
+	// the loop finishes with a normal done.
+	assert.Equal(t, int32(1), atomic.LoadInt32(&executeCount))
+	assert.Equal(t, "done", finalEvent.Type)
+}

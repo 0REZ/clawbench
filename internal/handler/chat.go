@@ -927,6 +927,15 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		}
 	}
 
+	// HasConversationHistory: conservative on error (true = has history) so a
+	// DB hiccup can never silently reset the session via amnesia prevention.
+	hasConversationHistory := true
+	if count, err := service.GetChatMessageCount(sessionID); err == nil {
+		hasConversationHistory = count > 0
+	} else {
+		slog.Warn("buildChatRequest: GetChatMessageCount failed, assuming conversation history", "session_id", sessionID, "err", err)
+	}
+
 	return ai.ChatRequest{
 		Prompt:                 prompt,
 		SessionID:              effectiveSessionID,
@@ -940,7 +949,7 @@ func buildChatRequest(prompt, sessionID, projectPath, backendName, agentID, mode
 		Resume:                 resume,
 		HasAttachments:         hasAttachments,
 		AssistantMessageCount:  service.GetAssistantMessageCount(sessionID),
-		HasConversationHistory: service.GetChatMessageCount(sessionID) > 0,
+		HasConversationHistory: hasConversationHistory,
 		ForkContext:            forkContext,
 	}
 }
