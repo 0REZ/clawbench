@@ -828,7 +828,7 @@ describe('FileViewer — inline TOC dock', () => {
     dock.vm.$emit('jumpPage', 3)
     // Regression: FileViewer must declare + forward these — otherwise the
     // inline dock's clicks are swallowed (code-browse TOC had no reaction).
-    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jump')).toEqual([[12, undefined]])
     expect(wrapper.emitted('jumpPage')).toEqual([[3]])
   })
 })
@@ -861,7 +861,7 @@ describe('FileViewer — inline TOC dock jump integration (real CodeMirror)', ()
     const dock = wrapper.findComponent({ name: 'TocDock' })
     dock.vm.$emit('jump', 2)
     await nextTick()
-    expect(wrapper.emitted('jump')).toEqual([[2]])
+    expect(wrapper.emitted('jump')).toEqual([[2, undefined]])
     wrapper.unmount()
   })
 })

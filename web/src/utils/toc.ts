@@ -1,5 +1,7 @@
 // Table of Contents extraction utilities
 
+import { protectMarkdown } from '@/utils/markdownProtect.ts'
+
 export interface TocItem {
     level: number
     text: string
@@ -21,20 +23,33 @@ export function extractToc(content: string, lang: string): TocItem[] {
 }
 
 function extractTocMarkdown(content: string): TocItem[] {
+    // Protect LaTeX math with the SAME function the render pipeline uses, so
+    // heading ids derived here (e.g. math → `mathi0`) exactly match the anchors
+    // marked emits. Row count is preserved (code placeholders are restored), so
+    // line numbers below stay valid against the original source.
+    const { protected: protectedText } = protectMarkdown(content)
+
     const toc: TocItem[] = []
-    const headerRegex = /^(#{1,6})\s+(.+)$/gm
+    const headerRegex = /^(#{1,6})\s+(.+)$/
     const idCounts: Record<string, number> = {}
-    let match
-    while ((match = headerRegex.exec(content)) !== null) {
-        const level = match[1].length
-        const text = match[2].trim()
-        const baseId = slugify(text)
+    const srcLines = content.split('\n')
+    const protLines = protectedText.split('\n')
+    const count = Math.min(srcLines.length, protLines.length)
+
+    for (let i = 0; i < count; i++) {
+        const m = protLines[i].match(headerRegex)
+        if (!m) continue
+        const level = m[1].length
+        // Display text comes from the ORIGINAL source line (placeholders in the
+        // protected line would leak \x00MATH…\x00 into the visible TOC label).
+        const text = (srcLines[i].match(headerRegex)?.[2] || m[2]).trim()
+        // Id is derived from the PROTECTED line, matching marked's heading slug.
+        const baseId = slugify(m[2].trim())
         // Deduplicate: match markedConfig.ts heading ID logic
-        const count = (idCounts[baseId] || 0) + 1
-        idCounts[baseId] = count
-        const id = count > 1 ? `${baseId}-${count}` : baseId
-        const line = content.substring(0, match.index).split('\n').length
-        toc.push({ level, text, id, line })
+        const c = (idCounts[baseId] || 0) + 1
+        idCounts[baseId] = c
+        const id = c > 1 ? `${baseId}-${c}` : baseId
+        toc.push({ level, text, id, line: i + 1 })
     }
     return toc
 }

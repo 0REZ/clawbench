@@ -115,7 +115,7 @@
                       @search-change="viewSearchActive = !!$event"
                       @toggle-view="markdownViewMode = markdownViewMode === 'rendered' ? 'raw' : 'rendered'"
                       @refresh="handleRefresh"
-                      @jump="scrollToLine"
+                      @jump="(line, anchorId) => scrollToLine(line, undefined, store.state.currentFile?.path, anchorId)"
                       @jump-page="handleJumpPdfPage"
                       @close-git-history="fileHistoryDrawer.close()"
                       @open-file="handleOverlayOpenFile"
@@ -2043,7 +2043,7 @@ function handleOpenTerminal(cwd) {
 let activeLineScrollCancel = null
 let lineScrollRequestId = 0
 
-function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
+function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, anchorId) {
     const startLine = Math.max(1, line)
     const endLine = Math.min(lineEnd && lineEnd > startLine ? lineEnd : startLine, startLine + 200)
     const selector = `.code-line[data-line="${startLine}"]`
@@ -2068,6 +2068,11 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
     activeLineScrollCancel = cleanup
     window.addEventListener('cm-scroll-to-line-handled', onHandled)
 
+    // Rendered-markdown fallback: when the view has no CodeMirror line DOM
+    // (a rendered markdown preview), a TOC click already tried getElementById
+    // and still fell through — the heading DOM may simply not be mounted yet
+    // (async render, stream). Retry the anchor id within the file's own
+    // content container before giving up.
     function tryScroll() {
         attempts++
         // CodeMirror may mount asynchronously when a rendered Markdown file is
@@ -2094,6 +2099,16 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
             cleanup()
             return
         }
+        // Rendered-markdown anchor fallback (no .code-line DOM exists there).
+        const anchorEl = anchorId && findVisibleAnchorEl(anchorId, path)
+        if (anchorEl) {
+            window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
+            anchorEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            anchorEl.classList.add('line-flash')
+            anchorEl.addEventListener('animationend', () => anchorEl.classList.remove('line-flash'), { once: true })
+            cleanup()
+            return
+        }
         if (attempts < maxAttempts) {
             requestAnimationFrame(tryScroll)
         } else {
@@ -2101,6 +2116,29 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path) {
         }
     }
     requestAnimationFrame(tryScroll)
+}
+
+/** Find a heading anchor inside the content container for `path` (if any). */
+function findVisibleAnchorEl(id, path) {
+    if (!id) return null
+    if (path) {
+        const containers = document.querySelectorAll(`[data-file-path="${escAttr(path)}"]`)
+        for (const c of containers) {
+            const el = c.querySelector(`#${escId(id)}`)
+            if (el) return el
+        }
+    }
+    return document.getElementById(id)
+}
+
+/** Minimal CSS-identifier escaping without relying on global `CSS` (absent in jsdom). */
+function escId(id) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(id)
+    return String(id).replace(/["'\\]/g, '')
+}
+// For attribute selectors the value is literal — only quotes/backslashes matter.
+function escAttr(value) {
+    return String(value).replace(/["\\]/g, '')
 }
 
 

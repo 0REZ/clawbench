@@ -35,6 +35,7 @@ import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
 import { useListNav } from '@/composables/useListNav'
 import { useListKeys } from '@/composables/useListKeys'
 import { extractToc, slugify } from '@/utils/toc.ts'
+import { protectMarkdown } from '@/utils/markdownProtect.ts'
 import { getFileType } from '@/utils/fileType.ts'
 import { fetchCodeSymbols } from '@/composables/useCodeSymbols'
 import { useFileEditor } from '@/composables/useFileEditor'
@@ -128,10 +129,26 @@ watch([() => props.file, () => props.file?.content, () => props.pdfOutline], ([f
                 // Convert backend symbols to TocItem format
                 // Deduplicate heading IDs to match markedConfig.ts logic
                 const headingIdCounts = {}
+                // For markdown headings, backend symbols carry the raw heading
+                // text. The render pipeline derives anchor ids from the SAME
+                // protected text toc.ts uses (math → \x00MATHI0\x00 placeholders),
+                // so recompute ids through protectMarkdown to stay in sync —
+                // otherwise math headings would get a mismatched slug.
+                const protectedByLine = new Map()
+                if (lang === 'markdown' && content) {
+                    const res = protectMarkdown(content)
+                    res.protected.split('\n').forEach((line, i) => protectedByLine.set(i + 1, line))
+                }
                 toc.value = result.symbols.map(s => {
                     let id
                     if (s.kind === 'heading') {
-                        const baseId = slugify(s.name)
+                        let baseId
+                        if (lang === 'markdown' && protectedByLine.size > 0) {
+                            const protLine = protectedByLine.get(s.line)
+                            baseId = protLine ? slugify(protLine.replace(/^\s*#+\s*/, '').trim()) : slugify(s.name)
+                        } else {
+                            baseId = slugify(s.name)
+                        }
                         const count = (headingIdCounts[baseId] || 0) + 1
                         headingIdCounts[baseId] = count
                         id = count > 1 ? `${baseId}-${count}` : baseId
@@ -221,7 +238,11 @@ function scrollTo(item) {
         return
     }
 
-    const elById = document.getElementById(item.id)
+    // Find the heading element scoped to the CURRENT file's content container.
+    // A bare document.getElementById could hit the same id in another file
+    // stacked underneath an overlay (FileOverlay nav stack), scrolling a hidden
+    // container instead of the visible one.
+    const elById = findHeadingEl(item.id)
     if (elById) {
         elById.scrollIntoView({ behavior: 'smooth', block: 'start' })
         elById.classList.add('line-flash')
@@ -230,8 +251,41 @@ function scrollTo(item) {
         return
     }
     if (item.line) {
-        emit('jump', item.line)
+        emit('jump', item.line, item.id)
     }
+}
+
+/** Resolve a heading anchor scoped to the file this TOC belongs to. */
+function findHeadingEl(id) {
+    const filePath = props.file?.path
+    if (!id) return null
+    // 1. Markdown rendered preview: the container exposes its source path.
+    if (filePath) {
+        const containers = document.querySelectorAll(`[data-file-path="${escAttr(filePath)}"]`)
+        for (const c of containers) {
+            const el = c.querySelector(`#${escId(id)}`)
+            if (el) return el
+        }
+    }
+    // 2. Fallback: plain document lookup (CodeMirror views have no anchor DOM,
+    //    but headings in raw/other views may still match).
+    return document.getElementById(id)
+}
+
+/**
+ * Minimal CSS escaping without depending on global `CSS` (absent in jsdom).
+ * - `escId`: escape for `#<id>` selectors (id chars may need CSS escaping).
+ * - `escAttr`: escape for `[data-file-path="..."]` — the value inside the
+ *   quoted attribute is a literal string, so only quote/backslash need
+ *   escaping; CSS.escape must NOT be used here (it escapes `/` etc. that are
+ *   valid literal attribute characters).
+ */
+function escId(id) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(id)
+    return String(id).replace(/["'\\]/g, '')
+}
+function escAttr(value) {
+    return String(value).replace(/["\\]/g, '')
 }
 
 let observer = null

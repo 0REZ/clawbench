@@ -114,7 +114,7 @@ describe('FileOverlay — TOC dock vs drawer', () => {
     viewer.vm.$emit('jumpPage', 3)
     // Regression: inline TOC dock clicks must reach App's scrollToLine /
     // handleJumpPdfPage — previously the dock was only wired for close.
-    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jump')).toEqual([[12, undefined]])
     expect(wrapper.emitted('jumpPage')).toEqual([[3]])
   })
 })

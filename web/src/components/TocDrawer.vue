@@ -35,8 +35,8 @@ defineProps({
 const emit = defineEmits(['close', 'jump', 'jumpPage'])
 
 // Bottom-sheet TOC: tapping an item jumps and dismisses the drawer.
-function handleJump(line) {
-  emit('jump', line)
+function handleJump(line, anchorId) {
+  emit('jump', line, anchorId)
   emit('close')
 }
 function handleJumpPage(pageNum) {

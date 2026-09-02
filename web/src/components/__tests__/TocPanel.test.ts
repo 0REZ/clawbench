@@ -201,10 +201,10 @@ describe('TocPanel — fetchCodeSymbols with results', () => {
     await new Promise(r => setTimeout(r, 50))
     await nextTick()
 
-    // No DOM element has id "toc-l10" — clicking must fall back to emit('jump', line)
+    // No DOM element has id "toc-l10" — clicking must fall back to emit('jump', line, anchorId)
     await wrapper.findAll('.toc-item')[0].trigger('click')
     expect(wrapper.emitted('jump')).toBeTruthy()
-    expect(wrapper.emitted('jump')![0]).toEqual([10])
+    expect(wrapper.emitted('jump')![0]).toEqual([10, 'toc-l10'])
   })
 
   it('falls back to extractToc when fetchCodeSymbols returns null', async () => {
@@ -466,5 +466,40 @@ describe('TocPanel — markdown source view scroll-follow (codeView)', () => {
     const intro = items.find(i => i.text().includes('Intro'))
     expect(intro?.classes()).not.toContain('active')
     wrapper.unmount()
+  })
+})
+
+describe('TocPanel — rendered markdown anchor scoping', () => {
+  it('math-heading TOC id matches a real rendered heading id and scrolls it', async () => {
+    const current = document.createElement('div')
+    current.setAttribute('data-file-path', '/m.md')
+    // The heading id is produced by marked's slug pipeline on PROTECTED text:
+    // math → placeholder → id "energy-mathi0" (same rule toc.ts now uses).
+    current.innerHTML = '<h2 id="能量公式-mathi0">能量公式</h2>'
+    document.body.appendChild(current)
+
+    const scrollSpy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollSpy
+
+    try {
+      const wrapper = mountPanel({
+        file: { name: 'm.md', content: '## 能量公式 $E=mc^2$', path: '/m.md' },
+      })
+      await nextTick()
+      await nextTick()
+
+      const item = wrapper.findAll('.toc-item').find(i => i.text().includes('能量公式'))
+      expect(item).toBeTruthy()
+      expect(item!.text()).not.toContain('MATH') // display text stays clean
+      await item!.trigger('click')
+
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+      expect(scrollSpy.mock.instances[0]).toBe(current.querySelector('h2'))
+      wrapper.unmount()
+    } finally {
+      Element.prototype.scrollIntoView = orig
+      current.remove()
+    }
   })
 })

@@ -89,7 +89,7 @@ describe('TocDrawer', () => {
     const wrapper = mountDrawer({ file: { name: 'a.md', path: '/a.md' } })
     const panel = wrapper.findComponent({ name: 'TocPanel' })
     panel.vm.$emit('jump', 12)
-    expect(wrapper.emitted('jump')).toEqual([[12]])
+    expect(wrapper.emitted('jump')).toEqual([[12, undefined]])
     // Bottom-sheet TOC closes after jumping to an item.
     expect(wrapper.emitted('close')).toBeTruthy()
   })

@@ -35,7 +35,7 @@
       :file="file"
       :pdf-outline="pdfOutline"
       :code-view="codeView"
-      @jump="emit('jump', $event)"
+      @jump="(line, anchorId) => emit('jump', line, anchorId)"
       @jump-page="emit('jumpPage', $event)"
     />
   </div>

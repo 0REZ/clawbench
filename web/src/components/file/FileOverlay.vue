@@ -32,7 +32,7 @@
             @navigate-back="emit('navigateBack')"
             @navigate-forward="emit('navigateForward')"
             @share-external="emit('shareExternal')"
-            @jump="emit('jump', $event)"
+            @jump="(line, anchorId) => emit('jump', line, anchorId)"
             @jump-page="emit('jumpPage', $event)"
           />
           <!-- File loading mask — same style as chat session-switch -->
@@ -50,7 +50,7 @@
           :file="tocFile"
           :pdf-outline="pdfOutline"
           @close="emit('toggleToc')"
-          @jump="emit('jump', $event)"
+          @jump="(line, anchorId) => emit('jump', line, anchorId)"
           @jump-page="emit('jumpPage', $event)"
         />
 
