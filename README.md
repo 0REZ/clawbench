@@ -294,20 +294,10 @@ Once deployed, access `http://server-ip:20000` from your phone app or mobile bro
 - SSH password management, server dialog
 - WebView connection protection: WebView hidden during connection attempts to prevent browser error page flash
 - **Self-Update**: One-click version check, binary download, and service restart from the Web UI; disconnect recovery with polling fallback; version skip option
-- **Desktop App Upgrade**: `GET /api/desktop/latest` checks npm registry for the latest ClawBench desktop (Electron) version and per-platform download links
 - **Android Version Mismatch Detection**: WebView startup compares APK version with server version; shows `VersionMismatchOverlay` prompting APK update when mismatched
 - **Floating Status Window**: System-level overlay capsule (Android 8.0+ `TYPE_APPLICATION_OVERLAY`) that shows real-time session stats (running / pending-approval / unread counts) via the background WebSocket channel. Shows an "idle" capsule state when there's nothing to report rather than hiding. Draggable with edge-snapping and position persistence; tap expands a grouped session-list panel (per-project headers with name+path, status dots + unread badges) to jump straight into a session. Toggle + `SYSTEM_ALERT_WINDOW` permission flow in Settings
 - **Live Updates (Dynamic Island)**: Android 16 live-update notifications surface session state on the status bar and lock screen — a single-line status-bar chip (pending approvals > unread > running, highest priority only, auto-removed when empty) plus an expanded-by-default card on the lock screen / notification drawer (full three-group counts). Shares the same overview data as the floating window, so the numbers always agree. Independent opt-in toggle in Settings (on by default); requires the system "Live Updates" notification permission, with graceful fallback to a plain ongoing notification
 - **Full Android i18n**: Native Android UI is fully bilingual (English default + Chinese mirror) — hardcoded Chinese in login/connection errors and notification text has been moved to string resources, with a three-layer language resolution (in-app choice > cookie > system locale)
-
-### 🖥️ Desktop App
-- **Cross-platform Electron client**: Windows / macOS / Linux desktop window wrapping the same Web UI — a full native experience without a browser
-- **Native Context Menu**: Right-click in editable fields (cut/copy/paste), text selection (copy), links (copy link), and images (copy image). Cut/copy/paste use OS-localized roles; custom items follow the app language
-- **External Links in Default Browser**: Links outside the configured server origin (third-party URLs, `mailto:`) open in your system browser instead of hijacking the app window
-- **SSH Port Forwarding**: Built-in ssh2 client maps server ports to `localhost`, so AI-started web services are reachable directly from the desktop shell
-- **System Notifications**: Native OS notifications with click-through navigation to the session/task; pending navigation is deferred on cold start
-- **Hard Refresh**: Ctrl+F5 (macOS: Cmd+Shift+R) clears session cache and hard-reloads the window
-- **Server Management**: Save multiple server URLs with credentials, switch via the built-in login page, passwords encrypted via OS keychain (safeStorage)
 
 ### 🔔 Notifications
 - Notification sound + haptic feedback (alerts when AI completes); sound can be toggled off in settings to prevent Bluetooth headphone interruption
