@@ -236,6 +236,10 @@
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedReadTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedReadTokens.toLocaleString() }}</span>
           </div>
+          <div v-if="cacheHitRate !== null" class="usage-popup-row">
+            <span class="usage-popup-label">{{ t('chat.sessionInfo.cacheHitRate') }}</span>
+            <span class="usage-popup-value">{{ cacheHitRate.toFixed(1) }}%</span>
+          </div>
           <div v-if="contextCachedWriteTokens > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.cachedWriteTokens') }}</span>
             <span class="usage-popup-value">{{ contextCachedWriteTokens.toLocaleString() }}</span>
@@ -332,7 +336,7 @@ import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
-const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency, contextCacheCreationTokens, contextCacheMissTokens, contextCredit, contextUsageByCategory } = useSessionIdentity()
+const { availableCommands, availableModes, currentTransport: sessionTransport, autoApprove, toggleAutoApprove, contextUsed, contextSize, contextInputTokens, contextOutputTokens, contextTotalTokens, contextCachedReadTokens, contextCachedWriteTokens, contextThoughtTokens, contextCost, contextCurrency, contextCacheCreationTokens, contextCacheHitTokens, contextCacheMissTokens, contextCredit, contextUsageByCategory } = useSessionIdentity()
 const { supportsACP, hasPreferredMode } = useAgents()
 const toast = useToast()
 const { uploadAndAttach, pendingFiles, removeFile } = useFileUpload()
@@ -411,6 +415,16 @@ const usageColor = computed(() => {
   if (pct >= 75) return '#eab308'
   return '#22c55e'
 })
+// Cache hit rate = hit / (hit + miss). Shown as a percentage when at least one
+// side is known. Returns null when neither is reported (no cache stats).
+const cacheHitRate = computed(() => {
+  const hit = contextCacheHitTokens.value
+  const miss = contextCacheMissTokens.value
+  if (hit <= 0 && miss <= 0) return null
+  const total = hit + miss
+  if (total <= 0) return 0
+  return (hit / total) * 100
+})
 // True when any token/cost row inside the Token Detail section has a value.
 // The section header only renders then — otherwise the popup would show an
 // empty header between used/size/remaining and the context breakdown.
@@ -418,8 +432,8 @@ const hasTokenDetail = computed(() =>
   contextInputTokens.value > 0 || contextOutputTokens.value > 0 ||
   contextTotalTokens.value > 0 || contextCachedReadTokens.value > 0 ||
   contextCachedWriteTokens.value > 0 || contextCacheCreationTokens.value > 0 ||
-  contextCacheMissTokens.value > 0 || contextThoughtTokens.value > 0 ||
-  contextCredit.value > 0 || contextCost.value > 0,
+  contextCacheHitTokens.value > 0 || contextCacheMissTokens.value > 0 ||
+  contextThoughtTokens.value > 0 || contextCredit.value > 0 || contextCost.value > 0,
 )
 // Context breakdown rows from CodeBuddy usageByCategory (by value, i18n labels).
 const categoryRows = computed(() => {

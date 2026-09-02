@@ -1044,6 +1044,38 @@ describe('ChatInputBar', () => {
     mockContextCacheMissTokens.value = 0
   })
 
+  it('shows cache hit rate as hit/(hit+miss) percentage', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 326400
+    mockContextCacheHitTokens.value = 326400
+    mockContextCacheMissTokens.value = 2984
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // 326400 / (326400 + 2984) = 99.09%
+    expect(wrapper.text()).toContain('chat.sessionInfo.cacheHitRate')
+    expect(wrapper.text()).toContain('99.1%')
+
+    // Reset for other tests.
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+  })
+
+  it('hides cache hit rate when no cache stats are reported', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    mockContextCacheHitTokens.value = 0
+    mockContextCacheMissTokens.value = 0
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('chat.sessionInfo.cacheHitRate')
+  })
+
   it('token detail section hidden when only used/size present', async () => {
     // No token rows → no Token Detail header at all (only used/size/remaining).
     mockContextSize.value = 200000

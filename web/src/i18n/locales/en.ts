@@ -326,6 +326,7 @@ export default {
       totalTokens: 'Total',
       cachedReadTokens: 'Cache Read',
       cachedWriteTokens: 'Cache Write',
+      cacheHitRate: 'Cache Hit Rate',
       thoughtTokens: 'Thought',
       compact: 'Compact context',
       // Token detail section — all token/cost rows grouped under one header.

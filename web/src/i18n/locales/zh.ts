@@ -326,6 +326,7 @@ export default {
       totalTokens: '总Token',
       cachedReadTokens: '缓存读',
       cachedWriteTokens: '缓存写',
+      cacheHitRate: '缓存命中率',
       thoughtTokens: '思考',
       compact: '压缩上下文',
       // Token detail section — all token/cost rows grouped under one header.
