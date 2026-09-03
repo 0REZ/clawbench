@@ -213,6 +213,10 @@ const isTextContent = computed(() => {
 const hasToc = computed(() => {
   if (!file.value || error.value) return false
   if (file.value.isBinary || file.value.tooLarge) return false
+  // Mirror the file browser: OpenAPI renders through its own Swagger UI
+  // sidebar (fileSupportsToc returns false for openapi in rendered view),
+  // so no heading outline is extracted or shown.
+  if (file.value.subtype === 'openapi') return false
   return isMarkdown.value || isTextContent.value
 })
 
