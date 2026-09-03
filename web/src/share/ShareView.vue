@@ -78,10 +78,9 @@
           />
 
           <!-- OpenAPI / Swagger spec (rendered docs) -->
-          <OpenApiPreview
-            v-else-if="file.subtype === 'openapi'"
-            :file="file"
-          />
+          <div v-else-if="file.subtype === 'openapi'" class="share-fill-viewer">
+            <OpenApiPreview :file="file" />
+          </div>
 
           <!-- HTML rendered -->
           <iframe
@@ -417,6 +416,20 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   border: none;
+}
+
+/* OpenAPI preview fills the visible content area. .share-content is an
+   overflow:auto scroller whose height is determined by its children, so a
+   flex:1 child would collapse to content height. Pin the viewer to the
+   scroller's visible viewport instead. */
+.share-fill-viewer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .share-download-btn {

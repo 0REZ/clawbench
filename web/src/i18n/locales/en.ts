@@ -2270,6 +2270,7 @@ export default {
     title: 'Shared files',
     empty: 'No shared files yet. Open a file preview and use "Share link" to share it.',
     openFile: 'Open file',
+    openInNewTab: 'Open link in new tab',
     copyLink: 'Copy link',
     copied: 'Link copied',
     revoke: 'Revoke share',

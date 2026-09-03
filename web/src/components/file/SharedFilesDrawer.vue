@@ -24,7 +24,16 @@
 
       <!-- List -->
       <div v-else class="shared-files-list">
-        <div v-for="item in items" :key="item.token" class="shared-file-row" :class="{ deleted: !item.exists }">
+        <div
+          v-for="item in items"
+          :key="item.token"
+          class="shared-file-row"
+          :class="{ deleted: !item.exists, clickable: item.exists }"
+          role="button"
+          tabindex="0"
+          @click="item.exists && openFile(item)"
+          @keydown.enter="item.exists && openFile(item)"
+        >
           <div class="shared-file-main">
             <FileIcon :path="item.name" :size="22" />
             <div class="shared-file-info">
@@ -37,16 +46,17 @@
             </div>
           </div>
 
-          <div class="shared-file-actions">
-            <button
+          <div class="shared-file-actions" @click.stop>
+            <a
               v-if="item.exists"
               class="shared-file-btn"
-              :disabled="openingToken === item.token"
-              :title="t('sharedFiles.openFile')"
-              @click="openFile(item)"
+              :href="shareUrl(item)"
+              target="_blank"
+              rel="noopener noreferrer"
+              :title="t('sharedFiles.openInNewTab')"
             >
               <ExternalLink :size="14" />
-            </button>
+            </a>
             <button class="shared-file-btn" :title="t('sharedFiles.copyLink')" @click="copyLink(item)">
               <Copy :size="14" />
             </button>
@@ -92,11 +102,15 @@ const drawer = useTabDrawer('browse', { autoRestore: false })
 const busy = ref(false)
 const errorMsg = ref('')
 const items = ref([])
-const openingToken = ref('')
 const revokingToken = ref('')
 
 function openDrawer() {
   drawer.open()
+}
+
+// Absolute public URL for a share link.
+function shareUrl(item) {
+  return window.location.origin + '/share/' + item.token
 }
 
 // Load the list whenever the drawer becomes visible (first open, or returning
@@ -121,20 +135,14 @@ async function loadList() {
 }
 
 function openFile(item) {
-  openingToken.value = item.token
-  try {
-    // Absolute path for out-of-project files is handled by store.selectFile
-    // (external files), and App.vue switches to the view tab on success.
-    emit('selectFile', item.path)
-    drawer.close()
-  } finally {
-    openingToken.value = ''
-  }
+  // Absolute path for out-of-project files is handled by store.selectFile
+  // (external files), and App.vue switches to the view tab on success.
+  emit('selectFile', item.path)
+  drawer.close()
 }
 
 function copyLink(item) {
-  const url = window.location.origin + '/share/' + item.token
-  copyText(url, () => {
+  copyText(shareUrl(item), () => {
     toast.show(t('sharedFiles.copied'), { icon: '✅', type: 'success', duration: 2000 })
   })
 }
@@ -208,6 +216,8 @@ defineExpose({ open: openDrawer })
   border-bottom: 1px solid var(--border-color, rgba(128,128,128,.15));
 }
 .shared-file-row:last-child { border-bottom: none; }
+.shared-file-row.clickable { cursor: pointer; }
+.shared-file-row.clickable:hover { background: var(--bg-tertiary, #eaeef2); }
 .shared-file-row.deleted .shared-file-name,
 .shared-file-row.deleted .shared-file-path {
   opacity: 0.5;

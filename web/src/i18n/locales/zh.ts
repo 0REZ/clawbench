@@ -2270,6 +2270,7 @@ export default {
     title: '已分享文件',
     empty: '暂无已分享文件。在文件预览工具栏点「分享链接」即可分享。',
     openFile: '打开文件',
+    openInNewTab: '在新标签页打开',
     copyLink: '复制链接',
     copied: '链接已复制',
     revoke: '取消分享',

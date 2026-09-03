@@ -52,6 +52,7 @@ const messages = {
       title: 'Shared files',
       empty: 'No shared files yet',
       openFile: 'Open file',
+      openInNewTab: 'Open link in new tab',
       copyLink: 'Copy link',
       copied: 'Link copied',
       revoke: 'Revoke share',
@@ -125,7 +126,7 @@ describe('SharedFilesDrawer', () => {
     expect(wrapper.text()).toContain('Error')
   })
 
-  it('emits selectFile and closes when opening an existing file', async () => {
+  it('emits selectFile when the row is clicked', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       shares: [{ token: 'tok1', name: 'a.md', path: 'docs/a.md', createdAt: 'x', exists: true }],
     }))
@@ -134,12 +135,12 @@ describe('SharedFilesDrawer', () => {
     await flushPromises()
     await nextTick()
 
-    await wrapper.find('.shared-file-btn').trigger('click') // first action = open file
+    await wrapper.find('.shared-file-row').trigger('click')
     expect(wrapper.emitted('selectFile')).toBeTruthy()
     expect(wrapper.emitted('selectFile')![0]).toEqual(['docs/a.md'])
   })
 
-  it('does not show the open button for a deleted file', async () => {
+  it('does not open a deleted file when its row is clicked', async () => {
     fetchMock.mockResolvedValue(jsonResponse({
       shares: [{ token: 'tok2', name: 'b.md', path: 'b.md', createdAt: 'x', exists: false }],
     }))
@@ -148,8 +149,27 @@ describe('SharedFilesDrawer', () => {
     await flushPromises()
     await nextTick()
 
-    const openBtn = wrapper.findAll('.shared-file-btn').filter(b => b.attributes('title') === 'Open file')
-    expect(openBtn).toHaveLength(0)
+    await wrapper.find('.shared-file-row').trigger('click')
+    expect(wrapper.emitted('selectFile')).toBeUndefined()
+  })
+
+  it('provides a new-tab share link for existing files only', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({
+      shares: [
+        { token: 'tok1', name: 'a.md', path: 'docs/a.md', createdAt: 'x', exists: true },
+        { token: 'tok2', name: 'b.md', path: 'b.md', createdAt: 'x', exists: false },
+      ],
+    }))
+    const wrapper = mountDrawer()
+    ;(wrapper.vm as any).open()
+    await flushPromises()
+    await nextTick()
+
+    const externalLinks = wrapper.findAll('a[title="Open link in new tab"]')
+    expect(externalLinks).toHaveLength(1)
+    expect(externalLinks[0].attributes('href')).toBe('https://host.example/share/tok1')
+    expect(externalLinks[0].attributes('target')).toBe('_blank')
+    expect(externalLinks[0].attributes('rel')).toBe('noopener noreferrer')
   })
 
   it('revokes a share after confirmation and removes the row', async () => {
