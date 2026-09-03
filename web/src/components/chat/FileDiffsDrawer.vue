@@ -250,7 +250,7 @@ function handleBodyInput(event) {
 }
 
 .fd-file-info-path {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   color: var(--text-secondary, #888);
   min-width: 0;
@@ -354,7 +354,7 @@ function handleBodyInput(event) {
 }
 
 .fd-header-path {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 12px;
   font-weight: 600;
   color: var(--text-primary);

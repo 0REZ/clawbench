@@ -486,7 +486,7 @@ defineExpose({ observeList, unobserveList, commitSearch })
     background: var(--bg-tertiary);
     padding: 2px 6px;
     border-radius: 4px;
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     font-size: 11px;
 }
 
@@ -516,7 +516,7 @@ defineExpose({ observeList, unobserveList, commitSearch })
 
 /* Short SHA tag */
 .git-commit-sha {
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, monospace);
   font-size: 10px;
   color: var(--text-muted, #999);
   background: var(--bg-tertiary, #f0f0f0);

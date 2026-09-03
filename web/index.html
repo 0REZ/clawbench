@@ -36,6 +36,34 @@
       })();
     </script>
 
+    <!-- Apply configured open-source font stacks BEFORE CSS loads to avoid a
+         flash of the default font. Reads the same prefixed localStorage keys
+         as utils/fontConfig.ts (clawbench-settings-fontMono / -fontUi) and
+         sets --font-mono / --font-ui on <html>. Default values stored as
+         'default' are left untouched so the CSS variables in variables.css
+         keep their fallback stacks. -->
+    <script>
+      (function() {
+        function readFontChoice(key) {
+          try { var s = localStorage.getItem(key); if (s) { var v = JSON.parse(s); if (typeof v === 'string' && v) return v; } } catch (e) {}
+          return 'default';
+        }
+        function quoteFamily(name) {
+          return /\s/.test(name) ? "'" + name + "'" : name;
+        }
+        var MONO_DEFAULT = "'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace";
+        var UI_DEFAULT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif";
+        var mono = readFontChoice('clawbench-settings-fontMono');
+        var ui = readFontChoice('clawbench-settings-fontUi');
+        if (mono !== 'default') {
+          document.documentElement.style.setProperty('--font-mono', quoteFamily(mono) + ', ' + MONO_DEFAULT);
+        }
+        if (ui !== 'default') {
+          document.documentElement.style.setProperty('--font-ui', quoteFamily(ui) + ', ' + UI_DEFAULT);
+        }
+      })();
+    </script>
+
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">

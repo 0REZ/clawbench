@@ -141,7 +141,7 @@ function copyCmd() {
 
 .install-cmd {
   flex: 1;
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Cascadia Code', monospace);
   font-size: 12px;
   color: var(--text-primary, #1a1a1a);
   word-break: break-all;

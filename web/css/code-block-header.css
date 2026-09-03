@@ -44,7 +44,7 @@
     color: var(--text-muted);
     font-weight: 500;
     text-transform: lowercase;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
 }
 
 /* ─── Actions group (right side) ─── */
@@ -178,7 +178,7 @@
     color: var(--text-muted);
     font-weight: 500;
     text-transform: lowercase;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
 }
 
 /* ─── Actions group (right side) ─── */

@@ -292,6 +292,7 @@ import {
   showErrorOverlay as showErrorOverlayUtil,
 } from '@/utils/terminalFontUtils'
 import { localConfig, setLocalConfig, useSettingsConfig } from '@/composables/useSettingsConfig'
+import { buildFontStack, DEFAULT_TERMINAL_MONO_STACK } from '@/utils/fontConfig'
 import { shouldAutoRefocusTerminal, shouldInstallTerminalBlurRefocus } from '@/utils/terminalBlurUtils'
 import type { KeyDef } from '@/utils/terminalKeyDefs'
 import {
@@ -327,6 +328,14 @@ const { getServerValueWithDefault } = useSettingsConfig()
 
 // Font size with persistence
 const fontSize = ref<number>((localConfig.terminalFontSize as number) || DEFAULT_FONT_SIZE)
+
+// Font family follows the Settings → Appearance mono font choice. xterm is
+// canvas-rendered and cannot read CSS vars, so resolve the stored choice to
+// a concrete stack (default stack when 'default').
+const fontFamily = computed(() => buildFontStack(
+  localConfig.fontMono as string,
+  DEFAULT_TERMINAL_MONO_STACK,
+))
 
 // Max sessions from server config
 const maxSessions = computed(() => {
@@ -643,6 +652,7 @@ const quickCmdDrawer = useTabDrawer('terminal', showEditDialog)
 
 const tabManager = useTerminalTabs(getWsUrl, {
   fontSize,
+  fontFamily,
   getXtermTheme,
   errorMessages: {
     shellStartFailed: t('terminal.shellStartFailed'),
@@ -669,6 +679,12 @@ const tabManager = useTerminalTabs(getWsUrl, {
 })
 
 const { tabs, activeTabId, activeTab } = tabManager
+
+// React to mono font changes from the Settings panel: push the resolved
+// stack onto existing xterm instances (new tabs read it via createXtermInstance).
+watch(() => localConfig.fontMono, () => {
+  tabManager.updateFontFamily(fontFamily.value)
+})
 
 // Terminal viewport — uses the active tab's xterm and container
 const viewport = useTerminalViewport(
@@ -1723,7 +1739,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
 }
 
 .toolbar-btn.btn-modifier, .toolbar-btn.btn-nav, .toolbar-btn.btn-arrow, .toolbar-btn.btn-symbol, .toolbar-btn.btn-action { background: transparent; }
-.toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; }
+.toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 15px; font-weight: 700; }
 
 /* WebView bold compensation — same mechanism as chat markdown bold
  * (markdown-common.css): font-weight alone renders lighter/softer in Android
@@ -1814,7 +1830,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   flex: 1;
   min-width: 0;
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;

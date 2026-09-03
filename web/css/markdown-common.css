@@ -514,7 +514,7 @@
 .markdown-body .chat-file-path,
 .chat-message.assistant .chat-file-path,
 .table-row-value .chat-file-path {
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     background: var(--bg-secondary);
     border-radius: 3px;
     padding: 0 3px;
@@ -545,7 +545,7 @@
 
 /* User message file path annotation & open button */
 .chat-message.user .chat-file-path {
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     background: rgba(0, 0, 0, 0.15);
     border-radius: 3px;
     padding: 0 3px;

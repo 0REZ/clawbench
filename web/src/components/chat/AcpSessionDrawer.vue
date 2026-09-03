@@ -301,7 +301,7 @@ function formatTime(iso: string): string {
   font-weight: 500;
   background: var(--bg-tertiary, #e9ecef);
   color: var(--text-secondary, #495057);
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   word-break: break-all;
 }
 

@@ -315,7 +315,7 @@ function copyValue(value, event) {
 }
 
 .metadata-session-id {
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     font-size: 12px;
     background: var(--bg-tertiary);
     padding: 2px 6px;

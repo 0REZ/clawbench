@@ -324,6 +324,38 @@ describe('useSettingsConfig', () => {
     })
   })
 
+  describe('font config side effects', () => {
+    it('setLocalConfig for fontMono dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontMono', 'Fira Code')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontMono: 'Fira Code' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontMono')
+    })
+
+    it('setLocalConfig for fontUi dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontUi', 'Inter')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontUi: 'Inter' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontUi')
+    })
+  })
+
   describe('patchAgentField', () => {
     it('patches agent field and updates local agent data', async () => {
       const { patchAgentField } = useSettingsConfig()

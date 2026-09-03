@@ -202,7 +202,7 @@ const segments = computed<Segment[]>(() => {
 <style scoped>
 .diff-drawer-body {
   overflow: auto;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace);
   font-size: 12px;
   line-height: 1.5;
 }

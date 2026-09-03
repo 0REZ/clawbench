@@ -34,7 +34,7 @@
   width: 100%;
   box-sizing: border-box;
   padding: 5px 8px 6px;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
   font-size: 13px;
   display: flex;
   flex-wrap: wrap;
@@ -129,7 +129,7 @@
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
   line-height: 1;
   border-radius: 3px;
   cursor: pointer;

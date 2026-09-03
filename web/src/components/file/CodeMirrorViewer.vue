@@ -68,7 +68,11 @@ const canUndo = ref(false)
 const canRedo = ref(false)
 const dirty = ref(false)
 
-const MONO_FONT = "'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace"
+// Font family follows the global --font-mono CSS variable (set by Settings →
+// Appearance). EditorView.theme emits these as real CSS rules, so a
+// var(--font-mono) reference resolves live against <html> and re-renders
+// automatically when the user changes the font — no watcher needed.
+const MONO_FONT = "var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace)"
 
 const codeMirrorTheme = EditorView.theme({
     '&': {
@@ -881,7 +885,7 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
     border-bottom: 1px solid var(--border-color);
     opacity: 0.94;
     cursor: pointer;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
     font-size: 13px;
     line-height: 20.8px;
     pointer-events: auto;
@@ -916,7 +920,7 @@ defineExpose({ getValue, scrollToLine, getView: () => view.value, handleExit, is
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .cm-viewer .cm-tooltip-autocomplete {
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
   font-size: 13px;
   max-height: 200px;
 }

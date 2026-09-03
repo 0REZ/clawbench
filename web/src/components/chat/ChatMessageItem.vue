@@ -631,7 +631,7 @@ function handleCopyMessage() {
 }
 
 .chat-message .attachment-filename {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -662,7 +662,7 @@ function handleCopyMessage() {
 }
 
 .chat-file-tag-path {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   flex: 1;
   min-width: 0;
   overflow-x: auto;
@@ -786,7 +786,7 @@ function handleCopyMessage() {
 }
 
 .chat-message.user code {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
     padding: 2px 6px;
     font-size: 13px;
     background: rgba(0, 0, 0, 0.15);
@@ -947,7 +947,7 @@ function handleCopyMessage() {
 }
 
 .chat-message.assistant code {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
     padding: 2px 6px;
     font-size: 13px;
 }

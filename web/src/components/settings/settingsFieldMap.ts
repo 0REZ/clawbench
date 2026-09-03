@@ -10,6 +10,7 @@
  */
 
 import { getNative } from '@/utils/clawbenchNative'
+import { MONO_FONT_CHOICES, UI_FONT_CHOICES } from '@/utils/fontConfig'
 
 export interface DependsOn {
   key: string
@@ -155,6 +156,12 @@ export const categoryItems: Record<string, CategoryEntry[]> = {
     ]}},
     { type: 'item', spec: { labelKey: 'settings.items.uiScale', descriptionKey: 'settings.items.uiScaleDesc', key: 'uiScale', type: 'slider', source: 'local', min: 0.8, max: 1.5, step: 0.05, defaultValue: 1, displayFormat: 'percent', sectionHeader: 'settings.items.appearanceDisplaySection' } },
     { type: 'item', spec: { labelKey: 'settings.items.headerShortcutTips', descriptionKey: 'settings.items.headerShortcutTipsDesc', key: 'headerShortcutTips', type: 'switch', source: 'local', sectionHeader: 'settings.items.appearanceDisplaySection' } },
+    { type: 'item', spec: { labelKey: 'settings.items.fontMono', descriptionKey: 'settings.items.fontMonoDesc', key: 'fontMono', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: [
+      ...MONO_FONT_CHOICES.map(f => ({ labelKey: `settings.items.fonts.${f.id}`, value: f.id })),
+    ]}},
+    { type: 'item', spec: { labelKey: 'settings.items.fontUi', descriptionKey: 'settings.items.fontUiDesc', key: 'fontUi', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: [
+      ...UI_FONT_CHOICES.map(f => ({ labelKey: `settings.items.fonts.${f.id}`, value: f.id })),
+    ]}},
   ],
   agents: [],
   chat: [

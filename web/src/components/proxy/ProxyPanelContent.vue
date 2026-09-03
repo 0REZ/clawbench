@@ -743,7 +743,7 @@ async function handleRetryTunnel() {
 }
 
 .tunnel-guide-command code {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 10px;
   color: var(--text-primary, #1a1a1a);
   word-break: break-all;
@@ -788,7 +788,7 @@ async function handleRetryTunnel() {
 }
 
 .fingerprint-value {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   color: var(--text-muted, #999);
   word-break: break-all;
 }
@@ -893,7 +893,7 @@ async function handleRetryTunnel() {
 }
 
 .port-scan-item-port {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-weight: 700;
   font-size: 15px;
   flex-shrink: 0;
@@ -918,7 +918,7 @@ async function handleRetryTunnel() {
 
 .port-scan-item-process {
   font-size: 11px;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   color: var(--text-muted, #999);
   overflow: hidden;
   text-overflow: ellipsis;

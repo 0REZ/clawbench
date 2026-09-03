@@ -415,6 +415,7 @@ import { useDockOverflow } from '@/composables/useDockOverflow'
 import { closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
+import { applyFontConfig } from '@/utils/fontConfig'
 import { MessageSquare, MessageSquareOff, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
@@ -1269,6 +1270,13 @@ function registerAppEventListeners() {
       await initMermaid()
       await reRenderMermaid()
   })
+  window.addEventListener('clawbench-font-change', async () => {
+      // Re-render mermaid diagrams so their SVG text picks up the new font.
+      // (Other text follows --font-ui/--font-mono CSS vars automatically.)
+      const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
+      await initMermaid()
+      await reRenderMermaid()
+  })
   window.addEventListener('clawbench-showhidden-change', (e) => {
       showHidden.value = e.detail
   })
@@ -1333,6 +1341,7 @@ async function handleLoginSuccess() {
     dismissSplash()
     await nextTick()
     applyUIScale(localConfig.uiScale ?? 1)
+    applyFontConfig()
     startDockResize()
     // Measure dock height and set --dock-height CSS variable for fixed-position elements
     const dockWrapper = document.querySelector('.bottom-dock-wrapper')
@@ -2280,6 +2289,7 @@ onMounted(async () => {
     dismissSplash()
     await nextTick()
     applyUIScale(localConfig.uiScale ?? 1)
+    applyFontConfig()
     startDockResize()
     welcomeOverlay.value?.show()
     versionMismatchOverlay.value?.show()

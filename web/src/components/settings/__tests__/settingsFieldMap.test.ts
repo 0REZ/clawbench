@@ -29,6 +29,28 @@ describe('settingsFieldMap', () => {
     expect(map['autoSpeech']).toBeUndefined()
     expect(map['swipeSession']).toBeUndefined()
     expect(map['pushPersistentNotification']).toBeUndefined()
+    expect(map['fontMono']).toBeUndefined()
+    expect(map['fontUi']).toBeUndefined()
+  })
+
+  it('appearance category has local font select items pointing at settings.items.fonts.* labels', () => {
+    const appearanceEntries = categoryItems['appearance']
+    for (const key of ['fontMono', 'fontUi']) {
+      const entry = appearanceEntries.find(e => e.type === 'item' && e.spec.key === key)
+      expect(entry).toBeDefined()
+      if (entry!.type !== 'item') throw new Error(`expected item entry for ${key}`)
+      expect(entry!.spec.source).toBe('local')
+      expect(entry!.spec.type).toBe('select')
+      expect(entry!.spec.defaultValue).toBe('default')
+      // First option is the sentinel default; every option has an i18n key
+      expect(entry!.spec.options).toBeDefined()
+      const opts = entry!.spec.options!
+      expect(opts.length).toBeGreaterThan(1)
+      expect(opts[0].value).toBe('default')
+      for (const o of opts) {
+        expect(o.labelKey).toMatch(/^settings\.items\.fonts\./)
+      }
+    }
   })
 
   it('includes TTS sub-config keys', () => {

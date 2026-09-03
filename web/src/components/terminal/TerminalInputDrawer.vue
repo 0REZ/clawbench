@@ -94,7 +94,7 @@ function doInput() {
   border-radius: 0;
   background: transparent;
   color: var(--text-primary, #1a1a1a);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 13px;
   line-height: 1.6;
   padding: 8px 0;

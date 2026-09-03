@@ -505,7 +505,7 @@ onBeforeUnmount(() => {
     flex: 0 0 auto;
     max-width: 100%;
     color: var(--text-muted);
-    font-family: monospace;
+    font-family: var(--font-mono, monospace);
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
