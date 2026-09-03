@@ -19,7 +19,6 @@
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { annotateFilePaths } from '@/composables/useFilePathAnnotation.ts'
 import { dirName, joinPath, splitPath } from '@/utils/path.ts'
-import { apiUrl } from '@/utils/basePath.ts'
 import { isThumbExtension, buildThumbUrl, getThumbWidth } from '@/utils/chatRenderUtils.ts'
 import { usePlatformDetect } from '@/composables/usePlatformDetect.ts'
 
@@ -79,7 +78,7 @@ export function createFixLocalImagePaths(opts: FixLocalImagePathsOptions): (html
                 normalized.push(encodeURIComponent(part))
             }
             const rel = normalized.join('/')
-            const fullSrc = apiUrl(`/api/local-file/${rel}?t=${imageTimestamp}`)
+            const fullSrc = `/api/local-file/${rel}?t=${imageTimestamp}`
             // Raster formats the thumb endpoint can decode → use a lightweight JPEG
             // thumbnail for the inline src (kept stable so ETag revalidation refreshes
             // it when the source file changes) and keep the full image for the lightbox.
