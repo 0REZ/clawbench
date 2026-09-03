@@ -1028,7 +1028,11 @@ ${tocCss}
 
 /* ─── Lightbox overlay ─── */
 .export-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
-.export-lightbox img, .export-lightbox svg { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+.export-lightbox img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+/* SVG (mermaid diagrams) gets the theme's content background — same as the app
+   lightbox (Lightbox.vue .lightbox-content svg { background: var(--bg-primary) }) —
+   otherwise the transparent diagram sits directly on the dark overlay. */
+.export-lightbox svg { max-width: 95vw; max-height: 95vh; background: var(--bg-primary); }
 .export-lightbox .lb-close-btn { position: absolute; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(255,255,255,0.2); color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .export-lightbox .lb-close-btn:hover { background: rgba(255,255,255,0.4); }
 </style>

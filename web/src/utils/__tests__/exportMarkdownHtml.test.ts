@@ -339,6 +339,14 @@ describe('exportMarkdownToHtml', () => {
     expect(result.html).not.toContain('Diagram failed to render')
   })
 
+  it('gives lightbox SVG (mermaid) the theme content background like the app lightbox', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '<div class="mermaid"><svg>diagram</svg></div>' }))
+    // App Lightbox.vue applies `.lightbox-content svg { background: var(--bg-primary) }`;
+    // the export lightbox must do the same so diagrams aren't transparent over the overlay.
+    expect(result.html).toContain('.export-lightbox svg')
+    expect(result.html).toContain('background: var(--bg-primary)')
+  })
+
   it('removes script tags and iframes from the content DOM', async () => {
     const result = await exportMarkdownToHtml(opts({ content: '<script>alert(1)</script><iframe src="https://evil.com"></iframe>' }))
     expect(result.html).not.toContain('alert(1)')
