@@ -173,6 +173,143 @@ func TestMergeResumedSessionState_NoModeStateInResponse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// MergeResumedSessionState — fallback to LoadSessionResponse (LoadSession path)
+// ---------------------------------------------------------------------------
+
+func TestMergeResumedSessionState_FallsBackToLoadResponse(t *testing.T) {
+	// Sessions restored via recoverViaLoadSession / SyncLoadSession stash a
+	// LoadSessionResponse instead of a ResumeSessionResponse. The merge must
+	// fall back to it so mode/model state reaches the registry — otherwise the
+	// UI keeps showing the static CLI-discovered model defaults forever.
+	agent := &model.Agent{ID: "test-merge-load-fallback", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-merge-load-fallback")
+
+	modeCat := acp.SessionConfigOptionCategoryMode
+	modelCat := acp.SessionConfigOptionCategoryModel
+	loadResp := &acp.LoadSessionResponse{
+		Modes: &acp.SessionModeState{
+			CurrentModeId: "auto",
+			AvailableModes: []acp.SessionMode{
+				{Id: "auto", Name: "Auto"},
+			},
+		},
+		ConfigOptions: []acp.SessionConfigOption{
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modeCat,
+					Id:           "mode",
+					Name:         "Mode",
+					CurrentValue: "auto",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "auto", Name: "Auto"},
+						},
+					},
+				},
+			},
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modelCat,
+					Id:           "model",
+					Name:         "Model",
+					CurrentValue: "sonnet",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "default", Name: "Default (recommended)"},
+							{Value: "opus", Name: "glm-5.3[1m]"},
+							{Value: "sonnet", Name: "glm-5.3[1m]"},
+							{Value: "haiku", Name: "glm-5.3[1m]"},
+						},
+					},
+				},
+			},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastLoadSessionResp = loadResp
+	conn.mu.Unlock()
+
+	conn.MergeResumedSessionState()
+
+	assert.Equal(t, "sonnet", conn.GetCurrentModelID())
+	assert.Equal(t, "auto", conn.GetCurrentModeID())
+
+	// The registry must carry the extracted list so /api/agents acpStates
+	// serves it to the frontend.
+	ml := GetAgentCapabilityRegistry().GetModelListState(agent.ID, "")
+	require.NotNil(t, ml)
+	require.Len(t, ml.Models, 4)
+	assert.Equal(t, "glm-5.3[1m]", ml.Models[1].Name)
+	assert.Equal(t, "glm-5.3[1m]", ml.Models[2].Name)
+}
+
+func TestMergeResumedSessionState_LoadResponseConsumedOnlyOnce(t *testing.T) {
+	// GetAndClear semantics: once the fallback consumed the load response, a
+	// second merge (the next prompt on the same conn) must be a no-op rather
+	// than re-applying stale state or panicking.
+	agent := &model.Agent{ID: "test-merge-load-consumed", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-merge-load-consumed")
+
+	modelCat := acp.SessionConfigOptionCategoryModel
+	loadResp := &acp.LoadSessionResponse{
+		ConfigOptions: []acp.SessionConfigOption{
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modelCat,
+					Id:           "model",
+					Name:         "Model",
+					CurrentValue: "opus",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "opus", Name: "glm-5.3[1m]"},
+						},
+					},
+				},
+			},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastLoadSessionResp = loadResp
+	conn.mu.Unlock()
+
+	conn.MergeResumedSessionState()
+	assert.Equal(t, "opus", conn.GetCurrentModelID())
+
+	// Second call: both stashes empty — no-op, values preserved.
+	conn.MergeResumedSessionState()
+	assert.Equal(t, "opus", conn.GetCurrentModelID())
+}
+
+func TestExtractACPModelListFromLoad_NilAndPopulated(t *testing.T) {
+	assert.Nil(t, extractACPModelListFromLoad(nil))
+
+	modelCat := acp.SessionConfigOptionCategoryModel
+	loadResp := &acp.LoadSessionResponse{
+		ConfigOptions: []acp.SessionConfigOption{
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modelCat,
+					Id:           "model",
+					Name:         "Model",
+					CurrentValue: "default",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "default", Name: "Default (recommended)"},
+							{Value: "haiku", Name: "glm-5.3[1m]"},
+						},
+					},
+				},
+			},
+		},
+	}
+	ml := extractACPModelListFromLoad(loadResp)
+	require.NotNil(t, ml)
+	assert.Equal(t, "default", ml.CurrentModelID)
+	require.Len(t, ml.Models, 2)
+	assert.Equal(t, "glm-5.3[1m]", ml.Models[1].Name)
+}
+
+// ---------------------------------------------------------------------------
 // extractSessionState — newResp with all sub-extractors returning non-nil
 // ---------------------------------------------------------------------------
 
