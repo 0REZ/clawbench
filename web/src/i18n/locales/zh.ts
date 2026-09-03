@@ -121,6 +121,7 @@ export default {
     removeProjectFailed: '移除项目失败',
     removeRecentFile: '从最近文件移除',
     themePicker: '切换主题',
+    moreAppearanceOptions: '更多外观选项',
     settings: '设置',
     reconfigureServer: '重新配置服务器',
     debugLog: '调试日志',

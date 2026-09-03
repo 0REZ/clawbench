@@ -121,6 +121,7 @@ export default {
     removeProjectFailed: 'Failed to remove project',
     removeRecentFile: 'Remove from recent files',
     themePicker: 'Switch theme',
+    moreAppearanceOptions: 'More appearance options',
     settings: 'Settings',
     reconfigureServer: 'Reconfigure Server',
     debugLog: 'Debug Log',

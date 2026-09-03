@@ -39,12 +39,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, watch, onMounted } from 'vue'
 import { RefreshCw, ChevronLeft, Settings } from 'lucide-vue-next'
 import SettingsIndex from './SettingsIndex.vue'
 import SettingsCategory from './SettingsCategory.vue'
 import SettingsRestartDialog from './SettingsRestartDialog.vue'
-import { useSettingsNavigation } from '@/composables/useSettingsNavigation'
+import { useSettingsNavigation, consumePendingSettingsCategory, pendingSettingsCategory } from '@/composables/useSettingsNavigation'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useAgents } from '@/composables/useAgents'
 import { useDialog } from '@/composables/useDialog'
@@ -113,10 +113,49 @@ const currentCategoryTitle = computed(() => {
 
 const serverVersion = computed(() => serverConfig.value?.version ?? '')
 
+// ── Deep-link into a category from OUTSIDE the settings tab ──
+// (AppHeader theme picker → "more appearance options"). The request is stored
+// at module level by the caller; when a category is currently open the
+// deep-link is pushed on top so the back button returns to it. The request is
+// consumed up front so a rejected deep-link (user cancels the unsaved-changes
+// confirm) is dropped instead of lingering for the next activation.
+async function openPendingDeepLink() {
+  const categoryId = consumePendingSettingsCategory()
+  if (!categoryId) return
+  if (navStack.value[navStack.value.length - 1] === categoryId) return
+  // Leaving a category with unsaved panel edits must confirm first (same as back).
+  if (!checkAllGuards()) {
+    const confirmed = await dialog.confirm(
+      t('settings.panel.unsavedMessage'),
+      {
+        title: t('settings.panel.unsavedTitle'),
+        confirmText: t('settings.panel.discard'),
+        cancelText: t('settings.panel.continueEditing'),
+      },
+    )
+    if (!confirmed) return
+  }
+  pushNav(categoryId)
+}
+
+// Case: the settings tab was ALREADY active when the deep-link fired and
+// switchTab() no-ops — the module-level ref change is what triggers here.
+watch(pendingSettingsCategory, (pending) => {
+  if (pending && props.active) void openPendingDeepLink()
+})
+
+// First-ever open: SettingsPage is lazily mounted by the TabPanel with
+// props.active already true, so the props.active watch never fires — the
+// deep-link must be consumed on mount.
+onMounted(() => {
+  void openPendingDeepLink()
+})
+
 // Refresh config values when tab becomes active (preserve navigation state)
 watch(() => props.active, (val) => {
   if (val) {
     loadConfig()
+    void openPendingDeepLink()
   }
 })
 </script>

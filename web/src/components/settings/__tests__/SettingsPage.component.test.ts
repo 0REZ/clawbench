@@ -37,23 +37,32 @@ const { pushNav, popNav, handleRestartNeeded, handleRestart, checkAllGuards, moc
   }
 })
 
-vi.mock('@/composables/useSettingsNavigation', () => ({
-  useSettingsNavigation: () => ({
-    t: (k: string) => k,
-    navStack: mockNavStack,
-    currentCategory: mockCurrentCategory,
-    pushNav,
-    popNav,
-    restartDialogVisible: mockRestartDialogVisible,
-    changedColdFields: mockChangedColdFields,
-    needsRestart: mockNeedsRestart,
-    restarting: mockRestarting,
-    handleRestartNeeded,
-    handleRestart,
-    checkAllGuards,
-    loadConfig: vi.fn(),
-  }),
-}))
+// NOTE: the settings-nav deep-link relies on a REAL module-level ref so that
+// SettingsPage's `watch(pendingSettingsCategory)` fires when the test mutates
+// it (a ref created via require('vue') in vi.hoisted belongs to a different
+// Vue copy and cannot trigger the component's watcher). We therefore re-use
+// the real module's exports and only stub useSettingsNavigation() itself.
+vi.mock('@/composables/useSettingsNavigation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/composables/useSettingsNavigation')>()
+  return {
+    ...actual,
+    useSettingsNavigation: () => ({
+      t: (k: string) => k,
+      navStack: mockNavStack,
+      currentCategory: mockCurrentCategory,
+      pushNav,
+      popNav,
+      restartDialogVisible: mockRestartDialogVisible,
+      changedColdFields: mockChangedColdFields,
+      needsRestart: mockNeedsRestart,
+      restarting: mockRestarting,
+      handleRestartNeeded,
+      handleRestart,
+      checkAllGuards,
+      loadConfig: vi.fn(),
+    }),
+  }
+})
 
 vi.mock('@/composables/useSettingsConfig', () => ({
   useSettingsConfig: () => ({
@@ -112,6 +121,10 @@ vi.mock('lucide-vue-next', () => ({
 
 import SettingsPage from '@/components/settings/SettingsPage.vue'
 
+// Real module exports (see the vi.mock factory above — the real module's
+// pending ref is used so SettingsPage's module-level watch fires on mutation).
+import { pendingSettingsCategory } from '@/composables/useSettingsNavigation'
+
 const i18n = (require('vue-i18n') as any).createI18n({ legacy: false, locale: 'en' })
 
 function mountPage(props: Record<string, unknown> = {}, initialState: Record<string, any> = {}) {
@@ -128,6 +141,8 @@ function mountPage(props: Record<string, unknown> = {}, initialState: Record<str
   if ('changedColdFields' in initialState) mockChangedColdFields.value = initialState.changedColdFields
   if ('needsRestart' in initialState) mockNeedsRestart.value = initialState.needsRestart
   if ('restarting' in initialState) mockRestarting.value = initialState.restarting
+  if ('pendingCategory' in initialState) pendingSettingsCategory.value = initialState.pendingCategory
+  else pendingSettingsCategory.value = null
 
   return mount(SettingsPage, {
     props: { ...props },
@@ -150,6 +165,7 @@ beforeEach(() => {
   mockNeedsRestart.value = false
   mockRestarting.value = false
   mockChangedColdFields.value = []
+  pendingSettingsCategory.value = null
 })
 
 describe('SettingsPage — mount', () => {
@@ -201,6 +217,78 @@ describe('SettingsPage — header', () => {
     await wrapper.find('.settings-page__back').trigger('click')
     await flushPromises()
     expect(popNav).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage — deep link from theme picker (more appearance options)', () => {
+  it('opens the pending category on first mount (lazy TabPanel mount)', async () => {
+    const wrapper = mountPage({}, { pendingCategory: 'appearance' })
+    await flushPromises()
+    expect(pushNav).toHaveBeenCalledWith('appearance')
+    expect(pendingSettingsCategory.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('opens the pending category when the settings tab becomes active', async () => {
+    const wrapper = mountPage({}, { active: false })
+    pendingSettingsCategory.value = 'appearance'
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    expect(pushNav).toHaveBeenCalledWith('appearance')
+    expect(pendingSettingsCategory.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('opens the pending category when settings is already the active tab (switchTab no-op)', async () => {
+    const wrapper = mountPage({ active: true })
+    pendingSettingsCategory.value = 'appearance'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(pushNav).toHaveBeenCalledWith('appearance')
+    expect(pendingSettingsCategory.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('does not duplicate a category that is already open', async () => {
+    const wrapper = mountPage({ active: true }, { navStack: ['appearance'], currentCategory: 'appearance' })
+    pendingSettingsCategory.value = 'appearance'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(pushNav).not.toHaveBeenCalled()
+    expect(pendingSettingsCategory.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('confirms before leaving a category with unsaved changes', async () => {
+    checkAllGuards.mockReturnValueOnce(false)
+    mockDialogConfirm.mockResolvedValueOnce(false) // user keeps editing
+    const wrapper = mountPage({ active: true }, { navStack: ['general'], currentCategory: 'general' })
+    pendingSettingsCategory.value = 'appearance'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(mockDialogConfirm).toHaveBeenCalled()
+    expect(pushNav).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('opens the category after the user confirms discarding unsaved changes', async () => {
+    checkAllGuards.mockReturnValueOnce(false)
+    mockDialogConfirm.mockResolvedValueOnce(true) // discard
+    const wrapper = mountPage({ active: true }, { navStack: ['general'], currentCategory: 'general' })
+    pendingSettingsCategory.value = 'appearance'
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(pushNav).toHaveBeenCalledWith('appearance')
+    expect(pendingSettingsCategory.value).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('does nothing when no category is pending', async () => {
+    const wrapper = mountPage({ active: true })
+    await wrapper.vm.$nextTick()
+    await flushPromises()
+    expect(pushNav).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 })
 

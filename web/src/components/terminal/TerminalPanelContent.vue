@@ -220,15 +220,16 @@
       :max-height="440"
       :menu-items-count="6"
       anchor="right"
+      app-surface
     >
-      <div class="theme-picker" @click.stop>
-        <div class="theme-picker-title">{{ t('terminal.theme') }}</div>
+      <div class="theme-picker app-menu-column" @click.stop>
+        <div class="app-menu-title">{{ t('terminal.theme') }}</div>
         <div v-if="themeLoading" class="theme-picker-status">{{ t('terminal.themeLoading') }}</div>
         <div v-else-if="themeLoadError" class="theme-picker-status theme-picker-error">
           <span>{{ t('terminal.themeLoadFailed') }}</span>
           <button class="theme-retry-btn" @click="ensureThemesLoaded">{{ t('common.retry') }}</button>
         </div>
-        <div v-else class="theme-picker-list">
+        <div v-else class="app-menu-scroll">
           <button
             class="theme-item"
             :class="{ active: themeSelection === TERMINAL_THEME_AUTO }"
@@ -1860,13 +1861,15 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   white-space: nowrap;
 }
 
-/* Terminal theme picker (unscoped because PopupMenu teleports to body) */
-.theme-picker { padding: 0; min-width: 160px; }
-.theme-picker-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 5px 10px 4px; border-bottom: 1px solid var(--border-color); }
+/* Terminal theme picker (unscoped because PopupMenu teleports to body).
+   Container surface comes from PopupMenu appSurface; title uses the shared
+   .app-menu-title. The theme-item* entry rules below mirror AppHeader's copy —
+   both are global, so they must stay in sync (kept here so the terminal
+   picker renders identically even if the AppHeader styles are not loaded). */
+.theme-picker { min-width: 160px; }
 .theme-picker-status { padding: 10px 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .theme-picker-error { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .theme-retry-btn { padding: 4px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 12px; }
-.theme-picker-list { max-height: 300px; overflow-y: auto; }
 .theme-item + .theme-item { border-top: 1px solid var(--border-color); }
 .theme-item {
   display: flex; align-items: center; gap: 6px;
