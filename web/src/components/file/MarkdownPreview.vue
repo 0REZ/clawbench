@@ -171,7 +171,7 @@ function handleClick(event: MouseEvent) {
             if (targetEl) {
                 event.preventDefault()
                 event.stopPropagation()
-                targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                targetEl.scrollIntoView({ behavior: 'auto', block: 'start' })
                 targetEl.classList.add('line-flash')
                 targetEl.addEventListener('animationend', () => targetEl.classList.remove('line-flash'), { once: true })
                 return

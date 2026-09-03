@@ -287,10 +287,11 @@ function recomputeOverlay() {
 }
 
 // ─── Scroll-to-line (search/TOC jump) with flash ───
-// CodeMirror's EditorView.scrollIntoView snaps instantly, so we animate
-// scrollDOM.scrollTop toward the target line to give a smooth scroll instead.
+// Jump instantly: the target line scroll is applied synchronously, so the
+// line-flash added right after lands on a line already inside the viewport
+// (a smooth scroll could sweep the viewport for hundreds of ms, finishing
+// long after the 1.2s flash ended).
 let flashTimer = null
-let scrollRAF = null
 function centeredScrollTop(editor, pos) {
     const scroller = editor.scrollDOM
     const block = editor.lineBlockAt(pos)
@@ -299,36 +300,12 @@ function centeredScrollTop(editor, pos) {
     const centeredTop = block.top - (viewportHeight - block.height) / 2
     return Math.min(maxScrollTop, Math.max(0, centeredTop))
 }
-function smoothScrollToLine(editor, pos) {
-    const scroller = editor.scrollDOM
-    const targetTop = centeredScrollTop(editor, pos)
-    const startTop = scroller.scrollTop
-    const delta = targetTop - startTop
-    if (Math.abs(delta) < 0.5) return
-    const duration = 300
-    const startTime = performance.now()
-    if (scrollRAF) cancelAnimationFrame(scrollRAF)
-    function step(now) {
-        const t = Math.min(1, (now - startTime) / duration)
-        // easeInOutCubic
-        const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
-        scroller.scrollTop = startTop + delta * eased
-        if (t < 1) scrollRAF = requestAnimationFrame(step)
-        else {
-            // Recalculate after the animation: CodeMirror may finish measuring
-            // the document while the smooth movement is in progress.
-            scroller.scrollTop = centeredScrollTop(editor, pos)
-            scrollRAF = null
-        }
-    }
-    scrollRAF = requestAnimationFrame(step)
-}
 function scrollToLine(line, lineEnd) {
     const editor = view.value
     if (!editor) return
     const target = Math.min(Math.max(1, line || 1), editor.state.doc.lines)
     const pos = editor.state.doc.line(target).from
-    smoothScrollToLine(editor, pos)
+    editor.scrollDOM.scrollTop = centeredScrollTop(editor, pos)
     const builder = new RangeSetBuilder()
     const last = Math.min(lineEnd || target, editor.state.doc.lines)
     for (let n = target; n <= last; n++) {
@@ -563,7 +540,6 @@ onUnmounted(() => {
     if (pendingScrollRAF) cancelAnimationFrame(pendingScrollRAF)
     pendingScrollRAF = null
     pendingScrollRequestId = null
-    if (scrollRAF) cancelAnimationFrame(scrollRAF)
     if (flashTimer) clearTimeout(flashTimer)
     if (selDebounceTimer) clearTimeout(selDebounceTimer)
     sticky.teardown()

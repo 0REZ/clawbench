@@ -299,7 +299,7 @@ function scrollToPage(pageNum) {
   if (!el) return
   const pageWrapper = el.querySelector(`[data-page="${pageNum}"]`)
   if (pageWrapper) {
-    pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    pageWrapper.scrollIntoView({ behavior: 'auto', block: 'start' })
   }
 }
 

@@ -52,11 +52,11 @@ describe('scroll-to-line event flow', () => {
       const firstEl = document.querySelector(`.code-line[data-line="${startLine}"]`)
       if (firstEl) {
         window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-        firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        firstEl.scrollIntoView({ behavior: 'auto', block: 'center' })
       }
 
       expect(dispatched).toContain('cancel-scroll-restore')
-      expect(mockElement.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+      expect(mockElement.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' })
 
       querySelectorSpy.mockRestore()
     })
@@ -97,7 +97,7 @@ describe('scroll-to-line event flow', () => {
         const firstEl = document.querySelector(selector)
         if (firstEl) {
           window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-          firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          firstEl.scrollIntoView({ behavior: 'auto', block: 'center' })
           return
         }
         if (attempts < maxAttempts) {

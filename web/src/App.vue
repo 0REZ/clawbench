@@ -2097,7 +2097,7 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, ancho
             // Cancel any pending scroll-position restore in FileViewer
             // so it doesn't override our scroll target
             window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-            firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            firstEl.scrollIntoView({ behavior: 'auto', block: 'center' })
             // Flash the range
             for (let i = startLine; i <= endLine; i++) {
                 const el = document.querySelector(`.code-line[data-line="${i}"]`)
@@ -2113,7 +2113,7 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, ancho
         const anchorEl = anchorId && findVisibleAnchorEl(anchorId, path)
         if (anchorEl) {
             window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-            anchorEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            anchorEl.scrollIntoView({ behavior: 'auto', block: 'start' })
             anchorEl.classList.add('line-flash')
             anchorEl.addEventListener('animationend', () => anchorEl.classList.remove('line-flash'), { once: true })
             cleanup()
