@@ -970,6 +970,7 @@ export default {
       stickyScroll: '粘性滚动',
       fileHistory: '文件历史',
       shareExternal: '分享',
+      details: '文件详情',
       confirmDelete: '确定要删除"{name}"吗？',
       exportHtml: '导出 HTML',
       exportingHtml: '导出 HTML 中...',

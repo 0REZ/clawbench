@@ -970,6 +970,7 @@ export default {
       stickyScroll: 'Sticky Scroll',
       fileHistory: 'File history',
       shareExternal: 'Share',
+      details: 'Details',
       confirmDelete: 'Delete "{name}"?',
       exportHtml: 'Export HTML',
       exportingHtml: 'Exporting HTML...',

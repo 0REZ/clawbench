@@ -2,7 +2,7 @@
   <div class="file-header-bar">
     <!-- Region 1: File name -->
     <div class="file-name-wrap">
-      <span class="file-path-hint" style="cursor:pointer" @click="$emit('showDetails')" :title="file.name">{{ file.name }}</span>
+      <span class="file-path-hint" :class="{ 'file-path-draggable': isWideScreen }" :draggable="isWideScreen" @click="$emit('showDetails')" @dragstart="handleFileNameDragStart" @dragend="handleFileNameDragEnd" :title="file.name">{{ file.name }}</span>
     </div>
 
     <!-- Region 2: Toolbar (ResizeObserver target) -->
@@ -87,9 +87,14 @@
         <GitBranch :size="14" />
       </button>
 
-      <!-- Delete button (last action) -->
+      <!-- Delete button -->
       <button v-if="toolbarInlineIds.includes('delete')" class="file-header-btn danger" @click.stop="handleDelete" :title="t('common.delete')">
         <Trash2 :size="14" />
+      </button>
+
+      <!-- File details button (always the last toolbar action) -->
+      <button v-if="toolbarInlineIds.includes('details')" class="file-header-btn" @click.stop="$emit('showDetails')" :title="t('file.header.details')">
+        <Info :size="14" />
       </button>
 
       <!-- More actions dropdown (only when collapsed items exist) -->
@@ -176,6 +181,10 @@
               <Trash2 :size="14" />
               {{ t('common.delete') }}
             </button>
+            <button v-if="toolbarCollapsedIds.includes('details')" class="dropdown-item" @click="$emit('showDetails'); menuOpen = false">
+              <Info :size="14" />
+              {{ t('file.header.details') }}
+            </button>
           </div>
         </Teleport>
       </div>
@@ -195,7 +204,7 @@ import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { isRefreshing } from '@/composables/useFileRefresh'
 import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
-import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2 } from 'lucide-vue-next'
+import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2, Info } from 'lucide-vue-next'
 import { getFileType } from '@/utils/fileType.ts'
 import { fileSupportsToc } from '@/utils/tocSupport.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
@@ -206,6 +215,8 @@ import { useToolbarOverflow } from '@/composables/useToolbarOverflow'
 import { navToFileInManager } from '@/composables/useFilePathAnnotation.ts'
 import { getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
 import { getNative } from '@/utils/clawbenchNative'
+import { setAttachDragData, buildAttachDragImage, cleanupDragGhost } from '@/utils/attachDrag'
+import { getWideScreenState } from '@/composables/useWideScreenLayout'
 
 const props = defineProps({
     file: Object,
@@ -224,6 +235,7 @@ const { isAppMode } = useAppMode()
 const { t } = useI18n()
 const { addAttachedFile, hasAttachedFile, removeAttachedFileByPath } = useChatContext()
 const toast = useToast()
+const { isWideScreen } = getWideScreenState()
 
 const isAttached = computed(() => !!props.file?.path && hasAttachedFile(props.file.path))
 
@@ -269,6 +281,8 @@ const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObs
     ids.push('openDirectory')
     ids.push('gitHistory')
     ids.push('delete')
+    // Details is the very last toolbar action (collapses into "More" first).
+    ids.push('details')
     return ids
   },
   { inlineCount: 1, gap: 8 },
@@ -453,6 +467,23 @@ function handleAttachToChat() {
     }
 }
 
+// Drag the file name onto the chat column (wide-screen split view) to attach
+// the current file as a chat attachment — same mechanism the file manager's
+// list/grid items use. Clicking the name (no drag) still opens file details.
+function handleFileNameDragStart(e) {
+    const path = props.file?.path
+    const name = props.file?.name
+    if (!path || !name) return
+    e.dataTransfer.effectAllowed = 'copy'
+    setAttachDragData(e.dataTransfer, path, false)
+    const ghost = buildAttachDragImage(name, false)
+    e.dataTransfer.setDragImage(ghost, 14, 16)
+}
+
+function handleFileNameDragEnd() {
+    cleanupDragGhost()
+}
+
 // Close dropdown on outside click
 function handleClickOutside(e) {
     if (menuOpen.value &&
@@ -517,6 +548,12 @@ onBeforeUnmount(() => {
     .file-path-hint:hover {
         color: var(--accent-color);
     }
+}
+.file-path-hint.file-path-draggable {
+    cursor: grab;
+}
+.file-path-hint.file-path-draggable:active {
+    cursor: grabbing;
 }
 .file-path-hint.copied {
     color: #22c55e;

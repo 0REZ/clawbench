@@ -32,6 +32,7 @@ const i18n = createI18n({
           exportHtml: 'Export HTML',
           edit: 'Edit',
           finishEditing: 'Finish editing',
+          details: 'Details',
         },
         overlay: { back: 'Back', forward: 'Forward' },
       },
@@ -57,6 +58,23 @@ vi.mock('@/composables/useFileRefresh', () => ({
 vi.mock('@/composables/useAppMode.ts', () => ({
   useAppMode: () => ({ isAppMode: { value: false } }),
 }))
+
+// Mock wide-screen state — drag-to-chat (draggable file name) is gated on it
+const mockIsWideScreen = ref(true)
+vi.mock('@/composables/useWideScreenLayout', () => ({
+  getWideScreenState: () => ({ isWideScreen: mockIsWideScreen }),
+}))
+
+// Keep the real setAttachDragData (verifies the drag payload) but stub the
+// ghost element builder/cleanup so tests don't touch the real DOM + timers.
+vi.mock('@/utils/attachDrag', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/attachDrag')>()
+  return {
+    ...actual,
+    buildAttachDragImage: vi.fn(() => document.createElement('div')),
+    cleanupDragGhost: vi.fn(),
+  }
+})
 
 // Mock useChatContext
 const mockAddAttachedFile = vi.fn()
@@ -314,6 +332,76 @@ describe('FileHeader', () => {
     const nameEl = wrapper.find('.file-path-hint')
     await nameEl.trigger('click')
     expect(wrapper.emitted('showDetails')).toBeTruthy()
+  })
+
+  describe('file details button', () => {
+    it('renders as the last toolbar action (after delete)', () => {
+      const wrapper = mountHeader()
+      const btns = wrapper.findAll('.header-actions .file-header-btn')
+      const detailsIdx = btns.findIndex(b => b.attributes('title') === 'Details')
+      const deleteIdx = btns.findIndex(b => b.attributes('title') === 'Delete')
+      expect(detailsIdx).toBeGreaterThanOrEqual(0)
+      expect(deleteIdx).toBeGreaterThanOrEqual(0)
+      expect(detailsIdx).toBeGreaterThan(deleteIdx)
+    })
+
+    it('emits showDetails when the details button is clicked', async () => {
+      const wrapper = mountHeader()
+      const btn = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Details')
+      expect(btn).toBeTruthy()
+      await btn!.trigger('click')
+      expect(wrapper.emitted('showDetails')).toBeTruthy()
+    })
+  })
+
+  describe('file name drag-to-chat', () => {
+    it('is draggable on wide screens', () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader()
+      const nameEl = wrapper.find('.file-path-hint')
+      expect(nameEl.attributes('draggable')).toBe('true')
+      expect(nameEl.classes()).toContain('file-path-draggable')
+    })
+
+    it('is not draggable on narrow screens (drag-to-chat requires split view)', () => {
+      mockIsWideScreen.value = false
+      const wrapper = mountHeader()
+      const nameEl = wrapper.find('.file-path-hint')
+      expect(nameEl.attributes('draggable')).toBe('false')
+      expect(nameEl.classes()).not.toContain('file-path-draggable')
+    })
+
+    it('writes the attach drag payload with the file path on dragstart', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader()
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).toHaveBeenCalledWith(
+        'application/x-clawbench-attach',
+        JSON.stringify({ path: '/tmp/main.ts', isDir: false }),
+      )
+      expect(dt.setData).toHaveBeenCalledWith('text/plain', '/tmp/main.ts')
+      expect(dt.setDragImage).toHaveBeenCalled()
+    })
+
+    it('does not write attach data when the file has no path', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader({ file: { name: 'no-path.ts', path: '', content: '' } })
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).not.toHaveBeenCalled()
+    })
+
+    it('does not write attach data when the file has no name', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader({ file: { name: '', path: '/tmp/no-name.ts' } })
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).not.toHaveBeenCalled()
+    })
   })
 
   it('emits toggleToc when toc button is clicked', async () => {
