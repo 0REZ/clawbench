@@ -805,6 +805,13 @@ function buildScrollState() {
 
 function followToBottom(force) {
   setProgrammatic(true)
+  // A force pin (send message / answer card / deferred force flush after the
+  // user's scroll stops) is an explicit intent to be at the bottom. Clear the
+  // "left the bottom" latch so the AI reply streaming BELOW the just-sent
+  // message keeps following — otherwise every subsequent non-force pin is
+  // rejected and the view stays stuck at the user bubble (the "sends but the
+  // streamed reply is never followed" bug).
+  if (force) userLeftBottom = false
   const el = messagesRef.value
   el.scrollTop = el.scrollHeight
   // Verify the scroll actually reached the bottom — content may have grown

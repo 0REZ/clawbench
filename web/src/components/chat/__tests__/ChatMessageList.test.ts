@@ -357,6 +357,34 @@ describe('ChatMessageList — stream-follow persistence', () => {
     expect(source).toContain('scrollingUp: el.scrollTop < prevScrollTop')
     expect(source).toContain('const scrollDelta = el.scrollTop - prevScrollTop')
   })
+
+  it('a force pin (send message / answer card) clears the userLeftBottom latch', async () => {
+    // Regression: sending a message while streaming force-pins the viewport to
+    // the bottom, but the one-way userLeftBottom latch (tripped by an earlier
+    // upward scroll while reading context during a long tool call) was never
+    // cleared by the force pin. The AI reply then streams BELOW the just-sent
+    // message and every subsequent non-force pin is rejected — the view stays
+    // stuck at the user bubble and the streamed reply is never followed.
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // The latch clear must live INSIDE followToBottom, gated on force.
+    expect(source).toMatch(/function followToBottom\(force\) \{\s*setProgrammatic\(true\)[\s\S]*?if \(force\) userLeftBottom = false/)
+  })
+
+  it('a non-force stream pin does NOT clear the userLeftBottom latch', async () => {
+    // The "user reading history is never yanked back" guarantee must survive:
+    // only explicit force pins (user action expecting the bottom) clear the
+    // latch — ordinary streamed content growth must not.
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // followToBottom must only clear under `if (force)` — no unconditional clear.
+    const fnStart = source.indexOf('function followToBottom(')
+    expect(fnStart).toBeGreaterThan(-1)
+    const fnEnd = source.indexOf('\n}', fnStart)
+    const fnBody = source.slice(fnStart, fnEnd)
+    expect(fnBody).toMatch(/if \(force\) userLeftBottom = false/)
+    expect(fnBody).not.toMatch(/userLeftBottom = false[\s\S]*?if \(force\)/)
+  })
 })
 
 /**
