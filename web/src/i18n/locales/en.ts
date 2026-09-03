@@ -1093,6 +1093,10 @@ export default {
     tunnelGuideStep1: '1. Add the ports you want to map',
     tunnelGuideStep2: '2. Copy the generated SSH command',
     tunnelGuideStep3: '3. Paste and run it in your local terminal — use your login password as the SSH password',
+    tunnelNeedSshHint: 'No ssh command on this machine?',
+    tunnelInstallWin: 'Download and install OpenSSH for Windows',
+    tunnelInstallMac: 'OpenSSH ships with macOS — no install needed',
+    tunnelInstallLinux: 'Install OpenSSH:',
     tunnelNoCommand: 'Add mapped ports first, the SSH tunnel command will be generated automatically',
     tunnelNoSsh: 'SSH tunnel is not enabled. Set port_forward.enabled: true in the server config.yaml',
     portItem: {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasActivePort, tunnelStatusFromPorts, buildPortUrl, enabledPorts } from '@/utils/portForwardUtils'
+import { hasActivePort, tunnelStatusFromPorts, buildPortUrl, enabledPorts, sshInstallHint } from '@/utils/portForwardUtils'
 import type { ForwardedPort } from '@/utils/portForwardUtils'
 
 describe('portForwardUtils', () => {
@@ -149,6 +149,39 @@ describe('portForwardUtils', () => {
 
     it('includes path with default port', () => {
       expect(buildPortUrl(443, 'https', '/dashboard')).toBe('https://localhost/dashboard')
+    })
+  })
+
+  // --- sshInstallHint ---
+
+  describe('sshInstallHint', () => {
+    it('returns Windows OpenSSH download page for Windows', () => {
+      expect(sshInstallHint({ windows: true, macDesktop: false, linuxDesktop: false })).toEqual({
+        kind: 'windows',
+        url: 'https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse',
+      })
+    })
+
+    it('returns mac noInstall marker for macOS desktop', () => {
+      expect(sshInstallHint({ windows: false, macDesktop: true, linuxDesktop: false })).toEqual({
+        kind: 'mac',
+        noInstall: true,
+      })
+    })
+
+    it('returns install command for Linux desktop', () => {
+      const hint = sshInstallHint({ windows: false, macDesktop: false, linuxDesktop: true })
+      expect(hint?.kind).toBe('linux')
+      expect(hint && 'command' in hint ? hint.command : '').toContain('apt install openssh-client')
+    })
+
+    it('returns null for unknown platform', () => {
+      expect(sshInstallHint({ windows: false, macDesktop: false, linuxDesktop: false })).toBeNull()
+    })
+
+    it('prefers windows when multiple flags set (windows wins by specificity)', () => {
+      const hint = sshInstallHint({ windows: true, macDesktop: true, linuxDesktop: true })
+      expect(hint?.kind).toBe('windows')
     })
   })
 })

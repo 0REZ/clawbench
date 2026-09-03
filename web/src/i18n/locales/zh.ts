@@ -1093,6 +1093,10 @@ export default {
     tunnelGuideStep1: '1. 先添加需要转发的端口',
     tunnelGuideStep2: '2. 复制生成的 SSH 命令',
     tunnelGuideStep3: '3. 在本地终端中粘贴并执行，使用登录密码作为 SSH 密码',
+    tunnelNeedSshHint: '本机还没有 ssh 命令？',
+    tunnelInstallWin: '下载并安装 OpenSSH for Windows',
+    tunnelInstallMac: 'macOS 自带 OpenSSH，无需安装',
+    tunnelInstallLinux: '安装 OpenSSH：',
     tunnelNoCommand: '请先添加转发端口，SSH 隧道命令将自动生成',
     tunnelNoSsh: 'SSH 隧道未启用，请在服务器端 config.yaml 中配置 port_forward.enabled: true',
     portItem: {
