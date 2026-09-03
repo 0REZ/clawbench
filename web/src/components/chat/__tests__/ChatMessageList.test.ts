@@ -36,6 +36,37 @@ describe('ChatMessageList — session switching indicator (replaces full-area ov
   })
 })
 
+describe('ChatMessageList — message jump flash is accent background (not border)', () => {
+  it('animates the bubble background with theme accent, leaving text color untouched', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    // No inset box-shadow border highlight.
+    expect(source).not.toContain('box-shadow: inset 0 0 0 2px var(--accent-color)')
+    expect(source).not.toContain('msg-highlight-flash 1.5s')
+    // Flash is role-specific and blends the accent over each bubble's own
+    // theme background (user white text and assistant text stay unchanged).
+    expect(source).toContain('--msg-base-bg: var(--user-msg-color)')
+    expect(source).toContain('--msg-base-bg: var(--bg-tertiary)')
+    expect(source).toContain('color-mix(in srgb, var(--accent-color) 65%, var(--msg-base-bg))')
+    expect(source).toContain('animation: msg-highlight-flash 1.2s ease-out 1')
+    // The background only animates — the keyframes block contains no color:
+    // property (only background-color), so text color never changes.
+    const kfStart = source.indexOf('@keyframes msg-highlight-flash')
+    const kfEnd = source.indexOf('}', source.indexOf('color-mix(in srgb, var(--accent-color) 25%, var(--msg-base-bg))'))
+    const keyframes = source.slice(kfStart, kfEnd > -1 ? kfEnd + 1 : undefined)
+    expect(keyframes).toContain('background-color')
+    // `background-color:` contains the substring "color:", so match a standalone
+    // `color:` property (declaration start) rather than a bare substring.
+    expect(keyframes).not.toMatch(/(?:^|[;{])\s*color:/)
+  })
+
+  it('keeps removing the highlight class after the animation window', async () => {
+    const mod = await import('@/components/chat/ChatMessageList.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    expect(source).toContain("setTimeout(() => el.classList.remove('chat-message-highlight'), 1500)")
+  })
+})
+
 /**
  * Test for the scroll sticky抖动 (snap-back jitter) fix.
  *

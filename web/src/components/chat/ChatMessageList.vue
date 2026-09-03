@@ -1486,15 +1486,29 @@ defineExpose({
   transform: translateY(10px) scale(0.9);
 }
 
-/* ── Message highlight flash ── */
-:deep(.chat-message-highlight) {
-  animation: msg-highlight-flash 1.5s ease-out;
+/* ── Message highlight flash ──
+   Message jumps (message index / prev / next / Ctrl+↑↓) flash the whole
+   bubble's BACKGROUND with the theme accent tint — the text color is left
+   untouched (only `background-color` animates, which always paints beneath
+   the text, so user-bubble white text and assistant text never change). Each
+   bubble role mixes the accent over its own resting theme background
+   (user: --user-msg-color / assistant: --bg-tertiary); the animation pulses
+   to brighter tints and returns to the resting background (no forwards fill,
+   class removal restores the base rule). Timing mirrors the canonical
+   `line-flash` (assets/code-viewer.css): 1.2s, two diminishing blinks. */
+:deep(.chat-message.user.chat-message-highlight) {
+  --msg-base-bg: var(--user-msg-color);
+  animation: msg-highlight-flash 1.2s ease-out 1;
+}
+:deep(.chat-message.assistant.chat-message-highlight) {
+  --msg-base-bg: var(--bg-tertiary);
+  animation: msg-highlight-flash 1.2s ease-out 1;
 }
 
 @keyframes msg-highlight-flash {
-  0%, 15% { box-shadow: inset 0 0 0 2px var(--accent-color); }
-  30%, 45% { box-shadow: inset 0 0 0 2px transparent; }
-  60%, 75% { box-shadow: inset 0 0 0 2px var(--accent-color); }
-  90%, 100% { box-shadow: inset 0 0 0 2px transparent; }
+  0%, 20%, 40%, 60%, 80%, 100% { background-color: var(--msg-base-bg); }
+  10%, 30% { background-color: color-mix(in srgb, var(--accent-color) 65%, var(--msg-base-bg)); }
+  50%, 70% { background-color: color-mix(in srgb, var(--accent-color) 45%, var(--msg-base-bg)); }
+  90% { background-color: color-mix(in srgb, var(--accent-color) 25%, var(--msg-base-bg)); }
 }
 </style>

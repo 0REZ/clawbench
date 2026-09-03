@@ -261,7 +261,8 @@ function jumpTo(mark: HTMLElement | null | undefined) {
     // (behavior:'auto' centers immediately — no animation, no settle loop).
     mark.classList.add('search-match-flash')
     mark.scrollIntoView({ behavior: 'auto', block: 'center' })
-    const timer = setTimeout(() => mark.classList.remove('search-match-flash'), 800)
+    // Aligned to the canonical 1.2s flash (assets/code-viewer.css line-flash).
+    const timer = setTimeout(() => mark.classList.remove('search-match-flash'), 1250)
     flashTimers.add(timer)
 }
 
