@@ -799,10 +799,16 @@ async function sendMessage(text) {
          })
          // The attachments were queued with the message — drop the snapshot.
          discardAttachmentDraft(identity.currentSessionId.value)
-       } catch {
+       } catch (err) {
          // Enqueue failed (network down / 5xx) — the message was not delivered.
-         // Restore the input so the user's text isn't lost.
-         inputBarRef.value?.restoreInput(inputText || '')
+         // enqueueMessage already toasted queueFailed; here we just restore the
+         // input so the user's text isn't lost.
+         appLog.w(TAG, 'enqueue path failed, restoring input', err)
+         try {
+           inputBarRef.value?.restoreInput(inputText || '')
+         } catch (e) {
+           appLog.e(TAG, 'restoreInput failed', e)
+         }
        }
        return
      }
@@ -825,10 +831,17 @@ async function sendMessage(text) {
       // snapshot so switching away and back doesn't resurrect them
       // (mirrors clearInput() deleting the text draft on send).
       discardAttachmentDraft(getSessionId())
-    } catch {
+    } catch (err) {
       // Send failed (network down / 5xx) — the message was not delivered.
-      // Restore the input so the user's text isn't lost.
-      inputBarRef.value?.restoreInput(inputText)
+      // Restore the input so the user's text isn't lost. sendMessageNow's
+      // catch has already toasted the failure; this catch only decides
+      // whether the typed text comes back.
+      appLog.w(TAG, 'sendMessage failed, restoring input', err)
+      try {
+        inputBarRef.value?.restoreInput(inputText)
+      } catch (e) {
+        appLog.e(TAG, 'restoreInput failed', e)
+      }
     }
 }
 
@@ -917,13 +930,19 @@ async function sendMessageNow(text, filePaths, files) {
             populateACPStateFromCache(effectiveAgentId)
         }
     } catch (err) {
+        // Surface the failure FIRST so no later cleanup step can swallow the
+        // user-visible toast. dispatch/disconnectStream/autoSpeech below are
+        // best-effort; if any of them throws, the error would otherwise skip
+        // straight to sendMessage's catch (which restores the input text) and
+        // the "发送失败" toast would never appear.
+        toast.show(t('toast.sendFailed'), { icon: '⚠️', type: 'error' })
+        appLog.e(TAG, 'sendMessageNow failed', err)
         // Remove the optimistically pushed user message on failure
         messageStore.dispatch({ type: 'optimistic_remove', id: pendingId })
         stream.disconnectStream()
         loading.value = false
         // Restore screen lock on send failure — output won't proceed
         autoSpeech.onOutputEndNoSpeech()
-        toast.show(t('toast.sendFailed'), { icon: '⚠️', type: 'error' })
         // Clear session ID on error to prevent using invalid session
         if (err.msgKey === 'SessionBackendNotFound' || err.msgKey === 'SessionNotFound') {
             identity.currentSessionId.value = ''
