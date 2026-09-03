@@ -66,6 +66,32 @@ describe('createFixLocalImagePaths', () => {
       setShareToken(null)
     }
   })
+
+  it('resolves shared docs with an absolute dir via ?path= (cross-dir images)', () => {
+    setShareToken('tokabs')
+    try {
+      // Share SPA always renders with an absolute file path, e.g.
+      // /home/user/proj/test/markdown/images-demo.md referencing ../images/…
+      const fix = createFixLocalImagePaths({ baseDir: '/home/user/proj/test/markdown', imageTimestamp: 7, isPC: true })
+      const out = fix('<img src="../images/pic.jpg" alt="p">')
+      expect(out).toContain('src="/api/share/tokabs/local?path=%2Fhome%2Fuser%2Fproj%2Ftest%2Fmarkdown%2F..%2Fimages%2Fpic.jpg&t=7"')
+      expect(out).not.toContain('/local-file')
+      expect(out).not.toContain('/file/thumb')
+    } finally {
+      setShareToken(null)
+    }
+  })
+
+  it('keeps external URLs untouched in share mode with absolute dirs', () => {
+    setShareToken('tokabs')
+    try {
+      const fix = createFixLocalImagePaths({ baseDir: '/home/user/proj/test/markdown', imageTimestamp: 1, isPC: true })
+      const out = fix('<img src="https://x.com/a.png">')
+      expect(out).toContain('src="https://x.com/a.png"')
+    } finally {
+      setShareToken(null)
+    }
+  })
 })
 
 describe('buildMarkdownPreviewDom', () => {

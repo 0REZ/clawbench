@@ -18,7 +18,7 @@
 
 import { renderMarkdownHtml } from '@/composables/useMarkdownRenderer.ts'
 import { annotateFilePaths } from '@/composables/useFilePathAnnotation.ts'
-import { dirName, joinPath, splitPath } from '@/utils/path.ts'
+import { dirName, joinPath, splitPath, isAbsolutePath, normalizeSlashes } from '@/utils/path.ts'
 import { isThumbExtension, buildThumbUrl, getThumbWidth } from '@/utils/chatRenderUtils.ts'
 import { usePlatformDetect } from '@/composables/usePlatformDetect.ts'
 import { isShareMode, shareApiUrl } from '@/share/shareMode'
@@ -95,6 +95,17 @@ export function createFixLocalImagePaths(opts: FixLocalImagePathsOptions): (html
             if (shareMode) {
                 // Share mode: no thumbnail endpoint (it requires the project
                 // cookie) — serve the full-size image through the token scope.
+                // When the markdown file path is absolute (share SPA always
+                // passes absolute paths), resolve media to their absolute
+                // target and use the ?path= form; otherwise the token endpoint
+                // treats {rel} as relative to the shared file's directory.
+                if (isAbsolutePath(currentDir)) {
+                    // Rebuild the absolute target from the raw (still-decoded)
+                    // src so `..` segments survive for the backend to resolve.
+                    const absTarget = normalizeSlashes(`${currentDir.replace(/\/+$/, '')}/${src}`)
+                    const shareSrc = shareApiUrl('local') + '?path=' + encodeURIComponent(absTarget) + `&t=${imageTimestamp}`
+                    return match.replace(`src="${src}"`, `src="${shareSrc}"`)
+                }
                 const shareSrc = buildLocalMediaUrl(rel, imageTimestamp)
                 return match.replace(`src="${src}"`, `src="${shareSrc}"`)
             }
