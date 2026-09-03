@@ -266,6 +266,7 @@ func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 		require.NoError(t, rows.Scan(&s))
 		seqs = append(seqs, s)
 	}
+	require.NoError(t, rows.Err())
 	assert.Equal(t, []int{0, 1}, seqs, "segments must be stored at seq 0 then seq 1")
 
 	// Content row EXCLUDES the thinking block entirely — a slim think_id marker
@@ -550,5 +551,6 @@ func TestExecutor_ForceFlush_ThenGrowth_FullRewrite(t *testing.T) {
 		require.NoError(t, rows.Scan(&s))
 		seqs = append(seqs, s)
 	}
+	require.NoError(t, rows.Err())
 	assert.Equal(t, []int{0}, seqs, "force mode must keep a single seq=0 full rewrite, no incremental chunks")
 }

@@ -184,10 +184,8 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	}
 
 	switch event.Type {
-	case "content":
-		return map[string]string{"content": event.Content}
-	case "thinking":
-		return map[string]string{"text": event.Content}
+	case "content", "thinking":
+		return simpleTextPayload(event)
 	case "tool_use":
 		return toolUsePayload(event)
 	case "tool_result":
@@ -203,14 +201,7 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	case "user_message":
 		return userMessagePayload(event)
 	case "stream_start":
-		if event.StreamStart != nil {
-			payload := map[string]any{"message_id": event.StreamStart.MessageID}
-			if event.StreamStart.QueueID != "" {
-				payload["queue_id"] = event.StreamStart.QueueID
-			}
-			return payload
-		}
-		return nil
+		return streamStartPayload(event)
 	case "queue_drain":
 		return queueDrainPayload(event)
 	case "queue_cancel":
@@ -218,6 +209,27 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	default:
 		return acpStatePayload(event)
 	}
+}
+
+// simpleTextPayload maps a bare-text event (content/thinking) to its keyed value.
+func simpleTextPayload(event ai.StreamEvent) any {
+	if event.Type == "thinking" {
+		return map[string]string{"text": event.Content}
+	}
+	return map[string]string{"content": event.Content}
+}
+
+// streamStartPayload builds the stream_start message payload. Returns nil when
+// no StreamStart data is attached (the event is then skipped downstream).
+func streamStartPayload(event ai.StreamEvent) any {
+	if event.StreamStart == nil {
+		return nil
+	}
+	payload := map[string]any{"message_id": event.StreamStart.MessageID}
+	if event.StreamStart.QueueID != "" {
+		payload["queue_id"] = event.StreamStart.QueueID
+	}
+	return payload
 }
 
 // acpStatePayload handles ACP state update event types (mode, config, commands, etc.)

@@ -202,6 +202,158 @@ func TestFileShares_DeleteByPaths(t *testing.T) {
 	require.NoError(t, service.DeleteFileShareByPaths(nil))
 }
 
+// ─── DB error branches ───────────────────────────────────────────────────────
+
+// closedSQLite returns an already-closed in-memory SQLite handle.
+func closedSQLite(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	return db
+}
+
+func TestFileShares_Upsert_GetByPathReadError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	// Healthy write handle, closed read handle → GetFileShareByPath errors first.
+	cleanup := service.SetDBForTest(db, closedSQLite(t))
+	defer cleanup()
+
+	_, _, err := service.UpsertFileShare("/tmp/err.md", "err.md")
+	assert.Error(t, err, "read failure in UpsertFileShare must surface")
+}
+
+func TestFileShares_Upsert_WriteErrorOnInsert(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	// Healthy read handle (so GetFileShareByPath succeeds and reports no
+	// existing share), closed write handle → INSERT fails.
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	_, _, err := service.UpsertFileShare("/tmp/err2.md", "err2.md")
+	assert.Error(t, err, "write failure in UpsertFileShare must surface")
+}
+
+func TestFileShares_Upsert_RotateWriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+
+	// Pre-create an existing share so the rotate path (DELETE then INSERT) runs.
+	token, created, err := service.UpsertFileShare("/tmp/rot.md", "rot.md")
+	require.NoError(t, err)
+	require.True(t, created)
+	require.NotEmpty(t, token)
+
+	// Now break the write handle → the DELETE (rotate) fails.
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	_, _, err = service.UpsertFileShare("/tmp/rot.md", "rot.md")
+	assert.Error(t, err, "rotate DELETE failure must surface")
+}
+
+func TestFileShares_GetByToken_ScanError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	// Drop the name column so a SELECT ... name scan fails on a live row.
+	_, err := service.UnsafeDBForTest().Exec("ALTER TABLE file_shares DROP COLUMN name")
+	require.NoError(t, err)
+	// Insert a row directly (no name column).
+	_, err = db.Exec("INSERT INTO file_shares (token, path) VALUES (?, ?)", "tok1", "/tmp/t.md")
+	require.NoError(t, err)
+
+	_, _, ok, err := service.GetFileShareByToken("tok1")
+	assert.False(t, ok)
+	assert.Error(t, err, "scan failure must surface as an error")
+}
+
+func TestFileShares_GetByToken_SQLQueryError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(db, closedSQLite(t))
+	defer cleanup()
+
+	_, _, _, err := service.GetFileShareByToken("abc")
+	assert.Error(t, err, "query on a closed read DB must error")
+}
+
+func TestFileShares_GetByPath_SQLQueryError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(db, closedSQLite(t))
+	defer cleanup()
+
+	_, _, _, err := service.GetFileShareByPath("/tmp/x.md")
+	assert.Error(t, err, "query on a closed read DB must error")
+}
+
+func TestFileShares_DeleteByToken_WriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	assert.Error(t, service.DeleteFileShareByToken("abc"))
+}
+
+func TestFileShares_DeleteByPath_WriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	assert.Error(t, service.DeleteFileShareByPath("/tmp/x.md"))
+}
+
+func TestFileShares_DeleteUnderPath_WriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	assert.Error(t, service.DeleteFileSharesUnderPath("/tmp/docs"))
+}
+
+func TestFileShares_DeleteByPaths_WriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	assert.Error(t, service.DeleteFileShareByPaths([]string{"/tmp/a.md"}))
+}
+
+func TestFileShares_DeleteAll_WriteError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(closedSQLite(t), db)
+	defer cleanup()
+
+	assert.Error(t, service.DeleteAllFileShares())
+}
+
+func TestFileShares_List_QueryError(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	cleanup := service.SetDBForTest(db, closedSQLite(t))
+	defer cleanup()
+
+	_, err := service.ListFileShares()
+	assert.Error(t, err, "list on a closed read DB must error")
+}
+
 func TestGenerateShareToken_IsUniqueAndHex(t *testing.T) {
 	db := setupTestDBForFileShares(t)
 	defer func() { _ = db.Close() }()

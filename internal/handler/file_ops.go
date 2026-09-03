@@ -166,7 +166,7 @@ func ServeFileDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeFileBatchDelete handles deleting multiple files/directories in a single request.
-func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // batch delete with per-item error handling
+func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -186,49 +186,14 @@ func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:goc
 	var errs []string
 	var deletedPaths []string
 	for _, p := range req.Paths {
-		// Resolve each path: absolute validated directly, relative resolved against project cookie
-		var absPath string
-		if filepath.IsAbs(p) {
-			ap, err := filepath.Abs(p)
-			if err != nil || !isPathUnderAnyRoot(ap) {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			absPath = ap
-		} else {
-			projectPath := middleware.GetProjectFromCookie(r)
-			if projectPath == "" {
-				errs = append(errs, p+": no project")
-				continue
-			}
-			baseAbs, err := filepath.Abs(projectPath)
-			if err != nil {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			ap, ok := model.ValidatePath(baseAbs, p)
-			if !ok || !isPathUnderAnyRoot(ap) {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			absPath = ap
-		}
-
-		info, err := os.Stat(absPath)
-		if err != nil {
-			errs = append(errs, p+": not found")
+		absPath, errMsg := resolveBatchDeletePath(r, p)
+		if errMsg != "" {
+			errs = append(errs, p+": "+errMsg)
 			continue
 		}
-		if info.IsDir() {
-			if err := safeRemoveAll(absPath); err != nil {
-				errs = append(errs, p+": delete failed: "+err.Error())
-				continue
-			}
-		} else {
-			if err := os.Remove(absPath); err != nil {
-				errs = append(errs, p+": delete failed: "+err.Error())
-				continue
-			}
+		if err := deletePathEntry(absPath); err != nil {
+			errs = append(errs, p+": "+err.Error())
+			continue
 		}
 		deleted++
 		deletedPaths = append(deletedPaths, absPath)
@@ -245,6 +210,48 @@ func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:goc
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// resolveBatchDeletePath resolves a batch-delete path to an absolute path under
+// a root. Returns the absolute path, or a non-empty error message on failure.
+const errBatchAccessDenied = "access denied"
+
+func resolveBatchDeletePath(r *http.Request, p string) (string, string) {
+	// Resolve each path: absolute validated directly, relative resolved against project cookie
+	if filepath.IsAbs(p) {
+		ap, err := filepath.Abs(p)
+		if err != nil || !isPathUnderAnyRoot(ap) {
+			return "", errBatchAccessDenied
+		}
+		return ap, ""
+	}
+
+	projectPath := middleware.GetProjectFromCookie(r)
+	if projectPath == "" {
+		return "", "no project"
+	}
+	baseAbs, err := filepath.Abs(projectPath)
+	if err != nil {
+		return "", errBatchAccessDenied
+	}
+	ap, ok := model.ValidatePath(baseAbs, p)
+	if !ok || !isPathUnderAnyRoot(ap) {
+		return "", errBatchAccessDenied
+	}
+	return ap, ""
+}
+
+// deletePathEntry removes a single file or directory tree. Directories are
+// removed recursively; the caller pre-validates the path is under a root.
+func deletePathEntry(absPath string) error {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("not found")
+	}
+	if info.IsDir() {
+		return safeRemoveAll(absPath)
+	}
+	return os.Remove(absPath)
 }
 
 // ServeFileCreate handles file creation.

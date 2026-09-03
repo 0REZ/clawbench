@@ -298,7 +298,7 @@ func ServeSharePublic(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case rest == "" || rest == "file":
+	case rest == "" || rest == entryTypeFile:
 		serveShareFileContent(w, r, absPath)
 	case rest == "download":
 		serveShareRaw(w, r, absPath, name, true)
@@ -470,12 +470,12 @@ func ServeSharePage(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet, http.MethodHead) {
 		return
 	}
-	serveShareHtml(w, r)
+	serveShareHTML(w, r)
 }
 
-// serveShareHtml serves the share SPA entry (share.html), preferring the disk
+// serveShareHTML serves the share SPA entry (share.html), preferring the disk
 // public/ dir then falling back to embedded dist (mirrors ServeIndex).
-func serveShareHtml(w http.ResponseWriter, r *http.Request) {
+func serveShareHTML(w http.ResponseWriter, r *http.Request) {
 	fsys := frontend.GetFS()
 	if fi, err := fsys.Open("share.html"); err == nil {
 		_ = fi.Close()

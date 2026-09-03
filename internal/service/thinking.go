@@ -51,10 +51,11 @@ func UpsertThinking(messageID int64, sessionID, thinkID, text string) error {
 	defer writeMu.Unlock()
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec("DELETE FROM chat_thinking WHERE think_id = ? AND message_id = ?", thinkID, messageID); err != nil {
+	ctx := context.Background()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM chat_thinking WHERE think_id = ? AND message_id = ?", thinkID, messageID); err != nil {
 		return fmt.Errorf("UpsertThinking delete: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text)
 		VALUES (?, ?, ?, 0, ?)
 	`, messageID, sessionID, thinkID, text); err != nil {
