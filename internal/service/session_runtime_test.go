@@ -2152,9 +2152,10 @@ func ensureChatThinkingTable(t *testing.T, db *sql.DB) {
 		message_id INTEGER NOT NULL,
 		session_id TEXT NOT NULL,
 		think_id TEXT NOT NULL,
+		seq INTEGER NOT NULL DEFAULT 0,
 		text TEXT NOT NULL DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE(think_id, message_id)
+		UNIQUE(think_id, message_id, seq)
 	)`)
 	require.NoError(t, err)
 }
@@ -2243,7 +2244,7 @@ func TestFinalizeOrphanedStreamingMessages_ThinkingAlreadySlimmed(t *testing.T) 
 	require.NoError(t, err)
 	// The periodic flush already persisted the full text.
 	_, err = db.Exec(
-		"INSERT INTO chat_thinking (message_id, session_id, think_id, text) VALUES ((SELECT id FROM chat_history WHERE session_id = ?), ?, ?, 'already flushed')",
+		"INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text) VALUES ((SELECT id FROM chat_history WHERE session_id = ?), ?, ?, 0, 'already flushed')",
 		sessionID, sessionID, existingID,
 	)
 	require.NoError(t, err)

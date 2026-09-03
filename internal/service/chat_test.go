@@ -180,9 +180,10 @@ CREATE TABLE IF NOT EXISTS chat_thinking (
 	message_id INTEGER NOT NULL,
 	session_id TEXT NOT NULL,
 	think_id TEXT NOT NULL,
+	seq INTEGER NOT NULL DEFAULT 0,
 	text TEXT NOT NULL DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(think_id, message_id)
+	UNIQUE(think_id, message_id, seq)
 );
 `
 

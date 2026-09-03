@@ -519,7 +519,7 @@ func copySessionDetailTables(idMap map[int64]int64, sourceSessionID, newSessionI
 
 	// chat_thinking
 	thRows, err := dbRead.Query(
-		"SELECT message_id, think_id, text, created_at FROM chat_thinking WHERE session_id = ?",
+		"SELECT message_id, think_id, seq, text, created_at FROM chat_thinking WHERE session_id = ?",
 		sourceSessionID,
 	)
 	if err != nil {
@@ -529,13 +529,14 @@ func copySessionDetailTables(idMap map[int64]int64, sourceSessionID, newSessionI
 	type thinkRow struct {
 		messageID int64
 		thinkID   string
+		seq       int
 		text      string
 		createdAt time.Time
 	}
 	var thinkRows []thinkRow
 	for thRows.Next() {
 		var r thinkRow
-		if err := thRows.Scan(&r.messageID, &r.thinkID, &r.text, &r.createdAt); err != nil {
+		if err := thRows.Scan(&r.messageID, &r.thinkID, &r.seq, &r.text, &r.createdAt); err != nil {
 			return fmt.Errorf("failed to scan thinking: %w", err)
 		}
 		thinkRows = append(thinkRows, r)
@@ -546,8 +547,8 @@ func copySessionDetailTables(idMap map[int64]int64, sourceSessionID, newSessionI
 			continue
 		}
 		if _, err := WriteExec(
-			"INSERT OR REPLACE INTO chat_thinking (message_id, session_id, think_id, text, created_at) VALUES (?, ?, ?, ?, ?)",
-			newID, newSessionID, r.thinkID, r.text, r.createdAt,
+			"INSERT OR REPLACE INTO chat_thinking (message_id, session_id, think_id, seq, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			newID, newSessionID, r.thinkID, r.seq, r.text, r.createdAt,
 		); err != nil {
 			return fmt.Errorf("failed to copy thinking %s: %w", r.thinkID, err)
 		}
