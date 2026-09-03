@@ -808,34 +808,248 @@ function buildCodeBlockJs(locale: string): string {
 
 // ─── Lightbox JS ───────────────────────────────────────────────────────────────
 
+/**
+ * Standalone lightbox with the same zoom/pan interactions as the in-app
+ * Lightbox.vue:
+ *  - wheel zoom (clamped to [0.1, 10], anchored to the fit-to-screen scale)
+ *  - drag to pan once zoomed beyond fit (mouse + single-touch)
+ *  - pinch to zoom (touch)
+ *  - clicking the overlay backdrop closes; Esc / × close
+ * SVGs (mermaid) are wrapped in a container div carrying the transform, with
+ * explicit width/height fit onto the viewport — mirroring Lightbox.vue's
+ * onSvgMounted; <img> carries its own transform like onImageLoad.
+ */
 function buildLightboxJs(): string {
     return `
 (function() {
+    var bodyOverflow = '';
+
     function openLightbox(content, isSvg) {
         var overlay = document.createElement('div');
         overlay.className = 'export-lightbox';
+
+        var view = document.createElement('div');
+        view.className = 'export-lightbox-view';
+        overlay.appendChild(view);
+
+        // Track how many export lightboxes are open so body overflow restore is
+        // balanced when several are opened in a row (the app uses a singleton).
+        window.__exportLbCount = (window.__exportLbCount || 0) + 1;
+
+        var isDragging = false;
+        var scale = 1;
+        var fitScale = 1;
+        var tx = 0, ty = 0, lastTx = 0, lastTy = 0;
+        var dragStartX = 0, dragStartY = 0;
+        var contentEl = null;   // element receiving the transform
+
+        function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
+
+        function applyTransform() {
+            if (!contentEl) return;
+            contentEl.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
+        }
+        function setScale(v, resetPan) {
+            scale = clamp(v, 0.1, 10);
+            if (resetPan) { tx = 0; ty = 0; lastTx = 0; lastTy = 0; }
+            applyTransform();
+        }
+        // While dragging, kill the transition so panning tracks the pointer 1:1
+        // (mirrors App imgStyle: transition none while isDragging).
+        function setDragging(on) {
+            isDragging = on;
+            if (contentEl) contentEl.style.transition = on ? 'none' : '';
+        }
+
+        // Size an <img> explicitly (like App imgStyle) so scale() operates on a
+        // real fitted dimension instead of CSS max-* constraints.
+        function sizeImgToFit(img, nw, nh) {
+            var pad = 56;
+            var availW = overlay.clientWidth - pad * 2;
+            var availH = overlay.clientHeight - pad * 2;
+            var s = 1;
+            if (nw > 0 && nh > 0 && availW > 0 && availH > 0) {
+                s = Math.min(availW / nw, availH / nh, 1);
+            }
+            img.style.width = Math.round(nw * s) + 'px';
+            img.style.height = Math.round(nh * s) + 'px';
+            img.style.maxWidth = 'none';
+            img.style.maxHeight = 'none';
+            fitScale = 1;
+            scale = 1;
+            applyTransform();
+        }
+
         if (isSvg) {
-            var div = document.createElement('div');
-            div.innerHTML = content;
-            var svg = div.querySelector('svg');
-            if (svg) { svg.style.maxWidth = '95vw'; svg.style.maxHeight = '95vh'; }
-            overlay.appendChild(svg || div);
+            var holder = document.createElement('div');
+            holder.innerHTML = content;
+            var svg = holder.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.maxWidth = 'none';
+                svg.style.maxHeight = 'none';
+                view.appendChild(svg);
+                contentEl = svg;
+                // Fit the SVG onto the viewport after it is in the layout (like
+                // Lightbox.vue onSvgMounted): measure via viewBox (fallback
+                // getBBox) and set an explicit fitted width/height so scale=1
+                // is the fully-visible baseline.
+                requestAnimationFrame(function() {
+                    var w = 0, h = 0;
+                    if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width > 0) {
+                        w = svg.viewBox.baseVal.width;
+                        h = svg.viewBox.baseVal.height;
+                    } else if (typeof svg.getBBox === 'function') {
+                        try {
+                            var bb = svg.getBBox();
+                            w = bb.width; h = bb.height;
+                        } catch (e) { w = 0; h = 0; }
+                    }
+                    if (w > 0 && h > 0) {
+                        var pad = 56;
+                        var availW = overlay.clientWidth - pad * 2;
+                        var availH = overlay.clientHeight - pad * 2;
+                        var s = Math.min(availW / w, availH / h);
+                        svg.setAttribute('width', Math.round(w * s) + 'px');
+                        svg.setAttribute('height', Math.round(h * s) + 'px');
+                        // Baseline scale = 1 (the SVG is already sized to fit).
+                        fitScale = 1;
+                        scale = 1;
+                        applyTransform();
+                    }
+                });
+            } else {
+                view.appendChild(holder);
+                contentEl = holder;
+            }
         } else {
             var img = document.createElement('img');
             img.src = content;
-            overlay.appendChild(img);
+            img.draggable = false;
+            view.appendChild(img);
+            contentEl = img;
+            if (img.complete && img.naturalWidth > 0) {
+                sizeImgToFit(img, img.naturalWidth, img.naturalHeight);
+            } else {
+                img.addEventListener('load', function() {
+                    sizeImgToFit(img, img.naturalWidth, img.naturalHeight);
+                });
+            }
         }
+
+        // ── Close ──
+        function closeLightbox() {
+            overlay.remove();
+            document.removeEventListener('keydown', onKey);
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            window.__exportLbCount = (window.__exportLbCount || 1) - 1;
+            if (window.__exportLbCount <= 0) {
+                document.body.style.overflow = bodyOverflow;
+            }
+        }
+        function onKey(e) { if (e.key === 'Escape') closeLightbox(); }
+
         var closeBtn = document.createElement('button');
         closeBtn.className = 'lb-close-btn';
         closeBtn.textContent = '\\u00d7';
-        closeBtn.onclick = function(e) { e.stopPropagation(); overlay.remove(); };
+        closeBtn.onclick = function(e) { e.stopPropagation(); closeLightbox(); };
         overlay.appendChild(closeBtn);
-        overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
-        document.addEventListener('keydown', function handler(e) {
-            if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', handler); }
+
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay || e.target === view) closeLightbox();
         });
+
+        // ── Wheel zoom ──
+        overlay.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            var delta = e.deltaY > 0 ? 0.85 : 1.2;
+            var newScale = scale * delta;
+            if (newScale < fitScale && scale >= fitScale) {
+                setScale(newScale, true);
+            } else {
+                setScale(newScale, false);
+            }
+        }, { passive: false });
+
+        // ── Mouse pan (only when zoomed beyond fit) ──
+        function canDrag() { return scale > fitScale + 0.001; }
+
+        overlay.addEventListener('mousedown', function(e) {
+            if (e.button !== 0) return;
+            if (!canDrag()) return;
+            e.preventDefault();
+            setDragging(true);
+            dragStartX = e.clientX - lastTx;
+            dragStartY = e.clientY - lastTy;
+        });
+        function onMove(e) {
+            if (!isDragging) return;
+            tx = e.clientX - dragStartX;
+            ty = e.clientY - dragStartY;
+            applyTransform();
+        }
+        function onUp() {
+            if (isDragging) {
+                setDragging(false);
+                lastTx = tx; lastTy = ty;
+            }
+        }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+
+        // ── Touch: pinch zoom + single-finger pan ──
+        var touchStartScale = 1, touchStartDist = 0;
+        overlay.addEventListener('touchstart', function(e) {
+            if (e.touches.length === 2) {
+                touchStartDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                touchStartScale = scale;
+                setDragging(false);
+            } else if (e.touches.length === 1) {
+                if (canDrag()) {
+                    setDragging(true);
+                    dragStartX = e.touches[0].clientX - lastTx;
+                    dragStartY = e.touches[0].clientY - lastTy;
+                }
+            }
+        }, { passive: true });
+        overlay.addEventListener('touchmove', function(e) {
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                var dist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                if (touchStartDist > 0) {
+                    setScale(touchStartScale * dist / touchStartDist, false);
+                }
+            } else if (e.touches.length === 1 && isDragging) {
+                e.preventDefault();
+                tx = e.touches[0].clientX - dragStartX;
+                ty = e.touches[0].clientY - dragStartY;
+                applyTransform();
+            }
+        }, { passive: false });
+        overlay.addEventListener('touchend', function() {
+            if (isDragging) {
+                setDragging(false);
+                lastTx = tx; lastTy = ty;
+            }
+            touchStartDist = 0;
+        });
+
+        document.addEventListener('keydown', onKey);
+        if (window.__exportLbCount <= 1) {
+            bodyOverflow = document.body.style.overflow;
+            document.body.style.overflow = 'hidden';
+        }
         document.body.appendChild(overlay);
     }
+
     document.addEventListener('click', function(e) {
         var expandIcon = e.target.closest('.lightbox-expand-icon');
         if (expandIcon) {
@@ -846,10 +1060,14 @@ function buildLightboxJs(): string {
                 if (svg) { e.preventDefault(); openLightbox(svg.outerHTML, true); }
                 return;
             }
-            // Otherwise, it's an image expand icon
+            // Otherwise, it's an image expand icon — open the full-size image.
             var wrap = expandIcon.closest('.lightbox-img-wrap');
             var img = wrap ? wrap.querySelector('.lightbox-img') : null;
-            if (img) { e.preventDefault(); openLightbox(img.src, false); }
+            if (img) {
+                e.preventDefault();
+                var fullSrc = img.getAttribute('data-full-src') || img.src;
+                openLightbox(fullSrc, false);
+            }
             return;
         }
     });
@@ -1027,13 +1245,15 @@ ${tocCss}
 @media (hover: hover) { .markdown-body .mermaid:hover .lightbox-expand-icon { display: flex; } }
 
 /* ─── Lightbox overlay ─── */
-.export-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
-.export-lightbox img { max-width: 95vw; max-height: 95vh; object-fit: contain; }
+.export-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; cursor: zoom-out; overflow: hidden; touch-action: none; }
+.export-lightbox-view { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; cursor: inherit; }
+.export-lightbox-view img, .export-lightbox-view svg { max-width: 95vw; max-height: 95vh; object-fit: contain; user-select: none; -webkit-user-drag: none; }
 /* SVG (mermaid diagrams) gets the theme's content background — same as the app
    lightbox (Lightbox.vue .lightbox-content svg { background: var(--bg-primary) }) —
    otherwise the transparent diagram sits directly on the dark overlay. */
-.export-lightbox svg { max-width: 95vw; max-height: 95vh; background: var(--bg-primary); }
-.export-lightbox .lb-close-btn { position: absolute; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(255,255,255,0.2); color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.export-lightbox-view svg { background: var(--bg-primary); }
+.export-lightbox-view img, .export-lightbox-view svg { transform-origin: center center; transition: transform 0.1s ease-out; }
+.export-lightbox .lb-close-btn { position: absolute; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(255,255,255,0.2); color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; }
 .export-lightbox .lb-close-btn:hover { background: rgba(255,255,255,0.4); }
 </style>
 </head>

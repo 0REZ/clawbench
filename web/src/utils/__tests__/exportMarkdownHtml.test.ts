@@ -343,8 +343,30 @@ describe('exportMarkdownToHtml', () => {
     const result = await exportMarkdownToHtml(opts({ content: '<div class="mermaid"><svg>diagram</svg></div>' }))
     // App Lightbox.vue applies `.lightbox-content svg { background: var(--bg-primary) }`;
     // the export lightbox must do the same so diagrams aren't transparent over the overlay.
-    expect(result.html).toContain('.export-lightbox svg')
+    expect(result.html).toContain('.export-lightbox-view svg')
     expect(result.html).toContain('background: var(--bg-primary)')
+  })
+
+  it('includes lightbox zoom/pan interactions matching the in-app lightbox', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '<p>hi</p>' }))
+    // Wheel zoom with the app's 0.85/1.2 factors.
+    expect(result.html).toContain("e.deltaY > 0 ? 0.85 : 1.2")
+    // Drag-to-pan only when zoomed past fit, pinch zoom, and a transform on content.
+    expect(result.html).toContain('function canDrag()')
+    expect(result.html).toContain('touchStartDist')
+    expect(result.html).toContain("'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')'")
+    // Backdrop click + Esc close (Esc handler present in the lightbox script).
+    expect(result.html).toContain("if (e.target === overlay || e.target === view) closeLightbox()")
+    expect(result.html).toContain("if (e.key === 'Escape') closeLightbox()")
+  })
+
+  it('produces syntactically valid inline script (no template-embedding breakage)', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '# T\n\n![x](https://a.com/i.png)\n\n<div class="mermaid"><svg><g /></svg></div>' }))
+    const m = result.html.match(/<script>([\s\S]*?)<\/script>/)
+    expect(m).toBeTruthy()
+    // Compiling proves no stray backticks / ${ } / broken braces leaked into the
+    // embedded JS from the surrounding TS template literal.
+    expect(() => new Function(m![1])).not.toThrow()
   })
 
   it('removes script tags and iframes from the content DOM', async () => {
