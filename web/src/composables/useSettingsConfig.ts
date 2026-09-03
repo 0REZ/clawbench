@@ -185,7 +185,7 @@ const legacyKeys: Record<string, {
     key: '',
     format: 'raw',
     sideEffect(value: string) {
-      applyFontConfig(document, value, localConfig.fontUi as string | undefined)
+      applyFontConfig(document, value, localConfig.fontMonoFallback as string | undefined, localConfig.fontUi as string | undefined, localConfig.fontUiFallback as string | undefined)
       // Notify JS font consumers (xterm / CodeMirror / mermaid) to re-apply
       window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontMono: value } }))
     },
@@ -194,8 +194,24 @@ const legacyKeys: Record<string, {
     key: '',
     format: 'raw',
     sideEffect(value: string) {
-      applyFontConfig(document, localConfig.fontMono as string | undefined, value)
+      applyFontConfig(document, localConfig.fontMono as string | undefined, localConfig.fontMonoFallback as string | undefined, value, localConfig.fontUiFallback as string | undefined)
       window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontUi: value } }))
+    },
+  },
+  fontMonoFallback: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, localConfig.fontMono as string | undefined, value, localConfig.fontUi as string | undefined, localConfig.fontUiFallback as string | undefined)
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontMonoFallback: value } }))
+    },
+  },
+  fontUiFallback: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, localConfig.fontMono as string | undefined, localConfig.fontMonoFallback as string | undefined, localConfig.fontUi as string | undefined, value)
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontUiFallback: value } }))
     },
   },
 }
@@ -311,6 +327,8 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   liveUpdate: true,
   fontMono: 'default',
   fontUi: 'default',
+  fontMonoFallback: 'default',
+  fontUiFallback: 'default',
 }
 
 // Build reactive local config from legacy localStorage + defaults

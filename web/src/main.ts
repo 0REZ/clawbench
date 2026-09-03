@@ -3,6 +3,10 @@ import { installPromiseWithResolversPolyfill } from './utils/polyfills.ts'
 // Must run before any module that depends on Promise.withResolvers (e.g. pdfjs-dist).
 installPromiseWithResolversPolyfill()
 
+// Self-hosted open-source font @font-face declarations (lazy — files download
+// only when the chosen family is actually used in rendered text).
+import '@/assets/self-hosted-fonts.css'
+
 import { createApp } from 'vue'
 import App from './App.vue'
 import i18n from './i18n'

@@ -354,6 +354,36 @@ describe('useSettingsConfig', () => {
       window.removeEventListener('clawbench-font-change', listener)
       localStorage.removeItem('clawbench-settings-fontUi')
     })
+
+    it('setLocalConfig for fontMonoFallback dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontMonoFallback', 'Sarasa Mono SC')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontMonoFallback: 'Sarasa Mono SC' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontMonoFallback')
+    })
+
+    it('setLocalConfig for fontUiFallback dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontUiFallback', 'SimSun')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontUiFallback: 'SimSun' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontUiFallback')
+    })
   })
 
   describe('patchAgentField', () => {

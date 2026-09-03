@@ -10,7 +10,46 @@
  */
 
 import { getNative } from '@/utils/clawbenchNative'
-import { MONO_FONT_CHOICES, UI_FONT_CHOICES } from '@/utils/fontConfig'
+import { buildFontStack, DEFAULT_MONO_STACK, DEFAULT_UI_STACK, MONO_FONT_CHOICES, UI_FONT_CHOICES, MONO_FALLBACK_CHOICES, type FontChoice } from '@/utils/fontConfig'
+
+/** Raw (untranslated) font option descriptor used by the settings pickers. */
+export interface FontOptionRaw {
+  labelKey: string
+  value: string
+  groupKey: string
+  badgeKey?: string
+  previewFont?: string
+}
+
+/** Shared core: map a candidate list to raw options with groups/badges/previews. */
+function toFontOptions(candidates: FontChoice[], defaultStack: string): FontOptionRaw[] {
+  return candidates.map(f => {
+    const opt: FontOptionRaw = {
+      labelKey: `settings.items.fonts.${f.id}`,
+      value: f.id,
+      groupKey: `settings.items.fontsGroup.${f.kind}`,
+      previewFont: f.id === 'default' ? undefined : buildFontStack(f.id, defaultStack),
+    }
+    return f.kind === 'bundled' ? { ...opt, badgeKey: 'settings.items.fontsBadge.bundled' } : opt
+  })
+}
+
+/**
+ * Build the raw select options for the primary mono/ui font picker, carrying
+ * group + bundled badge + a previewFont CSS stack so the option label renders
+ * in its own font. 'default' has no previewFont (uses the ambient UI font).
+ */
+export function buildFontFamilyOptions(isMono: boolean): FontOptionRaw[] {
+  const candidates = isMono ? MONO_FONT_CHOICES : UI_FONT_CHOICES
+  const stack = isMono ? DEFAULT_MONO_STACK : DEFAULT_UI_STACK
+  return toFontOptions(candidates, stack)
+}
+
+/** Build options for the CODE-FONT fallback picker (adds CJK system fonts so
+ *  Chinese comments remain readable when the primary code font is Latin-only). */
+export function buildMonoFallbackOptions(): FontOptionRaw[] {
+  return toFontOptions(MONO_FALLBACK_CHOICES, DEFAULT_MONO_STACK)
+}
 
 export interface DependsOn {
   key: string
@@ -45,7 +84,7 @@ export interface ItemSpec {
   type: 'switch' | 'select' | 'number' | 'text' | 'slider' | 'action' | 'info' | 'header' | 'password' | 'textarea'
   source: 'server' | 'local'
   needsRestart?: boolean
-  options?: { labelKey: string; value: unknown }[]
+  options?: { labelKey: string; value: unknown; modelName?: string; groupKey?: string; badgeKey?: string }[]
   min?: number
   max?: number
   step?: number
@@ -156,12 +195,10 @@ export const categoryItems: Record<string, CategoryEntry[]> = {
     ]}},
     { type: 'item', spec: { labelKey: 'settings.items.uiScale', descriptionKey: 'settings.items.uiScaleDesc', key: 'uiScale', type: 'slider', source: 'local', min: 0.8, max: 1.5, step: 0.05, defaultValue: 1, displayFormat: 'percent', sectionHeader: 'settings.items.appearanceDisplaySection' } },
     { type: 'item', spec: { labelKey: 'settings.items.headerShortcutTips', descriptionKey: 'settings.items.headerShortcutTipsDesc', key: 'headerShortcutTips', type: 'switch', source: 'local', sectionHeader: 'settings.items.appearanceDisplaySection' } },
-    { type: 'item', spec: { labelKey: 'settings.items.fontMono', descriptionKey: 'settings.items.fontMonoDesc', key: 'fontMono', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: [
-      ...MONO_FONT_CHOICES.map(f => ({ labelKey: `settings.items.fonts.${f.id}`, value: f.id })),
-    ]}},
-    { type: 'item', spec: { labelKey: 'settings.items.fontUi', descriptionKey: 'settings.items.fontUiDesc', key: 'fontUi', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: [
-      ...UI_FONT_CHOICES.map(f => ({ labelKey: `settings.items.fonts.${f.id}`, value: f.id })),
-    ]}},
+    { type: 'item', spec: { labelKey: 'settings.items.fontMono', descriptionKey: 'settings.items.fontMonoDesc', key: 'fontMono', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: buildFontFamilyOptions(true) }},
+    { type: 'item', spec: { labelKey: 'settings.items.fontMonoFallback', descriptionKey: 'settings.items.fontMonoFallbackDesc', key: 'fontMonoFallback', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: buildMonoFallbackOptions() }},
+    { type: 'item', spec: { labelKey: 'settings.items.fontUi', descriptionKey: 'settings.items.fontUiDesc', key: 'fontUi', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: buildFontFamilyOptions(false) }},
+    { type: 'item', spec: { labelKey: 'settings.items.fontUiFallback', descriptionKey: 'settings.items.fontUiFallbackDesc', key: 'fontUiFallback', type: 'select', source: 'local', defaultValue: 'default', sectionHeader: 'settings.items.fontSection', options: buildFontFamilyOptions(false) }},
   ],
   agents: [],
   chat: [

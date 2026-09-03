@@ -292,7 +292,7 @@ import {
   showErrorOverlay as showErrorOverlayUtil,
 } from '@/utils/terminalFontUtils'
 import { localConfig, setLocalConfig, useSettingsConfig } from '@/composables/useSettingsConfig'
-import { buildFontStack, DEFAULT_TERMINAL_MONO_STACK } from '@/utils/fontConfig'
+import { buildDualFontStack, DEFAULT_TERMINAL_MONO_STACK, ensureFontLoaded, isBundledChoice, MONO_FONT_CHOICES } from '@/utils/fontConfig'
 import { shouldAutoRefocusTerminal, shouldInstallTerminalBlurRefocus } from '@/utils/terminalBlurUtils'
 import type { KeyDef } from '@/utils/terminalKeyDefs'
 import {
@@ -329,11 +329,12 @@ const { getServerValueWithDefault } = useSettingsConfig()
 // Font size with persistence
 const fontSize = ref<number>((localConfig.terminalFontSize as number) || DEFAULT_FONT_SIZE)
 
-// Font family follows the Settings → Appearance mono font choice. xterm is
-// canvas-rendered and cannot read CSS vars, so resolve the stored choice to
-// a concrete stack (default stack when 'default').
-const fontFamily = computed(() => buildFontStack(
+// Font family follows the Settings → Appearance mono font choice (+fallback).
+// xterm is canvas-rendered and cannot read CSS vars, so resolve the stored
+// choices to a concrete stack (default stack when both are 'default').
+const fontFamily = computed(() => buildDualFontStack(
   localConfig.fontMono as string,
+  localConfig.fontMonoFallback as string,
   DEFAULT_TERMINAL_MONO_STACK,
 ))
 
@@ -680,10 +681,32 @@ const tabManager = useTerminalTabs(getWsUrl, {
 
 const { tabs, activeTabId, activeTab } = tabManager
 
-// React to mono font changes from the Settings panel: push the resolved
-// stack onto existing xterm instances (new tabs read it via createXtermInstance).
-watch(() => localConfig.fontMono, () => {
+// React to mono font changes from the Settings panel: when the chosen font is
+// a self-hosted bundled webfont, wait for it to finish loading BEFORE setting
+// the xterm fontFamily so glyph measurement uses the real font (xterm measures
+// synchronously and never re-measures when a webfont arrives late). Then
+// re-fit the active terminal because cell metrics may have changed.
+async function applyMonoFontChange() {
+  const primary = localConfig.fontMono as string | undefined
+  const fallback = localConfig.fontMonoFallback as string | undefined
+  if (isBundledChoice(primary, MONO_FONT_CHOICES) && primary) await ensureFontLoaded(primary)
+  if (isBundledChoice(fallback, MONO_FONT_CHOICES) && fallback) await ensureFontLoaded(fallback)
   tabManager.updateFontFamily(fontFamily.value)
+  const active = tabManager.activeTab.value
+  requestAnimationFrame(() => {
+    try { active?.fitAddon?.fit() } catch { /* ignore */ }
+  })
+}
+
+watch(() => [localConfig.fontMono, localConfig.fontMonoFallback], () => {
+  void applyMonoFontChange()
+})
+
+// Cold-start case: the user already picked a bundled font before opening the
+// terminal (e.g. after a reload). Existing instances were created with a stack
+// that may still be loading — re-run the ensure+set+fit sequence on mount.
+onMounted(() => {
+  void applyMonoFontChange()
 })
 
 // Terminal viewport — uses the active tab's xterm and container

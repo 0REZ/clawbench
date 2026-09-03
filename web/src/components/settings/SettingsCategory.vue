@@ -33,6 +33,7 @@
           :type="item.type"
           :model-value="getItemValue(item)"
           :options="resolveItemOptions(item)"
+          :options-filter="resolveOptionsFilter(item)"
           :option-previews="item.key === 'theme' ? themePreviews : undefined"
           :min="item.min"
           :max="item.max"
@@ -92,7 +93,8 @@ import { usePwaInstall } from '@/composables/usePwaInstall'
 import { downloadByUrl } from '@/utils/download'
 import { categoryItems, isPanelOnlyCategory, getCategoryPanels, isDependsOnMet, isSubPageRoute, getSubPagePanel, type ItemSpec, type CategoryEntry, type GroupPanelConfig } from './settingsFieldMap'
 import { THEMES } from '@/utils/themeMeta'
-import type { OptionPreview } from './SettingsItem.vue'
+import type { OptionPreview, SelectOption } from './SettingsItem.vue'
+import { filterAvailableFonts, MONO_FONT_CHOICES, UI_FONT_CHOICES, MONO_FALLBACK_CHOICES, type FontChoice } from '@/utils/fontConfig'
 
 const props = defineProps<{
   categoryId: string
@@ -227,7 +229,7 @@ function getItemLabel(entry: ItemSpec): string {
   return extended.label || t(entry.labelKey)
 }
 
-function resolveItemOptions(item: ItemSpec): { label: string; value: unknown }[] | undefined {
+function resolveItemOptions(item: ItemSpec): SelectOption[] | undefined {
   const resolvedOptions = item.options
   if (resolvedOptions) {
     return resolvedOptions.map((opt) => ({
@@ -236,6 +238,28 @@ function resolveItemOptions(item: ItemSpec): { label: string; value: unknown }[]
     }))
   }
   return undefined
+}
+
+/**
+ * Options availability filter for font select rows: drop system candidates the
+ * current device does not have, so the picker only shows fonts that would
+ * actually render (bundled always shown). Applies to the four font keys —
+ * primary + fallback for both mono and ui.
+ */
+function resolveOptionsFilter(item: ItemSpec): ((opts: SelectOption[]) => Promise<SelectOption[]>) | undefined {
+  if (item.key === 'fontMono') return (opts) => filterFontOptions(opts, MONO_FONT_CHOICES, String(localConfig.fontMono ?? 'default'))
+  if (item.key === 'fontUi') return (opts) => filterFontOptions(opts, UI_FONT_CHOICES, String(localConfig.fontUi ?? 'default'))
+  if (item.key === 'fontMonoFallback') return (opts) => filterFontOptions(opts, MONO_FALLBACK_CHOICES, String(localConfig.fontMonoFallback ?? 'default'))
+  if (item.key === 'fontUiFallback') return (opts) => filterFontOptions(opts, UI_FONT_CHOICES, String(localConfig.fontUiFallback ?? 'default'))
+  return undefined
+}
+
+async function filterFontOptions(opts: SelectOption[], candidates: FontChoice[], selectedId: string): Promise<SelectOption[]> {
+  const available = await filterAvailableFonts(candidates, selectedId)
+  const availableIds = new Set(available.map(c => c.id))
+  // Always keep the currently-selected option even if undetectable, so the
+  // picker never renders an empty selection.
+  return opts.filter(o => o.value === 'default' || o.value === selectedId || availableIds.has(String(o.value)))
 }
 
 function resolveOptionLabel(_itemKey: string, opt: { labelKey: string; value: unknown }): string {

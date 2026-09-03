@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getServerFieldToLabelKey, categoryItems, categoryHasPanels, isPanelOnlyCategory, getCategoryPanels, isSubPageRoute, getSubPagePanel, getSubPageTitleKey, subPagePanelMap } from '@/components/settings/settingsFieldMap'
+import { getServerFieldToLabelKey, categoryItems, categoryHasPanels, isPanelOnlyCategory, getCategoryPanels, isSubPageRoute, getSubPagePanel, getSubPageTitleKey, subPagePanelMap, buildFontFamilyOptions } from '@/components/settings/settingsFieldMap'
 
 describe('settingsFieldMap', () => {
   it('maps all server-side dot-path keys to i18n label keys', () => {
@@ -35,7 +35,7 @@ describe('settingsFieldMap', () => {
 
   it('appearance category has local font select items pointing at settings.items.fonts.* labels', () => {
     const appearanceEntries = categoryItems['appearance']
-    for (const key of ['fontMono', 'fontUi']) {
+    for (const key of ['fontMono', 'fontMonoFallback', 'fontUi', 'fontUiFallback']) {
       const entry = appearanceEntries.find(e => e.type === 'item' && e.spec.key === key)
       expect(entry).toBeDefined()
       if (entry!.type !== 'item') throw new Error(`expected item entry for ${key}`)
@@ -49,8 +49,38 @@ describe('settingsFieldMap', () => {
       expect(opts[0].value).toBe('default')
       for (const o of opts) {
         expect(o.labelKey).toMatch(/^settings\.items\.fonts\./)
+        // Group key maps to fontsGroup.* headings; bundled options also carry a badge.
+        expect(o.groupKey).toMatch(/^settings\.items\.fontsGroup\./)
+        if (o.badgeKey) expect(o.badgeKey).toMatch(/^settings\.items\.fontsBadge\./)
+        // Concrete font options carry a previewFont CSS stack; 'default' does not.
+        if (o.value === 'default') expect(o.previewFont).toBeUndefined()
+        else expect(typeof o.previewFont).toBe('string')
       }
+      // At least one bundled option carries the badge key.
+      const anyBundled = opts.some(o => o.groupKey === 'settings.items.fontsGroup.bundled' && o.badgeKey === 'settings.items.fontsBadge.bundled')
+      expect(anyBundled).toBe(true)
     }
+  })
+
+  it('buildFontFamilyOptions returns grouped options with badges/previews', () => {
+    const mono = buildFontFamilyOptions(true)
+    const ui = buildFontFamilyOptions(false)
+    for (const opts of [mono, ui]) {
+      expect(opts[0].value).toBe('default')
+      expect(opts[0].groupKey).toBe('settings.items.fontsGroup.default')
+      expect(opts[0].previewFont).toBeUndefined()
+      for (const o of opts) {
+        expect(o.labelKey).toMatch(/^settings\.items\.fonts\./)
+        expect(o.groupKey).toMatch(/^settings\.items\.fontsGroup\./)
+        if (o.value !== 'default') expect(typeof o.previewFont).toBe('string')
+      }
+      const bundled = opts.some(o => o.groupKey === 'settings.items.fontsGroup.bundled' && o.badgeKey === 'settings.items.fontsBadge.bundled')
+      expect(bundled).toBe(true)
+    }
+    // UI mono distinct: bundled ui includes Inter but mono doesn't.
+    const uiIds = ui.map(o => o.value)
+    expect(uiIds).toContain('Inter')
+    expect(mono.map(o => o.value)).not.toContain('Inter')
   })
 
   it('includes TTS sub-config keys', () => {

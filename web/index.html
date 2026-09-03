@@ -53,14 +53,19 @@
         }
         var MONO_DEFAULT = "'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace";
         var UI_DEFAULT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif";
+        function fontStack(main, fb, dflt) {
+          var parts = [];
+          if (main && main !== 'default') parts.push(quoteFamily(main));
+          if (fb && fb !== 'default' && fb !== main) parts.push(quoteFamily(fb));
+          if (parts.length === 0) return dflt;
+          return parts.join(', ') + ', ' + dflt;
+        }
         var mono = readFontChoice('clawbench-settings-fontMono');
+        var monoFb = readFontChoice('clawbench-settings-fontMonoFallback');
         var ui = readFontChoice('clawbench-settings-fontUi');
-        if (mono !== 'default') {
-          document.documentElement.style.setProperty('--font-mono', quoteFamily(mono) + ', ' + MONO_DEFAULT);
-        }
-        if (ui !== 'default') {
-          document.documentElement.style.setProperty('--font-ui', quoteFamily(ui) + ', ' + UI_DEFAULT);
-        }
+        var uiFb = readFontChoice('clawbench-settings-fontUiFallback');
+        document.documentElement.style.setProperty('--font-mono', fontStack(mono, monoFb, MONO_DEFAULT));
+        document.documentElement.style.setProperty('--font-ui', fontStack(ui, uiFb, UI_DEFAULT));
       })();
     </script>
 
