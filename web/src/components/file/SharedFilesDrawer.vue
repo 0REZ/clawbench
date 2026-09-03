@@ -3,6 +3,16 @@
     <template #header>
       <ScreenShare :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ t('sharedFiles.title') }}</span>
+      <button
+        v-if="items.length > 0 && !busy"
+        class="shared-files-clear"
+        :disabled="clearing"
+        :title="t('sharedFiles.clearAll')"
+        @click.stop="clearAll"
+      >
+        <RefreshCw v-if="clearing" :size="14" class="shared-files-clear-spin" />
+        <Trash2 v-else :size="14" />
+      </button>
     </template>
 
     <div class="shared-files-body">
@@ -70,10 +80,6 @@
             </button>
           </div>
         </div>
-        <button class="shared-files-clear" :disabled="clearing" @click="clearAll">
-          <Trash2 :size="13" />
-          {{ clearing ? t('common.loading') : t('sharedFiles.clearAll') }}
-        </button>
       </div>
     </div>
   </BottomSheet>
@@ -81,7 +87,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import { ScreenShare, Copy, ExternalLink, Trash2 } from 'lucide-vue-next'
+import { ScreenShare, Copy, ExternalLink, Trash2, RefreshCw } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
@@ -325,21 +331,25 @@ defineExpose({ open: openDrawer })
 .shared-file-btn.danger:hover { color: #cf222e; background: #fef2f2; }
 .shared-file-btn:disabled { opacity: 0.4; cursor: default; }
 .shared-files-clear {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  margin-top: 10px;
-  padding: 8px 14px;
-  width: 100%;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: none;
+  border-radius: 6px;
   background: transparent;
   color: #cf222e;
-  border: 1px solid var(--border-color, rgba(207,34,46,.4));
-  border-radius: var(--radius-sm, 6px);
-  font-size: 13px;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .shared-files-clear:disabled { opacity: 0.5; cursor: default; }
+.shared-files-clear-spin { animation: shared-files-clear-spin 0.8s linear infinite; }
+@keyframes shared-files-clear-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 @media (hover: hover) {
   .shared-files-clear:not(:disabled):hover { background: #fef2f2; }
 }
