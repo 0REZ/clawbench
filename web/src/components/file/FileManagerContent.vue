@@ -68,6 +68,9 @@
           <button v-if="toolbarInlineIds.includes('jump')" class="toolbar-btn jump-btn" @click="jumpOpen = true" :title="t('jump.button')">
             <FolderSearch :size="16" />
           </button>
+          <button v-if="toolbarInlineIds.includes('sharedFiles')" class="toolbar-btn" @click="sharedDrawerRef?.open()" :title="t('sharedFiles.button')">
+            <Share2 :size="16" />
+          </button>
           <template v-if="showMoreDropdown">
           <div ref="moreDropdownWrapRef" class="toolbar-dropdown-wrap">
             <button class="toolbar-btn" @click="moreMenuOpen = !moreMenuOpen" :title="t('nav.more')">
@@ -129,6 +132,12 @@
                 <button class="toolbar-dropdown-item" @click="jumpOpen = true; moreMenuOpen = false">
                   <FolderSearch :size="14" />
                   <span>{{ t('jump.button') }}</span>
+                </button>
+              </template>
+              <template v-if="toolbarCollapsedIds.includes('sharedFiles')">
+                <button class="toolbar-dropdown-item" @click="sharedDrawerRef?.open(); moreMenuOpen = false">
+                  <Share2 :size="14" />
+                  <span>{{ t('sharedFiles.button') }}</span>
                 </button>
               </template>
             </div>
@@ -403,6 +412,7 @@
       @selectFile="onSearchSelectFile"
     />
     <JumpDirDialog :open="jumpOpen" @close="jumpOpen = false" @confirm="handleJumpConfirm" />
+    <SharedFilesDrawer ref="sharedDrawerRef" @selectFile="onSharedFileOpen" />
 
     <!-- Drop upload overlay — covers the whole file manager panel -->
     <Transition name="paste-fade">
@@ -449,6 +459,7 @@ import DirBreadcrumb from './DirBreadcrumb.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
 import FileSearchDrawer from './FileSearchDrawer.vue'
 import JumpDirDialog from './JumpDirDialog.vue'
+import SharedFilesDrawer from './SharedFilesDrawer.vue'
 
 const toast = inject('toast', null)
 const { isAppMode } = useAppMode()
@@ -646,6 +657,10 @@ async function handleJumpConfirm(path) {
   // normalization, existence checks and the out-of-project toast.
   await navToFileInManager(path)
 }
+const sharedDrawerRef = ref(null)
+function onSharedFileOpen(path) {
+  emit('selectFile', path)
+}
 const { addAttachedFile, hasAttachedFile, removeAttachedFileByPath } = useChatContext()
 const { terminalRuntimeEnabled } = useTerminalStatus()
 const isTerminalDisabled = computed(() => terminalRuntimeEnabled.value !== true)
@@ -721,7 +736,7 @@ watch(moreMenuOpen, (open) => {
 const dirToolbarRef = ref(null)
 const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObserving: startToolbarResize, stopObserving: stopToolbarResize } = useToolbarOverflow(
   () => dirToolbarRef.value,
-  () => ['refresh', 'newFile', 'newFolder', 'upload', 'uploadFolder', 'viewToggle', 'multiselect', 'hidden', 'jump'],
+  () => ['refresh', 'newFile', 'newFolder', 'upload', 'uploadFolder', 'viewToggle', 'multiselect', 'hidden', 'jump', 'sharedFiles'],
   { inlineCount: 3, gap: 6 },
 )
 

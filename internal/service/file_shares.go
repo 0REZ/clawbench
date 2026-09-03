@@ -157,3 +157,31 @@ func DeleteFileShareByPaths(paths []string) error {
 	}
 	return nil
 }
+
+// FileShare describes one active share link (list view item).
+type FileShare struct {
+	Token     string `json:"token"`
+	Path      string `json:"path"` // absolute path of the shared file
+	Name      string `json:"name"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// ListFileShares returns every active share, newest first.
+// Returns an empty (non-nil) slice when there are no shares so JSON encodes as [].
+func ListFileShares() ([]FileShare, error) {
+	rows, err := ReadDB().Query("SELECT token, path, name, created_at FROM file_shares ORDER BY rowid DESC")
+	if err != nil {
+		return nil, fmt.Errorf("list file shares: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	shares := make([]FileShare, 0)
+	for rows.Next() {
+		var s FileShare
+		if err := rows.Scan(&s.Token, &s.Path, &s.Name, &s.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan file share: %w", err)
+		}
+		shares = append(shares, s)
+	}
+	return shares, rows.Err()
+}

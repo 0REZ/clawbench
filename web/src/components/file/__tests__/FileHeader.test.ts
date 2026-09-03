@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, computed, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import FileHeader from '../FileHeader.vue'
+import { useFileShare } from '@/composables/useFileShare'
+
+// useFileShare is a module-level singleton; isolate it per test.
+const { markShared, markUnshared, resetFileShareState } = useFileShare()
+
+beforeEach(() => {
+  resetFileShareState()
+  // The share-highlight watcher fires a server query on mount; keep it inert.
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
+})
+
+afterEach(() => {
+  resetFileShareState()
+  vi.unstubAllGlobals()
+})
 
 // Minimal i18n instance for tests
 const i18n = createI18n({
@@ -30,6 +45,7 @@ const i18n = createI18n({
           fileHistory: 'File history',
           shareExternal: 'Share',
           shareLink: 'Share link',
+          shareLinkActive: 'Share link (active)',
           exportHtml: 'Export HTML',
           edit: 'Edit',
           finishEditing: 'Finish editing',
@@ -616,6 +632,33 @@ describe('FileHeader', () => {
       expect(button).toBeTruthy()
       await button!.trigger('click')
       expect(wrapper.emitted('shareLink')).toBeTruthy()
+    })
+
+    it('shows the active state when the file is shared', async () => {
+      markShared('/tmp/readme.md')
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link (active)')
+      expect(button).toBeTruthy()
+      expect(button!.classes()).toContain('active')
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(true)
+    })
+
+    it('clears the active state after the share is revoked', async () => {
+      markShared('/tmp/readme.md')
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(true)
+
+      markUnshared('/tmp/readme.md')
+      await nextTick()
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(false)
+    })
+
+    it('is not active for an unshared file', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link')
+      expect(button).toBeTruthy()
+      expect(button!.classes()).not.toContain('active')
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(false)
     })
   })
 })

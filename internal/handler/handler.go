@@ -267,6 +267,7 @@ func RegisterRoutes(mux *http.ServeMux) {
 	// in the URL is the sole credential, and no token means a 404 (zero
 	// exposure when the feature is unused).
 	register("/api/share", middleware.Auth(ServeShareManage))
+	register("/api/share/list", middleware.Auth(ServeShareList))
 	register("/api/share/", ServeSharePublic)
 	register("/share/", ServeSharePage)
 	register("/api/dir", middleware.Auth(ListDir))

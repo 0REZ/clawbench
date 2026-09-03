@@ -68,7 +68,7 @@
       </button>
 
       <!-- Share link button (create/manage a public link for this file) -->
-      <button v-if="!editing && toolbarInlineIds.includes('shareLink')" class="file-header-btn" @click.stop="$emit('shareLink')" :title="t('file.header.shareLink')">
+      <button v-if="!editing && toolbarInlineIds.includes('shareLink')" class="file-header-btn" :class="{ active: isShared }" @click.stop="$emit('shareLink')" :title="isShared ? t('file.header.shareLinkActive') : t('file.header.shareLink')">
         <Link2 :size="14" />
       </button>
 
@@ -162,9 +162,9 @@
               <Share2 :size="14" />
               {{ t('file.header.shareExternal') }}
             </button>
-            <button v-if="!editing && toolbarCollapsedIds.includes('shareLink')" class="dropdown-item" @click="$emit('shareLink'); menuOpen = false">
+            <button v-if="!editing && toolbarCollapsedIds.includes('shareLink')" class="dropdown-item" :class="{ active: isShared }" @click="$emit('shareLink'); menuOpen = false">
               <Link2 :size="14" />
-              {{ t('file.header.shareLink') }}
+              {{ isShared ? t('file.header.shareLinkActive') : t('file.header.shareLink') }}
             </button>
             <a v-if="!isAppMode && toolbarCollapsedIds.includes('download')" class="dropdown-item" :href="buildLocalFileUrl(file.path, { download: true })" :download="file.name" @click="menuOpen = false">
               <Download :size="14" />
@@ -209,7 +209,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { isRefreshing } from '@/composables/useFileRefresh'
 import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
@@ -226,6 +226,7 @@ import { getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
 import { getNative } from '@/utils/clawbenchNative'
 import { setAttachDragData, buildAttachDragImage, cleanupDragGhost } from '@/utils/attachDrag'
 import { getWideScreenState } from '@/composables/useWideScreenLayout'
+import { useFileShare } from '@/composables/useFileShare'
 
 const props = defineProps({
     file: Object,
@@ -247,6 +248,18 @@ const toast = useToast()
 const { isWideScreen } = getWideScreenState()
 
 const isAttached = computed(() => !!props.file?.path && hasAttachedFile(props.file.path))
+const { refreshFileShare, isFileShared } = useFileShare()
+
+// Whether the currently open file has an active public share link. Mirrors the
+// ShareLinkDialog state via the module-level Set so the button highlights as
+// soon as a link is created/revoked without extra prop plumbing.
+const isShared = computed(() => !!props.file?.path && isFileShared(props.file.path))
+
+// Query the server when the open file changes so the highlight reflects the
+// authoritative persisted share state (e.g. after a page reload).
+watch(() => props.file?.path, (path) => {
+    if (path) void refreshFileShare(path)
+}, { immediate: true })
 
 const menuOpen = ref(false)
 const dropdownRef = ref(null)

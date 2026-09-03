@@ -77,6 +77,12 @@
             :file="file"
           />
 
+          <!-- OpenAPI / Swagger spec (rendered docs) -->
+          <OpenApiPreview
+            v-else-if="file.subtype === 'openapi'"
+            :file="file"
+          />
+
           <!-- HTML rendered -->
           <iframe
             v-else-if="file.isHtml"
@@ -125,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, defineAsyncComponent } from 'vue'
+import { computed, onMounted, ref, defineAsyncComponent, provide, readonly } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Download, FileX2, List } from 'lucide-vue-next'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
@@ -138,10 +144,16 @@ import { buildAsyncComponentOptions } from '@/composables/useAsyncComponent.ts'
 import MarkdownPreview from '@/components/file/MarkdownPreview.vue'
 const CodeMirrorViewer = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('@/components/file/CodeMirrorViewer.vue') }))
 const OfficePreview = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('@/components/media/OfficePreview.vue') }))
+const OpenApiPreview = defineAsyncComponent(buildAsyncComponentOptions({ loader: () => import('@/components/file/OpenApiPreview.vue') }))
 import { getFileType } from '@/utils/fileType.ts'
 import { extractToc, type TocItem } from '@/utils/toc.ts'
 import { setShareToken, setSharedFile, shareApiUrl } from '@/share/shareMode'
 import { store } from '@/stores/app.ts'
+
+// Share the resolved theme id with child components (OpenApiPreview reads it via
+// inject('theme') to pick Swagger UI colors). share.html sets data-theme on <html>.
+const themeId = ref(document.documentElement.getAttribute('data-theme') || 'github-dark')
+provide('theme', readonly(themeId))
 
 /** The file payload returned by the share /file endpoint (FileContent JSON)
  *  extended with the viewer flags set by decorateFile. */
@@ -339,9 +351,7 @@ onMounted(() => {
   min-height: 0;
   overflow: auto;
   position: relative;
-}
-
-.share-toc {
+}.share-toc {
   flex: 0 0 240px;
   width: 240px;
   min-width: 0;
@@ -425,6 +435,15 @@ onMounted(() => {
 @media (max-width: 899px) {
   .share-body[data-toc-open="true"] .share-toc {
     display: none; /* TOC handled by overlay toggle on mobile */
+  }
+}
+
+/* On very wide screens the content column would stretch content (PDFs, code)
+   unreasonably wide. Cap it and center it, leaving generous side margins. */
+@media (min-width: 1100px) {
+  .share-content {
+    max-width: 1080px;
+    margin: 0 auto;
   }
 }
 </style>

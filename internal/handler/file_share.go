@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"clawbench/internal/frontend"
+	"clawbench/internal/middleware"
 	"clawbench/internal/model"
 	"clawbench/internal/service"
 )
@@ -149,6 +150,89 @@ func serveShareRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := service.DeleteFileShareByPath(absPath); err != nil {
 		slog.Error("share: revoke failed", "path", absPath, "err", err)
+		model.WriteError(w, model.Internal(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// shareListItem is one entry in the shared-files drawer.
+type shareListItem struct {
+	Token     string `json:"token"`
+	Name      string `json:"name"`
+	Path      string `json:"path"` // display path (project-relative when under project, else absolute)
+	CreatedAt string `json:"createdAt"`
+	Exists    bool   `json:"exists"`
+}
+
+// ServeShareList lists all active shares (GET) or revokes one by token (DELETE).
+// DELETE does not require the shared file to still exist, so stale shares for
+// files deleted outside the app can still be revoked here.
+func ServeShareList(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		serveShareList(w, r)
+	case http.MethodDelete:
+		serveShareRevokeByToken(w, r)
+	default:
+		writeLocalizedErrorf(w, r, http.StatusMethodNotAllowed, "MethodNotAllowed")
+	}
+}
+
+func serveShareList(w http.ResponseWriter, r *http.Request) {
+	shares, err := service.ListFileShares()
+	if err != nil {
+		slog.Error("share: list failed", "err", err)
+		model.WriteError(w, model.Internal(err))
+		return
+	}
+
+	// Project path for display-path relativization; may be empty when no
+	// project cookie is set (still list everything, paths stay absolute).
+	projectPath := middleware.GetProjectFromCookie(r)
+	projectAbs, _ := filepath.Abs(projectPath)
+
+	items := make([]shareListItem, 0, len(shares))
+	for _, s := range shares {
+		_, statErr := os.Stat(s.Path)
+		exists := statErr == nil
+
+		display := s.Path
+		if projectAbs != "" {
+			if rel, err := filepath.Rel(projectAbs, s.Path); err == nil &&
+				rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				display = filepath.ToSlash(rel)
+			}
+		}
+
+		items = append(items, shareListItem{
+			Token:     s.Token,
+			Name:      s.Name,
+			Path:      display,
+			CreatedAt: s.CreatedAt,
+			Exists:    exists,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"shares": items})
+}
+
+func serveShareRevokeByToken(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		var req struct {
+			Token string `json:"token"`
+		}
+		if decodeJSON(w, r, &req) {
+			token = req.Token
+		}
+	}
+	if token == "" {
+		writeLocalizedErrorf(w, r, http.StatusBadRequest, "MissingToken")
+		return
+	}
+	if err := service.DeleteFileShareByToken(token); err != nil {
+		slog.Error("share: revoke-by-token failed", "token", token, "err", err)
 		model.WriteError(w, model.Internal(err))
 		return
 	}

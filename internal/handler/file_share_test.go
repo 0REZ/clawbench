@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"clawbench/internal/service"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -314,4 +316,146 @@ func TestShareManage_RouteDoesNotShadowShareIn(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.NotEqual(t, http.StatusNotFound, rec.Code, "share-in route must not 404")
+}
+
+// ─── List endpoints ──────────────────────────────────────────────────────────
+
+func TestShareList_EmptyReturnsArray(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(ServeShareList, req)
+	assertOK(t, w)
+
+	var resp struct {
+		Shares []shareListItem `json:"shares"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Shares, "empty list must encode as [] not null")
+	assert.Empty(t, resp.Shares)
+}
+
+func TestShareList_ListsAllSharesWithDisplayPath(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// File inside the project → display path should be project-relative.
+	inProject := createShareTestFile(t, env, "docs/inside.md", "x")
+	createShareViaAPI(t, inProject)
+
+	// File outside the project but under a root → display path stays absolute.
+	outsideDir := filepath.Join(env.WatchDir, "other")
+	require.NoError(t, os.MkdirAll(outsideDir, 0o755))
+	outside := filepath.Join(outsideDir, "outside.md")
+	createTestFile(t, outsideDir, "outside.md", "y")
+	createShareViaAPI(t, outside)
+
+	req := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(ServeShareList, req)
+	assertOK(t, w)
+
+	var resp struct {
+		Shares []shareListItem `json:"shares"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Shares, 2)
+
+	byPath := map[string]shareListItem{}
+	for _, s := range resp.Shares {
+		byPath[s.Path] = s
+	}
+	// Project file relativized.
+	assert.Contains(t, byPath, "docs/inside.md")
+	assert.True(t, byPath["docs/inside.md"].Exists)
+	assert.Equal(t, "inside.md", byPath["docs/inside.md"].Name)
+	assert.NotEmpty(t, byPath["docs/inside.md"].Token)
+	assert.NotEmpty(t, byPath["docs/inside.md"].CreatedAt)
+	// Out-of-project file stays absolute.
+	assert.Contains(t, byPath, outside)
+	assert.True(t, byPath[outside].Exists)
+}
+
+func TestShareList_MarksDeletedFileAsNotExists(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	absPath := createShareTestFile(t, env, "docs/doomed.md", "x")
+	createShareViaAPI(t, absPath)
+	require.NoError(t, os.Remove(absPath))
+
+	req := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(ServeShareList, req)
+	assertOK(t, w)
+
+	var resp struct {
+		Shares []shareListItem `json:"shares"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Shares, 1)
+	assert.Equal(t, "docs/doomed.md", resp.Shares[0].Path)
+	assert.False(t, resp.Shares[0].Exists)
+}
+
+func TestShareList_RevokeByToken(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Share a file then delete it — stale share must still be revocable by token.
+	absPath := createShareTestFile(t, env, "docs/stale.md", "x")
+	token := createShareViaAPI(t, absPath)
+	require.NoError(t, os.Remove(absPath))
+
+	req := newRequest(t, http.MethodDelete, "/api/share/list", map[string]string{"token": token})
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(ServeShareList, req)
+	assertOK(t, w)
+
+	_, _, ok, err := service.GetFileShareByToken(token)
+	require.NoError(t, err)
+	assert.False(t, ok, "share must be revoked")
+}
+
+func TestShareList_RevokeByTokenMissingToken_400(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodDelete, "/api/share/list", map[string]string{})
+	withProjectCookie(req, env.ProjectDir)
+	w := callHandler(ServeShareList, req)
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
+func TestShareList_MethodNotAllowed(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	req := newRequest(t, http.MethodPost, "/api/share/list", map[string]string{})
+	w := callHandler(ServeShareList, req)
+	assertStatus(t, w, http.StatusMethodNotAllowed)
+}
+
+// TestShareList_RoutePrecedence ensures /api/share/list is NOT swallowed by the
+// public /api/share/{token}/... handler (ServeSharePublic).
+func TestShareList_RoutePrecedence(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	absPath := createShareTestFile(t, env, "prec2.md", "x")
+	createShareViaAPI(t, absPath)
+
+	mux := http.NewServeMux()
+	RegisterRoutes(mux)
+
+	// A request to the literal list path must reach the authed list handler.
+	req := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(req, env.ProjectDir)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// ... and be a JSON list (not a public "file content" response).
+	assert.Contains(t, rec.Body.String(), `"shares"`)
 }

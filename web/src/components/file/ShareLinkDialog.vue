@@ -55,6 +55,7 @@ import { useI18n } from 'vue-i18n'
 import { Copy } from 'lucide-vue-next'
 import ModalDialog from '@/components/common/ModalDialog.vue'
 import { useToast } from '@/composables/useToast.ts'
+import { useFileShare } from '@/composables/useFileShare.ts'
 import { copyText } from '@/utils/clipboard.ts'
 
 const props = defineProps({
@@ -64,6 +65,7 @@ const props = defineProps({
 
 const { t } = useI18n()
 const toast = useToast()
+const { markShared, markUnshared } = useFileShare()
 
 const busy = ref(false)
 const creating = ref(false)
@@ -89,7 +91,12 @@ async function loadStatus() {
     const resp = await fetch(`/api/share?path=${encodeURIComponent(props.file.path)}`)
     if (!resp.ok) throw new Error(resp.statusText)
     const data = await resp.json()
-    if (data.path) linkUrl.value = toAbsoluteUrl(data.path)
+    if (data.path) {
+      linkUrl.value = toAbsoluteUrl(data.path)
+      markShared(props.file.path)
+    } else {
+      markUnshared(props.file.path)
+    }
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -112,6 +119,7 @@ async function createLink() {
     }
     const data = await resp.json()
     linkUrl.value = toAbsoluteUrl(data.path)
+    markShared(props.file.path)
     copyLink()
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err)
@@ -138,6 +146,7 @@ async function revokeLink() {
     const resp = await fetch(`/api/share?path=${encodeURIComponent(props.file.path)}`, { method: 'DELETE' })
     if (!resp.ok) throw new Error(resp.statusText)
     linkUrl.value = ''
+    markUnshared(props.file.path)
     toast.show(t('shareDialog.revoked'), { icon: '🔗', type: 'success', duration: 2000 })
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : String(err)

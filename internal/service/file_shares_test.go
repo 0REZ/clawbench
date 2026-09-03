@@ -215,3 +215,37 @@ func TestGenerateShareToken_IsUniqueAndHex(t *testing.T) {
 	}
 	assert.Len(t, seen, 200, "tokens must not collide")
 }
+
+func TestListFileShares_Empty(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	shares, err := service.ListFileShares()
+	require.NoError(t, err)
+	require.NotNil(t, shares, "empty list must be a non-nil slice so JSON encodes as []")
+	assert.Empty(t, shares)
+}
+
+func TestListFileShares_ReturnsAllNewestFirst(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	_, _, err := service.UpsertFileShare("/tmp/l1.md", "l1.md")
+	require.NoError(t, err)
+	_, _, err = service.UpsertFileShare("/tmp/l2.md", "l2.md")
+	require.NoError(t, err)
+
+	shares, err := service.ListFileShares()
+	require.NoError(t, err)
+	require.Len(t, shares, 2)
+
+	// Newest inserted first (rowid DESC proxy — created_at has only 1s precision).
+	assert.Equal(t, "/tmp/l2.md", shares[0].Path)
+	assert.Equal(t, "l2.md", shares[0].Name)
+	assert.Equal(t, "/tmp/l1.md", shares[1].Path)
+	assert.NotEmpty(t, shares[0].Token)
+	assert.NotEmpty(t, shares[0].CreatedAt)
+
+	// Token/name/createdAt all populated.
+	assert.Len(t, shares[0].Token, 32)
+}
