@@ -75,7 +75,7 @@ describe('CopyAgentDialog', () => {
 
   it('emits close when cancel button clicked', async () => {
     const w = mountDialog()!
-    const cancelBtn = $('.copy-agent-dialog__btn--cancel')!
+    const cancelBtn = $('.modal-btn')!
     cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
     expect(w.emitted('close')).toBeTruthy()
@@ -88,7 +88,7 @@ describe('CopyAgentDialog', () => {
     vm.$.setupState.newName = '  My Agent  '
     w.vm.$forceUpdate()
     await w.vm.$nextTick()
-    const submitBtn = $('.copy-agent-dialog__btn--submit')!
+    const submitBtn = $('.modal-btn.primary')!
     submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await nextTick()
     expect(w.emitted('confirmed')).toBeTruthy()
@@ -98,7 +98,7 @@ describe('CopyAgentDialog', () => {
   it('disables submit button when name is empty', async () => {
     mountDialog('')
     await nextTick()
-    const submitBtn = $('.copy-agent-dialog__btn--submit') as HTMLButtonElement
+    const submitBtn = $('.modal-btn.primary') as HTMLButtonElement
     expect(submitBtn.disabled).toBe(true)
   })
 
@@ -120,8 +120,8 @@ describe('CopyAgentDialog', () => {
     mountDialog()
     await nextTick()
     expect($('.copy-agent-dialog__input')).toBeTruthy()
-    expect($('.copy-agent-dialog__btn--cancel')).toBeTruthy()
-    expect($('.copy-agent-dialog__btn--submit')).toBeTruthy()
+    expect($('.modal-btn')).toBeTruthy()
+    expect($('.modal-btn.primary')).toBeTruthy()
   })
 
   it('does not render when open is false', async () => {

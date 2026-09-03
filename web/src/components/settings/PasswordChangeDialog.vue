@@ -85,11 +85,11 @@
     </div>
 
     <template #footer>
-      <button class="password-dialog__btn password-dialog__btn--cancel" @click="handleClose" :disabled="submitting">
+      <button class="modal-btn" @click="handleClose" :disabled="submitting">
         {{ t('common.cancel') }}
       </button>
       <button
-        class="password-dialog__btn password-dialog__btn--submit"
+        class="modal-btn primary"
         :disabled="!canSubmit || submitting"
         @click="submit"
       >
@@ -432,49 +432,45 @@ function onModalClose() {
   border-radius: 8px;
 }
 
-.password-dialog__btn {
-  padding: 8px 18px;
-  border-radius: 8px;
-  font-size: 14px;
+/* Footer buttons — same visual language as the other ModalDialog consumers
+   (QuickSendEditModal, QuickCommandEditModal, …): a bordered neutral cancel
+   and an accent primary action. */
+.modal-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  flex-shrink: 0;
-}
-
-.password-dialog__btn--cancel {
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-.password-dialog__btn--submit {
-  background: var(--accent-color);
-  color: #fff;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-width: 108px;
   justify-content: center;
-}
-
-.password-dialog__btn--submit:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  gap: 6px;
+  transition: background 0.12s, opacity 0.12s;
 }
 
 @media (hover: hover) {
-  .password-dialog__btn--cancel:hover {
-    background: var(--bg-secondary);
-  }
-  .password-dialog__btn--submit:not(:disabled):hover {
-    background: var(--accent-hover);
+  .modal-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary, #f5f5f5);
   }
 }
 
-.password-dialog__btn--cancel:active {
-  background: var(--bg-secondary);
+.modal-btn.primary {
+  background: var(--accent-color, #0066cc);
+  color: #fff;
+  border-color: var(--accent-color, #0066cc);
 }
 
-.password-dialog__btn--submit:not(:disabled):active {
-  background: var(--accent-hover);
+@media (hover: hover) {
+  .modal-btn.primary:hover:not(:disabled) {
+    background: var(--accent-hover, #0055aa);
+  }
+}
+
+.modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
