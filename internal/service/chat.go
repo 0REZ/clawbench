@@ -2011,6 +2011,24 @@ func GetStreamingMessageID(sessionID string) int64 {
 	return id
 }
 
+// GetStreamingMessageInfo returns the ID and the answered queue id of the
+// actively streaming assistant message for a session. queueID is the queueId
+// of the user question this run answers (the streaming row's queue_id), empty
+// for runs without a question. Unlike GetStreamingMessageID it does NOT fall
+// back to a finalized row — the subscribe-time stream_start re-emit must
+// describe the live stream only, so a stale finalized row's queue_id is never
+// broadcast as the answer of a run that has not started yet.
+func GetStreamingMessageInfo(sessionID string) (id int64, queueID string) {
+	err := dbRead.QueryRow(
+		"SELECT id, queue_id FROM chat_history WHERE session_id = ? AND role = 'assistant' AND streaming = 1 ORDER BY id DESC LIMIT 1",
+		sessionID,
+	).Scan(&id, &queueID)
+	if err != nil {
+		return 0, ""
+	}
+	return id, queueID
+}
+
 // UpdateMessageContent updates the content of a specific message by its ID.
 func UpdateMessageContent(messageID int, content string) error {
 	_, err := WriteExec("UPDATE chat_history SET content = ? WHERE id = ?", content, messageID)

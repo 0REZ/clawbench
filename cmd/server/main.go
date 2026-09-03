@@ -1034,8 +1034,12 @@ func main() { //nolint:gocognit,gocyclo // complex startup orchestration
 		hub := mgr.StreamHub()
 		hub.EmitACPStateEvents(clientID, sessionID)
 		if service.IsSessionRunning(sessionID) {
-			if msgID := service.GetStreamingMessageID(sessionID); msgID > 0 {
-				hub.EmitStreamStartEvent(clientID, sessionID, msgID)
+			// The streaming row's queue_id is the queueId of the question this
+			// run answers. Broadcasting it lets the subscribing client re-anchor
+			// the streaming placeholder to the true question even when its own
+			// question bubble arrived out of order (recovery path).
+			if msgID, queueID := service.GetStreamingMessageInfo(sessionID); msgID > 0 {
+				hub.EmitStreamStartEvent(clientID, sessionID, msgID, queueID)
 			}
 		}
 	}

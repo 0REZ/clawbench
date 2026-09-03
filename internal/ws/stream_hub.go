@@ -204,7 +204,11 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 		return userMessagePayload(event)
 	case "stream_start":
 		if event.StreamStart != nil {
-			return map[string]int64{"message_id": event.StreamStart.MessageID}
+			payload := map[string]any{"message_id": event.StreamStart.MessageID}
+			if event.StreamStart.QueueID != "" {
+				payload["queue_id"] = event.StreamStart.QueueID
+			}
+			return payload
 		}
 		return nil
 	case "queue_drain":
@@ -433,9 +437,15 @@ func (h *StreamHub) emitACPState(clientID, sessionID string, s ai.ACPCachedState
 	slog.Debug("streamhub: re-emitted cached ACP state on subscribe", "session_id", sessionID, "client_id", clientID)
 }
 
-// EmitStreamStartEvent sends a stream_start chat_stream event with the streaming message ID.
-func (h *StreamHub) EmitStreamStartEvent(clientID, sessionID string, messageID int64) {
-	h.emitStateEvent(clientID, sessionID, "stream_start", map[string]int64{"message_id": messageID})
+// EmitStreamStartEvent sends a stream_start chat_stream event with the streaming
+// message ID and the answered queue id (the queueId of the question this run
+// answers, when known).
+func (h *StreamHub) EmitStreamStartEvent(clientID, sessionID string, messageID int64, queueID string) {
+	payload := map[string]any{"message_id": messageID}
+	if queueID != "" {
+		payload["queue_id"] = queueID
+	}
+	h.emitStateEvent(clientID, sessionID, "stream_start", payload)
 }
 
 // emitStateEvent sends a single chat_stream state event to a specific client.

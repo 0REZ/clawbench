@@ -739,11 +739,24 @@ func TestStreamEventToPayload_UserMessage_Nil(t *testing.T) {
 func TestStreamEventToPayload_StreamStart(t *testing.T) {
 	payload := StreamEventToPayload(ai.StreamEvent{
 		Type:        "stream_start",
+		StreamStart: &ai.StreamStartData{MessageID: 12345, QueueID: "pending-abc"},
+	})
+	m, ok := payload.(map[string]any)
+	require.True(t, ok, "expected map[string]any payload")
+	assert.Equal(t, int64(12345), m["message_id"])
+	assert.Equal(t, "pending-abc", m["queue_id"])
+}
+
+func TestStreamEventToPayload_StreamStart_NoQueueID(t *testing.T) {
+	payload := StreamEventToPayload(ai.StreamEvent{
+		Type:        "stream_start",
 		StreamStart: &ai.StreamStartData{MessageID: 12345},
 	})
-	m, ok := payload.(map[string]int64)
-	require.True(t, ok, "expected map[string]int64 payload")
+	m, ok := payload.(map[string]any)
+	require.True(t, ok, "expected map[string]any payload")
 	assert.Equal(t, int64(12345), m["message_id"])
+	_, hasQueue := m["queue_id"]
+	assert.False(t, hasQueue, "queue_id should be omitted when empty")
 }
 
 func TestStreamEventToPayload_StreamStartNilData(t *testing.T) {
@@ -816,7 +829,7 @@ func TestStreamHub_EmitStreamStartEvent(t *testing.T) {
 	sub := mgr.Subscribe(nil, &writeMu, "client-start", "")
 	hub.Subscribe("client-start", "session-start")
 
-	hub.EmitStreamStartEvent("client-start", "session-start", 42)
+	hub.EmitStreamStartEvent("client-start", "session-start", 42, "pending-abc")
 
 	buffered := sub.GetBufferedEvents()
 	require.NotEmpty(t, buffered, "expected at least one buffered event")
@@ -824,6 +837,10 @@ func TestStreamHub_EmitStreamStartEvent(t *testing.T) {
 	require.True(t, ok, "expected ChatStreamData")
 	assert.Equal(t, "stream_start", data.EventType)
 	assert.Equal(t, "session-start", data.SessionID)
+	payload, ok := data.Payload.(map[string]any)
+	require.True(t, ok, "expected map payload")
+	assert.Equal(t, int64(42), payload["message_id"])
+	assert.Equal(t, "pending-abc", payload["queue_id"])
 }
 
 // --- EmitACPStateEvents ---

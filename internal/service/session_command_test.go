@@ -2434,9 +2434,9 @@ func TestExecuteStreamRunShared_BroadcastsStreamStart(t *testing.T) {
 	require.NotNil(t, found, "expected a stream_start chat_stream event in the subscriber buffer")
 
 	data := found.Data.(ws.ChatStreamData)
-	payload, ok := data.Payload.(map[string]int64)
-	require.True(t, ok, "stream_start payload must be map[string]int64")
-	assert.Greater(t, payload["message_id"], int64(0), "stream_start must carry the streaming message DB id")
+	payload, ok := data.Payload.(map[string]any)
+	require.True(t, ok, "stream_start payload must be map[string]any")
+	assert.Greater(t, payload["message_id"].(int64), int64(0), "stream_start must carry the streaming message DB id")
 
 	// The broadcast id must match the persisted assistant row created by this run.
 	// Note: the streaming row is finalized (streaming=0) once the done event

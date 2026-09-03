@@ -3353,6 +3353,42 @@ func TestGetStreamingMessageID_SessionIsolation(t *testing.T) {
 	assert.NotEqual(t, id1, id2, "different sessions should not return each other's message IDs")
 }
 
+// ---------- GetStreamingMessageInfo ----------
+
+func TestGetStreamingMessageInfo_ReturnsQueueID(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Stream Info")
+
+	// Streaming assistant row answers a queued message (queue_id persisted).
+	_, err := service.AddChatMessage("/project", "claude", sid, "user", "question", nil, false, "")
+	assert.NoError(t, err)
+	streamingID, err := service.AddChatMessage("/project", "claude", sid, "assistant", "{}", nil, true, "", "pending-abc")
+	assert.NoError(t, err)
+
+	id, queueID := service.GetStreamingMessageInfo(sid)
+	assert.Equal(t, streamingID, id)
+	assert.Equal(t, "pending-abc", queueID)
+}
+
+func TestGetStreamingMessageInfo_NoStreamingRow(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Stream Info Empty")
+
+	// Only a finalized assistant row exists — GetStreamingMessageInfo must NOT
+	// fall back to it (unlike GetStreamingMessageID): the subscribe-time
+	// stream_start re-emit describes the LIVE stream only.
+	_, err := service.AddChatMessage("/project", "claude", sid, "assistant", "final", nil, true, "", "pending-stale")
+	assert.NoError(t, err)
+	_, err = service.FinalizeStreamingMessage("/project", "claude", sid, "final content")
+	assert.NoError(t, err)
+
+	id, queueID := service.GetStreamingMessageInfo(sid)
+	assert.Equal(t, int64(0), id)
+	assert.Equal(t, "", queueID)
+}
+
 // ---------- SaveRawResponse ----------
 
 func TestSaveRawResponse(t *testing.T) {

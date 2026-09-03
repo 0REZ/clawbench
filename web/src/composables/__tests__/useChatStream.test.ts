@@ -2213,6 +2213,68 @@ describe('useChatStream', () => {
       expect(assistantMsg.parentQueueId).toBeUndefined()
     })
 
+    it('stream_start with answeredQueueId creates placeholder anchored to the answered question', () => {
+      // Recovery create-path: no placeholder exists yet and the question bubble
+      // has not arrived. The backend's answered queue id (queue_id on the
+      // stream_start payload) must become the anchor — NOT the newest visible
+      // user message, which would be a stale question.
+      const options = createOptions()
+      useChatStream(options)
+      options.dispatch({ type: 'optimistic_push', msg: {
+        role: 'user', id: 100, content: 'older', blocks: [{ type: 'text', text: 'older' }],
+      } })
+
+      simulateWsEvent('stream_start', { message_id: 202, queue_id: 'pending-2' })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      expect(assistantMsg).toBeDefined()
+      expect(assistantMsg.id).toBe(202)
+      // Anchor is the answered question's queue id, not the newest user (100).
+      expect(String(assistantMsg.parentQueueId)).toBe('pending-2')
+    })
+
+    it('stream_start with answeredQueueId re-anchors a stale recovery placeholder', () => {
+      // The reported bug: the recovery path (session_update running while
+      // loading=false) built a placeholder anchored to the newest user message
+      // 100 BEFORE the real question bubble arrived. When the stream_start
+      // event lands carrying the answered queue id, the placeholder must be
+      // repointed so the reply sorts after its true question.
+      const options = createOptions()
+      useChatStream(options)
+      // Finalized older turn.
+      options.dispatch({ type: 'optimistic_push', msg: {
+        role: 'user', id: 100, content: 'older q', blocks: [{ type: 'text', text: 'older q' }],
+      } })
+      options.dispatch({ type: 'optimistic_push', msg: {
+        role: 'assistant', id: 101, content: 'older a', blocks: [{ type: 'text', text: 'older a' }],
+      } })
+      // Recovery placeholder (created by ensureStreamingPlaceholder) anchored to 100.
+      options.dispatch({ type: 'stream_placeholder', msg: {
+        role: 'assistant', id: 'drain-1', content: '', blocks: [], streaming: true,
+        seq: 5, parentQueueId: '100',
+      } })
+      // The true question bubble arrives from the other device (cross-device echo).
+      options.dispatch({ type: 'ws_user_message', data: {
+        messageId: 200, content: 'real q', queueId: 'pending-2', senderClientId: 'other-device',
+      } })
+      // The stream_start for the answer arrives last, carrying the answered queue id.
+      simulateWsEvent('stream_start', { message_id: 202, queue_id: 'pending-2' })
+
+      const assistantMsg = options.messages.value.find(
+        (m: any) => m.role === 'assistant' && m.streaming
+      )
+      expect(assistantMsg).toBeDefined()
+      expect(assistantMsg.id).toBe(202)
+      expect(String(assistantMsg.parentQueueId)).toBe('pending-2')
+      // Order: older q, older a, real q, streaming reply.
+      const order = options.messages.value.map((m: any) =>
+        m.role === 'user' ? `u:${m.content}` : `a:${m.id}`
+      )
+      expect(order).toEqual(['u:older q', 'a:101', 'u:real q', 'a:202'])
+    })
+
     it('does not create a duplicate placeholder when one already exists', () => {
       const options = createOptions()
       const { connectStream } = useChatStream(options)
