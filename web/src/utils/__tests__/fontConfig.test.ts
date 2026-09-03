@@ -329,9 +329,11 @@ describe('availability detection', () => {
     _resetAvailabilityCache()
   })
 
-  function stubCanvas(installed: (font: string) => boolean) {
-    // jsdom returns null for getContext('2d'); stub the canvas element so
-    // measureText reports the installed font as a different width.
+  // Stub canvas measureText to emulate the real browser: the candidate width
+  // differs from the sans-serif baseline only when the family is INSTALLED
+  // AND actually covers the probe text's script (Latin probe text vs CJK probe
+  // text). A CJK-only face therefore only "registers" on the CJK probe.
+  function stubCanvas(meta: { [font: string]: { installed: boolean; latin?: boolean; cjk?: boolean } }) {
     const originalCreate = document.createElement.bind(document)
     vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
       const el = originalCreate(tag)
@@ -345,8 +347,11 @@ describe('availability detection', () => {
             measureText: (text: string) => {
               const m = state.font.match(/"([^"]+)"/)
               const family = m?.[1]
-              const installedFamily = family ? installed(family) : false
-              return { width: installedFamily ? text.length * 8 : text.length * 6 }
+              const info = family ? meta[family] : undefined
+              const covers = info?.installed && (/[\u4e00-\u9fff]/.test(text) ? !!info.cjk : info.latin !== false)
+              // width proportional to length: 8px/char when the face actually
+              // provides the glyphs, otherwise the 6px generic fallback.
+              return { width: covers ? text.length * 8 : text.length * 6 }
             },
           }),
         })
@@ -370,15 +375,33 @@ describe('availability detection', () => {
   })
 
   it('isFontAvailable probes system fonts through canvas measureText', () => {
-    stubCanvas((font) => font === 'SimSun' || font === 'Menlo')
+    // SimSun covers both scripts; Menlo covers Latin only; PingFang SC missing.
+    stubCanvas({
+      SimSun: { installed: true, latin: true, cjk: true },
+      Menlo: { installed: true, latin: true, cjk: false },
+      'PingFang SC': { installed: false },
+    })
     _resetAvailabilityCache()
     expect(isFontAvailable('SimSun', 'system')).toBe(true)
+    _resetAvailabilityCache()
+    expect(isFontAvailable('Menlo', 'system')).toBe(true)
     _resetAvailabilityCache()
     expect(isFontAvailable('PingFang SC', 'system')).toBe(false)
   })
 
+  it('detects a CJK-only face via the CJK probe even though it lacks Latin glyphs', () => {
+    // Emulates Android: 'Noto Sans SC' exists and covers CJK but NOT Latin
+    // (Latin falls back to Roboto) → the Latin-only probe would miss it.
+    stubCanvas({
+      'Noto Sans SC': { installed: true, latin: false, cjk: true },
+      Menlo: { installed: true, latin: true, cjk: false },
+    })
+    _resetAvailabilityCache()
+    expect(isFontAvailable('Noto Sans SC', 'system')).toBe(true)
+  })
+
   it('filterAvailableFonts keeps default + bundled, drops missing system, keeps selection', async () => {
-    stubCanvas((font) => font === 'Menlo') // only Menlo among system mono
+    stubCanvas({ Menlo: { installed: true, latin: true, cjk: false } }) // only Menlo among system mono
     _resetAvailabilityCache()
     const out = await filterAvailableFonts(MONO_FONT_CHOICES, 'Consolas')
     const ids = out.map(c => c.id)

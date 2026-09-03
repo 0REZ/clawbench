@@ -1537,6 +1537,7 @@ export default {
         YouYuan: '幼圆 (YouYuan)',
         'WenQuanYi Micro Hei': '文泉驿微米黑',
         'WenQuanYi Zen Hei': '文泉驿正黑',
+        'Noto Sans CJK SC': '思源黑体 (Noto Sans CJK SC)',
         'Noto Serif CJK SC': '思源宋体 (Noto Serif CJK SC)',
         'Noto Sans SC': '思源黑体 (Noto Sans SC)',
         'Segoe UI': 'Segoe UI',
