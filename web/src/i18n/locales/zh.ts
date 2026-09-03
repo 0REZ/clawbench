@@ -1661,7 +1661,7 @@ export default {
       messageDisplayModeSummary: '摘要模式',
       messageDisplayModeOriginal: '原文模式',
       chatSystemPromptInterval: '系统提示间隔',
-      chatSystemPromptIntervalDesc: '每隔多少条消息插入一次系统提示',
+      chatSystemPromptIntervalDesc: '每隔多少条消息插入一次系统提示（0 = 从不插入）',
       sessionMaxCount: '最大会话数',
       sessionMaxCountDesc: '允许同时存在的聊天会话上限',
       archiveRetentionSectionHeader: '归档留存',
