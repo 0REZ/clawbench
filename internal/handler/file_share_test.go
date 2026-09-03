@@ -459,3 +459,38 @@ func TestShareList_RoutePrecedence(t *testing.T) {
 	// ... and be a JSON list (not a public "file content" response).
 	assert.Contains(t, rec.Body.String(), `"shares"`)
 }
+
+// TestShareList_DeleteAll revokes every share via DELETE with {"all":true}.
+func TestShareList_DeleteAll(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	abs1 := createShareTestFile(t, env, "docs/one.md", "x")
+	createShareViaAPI(t, abs1)
+	abs2 := createShareTestFile(t, env, "docs/two.md", "y")
+	createShareViaAPI(t, abs2)
+
+	// Sanity: two shares exist.
+	list := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(list, env.ProjectDir)
+	w := callHandler(ServeShareList, list)
+	assertOK(t, w)
+	var resp struct {
+		Shares []shareListItem `json:"shares"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Shares, 2)
+
+	// One-click clear.
+	clearReq := newRequest(t, http.MethodDelete, "/api/share/list", map[string]any{"all": true})
+	withProjectCookie(clearReq, env.ProjectDir)
+	w = callHandler(ServeShareList, clearReq)
+	assertOK(t, w)
+
+	after := newRequest(t, http.MethodGet, "/api/share/list", nil)
+	withProjectCookie(after, env.ProjectDir)
+	w = callHandler(ServeShareList, after)
+	assertOK(t, w)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Empty(t, resp.Shares)
+}

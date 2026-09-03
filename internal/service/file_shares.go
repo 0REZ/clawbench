@@ -158,6 +158,14 @@ func DeleteFileShareByPaths(paths []string) error {
 	return nil
 }
 
+// DeleteAllFileShares revokes every active share link.
+func DeleteAllFileShares() error {
+	if _, err := WriteExec("DELETE FROM file_shares"); err != nil {
+		return fmt.Errorf("delete all file shares: %w", err)
+	}
+	return nil
+}
+
 // FileShare describes one active share link (list view item).
 type FileShare struct {
 	Token     string `json:"token"`

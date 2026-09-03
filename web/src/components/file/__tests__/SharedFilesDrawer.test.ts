@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   copyText: vi.fn((_t: string, onSuccess?: () => void) => onSuccess?.()),
   confirm: vi.fn().mockResolvedValue(true),
   markUnshared: vi.fn(),
+  resetFileShareState: vi.fn(),
 }))
 
 vi.mock('@/composables/useToast.ts', () => ({
@@ -37,7 +38,7 @@ vi.mock('@/composables/useDialog', () => ({
 }))
 
 vi.mock('@/composables/useFileShare', () => ({
-  useFileShare: () => ({ markUnshared: h.markUnshared }),
+  useFileShare: () => ({ markUnshared: h.markUnshared, resetFileShareState: h.resetFileShareState }),
 }))
 
 vi.mock('@/utils/appLog', () => ({
@@ -59,6 +60,8 @@ const messages = {
       revoked: 'Share revoked',
       fileDeleted: 'File deleted',
       confirmRevoke: 'Revoke "{name}"?',
+      clearAll: 'Clear all',
+      confirmClearAll: 'Clear all shared files?',
     },
   },
 }
@@ -235,6 +238,55 @@ describe('SharedFilesDrawer', () => {
 
     const delCall = fetchMock.mock.calls.find((c: unknown[]) => c[1]?.method === 'DELETE')
     expect(delCall).toBeUndefined()
+    expect(wrapper.text()).toContain('a.md')
+  })
+
+  it('clears all shares after confirmation', async () => {
+    // GET returns a list; DELETE {all:true} clears.
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      Promise.resolve(init?.method === 'DELETE'
+        ? jsonResponse({ ok: true })
+        : jsonResponse({
+            shares: [
+              { token: 'tok1', name: 'a.md', path: 'docs/a.md', createdAt: 'x', exists: true },
+              { token: 'tok2', name: 'b.md', path: 'b.md', createdAt: 'x', exists: true },
+            ],
+          }))
+    )
+
+    const wrapper = mountDrawer()
+    ;(wrapper.vm as any).open()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.shared-files-clear').exists()).toBe(true)
+    await wrapper.find('.shared-files-clear').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(h.confirm).toHaveBeenCalledWith('Clear all shared files?', expect.anything())
+    const delCall = fetchMock.mock.calls.find((c: unknown[]) => c[1]?.method === 'DELETE')
+    expect(delCall).toBeTruthy()
+    expect(JSON.parse(delCall![1].body)).toEqual({ all: true })
+    expect(wrapper.text()).not.toContain('a.md')
+    expect(h.resetFileShareState).toHaveBeenCalled()
+  })
+
+  it('does not clear all when the confirm dialog is cancelled', async () => {
+    h.confirm.mockResolvedValueOnce(false)
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      shares: [{ token: 'tok1', name: 'a.md', path: 'docs/a.md', createdAt: 'x', exists: true }],
+    }))
+    const wrapper = mountDrawer()
+    ;(wrapper.vm as any).open()
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('.shared-files-clear').trigger('click')
+    await flushPromises()
+
+    const delCalls = fetchMock.mock.calls.filter((c: unknown[]) => c[1]?.method === 'DELETE')
+    expect(delCalls).toHaveLength(0)
     expect(wrapper.text()).toContain('a.md')
   })
 })

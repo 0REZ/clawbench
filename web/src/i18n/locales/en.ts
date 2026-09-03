@@ -2276,6 +2276,8 @@ export default {
     copied: 'Link copied',
     revoke: 'Revoke share',
     revoked: 'Share revoked',
+    clearAll: 'Clear all',
+    confirmClearAll: 'Clear all shared files? Every share link will stop working immediately.',
     fileDeleted: 'File deleted',
     confirmRevoke: 'Revoke the share of "{name}"? The link will stop working immediately.',
   },

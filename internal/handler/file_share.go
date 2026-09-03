@@ -218,22 +218,36 @@ func serveShareList(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveShareRevokeByToken(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		var req struct {
-			Token string `json:"token"`
-		}
-		if decodeJSON(w, r, &req) {
-			token = req.Token
+	var req struct {
+		Token string `json:"token"`
+		All   bool   `json:"all"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &req) {
+			return
 		}
 	}
-	if token == "" {
+	if req.Token == "" {
+		req.Token = r.URL.Query().Get("token")
+	}
+	req.All = req.All || r.URL.Query().Get("all") == "1"
+
+	switch {
+	case req.All:
+		// One-click clear: revoke every share link at once.
+		if err := service.DeleteAllFileShares(); err != nil {
+			slog.Error("share: delete-all failed", "err", err)
+			model.WriteError(w, model.Internal(err))
+			return
+		}
+	case req.Token != "":
+		if err := service.DeleteFileShareByToken(req.Token); err != nil {
+			slog.Error("share: revoke-by-token failed", "token", req.Token, "err", err)
+			model.WriteError(w, model.Internal(err))
+			return
+		}
+	default:
 		writeLocalizedErrorf(w, r, http.StatusBadRequest, "MissingToken")
-		return
-	}
-	if err := service.DeleteFileShareByToken(token); err != nil {
-		slog.Error("share: revoke-by-token failed", "token", token, "err", err)
-		model.WriteError(w, model.Internal(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

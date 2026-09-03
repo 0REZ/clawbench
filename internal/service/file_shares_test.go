@@ -249,3 +249,22 @@ func TestListFileShares_ReturnsAllNewestFirst(t *testing.T) {
 	// Token/name/createdAt all populated.
 	assert.Len(t, shares[0].Token, 32)
 }
+
+func TestDeleteAllFileShares_RemovesEveryShare(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	_, _, err := service.UpsertFileShare("/tmp/a.md", "a.md")
+	require.NoError(t, err)
+	_, _, err = service.UpsertFileShare("/tmp/b.md", "b.md")
+	require.NoError(t, err)
+
+	require.NoError(t, service.DeleteAllFileShares())
+
+	shares, err := service.ListFileShares()
+	require.NoError(t, err)
+	assert.Empty(t, shares)
+
+	// Double delete is a no-op, not an error.
+	require.NoError(t, service.DeleteAllFileShares())
+}

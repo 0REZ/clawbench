@@ -70,6 +70,10 @@
             </button>
           </div>
         </div>
+        <button class="shared-files-clear" :disabled="clearing" @click="clearAll">
+          <Trash2 :size="13" />
+          {{ clearing ? t('common.loading') : t('sharedFiles.clearAll') }}
+        </button>
       </div>
     </div>
   </BottomSheet>
@@ -93,7 +97,7 @@ const emit = defineEmits(['selectFile', 'close'])
 const { t } = useI18n()
 const dialog = useDialog()
 const toast = useToast()
-const { markUnshared } = useFileShare()
+const { markUnshared, resetFileShareState } = useFileShare()
 
 // Bound to the browse tab: hides automatically when the user leaves it and
 // won't auto-reopen when returning (it is an action popover, not a panel).
@@ -103,6 +107,7 @@ const busy = ref(false)
 const errorMsg = ref('')
 const items = ref([])
 const revokingToken = ref('')
+const clearing = ref(false)
 
 function openDrawer() {
   drawer.open()
@@ -165,6 +170,27 @@ async function revoke(item) {
     toast.show(err instanceof Error ? err.message : String(err), { icon: '⚠️', type: 'error', duration: 3000 })
   } finally {
     revokingToken.value = ''
+  }
+}
+
+async function clearAll() {
+  const confirmed = await dialog.confirm(t('sharedFiles.confirmClearAll'), { dangerous: true })
+  if (!confirmed) return
+  clearing.value = true
+  try {
+    const resp = await fetch('/api/share/list', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    })
+    if (!resp.ok) throw new Error(resp.statusText)
+    items.value = []
+    resetFileShareState()
+    toast.show(t('sharedFiles.revoked'), { icon: '🔗', type: 'success', duration: 2000 })
+  } catch (err) {
+    toast.show(err instanceof Error ? err.message : String(err), { icon: '⚠️', type: 'error', duration: 3000 })
+  } finally {
+    clearing.value = false
   }
 }
 
@@ -298,4 +324,23 @@ defineExpose({ open: openDrawer })
 .shared-file-btn:hover { background: var(--bg-tertiary, #eaeef2); color: var(--accent-color, #0969da); }
 .shared-file-btn.danger:hover { color: #cf222e; background: #fef2f2; }
 .shared-file-btn:disabled { opacity: 0.4; cursor: default; }
+.shared-files-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 8px 14px;
+  width: 100%;
+  background: transparent;
+  color: #cf222e;
+  border: 1px solid var(--border-color, rgba(207,34,46,.4));
+  border-radius: var(--radius-sm, 6px);
+  font-size: 13px;
+  cursor: pointer;
+}
+.shared-files-clear:disabled { opacity: 0.5; cursor: default; }
+@media (hover: hover) {
+  .shared-files-clear:not(:disabled):hover { background: #fef2f2; }
+}
 </style>

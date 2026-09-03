@@ -2276,6 +2276,8 @@ export default {
     copied: '链接已复制',
     revoke: '取消分享',
     revoked: '已取消分享',
+    clearAll: '一键清空',
+    confirmClearAll: '确定清空全部已分享文件？所有分享链接将立即失效。',
     fileDeleted: '文件已删除',
     confirmRevoke: '确定取消「{name}」的分享？链接将立即失效。',
   },
