@@ -26,6 +26,7 @@
       @refresh="emit('refresh')"
       @overlay-close="handleOverlayCloseRequest"
       @share-external="emit('shareExternal')"
+      @share-link="emit('shareLink')"
       @export-html="handleExportHtml"
       @fit-width="handleFitWidth"
     />
@@ -339,7 +340,7 @@ const props = defineProps({
     /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
     docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'shareLink', 'jump', 'jumpPage'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()

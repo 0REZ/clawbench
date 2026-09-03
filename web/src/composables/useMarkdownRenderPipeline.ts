@@ -21,6 +21,19 @@ import { annotateFilePaths } from '@/composables/useFilePathAnnotation.ts'
 import { dirName, joinPath, splitPath } from '@/utils/path.ts'
 import { isThumbExtension, buildThumbUrl, getThumbWidth } from '@/utils/chatRenderUtils.ts'
 import { usePlatformDetect } from '@/composables/usePlatformDetect.ts'
+import { isShareMode, shareApiUrl } from '@/share/shareMode'
+
+/**
+ * Build the served URL for a project-relative (already normalized, unencoded)
+ * media path. Normal mode: /api/local-file/<rel>. Share mode: the token-scoped
+ * /api/share/{token}/local/<rel> endpoint (relative refs resolve against the
+ * shared file's directory). Share mode skips the thumbnail optimization — the
+ * thumb endpoint is project-cookie based and would 401 anonymously.
+ */
+export function buildLocalMediaUrl(rel: string, imageTimestamp: number): string {
+    const url = isShareMode() ? shareApiUrl('local/' + rel) : `/api/local-file/${rel}`
+    return url + `?t=${imageTimestamp}`
+}
 
 /** Source markdown file to render (the file being previewed / exported). */
 export interface MarkdownSource {
@@ -78,7 +91,14 @@ export function createFixLocalImagePaths(opts: FixLocalImagePathsOptions): (html
                 normalized.push(encodeURIComponent(part))
             }
             const rel = normalized.join('/')
-            const fullSrc = `/api/local-file/${rel}?t=${imageTimestamp}`
+            const shareMode = isShareMode()
+            if (shareMode) {
+                // Share mode: no thumbnail endpoint (it requires the project
+                // cookie) — serve the full-size image through the token scope.
+                const shareSrc = buildLocalMediaUrl(rel, imageTimestamp)
+                return match.replace(`src="${src}"`, `src="${shareSrc}"`)
+            }
+            const fullSrc = buildLocalMediaUrl(rel, imageTimestamp)
             // Raster formats the thumb endpoint can decode → use a lightweight JPEG
             // thumbnail for the inline src (kept stable so ETag revalidation refreshes
             // it when the source file changes) and keep the full image for the lightbox.
@@ -137,6 +157,13 @@ export function buildMarkdownPreviewDom(
             isPC: effectiveIsPC,
         }),
     })
+
+    // Share mode: render the document read-only. File-path annotation is
+    // skipped entirely — the shared view has no file navigation, and annotated
+    // links would attempt auth-protected opens.
+    if (isShareMode()) {
+        return { html, detectedPaths: [] }
+    }
 
     const { html: annotatedHtml, detectedPaths } = annotateFilePaths(html, {
         projectRoot,

@@ -29,6 +29,7 @@ const i18n = createI18n({
           stickyScroll: 'Sticky Scroll',
           fileHistory: 'File history',
           shareExternal: 'Share',
+          shareLink: 'Share link',
           exportHtml: 'Export HTML',
           edit: 'Edit',
           finishEditing: 'Finish editing',
@@ -593,6 +594,28 @@ describe('FileHeader', () => {
     it('hides the search button for media files without text content', () => {
       const wrapper = mountHeader({ file: { name: 'photo.png', path: '/tmp/photo.png', content: null } })
       expect((wrapper.vm as any).$.setupState.hasSearch).toBe(false)
+    })
+  })
+
+  describe('share link button', () => {
+    it('includes shareLink in the toolbar for a regular file', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const ids = (wrapper.vm as any).$.setupState.toolbarInlineIds
+      expect(ids).toContain('shareLink')
+    })
+
+    it('hides shareLink while editing', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: true })
+      const ids = (wrapper.vm as any).$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('shareLink')
+    })
+
+    it('emits shareLink when the share link button is clicked', async () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link')
+      expect(button).toBeTruthy()
+      await button!.trigger('click')
+      expect(wrapper.emitted('shareLink')).toBeTruthy()
     })
   })
 })

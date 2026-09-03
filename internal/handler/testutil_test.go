@@ -312,6 +312,11 @@ func setupTestEnv(t *testing.T) (*testEnv, func()) {
 		t.Fatalf("failed to create agent tables: %v", err)
 	}
 
+	// Create file share tables
+	if _, err := db.Exec(service.FileSharesDDL); err != nil {
+		t.Fatalf("failed to create file share tables: %v", err)
+	}
+
 	service.SetDBForTest(db, db)
 
 	// Register mock agents so GetDefaultAgentID() works

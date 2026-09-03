@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#161b22">
+
+    <!-- Resolve theme BEFORE CSS loads to prevent flash of default colors. -->
+    <script>
+      (function() {
+        var DARK_IDS = ['github-dark','one-dark-pro','catppuccin-mocha','dracula','nord','tokyo-night','solarized-dark','solarized-deep','gruvbox-dark','high-contrast-dark','night-owl','ayu-dark','vitesse-dark','rose-pine','everforest-dark','kanagawa'];
+        var t = null;
+        try { var s = localStorage.getItem('clawbench-settings-theme'); if (s) t = JSON.parse(s); } catch {}
+        if (t === null) { try { t = localStorage.getItem('theme'); } catch {} }
+        if (t === 'light') { t = 'github-light'; }
+        else if (t === 'dark') { t = 'github-dark'; }
+        if (!t || t === 'auto') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'github-dark' : 'github-light';
+        }
+        var base = DARK_IDS.indexOf(t) >= 0 ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', t);
+        document.documentElement.setAttribute('data-theme-base', base);
+        document.documentElement.setAttribute('data-hljs-theme', base);
+      })();
+    </script>
+
+    <meta name="mobile-web-app-capable" content="yes">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <title>ClawBench Share</title>
+    <style>
+      /* Share SPA: full-viewport read-only container */
+      html, body, #app {
+        height: 100%;
+        margin: 0;
+      }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    <script type="module" src="/src/share/main.ts"></script>
+</body>
+</html>

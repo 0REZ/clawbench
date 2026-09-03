@@ -32,6 +32,7 @@
             @navigate-back="emit('navigateBack')"
             @navigate-forward="emit('navigateForward')"
             @share-external="emit('shareExternal')"
+            @share-link="emit('shareLink')"
             @jump="(line, anchorId) => emit('jump', line, anchorId)"
             @jump-page="emit('jumpPage', $event)"
           />
@@ -108,7 +109,7 @@ const emit = defineEmits([
   'delete', 'showDetails', 'openGitHistory',
   'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh',
   'jump', 'jumpPage', 'closeGitHistory', 'openFile',
-  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal',
+  'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'shareLink',
 ])
 
 const contentRef = ref(null)

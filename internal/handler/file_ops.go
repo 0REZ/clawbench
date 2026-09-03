@@ -10,6 +10,7 @@ import (
 
 	"clawbench/internal/middleware"
 	"clawbench/internal/model"
+	"clawbench/internal/service"
 )
 
 // ServeFileRename handles file and directory rename operations.
@@ -53,6 +54,12 @@ func ServeFileRename(w http.ResponseWriter, r *http.Request) {
 		slog.Error("rename failed", slog.String("old", absOld), slog.String("new", absNew), slog.String("err", err.Error()))
 		model.WriteError(w, model.Internal(fmt.Errorf("rename failed: %w", err)))
 		return
+	}
+
+	// Renaming moves the file — a share pointing at the old path would break
+	// (the link references a path that no longer exists). Revoke it.
+	if err := service.DeleteFileSharesUnderPath(absOld); err != nil {
+		slog.Warn("rename: cleanup of file shares failed", "path", absOld, "err", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -150,6 +157,11 @@ func ServeFileDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Revoke any public share links pointing at the deleted file/directory.
+	if err := service.DeleteFileSharesUnderPath(absPath); err != nil {
+		slog.Warn("delete: cleanup of file shares failed", "path", absPath, "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -172,6 +184,7 @@ func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:goc
 
 	deleted := 0
 	var errs []string
+	var deletedPaths []string
 	for _, p := range req.Paths {
 		// Resolve each path: absolute validated directly, relative resolved against project cookie
 		var absPath string
@@ -218,11 +231,18 @@ func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:goc
 			}
 		}
 		deleted++
+		deletedPaths = append(deletedPaths, absPath)
 	}
 
 	result := map[string]interface{}{"ok": true, "deleted": deleted} //nolint:goconst // response key
 	if len(errs) > 0 {
 		result["errors"] = errs
+	}
+	// Revoke public share links for successfully deleted paths.
+	if deleted > 0 {
+		if err := cleanupSharesForDeletedPaths(deletedPaths); err != nil {
+			slog.Warn("batch-delete: cleanup of file shares failed", "err", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -397,6 +417,11 @@ func ServeFileMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Moving changes the path — revoke any share pointing at the source path.
+	if err := service.DeleteFileSharesUnderPath(srcAbsPath); err != nil {
+		slog.Warn("move: cleanup of file shares failed", "path", srcAbsPath, "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -531,6 +556,19 @@ func copyDir(src, dst string) error { //nolint:gocognit // recursive directory c
 			if err := copyFile(srcPath, dstPath); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// cleanupSharesForDeletedPaths revokes share links for deleted paths. For a
+// directory the share could point to the directory itself or any file inside it,
+// so every successful deletion is applied with prefix semantics via
+// DeleteFileSharesUnderPath.
+func cleanupSharesForDeletedPaths(paths []string) error {
+	for _, p := range paths {
+		if err := service.DeleteFileSharesUnderPath(p); err != nil {
+			return err
 		}
 	}
 	return nil

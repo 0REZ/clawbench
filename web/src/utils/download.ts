@@ -1,5 +1,6 @@
 import { getNative } from '@/utils/clawbenchNative'
 import { isAbsolutePath } from '@/utils/path'
+import { isShareMode, shareApiUrl } from '@/share/shareMode'
 
 /**
  * Download utilities shared across all components.
@@ -11,9 +12,12 @@ import { isAbsolutePath } from '@/utils/path'
  */
 
 /**
- * Build a `/api/local-file/` URL with proper path encoding.
- * - For project-relative paths: encodes each segment individually to preserve `/` separators.
- * - For absolute paths (external files): uses `?path=` query param to pass the absolute path.
+ * Build a file-content URL with proper path encoding.
+ * - Normal mode: `/api/local-file/` (project-relative via URL path, absolute via ?path=).
+ * - Share mode: `/api/share/{token}/local/...` so the anonymous share SPA can
+ *   fetch the referenced file without auth. Absolute paths resolve through the
+ *   token-scoped ?path= endpoint; bare relative paths are served relative to the
+ *   shared file's directory by the backend.
  */
 export function buildLocalFileUrl(
     path: string,
@@ -21,6 +25,18 @@ export function buildLocalFileUrl(
 ): string {
     const params: string[] = []
     if (options?.download) params.push('download=1')
+
+    if (isShareMode()) {
+        // Share mode: route through the token-scoped local endpoint.
+        if (isAbsolutePath(path)) {
+            params.push(`path=${encodeURIComponent(path)}`)
+            return shareApiUrl('local') + (params.length ? '?' + params.join('&') : '')
+        }
+        const encoded = path.split('/').map(s => encodeURIComponent(s)).join('/')
+        let url = shareApiUrl('local/' + encoded)
+        if (params.length) url += '?' + params.join('&')
+        return url
+    }
 
     if (isAbsolutePath(path)) {
         // External file: use ?path= query param

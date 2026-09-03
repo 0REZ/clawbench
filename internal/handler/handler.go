@@ -260,6 +260,15 @@ func RegisterRoutes(mux *http.ServeMux) {
 	register("/api/upload/file", middleware.Auth(UploadFile))
 	register("/api/upload/recent", middleware.Auth(UploadRecent))
 	register("/api/share-in/recent", middleware.Auth(ShareInRecent))
+
+	// Public file-share links. Management endpoints are auth-protected; the
+	// public data endpoints (/api/share/{token}/...) and the share SPA page
+	// (/share/{token}) are intentionally unauthenticated — the capability token
+	// in the URL is the sole credential, and no token means a 404 (zero
+	// exposure when the feature is unused).
+	register("/api/share", middleware.Auth(ServeShareManage))
+	register("/api/share/", ServeSharePublic)
+	register("/share/", ServeSharePage)
 	register("/api/dir", middleware.Auth(ListDir))
 	register("/api/files", middleware.Auth(ListFiles))
 	register("/api/file/list-tree", middleware.Auth(ServeListTree))

@@ -122,6 +122,7 @@
                       @overlay-close="handleOverlayClose"
                       @navigate-back="handleFileHistoryBack"
                       @navigate-forward="handleFileHistoryForward"
+                      @share-link="openShareLinkDialog"
                     />
                     <div v-else class="view-panel-empty" :class="recentFileEntries.length ? 'has-recent' : 'no-recent'">
                       <template v-if="recentFileEntries.length">
@@ -258,6 +259,12 @@
       <ProjectDialog
         :open="projectDialogOpen"
         @close="projectDialogOpen = false"
+      />
+
+      <ShareLinkDialog
+        :open="shareLinkOpen"
+        :file="currentFile"
+        @close="shareLinkOpen = false"
       />
 
       <FileDetailsDrawer
@@ -439,6 +446,7 @@ import VersionMismatchOverlay from './components/VersionMismatchOverlay.vue'
 import UpgradePromptOverlay from './components/UpgradePromptOverlay.vue'
 import UpgradeDialog from './components/settings/UpgradeDialog.vue'
 import FileDetailsDrawer from './components/file/FileDetailsDrawer.vue'
+import ShareLinkDialog from './components/file/ShareLinkDialog.vue'
 import ToastNotification from './components/common/ToastNotification.vue'
 import CompletionPopover from './components/common/CompletionPopover.vue'
 import DialogOverlay from './components/common/DialogOverlay.vue'
@@ -874,6 +882,10 @@ useFileWatch({
 
 const fileNav = useFileNavStack()
 const fileEditor = useFileEditor()
+
+function openShareLinkDialog() {
+  shareLinkOpen.value = true
+}
 
 function closeOverlayAndSync() {
   fileNav.closeOverlay()
@@ -1366,6 +1378,7 @@ async function handleLoginSuccess() {
 }
 
 const projectDialogOpen = ref(false)
+const shareLinkOpen = ref(false)
 const welcomeOverlay = ref(null)
 const versionMismatchOverlay = ref(null)
 const upgradePromptOverlay = ref(null)

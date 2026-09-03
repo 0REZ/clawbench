@@ -555,6 +555,17 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE INDEX IF NOT EXISTS idx_chat_rec_session ON chat_recommendations(session_id, id);
+
+		-- Public file share links (capability tokens). A row maps an opaque,
+		-- unguessable token to an absolute file path. Public endpoints accept the
+		-- token WITHOUT auth; removing the row revokes the link immediately.
+		CREATE TABLE IF NOT EXISTS file_shares (
+			token TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			name TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_file_shares_path ON file_shares(path);
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)

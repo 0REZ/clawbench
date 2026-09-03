@@ -67,6 +67,11 @@
         <Share2 :size="14" />
       </button>
 
+      <!-- Share link button (create/manage a public link for this file) -->
+      <button v-if="!editing && toolbarInlineIds.includes('shareLink')" class="file-header-btn" @click.stop="$emit('shareLink')" :title="t('file.header.shareLink')">
+        <Link2 :size="14" />
+      </button>
+
       <!-- Download button -->
       <button v-if="toolbarInlineIds.includes('download')" class="file-header-btn" @click.stop="handleDownload" :title="t('common.download')">
         <Download :size="14" />
@@ -157,6 +162,10 @@
               <Share2 :size="14" />
               {{ t('file.header.shareExternal') }}
             </button>
+            <button v-if="!editing && toolbarCollapsedIds.includes('shareLink')" class="dropdown-item" @click="$emit('shareLink'); menuOpen = false">
+              <Link2 :size="14" />
+              {{ t('file.header.shareLink') }}
+            </button>
             <a v-if="!isAppMode && toolbarCollapsedIds.includes('download')" class="dropdown-item" :href="buildLocalFileUrl(file.path, { download: true })" :download="file.name" @click="menuOpen = false">
               <Download :size="14" />
               {{ t('common.download') }}
@@ -204,7 +213,7 @@ import { computed, ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { isRefreshing } from '@/composables/useFileRefresh'
 import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
-import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2, Info } from 'lucide-vue-next'
+import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, Link2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2, Info } from 'lucide-vue-next'
 import { getFileType } from '@/utils/fileType.ts'
 import { fileSupportsToc } from '@/utils/tocSupport.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
@@ -229,7 +238,7 @@ const props = defineProps({
     overlayOpen: Boolean,
     editing: Boolean,
 })
-const emit = defineEmits(['delete', 'toggleView', 'showDetails', 'openGitHistory', 'toggleToc', 'toggleSearch', 'openAsText', 'toggleWordWrap', 'toggleLineNumbers', 'toggleStickyScroll', 'refresh', 'overlayClose', 'shareExternal', 'exportHtml', 'fitWidth', 'toggleEdit'])
+const emit = defineEmits(['delete', 'toggleView', 'showDetails', 'openGitHistory', 'toggleToc', 'toggleSearch', 'openAsText', 'toggleWordWrap', 'toggleLineNumbers', 'toggleStickyScroll', 'refresh', 'overlayClose', 'shareExternal', 'shareLink', 'exportHtml', 'fitWidth', 'toggleEdit'])
 
 const { isAppMode } = useAppMode()
 const { t } = useI18n()
@@ -276,6 +285,7 @@ const { inlineIds: toolbarInlineIds, collapsedIds: toolbarCollapsedIds, startObs
     // Order = left-to-right display priority; delete is kept last.
     if (props.file?.isBinary) ids.push('openAsText')
     if (isAppMode.value) ids.push('shareExternal')
+    if (!props.editing) ids.push('shareLink')
     ids.push('download')
     if (isMarkdown.value && effectiveViewMode.value === 'rendered') ids.push('exportHtml')
     ids.push('openDirectory')

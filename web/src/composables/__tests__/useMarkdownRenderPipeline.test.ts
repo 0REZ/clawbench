@@ -5,6 +5,7 @@ import {
   buildMarkdownPreviewDom,
   createFixLocalImagePaths,
 } from '@/composables/useMarkdownRenderPipeline'
+import { setShareToken } from '@/share/shareMode'
 
 configureMarkedRenderer()
 
@@ -50,6 +51,20 @@ describe('createFixLocalImagePaths', () => {
     const out = fix('<img src="x.png"><img src="https://y.com/z.png">')
     expect(out).toContain('lightbox-img-wrap')
     expect(out.match(/lightbox-img-wrap/g)).toHaveLength(2)
+  })
+
+  it('emits token-scoped full-size URLs and skips thumbnails in share mode', () => {
+    setShareToken('tokabc')
+    try {
+      const fix = createFixLocalImagePaths({ baseDir: 'docs', imageTimestamp: 42, isPC: true })
+      const out = fix('<img src="assets/a.png" alt="a">')
+      // Relative ref resolves against the markdown dir → token-scoped local endpoint.
+      expect(out).toContain('src="/api/share/tokabc/local/docs/assets/a.png?t=42"')
+      expect(out).not.toContain('/api/file/thumb')
+      expect(out).not.toContain('/api/local-file/')
+    } finally {
+      setShareToken(null)
+    }
   })
 })
 
@@ -103,5 +118,33 @@ describe('buildMarkdownPreviewDom', () => {
       { isPC: true, imageTimestamp: 1 }
     )
     expect(detectedPaths.length).toBeGreaterThan(0)
+  })
+
+  it('skips file-path annotation entirely in share mode', () => {
+    setShareToken('tokshare')
+    try {
+      const md = 'Open `src/main.ts:10` for details'
+      const { html, detectedPaths } = buildMarkdownPreviewDom(
+        { content: md, path: 'README.md', projectRoot: '', homeDir: '' },
+        { isPC: true, imageTimestamp: 1 }
+      )
+      expect(detectedPaths).toHaveLength(0)
+      expect(html).not.toContain('chat-file-open-btn')
+      expect(html).not.toContain('data-file-path')
+    } finally {
+      setShareToken(null)
+    }
+  })
+
+  it('rewrites relative images to the token endpoint in share mode', () => {
+    setShareToken('tokshare')
+    try {
+      const md = '![img](img/x.png)'
+      const { html } = buildMarkdownPreviewDom({ content: md, path: 'README.md' }, { isPC: true, imageTimestamp: 5 })
+      expect(html).toContain('src="/api/share/tokshare/local/img/x.png?t=5"')
+      expect(html).not.toContain('/api/file/thumb')
+    } finally {
+      setShareToken(null)
+    }
   })
 })
