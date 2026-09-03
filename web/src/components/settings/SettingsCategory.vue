@@ -60,7 +60,7 @@
     </template>
     <!-- Password change dialog -->
     <PasswordChangeDialog
-      v-if="showPasswordDialog"
+      :open="showPasswordDialog"
       @close="showPasswordDialog = false"
       @changed="handlePasswordChanged"
     />

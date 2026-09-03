@@ -1,7 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
-import { ref, reactive } from 'vue'
+import { ref, reactive, nextTick } from 'vue'
 import SettingsCategory from '@/components/settings/SettingsCategory.vue'
 import PasswordChangeDialog from '@/components/settings/PasswordChangeDialog.vue'
 
@@ -322,9 +322,10 @@ const i18n = createI18n({
   },
 })
 
-function mountCategory(categoryId: string, { deep = false }: { deep?: boolean } = {}) {
+function mountCategory(categoryId: string, { deep = false, attach = false }: { deep?: boolean; attach?: boolean } = {}) {
   return mount(SettingsCategory, {
     props: { categoryId },
+    attachTo: attach ? document.body : undefined,
     global: {
       plugins: [i18n],
       stubs: deep
@@ -340,6 +341,10 @@ function mountCategory(categoryId: string, { deep = false }: { deep?: boolean } 
     },
   })
 }
+
+afterEach(() => {
+  document.body.querySelectorAll('.modal-overlay').forEach((el) => el.remove())
+})
 
 describe('SettingsCategory', () => {
   beforeEach(() => {
@@ -528,7 +533,7 @@ describe('SettingsCategory', () => {
     })
 
     it('opens password dialog when changePassword action is clicked', async () => {
-      const wrapper = mountCategory('security', { deep: true })
+      const wrapper = mountCategory('security', { deep: true, attach: true })
 
       // Directly set the internal showPasswordDialog state
       const vm = wrapper.vm as any
@@ -536,12 +541,14 @@ describe('SettingsCategory', () => {
       wrapper.vm.$forceUpdate()
       await wrapper.vm.$nextTick()
 
-      // PasswordChangeDialog should be visible
-      expect(wrapper.find('.password-dialog-overlay').exists()).toBe(true)
+      // PasswordChangeDialog renders inside ModalDialog, which teleports to
+      // <body> — look it up there, not in the component's own subtree.
+      expect(document.body.querySelector('.modal-overlay')).toBeTruthy()
+      expect(document.body.querySelector('.password-dialog__input')).toBeTruthy()
     })
 
     it('closes password dialog when dialog emits close', async () => {
-      const wrapper = mountCategory('security', { deep: true })
+      const wrapper = mountCategory('security', { deep: true, attach: true })
 
       // Open the dialog directly
       const vm = wrapper.vm as any
@@ -549,24 +556,26 @@ describe('SettingsCategory', () => {
       wrapper.vm.$forceUpdate()
       await wrapper.vm.$nextTick()
 
-      expect(wrapper.find('.password-dialog-overlay').exists()).toBe(true)
+      expect(document.body.querySelector('.modal-overlay')).toBeTruthy()
 
-      // Close by clicking the cancel button
-      const cancelBtn = wrapper.find('.password-dialog__btn--cancel')
-      if (cancelBtn.exists()) {
-        await cancelBtn.trigger('click')
+      // Click the cancel button — PasswordChangeDialog handleClose emits close,
+      // SettingsCategory flips showPasswordDialog to false, and ModalDialog
+      // v-show-hides the overlay.
+      const cancelBtn = document.body.querySelector('.password-dialog__btn--cancel') as HTMLElement | null
+      if (cancelBtn) {
+        cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await nextTick()
       } else {
         vm.$.setupState.showPasswordDialog = false
       }
-      await wrapper.vm.$nextTick()
       wrapper.vm.$forceUpdate()
       await wrapper.vm.$nextTick()
 
-      expect(wrapper.find('.password-dialog-overlay').exists()).toBe(false)
+      expect(vm.$.setupState.showPasswordDialog).toBe(false)
     })
 
     it('shows toast and emits restartNeeded when password changed with needsRestart=true', async () => {
-      const wrapper = mountCategory('security')
+      const wrapper = mountCategory('security', { attach: true })
 
       // Open the dialog
       const vm = wrapper.vm as any
@@ -589,7 +598,7 @@ describe('SettingsCategory', () => {
       await wrapper.vm.$nextTick()
 
       // Dialog should be closed
-      expect(wrapper.find('.password-dialog-overlay').exists()).toBe(false)
+      expect(vm.$.setupState.showPasswordDialog).toBe(false)
       // Toast should show success
       expect(mockToastShow).toHaveBeenCalled()
       // restartNeeded should be emitted

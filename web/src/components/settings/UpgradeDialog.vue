@@ -1,7 +1,12 @@
 <template>
-  <Transition name="ug-fade">
-    <div v-if="visible" class="ug-overlay">
-      <div class="ug-panel">
+  <!-- Teleport to body: this full-viewport overlay renders inside the settings
+       tab-panel whose `isolation: isolate` stacking context traps it below the
+       chat column in wide-screen mode, no matter the z-index. Escaping to body
+       keeps it above the whole app. -->
+  <Teleport to="body">
+    <Transition name="ug-fade">
+      <div v-if="visible" class="ug-overlay">
+        <div class="ug-panel">
         <!-- Header -->
         <div class="ug-header">
           <h3>{{ t('upgrade.title') }}</h3>
@@ -76,7 +81,8 @@
         </div>
       </div>
     </div>
-  </Transition>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
