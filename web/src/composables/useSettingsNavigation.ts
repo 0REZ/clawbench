@@ -24,6 +24,35 @@ function unregisterGuard(id: string) {
 // ref that SettingsPage writes to, so both stay in sync.
 export const restartingOverlay = ref(false)
 
+// Module-level pending settings category deep-link — set by entry points that
+// live OUTSIDE the settings tab (e.g. AppHeader's "more appearance options"
+// button) and consumed by SettingsPage when the settings tab becomes active.
+// Module-level (not per-instance) because the SettingsPage may not even be
+// mounted yet when the request is made — the TabPanel mounts it lazily on the
+// first visit — so the request must survive until the page mounts/activates.
+const pendingSettingsCategory = ref<string | null>(null)
+
+/** Request a deep-link into a settings category (from outside the settings tab). */
+export function setPendingSettingsCategory(categoryId: string) {
+  pendingSettingsCategory.value = categoryId
+}
+
+/**
+ * Consume (and clear) the pending settings category request.
+ * Returns the category id or null when nothing is pending.
+ */
+export function consumePendingSettingsCategory(): string | null {
+  const id = pendingSettingsCategory.value
+  pendingSettingsCategory.value = null
+  return id
+}
+
+/**
+ * Reactive pending category ref — SettingsPage watches it so a deep-link is
+ * honored even when the settings tab is already active and switchTab() no-ops.
+ */
+export { pendingSettingsCategory }
+
 /** Check all registered guards. Returns true if all guards allow reset. */
 function checkAllGuards(): boolean {
   for (const guard of guards.values()) {

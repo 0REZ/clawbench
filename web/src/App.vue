@@ -122,6 +122,7 @@
                       @overlay-close="handleOverlayClose"
                       @navigate-back="handleFileHistoryBack"
                       @navigate-forward="handleFileHistoryForward"
+                      @share-link="openShareLinkDialog"
                     />
                     <div v-else class="view-panel-empty" :class="recentFileEntries.length ? 'has-recent' : 'no-recent'">
                       <template v-if="recentFileEntries.length">
@@ -258,6 +259,12 @@
       <ProjectDialog
         :open="projectDialogOpen"
         @close="projectDialogOpen = false"
+      />
+
+      <ShareLinkDialog
+        :open="shareLinkOpen"
+        :file="currentFile"
+        @close="shareLinkOpen = false"
       />
 
       <FileDetailsDrawer
@@ -415,6 +422,7 @@ import { useDockOverflow } from '@/composables/useDockOverflow'
 import { closeAllTableBlockMenus } from '@/composables/useCodeBlockHeader'
 import { useI18n } from 'vue-i18n'
 import { useSettingsConfig, applyUIScale, getZoomedViewport, toFixedCSS } from '@/composables/useSettingsConfig'
+import { applyFontConfig, ensureSelectedBundledFontsLoaded } from '@/utils/fontConfig'
 import { MessageSquare, MessageSquareOff, FolderOpen, GitBranch, Network, SquareTerminal as TerminalIcon, Clock, MoreHorizontal, Settings, Paperclip, FileText, X } from 'lucide-vue-next'
 import AppHeader from './components/common/AppHeader.vue'
 import TabPanel from './components/common/TabPanel.vue'
@@ -438,6 +446,7 @@ import VersionMismatchOverlay from './components/VersionMismatchOverlay.vue'
 import UpgradePromptOverlay from './components/UpgradePromptOverlay.vue'
 import UpgradeDialog from './components/settings/UpgradeDialog.vue'
 import FileDetailsDrawer from './components/file/FileDetailsDrawer.vue'
+import ShareLinkDialog from './components/file/ShareLinkDialog.vue'
 import ToastNotification from './components/common/ToastNotification.vue'
 import CompletionPopover from './components/common/CompletionPopover.vue'
 import DialogOverlay from './components/common/DialogOverlay.vue'
@@ -874,6 +883,10 @@ useFileWatch({
 const fileNav = useFileNavStack()
 const fileEditor = useFileEditor()
 
+function openShareLinkDialog() {
+  shareLinkOpen.value = true
+}
+
 function closeOverlayAndSync() {
   fileNav.closeOverlay()
   store.closeCurrentFile()
@@ -1269,6 +1282,16 @@ function registerAppEventListeners() {
       await initMermaid()
       await reRenderMermaid()
   })
+  window.addEventListener('clawbench-font-change', async () => {
+      // If a self-hosted bundled font was just selected, wait for its file so
+      // the re-rendered mermaid SVG text is measured with the real font.
+      await ensureSelectedBundledFontsLoaded()
+      // Re-render mermaid diagrams so their SVG text picks up the new font.
+      // (Other text follows --font-ui/--font-mono CSS vars automatically.)
+      const { initMermaid, reRenderMermaid } = await import('./utils/mermaid.ts')
+      await initMermaid()
+      await reRenderMermaid()
+  })
   window.addEventListener('clawbench-showhidden-change', (e) => {
       showHidden.value = e.detail
   })
@@ -1333,6 +1356,7 @@ async function handleLoginSuccess() {
     dismissSplash()
     await nextTick()
     applyUIScale(localConfig.uiScale ?? 1)
+    applyFontConfig()
     startDockResize()
     // Measure dock height and set --dock-height CSS variable for fixed-position elements
     const dockWrapper = document.querySelector('.bottom-dock-wrapper')
@@ -1354,6 +1378,7 @@ async function handleLoginSuccess() {
 }
 
 const projectDialogOpen = ref(false)
+const shareLinkOpen = ref(false)
 const welcomeOverlay = ref(null)
 const versionMismatchOverlay = ref(null)
 const upgradePromptOverlay = ref(null)
@@ -2097,7 +2122,7 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, ancho
             // Cancel any pending scroll-position restore in FileViewer
             // so it doesn't override our scroll target
             window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-            firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            firstEl.scrollIntoView({ behavior: 'auto', block: 'center' })
             // Flash the range
             for (let i = startLine; i <= endLine; i++) {
                 const el = document.querySelector(`.code-line[data-line="${i}"]`)
@@ -2113,7 +2138,7 @@ function scrollToLine(line, lineEnd, path = store.state.currentFile?.path, ancho
         const anchorEl = anchorId && findVisibleAnchorEl(anchorId, path)
         if (anchorEl) {
             window.dispatchEvent(new CustomEvent('cancel-scroll-restore'))
-            anchorEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            anchorEl.scrollIntoView({ behavior: 'auto', block: 'start' })
             anchorEl.classList.add('line-flash')
             anchorEl.addEventListener('animationend', () => anchorEl.classList.remove('line-flash'), { once: true })
             cleanup()
@@ -2280,6 +2305,7 @@ onMounted(async () => {
     dismissSplash()
     await nextTick()
     applyUIScale(localConfig.uiScale ?? 1)
+    applyFontConfig()
     startDockResize()
     welcomeOverlay.value?.show()
     versionMismatchOverlay.value?.show()

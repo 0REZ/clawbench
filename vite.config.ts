@@ -226,6 +226,7 @@ export default defineConfig({
       },
       '/login': `${backendProto}://localhost:${backendPort}`,
       '/dialog': `${backendProto}://localhost:${backendPort}`,
+      '/share': `${backendProto}://localhost:${backendPort}`,
       '/assets': `${backendProto}://localhost:${backendPort}`,
       '/sw.js': `${backendProto}://localhost:${backendPort}`,
       '/manifest.json': `${backendProto}://localhost:${backendPort}`,
@@ -236,7 +237,10 @@ export default defineConfig({
     emptyOutDir: false,
     assetsDir: '.',
     rollupOptions: {
-      input: resolve(__dirname, 'web/index.html'),
+      input: {
+        main: resolve(__dirname, 'web/index.html'),
+        share: resolve(__dirname, 'web/share.html'),
+      },
       output: {
         manualChunks: {
           'vendor-vue': ['vue', 'vue-i18n'],

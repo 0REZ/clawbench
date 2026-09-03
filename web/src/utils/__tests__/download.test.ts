@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { buildLocalFileUrl, downloadFileByPath, downloadByUrl } from '@/utils/download.ts'
+import { setShareToken } from '@/share/shareMode'
 
 // Track setTimeout IDs to clean up after each test
 const pendingTimers: ReturnType<typeof setTimeout>[] = []
@@ -42,6 +43,37 @@ describe('buildLocalFileUrl', () => {
   it('uses ?path= query param for absolute paths with download', () => {
     const url = buildLocalFileUrl('/tmp/data.csv', { download: true })
     expect(url).toBe('/api/local-file/?download=1&path=%2Ftmp%2Fdata.csv')
+  })
+})
+
+describe('buildLocalFileUrl in share mode', () => {
+  afterEach(() => {
+    setShareToken(null)
+  })
+
+  it('routes absolute paths through the token-scoped local endpoint', () => {
+    setShareToken('tok123')
+    const url = buildLocalFileUrl('/home/user/docs/report.pdf')
+    expect(url).toBe('/api/share/tok123/local?path=%2Fhome%2Fuser%2Fdocs%2Freport.pdf')
+  })
+
+  it('routes relative paths through the token-scoped local endpoint', () => {
+    setShareToken('tok123')
+    expect(buildLocalFileUrl('docs/a.png')).toBe('/api/share/tok123/local/docs/a.png')
+    expect(buildLocalFileUrl('foo/bar baz/file.pdf')).toBe('/api/share/tok123/local/foo/bar%20baz/file.pdf')
+  })
+
+  it('supports download param in share mode', () => {
+    setShareToken('tok123')
+    const url = buildLocalFileUrl('/abs/file.bin', { download: true })
+    expect(url).toBe('/api/share/tok123/local?download=1&path=%2Fabs%2Ffile.bin')
+  })
+
+  it('restores normal URLs after token cleared', () => {
+    setShareToken('tok123')
+    expect(buildLocalFileUrl('readme.md')).toContain('/api/share/tok123/')
+    setShareToken(null)
+    expect(buildLocalFileUrl('readme.md')).toBe('/api/local-file/readme.md')
   })
 })
 

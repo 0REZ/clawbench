@@ -256,9 +256,9 @@ function scrollTo(item) {
         return
     }
 
-    // Hold the clicked highlight while the programmatic scroll settles, so the
-    // scroll-follow (observer / viewport-line) doesn't steal it to a nearby
-    // heading the smooth scroll sweeps across.
+    // Hold the clicked highlight while the programmatic scroll (instant jump)
+    // lands, so the scroll-follow (observer / viewport-line) doesn't steal it
+    // to a nearby heading on the immediately following user scroll.
     holdActiveHighlight()
 
     // Find the heading element scoped to the CURRENT file's content container.
@@ -267,7 +267,7 @@ function scrollTo(item) {
     // container instead of the visible one.
     const elById = findHeadingEl(item.id)
     if (elById) {
-        elById.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        elById.scrollIntoView({ behavior: 'auto', block: 'start' })
         elById.classList.add('line-flash')
         elById.addEventListener('animationend', () => elById.classList.remove('line-flash'), { once: true })
         activeId.value = item.id
@@ -318,12 +318,12 @@ function escAttr(value) {
 let observer = null
 
 // ── Click-jump highlight hold ──
-// After a TOC item is clicked, the programmatic smooth scroll that follows
-// sweeps the viewport across intervening headings, so the scroll-follow
-// observer/viewport-line would immediately steal the highlight to a *nearby*
-// (not the clicked) item. Hold the clicked highlight for a short window
-// (long enough for the smooth scroll to finish and settle), then let normal
-// scroll-follow resume on the user's next scroll.
+// After a TOC item is clicked the viewport lands instantly on the target, but
+// the flash runs for ~1.2s and the user's next scroll usually starts within
+// that window — scroll-follow would then immediately steal the highlight to a
+// *nearby* (not the clicked) item. Hold the clicked highlight for a short
+// window so the flash is not overridden, then let normal scroll-follow resume
+// on the user's next scroll.
 const FOLLOW_HOLD_MS = 1500
 let followHoldUntil = 0
 let followHoldTimer = null

@@ -368,14 +368,19 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 		CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON chat_tool_calls(session_id, created_at DESC);
 
 		-- Thinking block detail storage (text split from chat_history.content for performance)
+		-- seq: chunk sequence for incremental streaming persistence — the streaming
+		-- flush appends delta segments (seq 0,1,2,...) instead of rewriting the full
+		-- text each 500ms window. Readers concatenate rows ordered by seq. Finalize
+		-- deletes all rows and rewrites a single seq=0 row with the complete text.
 		CREATE TABLE IF NOT EXISTS chat_thinking (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			message_id INTEGER NOT NULL REFERENCES chat_history(id) ON DELETE CASCADE,
 			session_id TEXT NOT NULL,
 			think_id TEXT NOT NULL,
+			seq INTEGER NOT NULL DEFAULT 0,
 			text TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(think_id, message_id)
+			UNIQUE(think_id, message_id, seq)
 		);
 		CREATE INDEX IF NOT EXISTS idx_thinking_message ON chat_thinking(message_id);
 		CREATE INDEX IF NOT EXISTS idx_thinking_session ON chat_thinking(session_id, created_at DESC);
@@ -550,6 +555,17 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 		CREATE INDEX IF NOT EXISTS idx_chat_rec_session ON chat_recommendations(session_id, id);
+
+		-- Public file share links (capability tokens). A row maps an opaque,
+		-- unguessable token to an absolute file path. Public endpoints accept the
+		-- token WITHOUT auth; removing the row revokes the link immediately.
+		CREATE TABLE IF NOT EXISTS file_shares (
+			token TEXT PRIMARY KEY,
+			path TEXT NOT NULL,
+			name TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_file_shares_path ON file_shares(path);
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
@@ -964,11 +980,97 @@ func InitDB(runFromServer ...bool) error { //nolint:gocognit,gocyclo // multi-ta
 	// chat_tool_calls table and rewrite content to slim format (no input/output).
 	MigrateToolCallsFromContent()
 
+	// Migrate: rebuild chat_thinking with a seq column for incremental streaming
+	// persistence (existing single rows become seq=0). Must run BEFORE
+	// MigrateThinkingFromContent, whose inserts must match the new constraint.
+	if err := migrateChatThinkingSeq(); err != nil {
+		return fmt.Errorf("failed to migrate chat_thinking schema: %w", err)
+	}
+
 	// Migrate: extract thinking text from chat_history.content into chat_thinking
 	// and rewrite content to slim format (think_id instead of text).
 	MigrateThinkingFromContent()
 
 	return nil
+}
+
+// migrateChatThinkingSeq rebuilds chat_thinking with a seq column for
+// incremental streaming persistence. Older databases created chat_thinking
+// without seq and with UNIQUE(think_id, message_id) (one full-text row per
+// think block). SQLite cannot alter a UNIQUE constraint, so the table is
+// rebuilt atomically: existing rows become seq=0 single-chunk records.
+//
+// Idempotent: skips when the seq column already exists (fresh installs get the
+// new schema directly from CREATE TABLE; a rerun after a partial migration is
+// a no-op). Runs inside a single write transaction — any failure rolls back to
+// the original table.
+func migrateChatThinkingSeq() error {
+	// Only relevant when the table exists (fresh installs create it with seq).
+	var tableExists int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chat_thinking'").Scan(&tableExists); err != nil {
+		return err
+	}
+	if tableExists == 0 {
+		return nil
+	}
+	var hasSeq int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_thinking') WHERE name='seq'").Scan(&hasSeq); err != nil {
+		return err
+	}
+	if hasSeq > 0 {
+		return nil
+	}
+
+	tx, err := WriteBegin()
+	if err != nil {
+		return err
+	}
+	defer writeMu.Unlock()
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`CREATE TABLE chat_thinking_new (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id INTEGER NOT NULL REFERENCES chat_history(id) ON DELETE CASCADE,
+		session_id TEXT NOT NULL,
+		think_id TEXT NOT NULL,
+		seq INTEGER NOT NULL DEFAULT 0,
+		text TEXT NOT NULL DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(think_id, message_id, seq)
+	)`); err != nil {
+		return fmt.Errorf("create chat_thinking_new: %w", err)
+	}
+
+	// Existing rows: one per (think_id, message_id) under the old UNIQUE —
+	// safe 1:1 copy as seq=0. Preserve ids so AUTOINCREMENT counters don't jump.
+	// Orphan rows (message_id with no chat_history row, possible in databases
+	// created before foreign keys were enforced) are skipped rather than making
+	// the migration fail under the new table's FK constraint.
+	if _, err := tx.Exec(`INSERT INTO chat_thinking_new
+		(id, message_id, session_id, think_id, seq, text, created_at)
+		SELECT t.id, t.message_id, t.session_id, t.think_id, 0, t.text, t.created_at
+		FROM chat_thinking t
+		WHERE EXISTS (SELECT 1 FROM chat_history h WHERE h.id = t.message_id)`); err != nil {
+		return fmt.Errorf("copy chat_thinking rows: %w", err)
+	}
+
+	if _, err := tx.Exec("DROP TABLE chat_thinking"); err != nil {
+		return fmt.Errorf("drop chat_thinking: %w", err)
+	}
+	if _, err := tx.Exec("ALTER TABLE chat_thinking_new RENAME TO chat_thinking"); err != nil {
+		return fmt.Errorf("rename chat_thinking_new: %w", err)
+	}
+
+	// Indexes are dropped with the old table — recreate them on the renamed one.
+	if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_thinking_message ON chat_thinking(message_id)"); err != nil {
+		return fmt.Errorf("recreate idx_thinking_message: %w", err)
+	}
+	if _, err := tx.Exec("CREATE INDEX IF NOT EXISTS idx_thinking_session ON chat_thinking(session_id, created_at DESC)"); err != nil {
+		return fmt.Errorf("recreate idx_thinking_session: %w", err)
+	}
+
+	slog.Info("migrated chat_thinking to chunked storage (seq column added)")
+	return tx.Commit()
 }
 
 // migrateQuickProjectScope adds the project_path column to the quick-send and

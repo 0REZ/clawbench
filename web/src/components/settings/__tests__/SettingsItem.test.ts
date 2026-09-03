@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import SettingsItem from '@/components/settings/SettingsItem.vue'
 
@@ -24,15 +24,19 @@ vi.mock('lucide-vue-next', () => ({
   ChevronsUpDown: { name: 'ChevronsUpDown', template: '<span class="icon-chevron" />' },
 }))
 
-// Mock useTabDrawer
+// Mock useTabDrawer — plain object state; the component's font filter is
+// invoked imperatively (no watcher), so reactivity is not required here.
 vi.mock('@/composables/useTabDrawer', () => ({
-  useTabDrawer: () => ({
-    isOpen: { value: false },
-    effectiveOpen: { value: false },
-    open: vi.fn(function (this: any) { this.isOpen.value = true; this.effectiveOpen.value = true }),
-    close: vi.fn(function (this: any) { this.isOpen.value = false; this.effectiveOpen.value = false }),
-    toggle: vi.fn(),
-  }),
+  useTabDrawer: () => {
+    const state = { isOpen: false, effectiveOpen: false }
+    return {
+      isOpen: { get value() { return state.isOpen }, set value(v: boolean) { state.isOpen = v } },
+      effectiveOpen: { get value() { return state.effectiveOpen }, set value(v: boolean) { state.effectiveOpen = v } },
+      open: () => { state.isOpen = true; state.effectiveOpen = true },
+      close: () => { state.isOpen = false; state.effectiveOpen = false },
+      toggle: () => { state.effectiveOpen = !state.effectiveOpen },
+    }
+  },
 }))
 
 function mountItem(props: Record<string, any> = {}) {
@@ -646,6 +650,42 @@ describe('SettingsItem', () => {
       await wrapper.find('.settings-item').trigger('click')
       expect(vm.$.setupState.selectPicker.isOpen.value).toBe(true)
       expect(vm.$.setupState.themePicker.isOpen.value).toBe(false)
+    })
+
+    it('applies optionsFilter result when the picker opens', async () => {
+      const filter = vi.fn(async (opts: any[]) => opts.filter(o => o.value !== 'hidden'))
+      const wrapper = mountItem({
+        type: 'select',
+        modelValue: 'keep',
+        options: [
+          { label: 'Keep', value: 'keep' },
+          { label: 'Hidden', value: 'hidden' },
+        ],
+        optionsFilter: filter,
+      })
+      const vm = wrapper.vm as any
+      await wrapper.find('.settings-item').trigger('click')
+      await nextTick()
+      expect(filter).toHaveBeenCalledTimes(1)
+      await nextTick()
+      expect(vm.$.setupState.displayOptions).toEqual([{ label: 'Keep', value: 'keep' }])
+      expect(vm.$.setupState.renderOptions).toHaveLength(1)
+    })
+
+    it('clears displayOptions when an option is selected (picker closes)', async () => {
+      const wrapper = mountItem({
+        type: 'select',
+        modelValue: 'a',
+        options: [{ label: 'A', value: 'a' }],
+        optionsFilter: async (opts: any[]) => opts,
+      })
+      const vm = wrapper.vm as any
+      await wrapper.find('.settings-item').trigger('click')
+      await nextTick()
+      expect(vm.$.setupState.displayOptions).toEqual([{ label: 'A', value: 'a' }])
+      vm.$.setupState.selectOption('a')
+      await nextTick()
+      expect(vm.$.setupState.displayOptions).toBeNull()
     })
   })
 

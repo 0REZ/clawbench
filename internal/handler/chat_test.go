@@ -3673,9 +3673,9 @@ func TestAIChat_StreamStartEvent(t *testing.T) {
 	require.NotNil(t, found, "expected a stream_start chat_stream event in the subscriber buffer")
 
 	data := found.Data.(ws.ChatStreamData)
-	payload, ok := data.Payload.(map[string]int64)
-	require.True(t, ok, "stream_start payload must be map[string]int64")
-	assert.Greater(t, payload["message_id"], int64(0), "stream_start must carry the streaming message DB id")
+	payload, ok := data.Payload.(map[string]any)
+	require.True(t, ok, "stream_start payload must be map[string]any")
+	assert.Greater(t, payload["message_id"].(int64), int64(0), "stream_start must carry the streaming message DB id")
 
 	// The broadcast id must match the persisted assistant streaming row.
 	messages, err := service.GetChatHistory(env.ProjectDir, "codebuddy", sessionID)
@@ -3689,7 +3689,6 @@ func TestAIChat_StreamStartEvent(t *testing.T) {
 	}
 	assert.Greater(t, streamingRowID, int64(0))
 	assert.Equal(t, streamingRowID, payload["message_id"], "stream_start message_id must equal the assistant streaming row id")
-
 	// Wait for the async AI goroutine to finish to avoid leaking a running session.
 	assert.Eventually(t, func() bool {
 		return !service.IsSessionRunning(sessionID)

@@ -113,6 +113,7 @@ const (
 	ReasonRequestFailed = "request_failed" // Codex turn.failed
 	ReasonRefused       = "refused"        // ACP stopReason=refusal (agent declined / model unavailable / upstream error)
 	ReasonPanic         = "panic"          // AI goroutine panicked
+	ReasonRestart       = "restart"        // Server restart/graceful shutdown interrupted the stream
 )
 
 // SelectOptionDef describes a single selectable option (e.g., mode, thinking effort level).
@@ -343,6 +344,12 @@ type StreamEvent struct {
 // anchored to the authoritative DB row id.
 type StreamStartData struct {
 	MessageID int64 `json:"message_id"`
+	// QueueID is the answered queue id stored on the streaming assistant row —
+	// the queueId of the user message this run answers (empty for runs without
+	// a question, e.g. scheduled tasks). It lets a client whose question bubble
+	// is still in flight (recovery / cross-device) re-anchor the streaming
+	// placeholder to the true question instead of the newest stale user message.
+	QueueID string `json:"queue_id,omitempty"`
 }
 
 // ToolCall represents a tool invocation by the AI.

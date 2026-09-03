@@ -131,7 +131,7 @@ const statusTitle = computed(() => {
 .port-number {
   font-size: 18px;
   font-weight: 700;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   color: var(--text-primary, #1a1a1a);
   line-height: 1;
 }
@@ -275,7 +275,7 @@ const statusTitle = computed(() => {
 
 .port-target {
   font-size: 11px;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-weight: 500;
   padding: 1px 6px;
   border-radius: 0;
@@ -285,7 +285,7 @@ const statusTitle = computed(() => {
 
 .port-host {
   font-size: 11px;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-weight: 500;
   padding: 1px 6px;
   border-radius: 0;

@@ -15,6 +15,18 @@ export const isIPadOSUA = /Macintosh/i.test(ua)
   && typeof navigator !== 'undefined'
   && navigator.maxTouchPoints > 0
 
+/** Windows desktop/browser UA (NT kernel) — PowerShell/Win32-OpenSSH download path */
+export const isWindowsUA = /Windows NT/i.test(ua)
+
+/** Real macOS desktop UA — Macintosh + no touch (excludes iPadOS desktop-mode) */
+export const isMacDesktopUA = /Macintosh/i.test(ua)
+  && typeof navigator !== 'undefined'
+  && navigator.maxTouchPoints === 0
+
+/** Linux desktop browser UA — excludes Android (mobile UA carries Linux + Android) */
+export const isLinuxDesktopUA = /Linux/i.test(ua)
+  && !/Android/i.test(ua)
+
 const isPC = ref(false)
 let platformInitialized = false
 

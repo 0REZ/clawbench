@@ -57,7 +57,7 @@
 }
 
 .markdown-body code {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, monospace;
+    font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, monospace);
     font-size: 0.875em;
     padding: 0.2em 0.4em;
 }

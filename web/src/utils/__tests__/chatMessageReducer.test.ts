@@ -435,6 +435,88 @@ describe('rebuildFromDb (db_load)', () => {
   })
 })
 
+describe('ws_stream_start re-anchor (answeredQueueId)', () => {
+
+  // ── Bug regression: recovery placeholder anchored to a STALE user message.
+  //    When the question bubble is delayed (missed queue_drain/stream_start
+  //    while unsubscribed, then rebuilt on the "running" session_update), the
+  //    placeholder is anchored to the newest user visible at that moment — an
+  //    older question. The stream_start event now carries the answered queue
+  //    id, so the reducer must repoint the anchor to the true question and the
+  //    reply must sort right after it (never above it).
+  it('re-anchors a stale recovery placeholder to the answered question', () => {
+    const state = run([
+      // Older question Q1 and its finalized reply — newest non-pending user at
+      // recovery time was Q1 (Q2's bubble had not arrived yet).
+      u({ id: 100, content: 'Q1' }),
+      a({ id: 101, content: 'A1', blocks: [{ type: 'text', text: 'A1' }] }),
+      // Q2 arrived AFTER the recovery placeholder was built anchored to Q1.
+      u({ id: 200, content: 'Q2', _remote: true, _remoteQueueId: 'pending-2', seq: 1 }),
+      // Recovery placeholder: anchored to Q1 (stale), then ws_stream_start
+      // assigns the DB id 202 and the answered queue id 'pending-2'.
+      a({ id: 'drain-1', content: '', blocks: [], streaming: true, seq: 2, parentQueueId: '100' }),
+    ], [
+      { type: 'ws_stream_start', messageId: 202, answeredQueueId: 'pending-2' },
+    ])
+
+    const sm = state.find((m) => m.role === 'assistant' && m.streaming)!
+    expect(sm.id).toBe(202)
+    expect(String(sm.parentQueueId)).toBe('pending-2')
+    // Q1 < A1 < Q2 < streaming reply — the reply sorts after its own question.
+    const order = state.map((m) => (m.role === 'user' ? `u:${m.content}` : `a:${m.id}`))
+    expect(order).toEqual(['u:Q1', 'a:101', 'u:Q2', 'a:202'])
+  })
+
+  it('does not re-anchor when the placeholder already points at the answered question', () => {
+    const state = run([
+      u({ id: 200, content: 'Q2', _remote: true, _remoteQueueId: 'pending-2', seq: 1 }),
+      a({ id: 202, content: '', blocks: [], streaming: true, seq: 2, parentQueueId: 'pending-2' }),
+    ], [
+      { type: 'ws_stream_start', messageId: 202, answeredQueueId: 'pending-2' },
+    ])
+    const sm = state.find((m) => m.role === 'assistant' && m.streaming)!
+    expect(String(sm.parentQueueId)).toBe('pending-2')
+  })
+
+  it('drops the anchor when ws_stream_start carries no answered queue id (scheduled run)', () => {
+    const state = run([
+      u({ id: 200, content: 'Q2', seq: 1 }),
+      a({ id: 'drain-1', content: '', blocks: [], streaming: true, seq: 2, parentQueueId: '200' }),
+    ], [
+      { type: 'ws_stream_start', messageId: 202 },
+    ])
+    const sm = state.find((m) => m.role === 'assistant' && m.streaming)!
+    expect(sm.id).toBe(202)
+    // Anchor untouched — no answeredQueueId, keep whatever anchor exists.
+    expect(String(sm.parentQueueId)).toBe('200')
+  })
+
+  it('re-anchor survives a following db_load rebuild (Channel 2 queue match)', () => {
+    // After re-anchoring to the answered queue id, loadHistory's rebuildFromDb
+    // matches the live placeholder to the DB streaming row by
+    // (r.queueId === live.parentQueueId) and keeps the live object.
+    const state = run([
+      u({ id: 100, content: 'Q1' }),
+      a({ id: 101, content: 'A1', blocks: [{ type: 'text', text: 'A1' }] }),
+      u({ id: 200, content: 'Q2', queueId: 'pending-2' }),
+      a({ id: 'drain-1', content: '', blocks: [], streaming: true, seq: 2, parentQueueId: '100' }),
+    ], [
+      { type: 'ws_stream_start', messageId: 202, answeredQueueId: 'pending-2' },
+    ])
+    const merged = rebuildFromDb(state, [
+      u({ id: 100, content: 'Q1' }),
+      a({ id: 101, content: 'A1', blocks: [{ type: 'text', text: 'A1' }] }),
+      u({ id: 200, content: 'Q2', queueId: 'pending-2' }),
+      a({ id: 202, streaming: true, queueId: 'pending-2', createdAt: '2026-01-01T00:00:00Z' }),
+    ])
+    const sm = merged.find((m) => m.role === 'assistant' && m.streaming)!
+    expect(sm.id).toBe(202)
+    expect(String(sm.parentQueueId)).toBe('pending-2')
+    const order = merged.map((m) => (m.role === 'user' ? `u:${m.content}` : `a:${m.id}`))
+    expect(order).toEqual(['u:Q1', 'a:101', 'u:Q2', 'a:202'])
+  })
+})
+
 describe('rebuildFromDb (live placeholder)', () => {
 
   it('keeps the LIVE placeholder when a DB streaming row matches it (by id)', () => {

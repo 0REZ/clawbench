@@ -80,6 +80,84 @@ func TestThinkingCRUD(t *testing.T) {
 	})
 }
 
+func TestAppendThinkingSegment_GetThinkingConcat(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := initTestDB(dbDir); err != nil {
+		t.Fatalf("initTestDB: %v", err)
+	}
+	defer func() {
+		db.Close()
+		dbRead.Close()
+	}()
+
+	sessionID := "thinking-append-sess"
+	_, _ = db.Exec("INSERT INTO chat_sessions (id, project_path, backend, title) VALUES (?, ?, ?, ?)",
+		sessionID, "/test", "test", "Test Session")
+	res, err := db.Exec("INSERT INTO chat_history (project_path, role, content, session_id, backend) VALUES (?, ?, ?, ?, ?)",
+		"/test", "assistant", `{"blocks":[]}`, sessionID, "test")
+	if err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+	msgID, _ := res.LastInsertId()
+
+	t.Run("append chunks then concat in seq order", func(t *testing.T) {
+		if err := AppendThinkingSegment(msgID, sessionID, "th_app1", 0, "part1"); err != nil {
+			t.Fatalf("append seq0: %v", err)
+		}
+		if err := AppendThinkingSegment(msgID, sessionID, "th_app1", 1, "part2"); err != nil {
+			t.Fatalf("append seq1: %v", err)
+		}
+		if err := AppendThinkingSegment(msgID, sessionID, "th_app1", 2, "part3"); err != nil {
+			t.Fatalf("append seq2: %v", err)
+		}
+		rec, err := GetThinking("th_app1", msgID)
+		if err != nil {
+			t.Fatalf("GetThinking: %v", err)
+		}
+		if rec == nil {
+			t.Fatal("GetThinking returned nil")
+		}
+		if rec.Text != "part1part2part3" {
+			t.Errorf("Text = %q, want concatenated part1part2part3", rec.Text)
+		}
+	})
+
+	t.Run("upsert full text replaces chunks without duplication", func(t *testing.T) {
+		if err := UpsertThinking(msgID, sessionID, "th_app1", "full replacement"); err != nil {
+			t.Fatalf("UpsertThinking: %v", err)
+		}
+		rec, _ := GetThinking("th_app1", msgID)
+		if rec.Text != "full replacement" {
+			t.Errorf("Text = %q, want full replacement (no chunk duplication)", rec.Text)
+		}
+		// Only one row remains after the full-text upsert.
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = 'th_app1'").Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("expected 1 row after UpsertThinking, got %d", count)
+		}
+	})
+
+	t.Run("idempotent append same seq overwrites not duplicates", func(t *testing.T) {
+		if err := AppendThinkingSegment(msgID, sessionID, "th_app2", 0, "alpha"); err != nil {
+			t.Fatalf("append seq0: %v", err)
+		}
+		// Simulated retry of the same seq after a failure.
+		if err := AppendThinkingSegment(msgID, sessionID, "th_app2", 0, "alpha"); err != nil {
+			t.Fatalf("append seq0 retry: %v", err)
+		}
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = 'th_app2'").Scan(&count); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("expected 1 row after idempotent retry, got %d", count)
+		}
+	})
+}
+
 func TestGetThinkingBySessionAll(t *testing.T) {
 	dbDir := t.TempDir()
 	if err := initTestDB(dbDir); err != nil {

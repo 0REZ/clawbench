@@ -28,11 +28,19 @@ let _initPromise: Promise<void> | null = null
 function mermaidConfig() {
     const currentThemeId = document.documentElement.getAttribute('data-theme') || 'github-light'
     const theme = isDarkTheme(currentThemeId) ? 'dark' as const : 'default' as const
+    // Mermaid renders its own SVG text, so it cannot inherit the page font.
+    // Read the resolved --font-ui stack (set by fontConfig) so diagrams follow
+    // the configured interface font; fall back to the historical system stack.
+    let rootStyle = ''
+    try {
+      rootStyle = getComputedStyle(document.documentElement).getPropertyValue('--font-ui').trim()
+    } catch { /* jsdom/SSR without layout — fall back below */ }
+    const fontFamily = rootStyle || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     return {
         startOnLoad: false,
         theme,
         securityLevel: 'loose' as const,
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontFamily,
     }
 }
 

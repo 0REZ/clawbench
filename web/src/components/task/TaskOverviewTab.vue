@@ -306,7 +306,7 @@ function handlePromptClick(event: MouseEvent) {
 }
 
 .task-id-value {
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
@@ -434,7 +434,7 @@ function handlePromptClick(event: MouseEvent) {
 }
 
 .overview-value.font-mono {
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
   background: var(--bg-primary, #fff);
   padding: 2px 6px;
   border-radius: 4px;

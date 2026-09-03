@@ -143,9 +143,8 @@ func migrateThinkingForRow(msgID int64, sessionID, content string) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, rec := range records {
 		if _, err = tx.ExecContext(context.Background(), `
-			INSERT INTO chat_thinking (message_id, session_id, think_id, text)
-			VALUES (?, ?, ?, ?)
-			ON CONFLICT(think_id, message_id) DO UPDATE SET text = excluded.text
+			INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text)
+			VALUES (?, ?, ?, 0, ?)
 		`, msgID, sessionID, rec.ThinkID, rec.Text); err != nil {
 			return fmt.Errorf("upsert thinking %s: %w", rec.ThinkID, err)
 		}

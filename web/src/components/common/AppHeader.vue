@@ -173,10 +173,10 @@
     <button ref="themeBtnRef" class="theme-quick-toggle" :title="t('appHeader.themePicker')" :aria-label="t('appHeader.themePicker')" @click="toggleThemeMenu">
       <Palette :size="18" />
     </button>
-    <PopupMenu v-model:show="themeMenuOpen" :target-element="themeBtnRef" :max-width="200" :max-height="440" :menu-items-count="1 + THEME_IDS.length" anchor="right">
-      <div class="theme-picker">
-        <div class="theme-picker-title">{{ t('terminal.theme') }}</div>
-        <div class="theme-picker-list">
+    <PopupMenu v-model:show="themeMenuOpen" :target-element="themeBtnRef" :max-width="200" :max-height="440" :menu-items-count="1 + THEME_IDS.length" anchor="right" app-surface>
+      <div class="theme-picker app-menu-column">
+        <div class="app-menu-title">{{ t('terminal.theme') }}</div>
+        <div class="app-menu-scroll">
           <button
             v-for="opt in themeOptions"
             :key="opt.value"
@@ -193,6 +193,11 @@
             <span class="theme-item-name">{{ opt.label }}</span>
             <component :is="getThemeBaseIcon(opt.value)" :size="12" class="theme-item-base-icon" />
           </button>
+        </div>
+        <div class="menu-divider"></div>
+        <div class="app-menu-item other-item" role="menuitem" tabindex="-1" @click="openMoreAppearanceOptions">
+          <SlidersHorizontal :size="14" class="item-icon" />
+          <span class="item-label">{{ t('appHeader.moreAppearanceOptions') }}</span>
         </div>
       </div>
     </PopupMenu>
@@ -212,7 +217,7 @@
 </template>
 
 <script setup lang="ts">
-import { Projector, Search, GitBranch, Server, FileText, Settings2, FolderOpen, Cpu, Activity, MemoryStick, Database, X, Palette, Sun, Moon } from 'lucide-vue-next'
+import { Projector, Search, GitBranch, Server, FileText, Settings2, SlidersHorizontal, FolderOpen, Cpu, Activity, MemoryStick, Database, X, Palette, Sun, Moon } from 'lucide-vue-next'
 import { ref, computed, onMounted, onUnmounted, inject, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useGlobalEvents } from '@/composables/useGlobalEvents'
@@ -220,6 +225,7 @@ import { useAppMode } from '@/composables/useAppMode'
 import { baseName, dirName } from '@/utils/path.ts'
 import { store } from '@/stores/app.ts'
 import { setPendingManageNavigation } from '@/composables/useCommitNavigation.ts'
+import { setPendingSettingsCategory } from '@/composables/useSettingsNavigation'
 import PopupMenu from '@/components/common/PopupMenu.vue'
 import SystemResourcesPanel from '@/components/common/SystemResourcesPanel.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
@@ -283,6 +289,16 @@ function toggleThemeMenu() {
 function selectTheme(value: string) {
   themeMenuOpen.value = false
   setLocalConfig('theme', value)
+}
+
+/** Deep-link into the full appearance settings (theme grid + fonts + UI scale).
+ *  Mirrors the branch-badge → history deep-link: a module-level pending request
+ *  is set first, then the settings tab is switched to. SettingsPage consumes
+ *  the request whether it was already mounted or is mounted lazily by the tab. */
+function openMoreAppearanceOptions() {
+  themeMenuOpen.value = false
+  setPendingSettingsCategory('appearance')
+  switchTab?.('settings')
 }
 
 function getThemePreviewStyle(value: string) {
@@ -1647,10 +1663,31 @@ useMenuKeyboard({ panelRef: branchDropdownPanelRef, isOpen: branchDropdownOpen }
     color: var(--text-secondary, #666);
 }
 
-/* ─── Theme picker popup (unified with terminal theme picker) ─────────── */
-.theme-picker { padding: 0; min-width: 160px; }
-.theme-picker-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 5px 10px 4px; border-bottom: 1px solid var(--border-color); }
-.theme-picker-list { max-height: 300px; overflow-y: auto; }
+/* ─── Theme picker popup (unified with terminal theme picker) ───────────
+   Container surface is the PopupMenu appSurface (.app-menu look). The inner
+   column lays out title + scrollable list + pinned footer (the "more
+   appearance options" row reuses the project dropdown's divider + other-item
+   structure so it looks identical to the "browse" row). */
+.theme-picker { min-width: 160px; }
+/* Column layout shared by app-menu-styled pickers (app-header theme picker +
+   terminal theme picker). max-height: inherit ties it to the PopupMenu root's
+   computed inline max-height, so on short viewports the scrollable middle
+   shrinks and the pinned footer never gets clipped. */
+.app-menu-column {
+  display: flex;
+  flex-direction: column;
+  max-height: inherit;
+  min-height: 0;
+}
+.app-menu-column > .app-menu-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Header (title) / divider / footer row must never shrink — the scrollable
+   middle absorbs any height deficit first. */
+.app-menu-column > :not(.app-menu-scroll) {
+  flex-shrink: 0;
+}
 .theme-item + .theme-item { border-top: 1px solid var(--border-color); }
 .theme-item {
   display: flex; align-items: center; gap: 6px;

@@ -275,9 +275,10 @@ func setupTestEnv(t *testing.T) (*testEnv, func()) {
 			message_id INTEGER NOT NULL REFERENCES chat_history(id) ON DELETE CASCADE,
 			session_id TEXT NOT NULL,
 			think_id TEXT NOT NULL,
+			seq INTEGER NOT NULL DEFAULT 0,
 			text TEXT NOT NULL DEFAULT '',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(think_id, message_id)
+			UNIQUE(think_id, message_id, seq)
 		);
 		CREATE INDEX IF NOT EXISTS idx_thinking_message ON chat_thinking(message_id);
 		CREATE INDEX IF NOT EXISTS idx_thinking_session ON chat_thinking(session_id, created_at DESC);
@@ -309,6 +310,11 @@ func setupTestEnv(t *testing.T) (*testEnv, func()) {
 	// Create agent store tables
 	if _, err := db.Exec(service.AgentDDL); err != nil {
 		t.Fatalf("failed to create agent tables: %v", err)
+	}
+
+	// Create file share tables
+	if _, err := db.Exec(service.FileSharesDDL); err != nil {
+		t.Fatalf("failed to create file share tables: %v", err)
 	}
 
 	service.SetDBForTest(db, db)

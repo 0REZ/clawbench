@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="menu-fade">
-      <div v-if="show" class="popup-menu" role="menu" :style="menuStyle" @click.stop="emit('update:show', false)" @keydown.escape="emit('update:show', false)">
+      <div v-if="show" class="popup-menu" :class="{ 'popup-menu--app': appSurface }" role="menu" :style="menuStyle" @click.stop="emit('update:show', false)" @keydown.escape="emit('update:show', false)">
         <slot />
       </div>
     </Transition>
@@ -20,6 +20,13 @@ const props = defineProps({
   edgeMargin: { type: Number, default: 6 },
   menuItemsCount: { type: Number, default: 10 }, // for height estimation
   anchor: { type: String, default: 'auto', validator: (v) => ['left', 'right', 'auto'].includes(v) }, // force horizontal alignment
+  /**
+   * Style the popup like the app-header dropdown (.app-menu): primary
+   * background, downward shadow, subtle vertical padding and a flex-column
+   * layout with overflow hidden — so a header/footer can stay pinned while the
+   * middle list scrolls. The root then does NOT scroll itself.
+   */
+  appSurface: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:show'])
@@ -38,6 +45,7 @@ function updatePosition() {
     edgeMargin: props.edgeMargin,
     menuItemsCount: props.menuItemsCount,
     anchor: props.anchor,
+    scrollable: !props.appSurface,
   })
 }
 
@@ -122,5 +130,23 @@ onBeforeUnmount(() => {
 .menu-fade-leave-to {
   opacity: 0;
   transform: translateY(-4px);
+}
+
+/* ── App-header dropdown surface (matches .app-menu) ──
+   When a popup is styled like the app-header dropdown (project switch, theme
+   pickers), mirror its container look: primary background, downward shadow and
+   subtle vertical padding. The root itself must NOT scroll (inline overflowY
+   is omitted via computeMenuStyle scrollable:false) — the slot content is
+   expected to be an .app-menu-column (header + .app-menu-scroll + footer)
+   whose scrollable middle region absorbs the height left over by the pinned
+   header/footer. max-height comes from the inline style computed by
+   computeMenuStyle. */
+.popup-menu--app {
+  background: var(--bg-primary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  padding: 3px 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>

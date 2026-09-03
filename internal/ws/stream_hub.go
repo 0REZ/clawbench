@@ -184,10 +184,8 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	}
 
 	switch event.Type {
-	case "content":
-		return map[string]string{"content": event.Content}
-	case "thinking":
-		return map[string]string{"text": event.Content}
+	case "content", "thinking":
+		return simpleTextPayload(event)
 	case "tool_use":
 		return toolUsePayload(event)
 	case "tool_result":
@@ -203,10 +201,7 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	case "user_message":
 		return userMessagePayload(event)
 	case "stream_start":
-		if event.StreamStart != nil {
-			return map[string]int64{"message_id": event.StreamStart.MessageID}
-		}
-		return nil
+		return streamStartPayload(event)
 	case "queue_drain":
 		return queueDrainPayload(event)
 	case "queue_cancel":
@@ -214,6 +209,27 @@ func StreamEventToPayload(event ai.StreamEvent) any {
 	default:
 		return acpStatePayload(event)
 	}
+}
+
+// simpleTextPayload maps a bare-text event (content/thinking) to its keyed value.
+func simpleTextPayload(event ai.StreamEvent) any {
+	if event.Type == "thinking" {
+		return map[string]string{"text": event.Content}
+	}
+	return map[string]string{"content": event.Content}
+}
+
+// streamStartPayload builds the stream_start message payload. Returns nil when
+// no StreamStart data is attached (the event is then skipped downstream).
+func streamStartPayload(event ai.StreamEvent) any {
+	if event.StreamStart == nil {
+		return nil
+	}
+	payload := map[string]any{"message_id": event.StreamStart.MessageID}
+	if event.StreamStart.QueueID != "" {
+		payload["queue_id"] = event.StreamStart.QueueID
+	}
+	return payload
 }
 
 // acpStatePayload handles ACP state update event types (mode, config, commands, etc.)
@@ -433,9 +449,15 @@ func (h *StreamHub) emitACPState(clientID, sessionID string, s ai.ACPCachedState
 	slog.Debug("streamhub: re-emitted cached ACP state on subscribe", "session_id", sessionID, "client_id", clientID)
 }
 
-// EmitStreamStartEvent sends a stream_start chat_stream event with the streaming message ID.
-func (h *StreamHub) EmitStreamStartEvent(clientID, sessionID string, messageID int64) {
-	h.emitStateEvent(clientID, sessionID, "stream_start", map[string]int64{"message_id": messageID})
+// EmitStreamStartEvent sends a stream_start chat_stream event with the streaming
+// message ID and the answered queue id (the queueId of the question this run
+// answers, when known).
+func (h *StreamHub) EmitStreamStartEvent(clientID, sessionID string, messageID int64, queueID string) {
+	payload := map[string]any{"message_id": messageID}
+	if queueID != "" {
+		payload["queue_id"] = queueID
+	}
+	h.emitStateEvent(clientID, sessionID, "stream_start", payload)
 }
 
 // emitStateEvent sends a single chat_stream state event to a specific client.

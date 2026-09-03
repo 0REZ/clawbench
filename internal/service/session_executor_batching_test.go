@@ -202,9 +202,11 @@ func TestExecutor_FlushStreamingNow_IncludeThinkingAndBatched(t *testing.T) {
 
 // TestExecutor_ThinkingFlushedPeriodically verifies that a growing thinking
 // block is persisted to chat_thinking on every flush window with a stable
-// think_id (the upsert overwrites the row), while the content row EXCLUDES the
-// thinking block entirely (no slim marker, no text) — the completed message's
-// think_id markers are produced once at finalization by persistThinkingToDB.
+// think_id and INCREMENTAL seq chunks (each flush appends only the delta grown
+// since the previous window — the reader concatenates them), while the content
+// row EXCLUDES the thinking block entirely (no slim marker, no text) — the
+// completed message's think_id markers are produced once at finalization by
+// persistThinkingToDB.
 func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 	setupExecutorDB(t)
 	model.Agents = map[string]*model.Agent{
@@ -228,8 +230,8 @@ func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 	// rows via DeleteThinkingByMessage.
 	defer executor.unregisterActiveStream()
 
-	// Thinking grows: flush1 persists "part1", flush2 overwrites with
-	// "part1part2" under the SAME think_id.
+	// Thinking grows: flush1 persists "part1" at seq0, flush2 appends "part2"
+	// at seq1 under the SAME think_id.
 	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part1"})
 	executor.flushStreamingMessage()
 	require.Len(t, executor.blocks, 1)
@@ -241,19 +243,31 @@ func TestExecutor_ThinkingFlushedPeriodically(t *testing.T) {
 	require.NotNil(t, rec)
 	assert.Equal(t, "part1", rec.Text)
 
-	// Second flush with more thinking — same think_id, updated text.
+	// Second flush with more thinking — same think_id, text grows.
 	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part2"})
 	executor.flushStreamingMessage()
 	assert.Equal(t, firstID, executor.blocks[0].ThinkID, "think_id must be stable across flushes")
 	rec, err = GetThinking(firstID, msgID)
 	require.NoError(t, err)
 	require.NotNil(t, rec)
-	assert.Equal(t, "part1part2", rec.Text)
+	assert.Equal(t, "part1part2", rec.Text, "reader concatenates seq chunks into the full text")
 
-	// Only one row for this think_id (upsert, not insert).
+	// Two chunks now: seq0="part1", seq1="part2" — the flush appends only the
+	// delta grown since the last window instead of rewriting the full text.
 	count := 0
 	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE message_id = ?", msgID).Scan(&count)
-	assert.Equal(t, 1, count, "periodic flush must upsert, not accumulate rows")
+	assert.Equal(t, 2, count, "periodic flush must append incremental segments, not rewrite one row")
+	var seqs []int
+	rows, err := dbRead.Query("SELECT seq FROM chat_thinking WHERE message_id = ? ORDER BY seq", msgID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var s int
+		require.NoError(t, rows.Scan(&s))
+		seqs = append(seqs, s)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []int{0, 1}, seqs, "segments must be stored at seq 0 then seq 1")
 
 	// Content row EXCLUDES the thinking block entirely — a slim think_id marker
 	// here would leak an "empty thinking block" into the frontend's live
@@ -468,4 +482,75 @@ func TestExecutor_ForceFlush_ThenRateLimitedFlush_KeepsSlimThinking(t *testing.T
 	assert.Equal(t, "thinking", thinkingBlock["type"])
 	assert.Equal(t, firstID, thinkingBlock["think_id"], "sticky force flush must keep the slim think_id in content")
 	assert.NotContains(t, thinkingBlock, "text", "rate-limited flush after force flush must slim the text")
+
+	// The rate-limited flush ran after the forced flush; forceIncludeThinking is
+	// sticky so persistThinkingToDB owns persistence (incremental append is
+	// disabled). No thinking grew in between, so the single seq=0 row is intact.
+	rec, err = GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "sticky reasoning", rec.Text, "no duplicated text after force flush + rate-limited flush")
+	var cnt int
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = ?", firstID).Scan(&cnt)
+	assert.Equal(t, 1, cnt, "force flush rewrote seq=0; rate-limited flush must not append a duplicate chunk")
+}
+
+// TestExecutor_ForceFlush_ThenGrowth_FullRewrite verifies force mode semantics:
+// after a forced full write, subsequent rate-limited flushes keep the thinking
+// block in content and persistThinkingToDB (not the incremental cursor) owns
+// persistence — the full updated text lives in a single seq=0 row, never
+// duplicated by incremental appends (flushPendingThinking is guarded off while
+// forceIncludeThinking is sticky).
+func TestExecutor_ForceFlush_ThenGrowth_FullRewrite(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// Force flush writes the full text as a single seq=0 row.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "base text"})
+	executor.flushStreamingLocked(true)
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID)
+	rec, err := GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "base text", rec.Text)
+
+	// Thinking grows. The rate-limited flush (forceIncludeThinking sticky)
+	// persists the FULL updated text via persistThinkingToDB into the seq=0
+	// row — incremental append is disabled in force mode, so no seq=1 chunk.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: " +more"})
+	executor.flushStreamingMessage()
+
+	rec, err = GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "base text +more", rec.Text, "full updated text preserved after force-mode growth")
+
+	// Exactly one chunk: force mode rewrites seq=0 rather than appending.
+	var seqs []int
+	rows, err := dbRead.Query("SELECT seq FROM chat_thinking WHERE think_id = ? ORDER BY seq", firstID)
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var s int
+		require.NoError(t, rows.Scan(&s))
+		seqs = append(seqs, s)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []int{0}, seqs, "force mode must keep a single seq=0 full rewrite, no incremental chunks")
 }

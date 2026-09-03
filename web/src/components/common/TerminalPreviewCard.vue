@@ -66,7 +66,7 @@ const fileStyle = computed(() => {
   height: 100%;
   border-radius: 6px;
   overflow: hidden;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace);
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
 }

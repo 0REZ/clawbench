@@ -90,7 +90,7 @@ function formatDate(dateStr) {
 }
 
 .diff-meta-sha {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 12px;
   color: var(--accent-color, #4a90d9);
   cursor: pointer;

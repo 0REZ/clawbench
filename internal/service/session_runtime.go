@@ -488,6 +488,14 @@ func CancelAllSessions() {
 			sessionCancels.Delete(key)
 			return true
 		}
+		// Record the restart reason BEFORE cancelling so each executor's
+		// buildResult (interactive mode reads GetAndClearCancelReason) persists
+		// the interrupted message with a restart warning block — otherwise the
+		// graceful-shutdown Finalize would only mark it cancelled:true and the
+		// frontend's "服务重启，AI 响应中断" banner would never appear.
+		if sid, ok := key.(string); ok {
+			sessionCancelReasons.Store(sid, cancelReasonRestart)
+		}
 		cancel()
 		sessionCancels.Delete(key)
 		if sid, ok := key.(string); ok {

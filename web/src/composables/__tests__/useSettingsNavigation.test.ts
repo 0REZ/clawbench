@@ -1,5 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { restartingOverlay, useSettingsNavigation } from '@/composables/useSettingsNavigation'
+import {
+  restartingOverlay,
+  useSettingsNavigation,
+  setPendingSettingsCategory,
+  consumePendingSettingsCategory,
+  pendingSettingsCategory,
+} from '@/composables/useSettingsNavigation'
 
 // Mock dependencies
 const mockLoadConfig = vi.fn()
@@ -266,6 +272,41 @@ describe('useSettingsNavigation', () => {
             const nav1 = useSettingsNavigation()
             const nav2 = useSettingsNavigation()
             expect(nav1.restartingOverlay).toBe(nav2.restartingOverlay)
+        })
+    })
+
+    // ── pending settings category deep-link ──
+
+    describe('pending settings category deep-link', () => {
+        afterEach(() => {
+            pendingSettingsCategory.value = null
+        })
+
+        it('setPendingSettingsCategory stores the category id', () => {
+            setPendingSettingsCategory('appearance')
+            expect(pendingSettingsCategory.value).toBe('appearance')
+        })
+
+        it('consumePendingSettingsCategory returns and clears the request', () => {
+            setPendingSettingsCategory('appearance')
+            expect(consumePendingSettingsCategory()).toBe('appearance')
+            expect(pendingSettingsCategory.value).toBeNull()
+        })
+
+        it('consumePendingSettingsCategory returns null when nothing is pending', () => {
+            expect(consumePendingSettingsCategory()).toBeNull()
+        })
+
+        it('consume is destructive — second call returns null', () => {
+            setPendingSettingsCategory('appearance')
+            expect(consumePendingSettingsCategory()).toBe('appearance')
+            expect(consumePendingSettingsCategory()).toBeNull()
+        })
+
+        it('supports sequential requests (latest wins)', () => {
+            setPendingSettingsCategory('appearance')
+            setPendingSettingsCategory('terminal')
+            expect(consumePendingSettingsCategory()).toBe('terminal')
         })
     })
 })

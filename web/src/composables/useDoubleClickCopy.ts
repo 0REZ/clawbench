@@ -199,10 +199,9 @@ export function useDoubleClickCopy(options?: DoubleClickCopyOptions) {
             const scrollTop = (scrollContainer as HTMLElement).scrollTop || 0
             const targetTop = scrollTop + targetRect.top - containerRect.top - 20 // 20px offset
             
-            // 平滑滚动
+            // 瞬间滚动
             scrollContainer.scrollTo({
-                top: targetTop,
-                behavior: 'smooth'
+                top: targetTop
             })
             
             return true

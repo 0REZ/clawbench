@@ -155,8 +155,8 @@ vi.mock('@/utils/fileType.ts', () => ({
   },
 }))
 
-vi.mock('@/utils/exportHtml.ts', () => ({
-  exportRenderedHtml: vi.fn().mockResolvedValue({ html: '<html></html>', skippedImages: 0, externalImages: 0, issues: [] }),
+vi.mock('@/utils/exportMarkdownHtml.ts', () => ({
+  exportMarkdownToHtml: vi.fn().mockResolvedValue({ html: '<html></html>', skippedImages: 0, externalImages: 0, issues: [] }),
 }))
 
 vi.mock('@/utils/download.ts', () => ({

@@ -144,23 +144,43 @@
     v-if="type === 'select'"
     :open="selectPicker.effectiveOpen.value"
     auto
-    @close="selectPicker.close()"
+    @close="closeSelectPicker()"
   >
     <template #header>
       <ChevronsUpDown :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ label }}</span>
     </template>
-    <div
-      v-for="opt in options"
-      :key="opt.value as PropertyKey"
-      class="settings-item__option"
-      :class="{ 'settings-item__option--active': modelValue === opt.value }"
-      @click="selectOption(opt.value)"
-    >
-      <ProviderIcon v-if="opt.modelName" :model-name="opt.modelName" :size="14" />
-      <span class="settings-item__option-label">{{ opt.label }}</span>
-      <span v-if="modelValue === opt.value" class="settings-item__option-check">✓</span>
-    </div>
+    <template v-if="selectGroups">
+      <template v-for="(group, gi) in selectGroups" :key="group.groupKey ?? gi">
+        <div v-if="group.groupKey" class="settings-item__option-group">
+          {{ t(group.groupKey) }}
+        </div>
+        <div
+          v-for="opt in group.options"
+          :key="opt.value as PropertyKey"
+          class="settings-item__option"
+          :class="{ 'settings-item__option--active': modelValue === opt.value }"
+          @click="selectOption(opt.value)"
+        >
+          <span class="settings-item__option-label" :style="opt.previewFont ? { fontFamily: opt.previewFont } : undefined">{{ opt.label }}</span>
+          <span v-if="opt.badgeKey" class="settings-item__option-badge">{{ t(opt.badgeKey) }}</span>
+          <span v-if="modelValue === opt.value" class="settings-item__option-check">✓</span>
+        </div>
+      </template>
+    </template>
+    <template v-else>
+      <div
+        v-for="opt in renderOptions"
+        :key="opt.value as PropertyKey"
+        class="settings-item__option"
+        :class="{ 'settings-item__option--active': modelValue === opt.value }"
+        @click="selectOption(opt.value)"
+      >
+        <ProviderIcon v-if="opt.modelName" :model-name="opt.modelName" :size="14" />
+        <span class="settings-item__option-label" :style="opt.previewFont ? { fontFamily: opt.previewFont } : undefined">{{ opt.label }}</span>
+        <span v-if="modelValue === opt.value" class="settings-item__option-check">✓</span>
+      </div>
+    </template>
   </BottomSheet>
   <!-- Theme picker BottomSheet with color preview swatches -->
   <BottomSheet
@@ -244,7 +264,10 @@ interface Props {
   description?: string
   type: 'switch' | 'select' | 'number' | 'text' | 'slider' | 'action' | 'info' | 'header' | 'password' | 'textarea'
   modelValue?: unknown
-  options?: { label: string; value: unknown; modelName?: string }[]
+  options?: SelectOption[]
+  /** Async filter applied to options each time the select picker opens
+   *  (e.g. font availability probing). When absent, options render as-is. */
+  optionsFilter?: (options: SelectOption[]) => Promise<SelectOption[]>
   /** Optional per-option previews — when provided, the select renders as a
    *  theme grid picker instead of a plain option list. Two kinds supported:
    *  color (bg/text/accent swatch) and terminal (mini terminal preview). */
@@ -322,6 +345,59 @@ const isTerminalThemeSelect = computed(() =>
   Object.values(props.optionPreviews).some(p => p.type === 'terminal')
 )
 
+export interface SelectOption {
+  label: string
+  value: unknown
+  modelName?: string
+  groupKey?: string
+  badgeKey?: string
+  /** CSS font-family used to render this option's label in its own font. */
+  previewFont?: string
+}
+interface SelectGroup { groupKey?: string; options: SelectOption[] }
+
+/** Options actually rendered: props.options, replaced by the async filter
+ *  result while the picker is open (null until a filter has produced output). */
+const displayOptions = ref<SelectOption[] | null>(null)
+
+/** The options list used for rendering (filtered when a filter produced output). */
+const renderOptions = computed<SelectOption[] | undefined>(() => displayOptions.value ?? (props.options as SelectOption[] | undefined))
+
+/** Reset the filtered snapshot (called whenever the plain select closes). */
+function resetDisplayOptions() {
+  displayOptions.value = null
+}
+
+/** Kick off the async options filter (if any) and store its result. */
+function refreshDisplayOptions() {
+  resetDisplayOptions()
+  const opts = props.options as SelectOption[] | undefined
+  if (!props.optionsFilter || !opts) return
+  void props.optionsFilter(opts).then((filtered) => {
+    displayOptions.value = filtered
+  }).catch(() => { /* keep unfiltered list on failure */ })
+}
+
+/** Close the plain select picker and clear the filtered snapshot. */
+function closeSelectPicker() {
+  selectPicker.close()
+  resetDisplayOptions()
+}
+
+/** Group the plain select options by groupKey (when present). Options without a
+ *  groupKey render as a single flat list — unchanged legacy behavior. */
+const selectGroups = computed<SelectGroup[] | null>(() => {
+  const opts = renderOptions.value
+  if (!opts?.some(o => o.groupKey)) return null
+  const groups: SelectGroup[] = []
+  for (const opt of opts) {
+    const last = groups[groups.length - 1]
+    if (!last || last.groupKey !== opt.groupKey) groups.push({ groupKey: opt.groupKey, options: [opt] })
+    else last.options.push(opt)
+  }
+  return groups
+})
+
 /** Look up the preview payload for an option value. */
 function previewFor(opt: { label: string; value: unknown }): OptionPreview | undefined {
   return props.optionPreviews?.[String(opt.value)]
@@ -381,7 +457,7 @@ watch(() => props.forceClose, (val) => {
     emit('editToggle', false)
   }
   if (val && selectPicker.isOpen.value) {
-    selectPicker.close()
+    closeSelectPicker()
     emit('editToggle', false)
   }
 })
@@ -464,6 +540,7 @@ function handleClick() {
     } else {
       selectPicker.open()
       themePicker.close()
+      refreshDisplayOptions()
     }
     emit('editToggle', true)
     return
@@ -479,7 +556,7 @@ function handleClick() {
 
 function selectOption(value: unknown) {
   emit('update:modelValue', value)
-  selectPicker.close()
+  closeSelectPicker()
   themePicker.close()
   emit('editToggle', false)
 }
@@ -936,6 +1013,29 @@ function confirmEdit() {
   font-weight: 600;
   flex-shrink: 0;
   margin-left: auto;
+}
+
+/* Group header inside the select option list (font picker). */
+.settings-item__option-group {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 10px 16px 4px;
+  background: var(--bg-secondary);
+}
+
+/* Small badge (e.g. "内置" for bundled fonts). */
+.settings-item__option-badge {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ── Theme picker grid ── */

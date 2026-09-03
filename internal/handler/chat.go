@@ -740,7 +740,7 @@ func executeStreamRun(
 	// service layer — this is the web POST path's per-prompt insertion point.
 	ws.EmitToSession(sessionID, ai.StreamEvent{
 		Type:        "stream_start",
-		StreamStart: &ai.StreamStartData{MessageID: streamingMsgID},
+		StreamStart: &ai.StreamStartData{MessageID: streamingMsgID, QueueID: queueID},
 	})
 
 	// Delegate event loop to SessionExecutor

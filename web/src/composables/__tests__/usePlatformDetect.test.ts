@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
-import { _setIsPCForTest, _resetPlatformForTest, usePlatformDetect, isAndroidUA, isIOSUA, isIPadOSUA } from '@/composables/usePlatformDetect'
+import { _setIsPCForTest, _resetPlatformForTest, usePlatformDetect, isAndroidUA, isIOSUA, isIPadOSUA, isWindowsUA, isMacDesktopUA, isLinuxDesktopUA } from '@/composables/usePlatformDetect'
 
 // Mock useAppMode to control isAppMode in tests
 vi.mock('@/composables/useAppMode', () => ({
@@ -129,5 +129,55 @@ describe('isPC logic', () => {
     expect(mod.isIPadOSUA).toBe(false)
     const { isPC } = mod.usePlatformDetect()
     expect(isPC.value).toBe(true)
+  })
+})
+
+describe('OS detection constants', () => {
+  it('isWindowsUA detects Windows NT UA', async () => {
+    const winUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: winUA })
+    vi.resetModules()
+    const mod = await import('@/composables/usePlatformDetect')
+    expect(mod.isWindowsUA).toBe(true)
+    expect(mod.isMacDesktopUA).toBe(false)
+    expect(mod.isLinuxDesktopUA).toBe(false)
+  })
+
+  it('isMacDesktopUA detects real Mac desktop UA (maxTouchPoints = 0)', async () => {
+    const macUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: macUA })
+    Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 0 })
+    vi.resetModules()
+    const mod = await import('@/composables/usePlatformDetect')
+    expect(mod.isWindowsUA).toBe(false)
+    expect(mod.isMacDesktopUA).toBe(true)
+    expect(mod.isLinuxDesktopUA).toBe(false)
+  })
+
+  it('isMacDesktopUA excludes iPadOS desktop-mode (maxTouchPoints > 0)', async () => {
+    const ipadUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: ipadUA })
+    Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 5 })
+    vi.resetModules()
+    const mod = await import('@/composables/usePlatformDetect')
+    expect(mod.isMacDesktopUA).toBe(false)
+  })
+
+  it('isLinuxDesktopUA detects Linux desktop UA without Android', async () => {
+    const linuxUA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: linuxUA })
+    vi.resetModules()
+    const mod = await import('@/composables/usePlatformDetect')
+    expect(mod.isWindowsUA).toBe(false)
+    expect(mod.isMacDesktopUA).toBe(false)
+    expect(mod.isLinuxDesktopUA).toBe(true)
+  })
+
+  it('isLinuxDesktopUA excludes Android UA (Linux + Android)', async () => {
+    const androidUA = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36'
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, value: androidUA })
+    vi.resetModules()
+    const mod = await import('@/composables/usePlatformDetect')
+    expect(mod.isLinuxDesktopUA).toBe(false)
   })
 })

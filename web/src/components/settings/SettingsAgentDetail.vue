@@ -31,7 +31,7 @@
       </button>
     </div>
     <CopyAgentDialog
-      v-if="copying"
+      :open="copying"
       :source-name="agent?.name ?? ''"
       @close="copying = false"
       @confirmed="handleCopyConfirmed"

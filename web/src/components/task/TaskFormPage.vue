@@ -504,7 +504,7 @@ onMounted(() => {
 }
 
 .form-input.font-mono {
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
 }
 
 .form-input:focus,
@@ -787,7 +787,7 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: var(--accent-color, #0066cc);
-  font-family: 'SF Mono', 'Menlo', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace);
 }
 
 .cron-humanize {

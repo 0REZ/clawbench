@@ -757,7 +757,7 @@ func executeStreamRunShared(ctx context.Context, cfg LaunchConfig) streamRunResu
 	// has a streaming=1 row or a stream_start event arrives.
 	ws.EmitToSession(cfg.SessionID, ai.StreamEvent{
 		Type:        "stream_start",
-		StreamStart: &ai.StreamStartData{MessageID: streamingMsgID},
+		StreamStart: &ai.StreamStartData{MessageID: streamingMsgID, QueueID: cfg.QueueID},
 	})
 
 	execCfg := RunConfig{

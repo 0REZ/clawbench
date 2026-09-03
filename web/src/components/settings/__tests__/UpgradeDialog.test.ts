@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { mount, VueWrapper } from '@vue/test-utils'
 import { nextTick, ref, reactive } from 'vue'
 import { createI18n } from 'vue-i18n'
 import UpgradeDialog from '@/components/settings/UpgradeDialog.vue'
@@ -73,10 +73,34 @@ vi.mock('@/composables/useBackHandler', () => ({
   PRIORITY_OVERLAY: 1000,
 }))
 
+// UpgradeDialog Teleports its overlay to <body>, so DOM lookups must go
+// through document.body — the dialog content is not part of the component's
+// own wrapper tree.
+function $(selector: string): HTMLElement | null {
+  return document.body.querySelector(selector)
+}
+
+let wrapper: VueWrapper | null = null
+let host: HTMLDivElement | null = null
+
+afterEach(() => {
+  if (wrapper) {
+    wrapper.unmount()
+    wrapper = null
+  }
+  if (host?.parentNode) host.parentNode.removeChild(host)
+  host = null
+  document.body.querySelectorAll('.ug-overlay').forEach((el) => el.remove())
+})
+
 function mountDialog() {
-  return mount(UpgradeDialog, {
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  wrapper = mount(UpgradeDialog, {
+    attachTo: host,
     global: { plugins: [i18n] },
   })
+  return wrapper
 }
 
 beforeEach(() => {
@@ -105,17 +129,17 @@ describe('UpgradeDialog', () => {
     it('shows dialog when show() is called', async () => {
       const wrapper = mountDialog()
       // Initially hidden
-      expect(wrapper.find('.ug-overlay').exists()).toBe(false)
+      expect($('.ug-overlay')).toBeFalsy()
 
       // Call show
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-overlay').exists()).toBe(true)
+      expect($('.ug-overlay')).toBeTruthy()
     })
 
     it('calls checkUpgrade when phase is empty', async () => {
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
       expect(mockCheckUpgrade).toHaveBeenCalled()
     })
@@ -123,7 +147,7 @@ describe('UpgradeDialog', () => {
     it('does not call checkUpgrade when phase is already set', async () => {
       mockState.phase = 'downloading'
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
       expect(mockCheckUpgrade).not.toHaveBeenCalled()
     })
@@ -131,26 +155,36 @@ describe('UpgradeDialog', () => {
 
   describe('close method', () => {
     it('hides dialog when close is called', async () => {
+      vi.useFakeTimers()
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-overlay').exists()).toBe(true)
+      expect($('.ug-overlay')).toBeTruthy()
 
       // Click cancel button
-      await wrapper.find('.ug-cancel').trigger('click')
-      expect(wrapper.find('.ug-overlay').exists()).toBe(false)
+      $('.ug-cancel')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      // The leave transition keeps the overlay mounted until it finishes
+      vi.advanceTimersByTime(300)
+      await nextTick()
+      expect($('.ug-overlay')).toBeFalsy()
+      vi.useRealTimers()
     })
 
     it('clicking close button hides dialog', async () => {
+      vi.useFakeTimers()
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
 
       // Click the X close button
-      const closeBtn = wrapper.find('.ug-close')
-      expect(closeBtn.exists()).toBe(true)
-      await closeBtn.trigger('click')
-      expect(wrapper.find('.ug-overlay').exists()).toBe(false)
+      const closeBtn = $('.ug-close')!
+      expect(closeBtn).toBeTruthy()
+      closeBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      // The leave transition keeps the overlay mounted until it finishes
+      vi.advanceTimersByTime(300)
+      await nextTick()
+      expect($('.ug-overlay')).toBeFalsy()
+      vi.useRealTimers()
     })
   })
 
@@ -158,9 +192,9 @@ describe('UpgradeDialog', () => {
     it('shows loading indicator when checking', async () => {
       mockChecking.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-progress-area').exists()).toBe(true)
+      expect($('.ug-progress-area')).toBeTruthy()
     })
   })
 
@@ -169,29 +203,29 @@ describe('UpgradeDialog', () => {
       mockChecking.value = false
       mockHasUpgrade.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-versions').exists()).toBe(true)
-      expect(wrapper.find('.ug-ver-current').text()).toBe('1.0.0')
-      expect(wrapper.find('.ug-ver-latest').text()).toBe('1.1.0')
+      expect($('.ug-versions')).toBeTruthy()
+      expect($('.ug-ver-current')!.textContent).toBe('1.0.0')
+      expect($('.ug-ver-latest')!.textContent).toBe('1.1.0')
     })
 
     it('shows no-upgrade message when no upgrade available', async () => {
       mockChecking.value = false
       mockHasUpgrade.value = false
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-no-upgrade').exists()).toBe(true)
+      expect($('.ug-no-upgrade')).toBeTruthy()
     })
 
     it('shows release notes link when available', async () => {
       mockChecking.value = false
       mockHasUpgrade.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-release-link').exists()).toBe(true)
+      expect($('.ug-release-link')).toBeTruthy()
     })
 
     it('does not show release notes link when not available', async () => {
@@ -199,9 +233,9 @@ describe('UpgradeDialog', () => {
       mockHasUpgrade.value = true
       mockReleaseNotesUrl.value = ''
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-release-link').exists()).toBe(false)
+      expect($('.ug-release-link')).toBeFalsy()
     })
   })
 
@@ -210,54 +244,54 @@ describe('UpgradeDialog', () => {
       mockState.phase = 'checking'
       mockChecking.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('检查中')
+      expect(document.body.textContent).toContain('检查中')
     })
 
     it('shows downloading message', async () => {
       mockState.phase = 'downloading'
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('下载中')
+      expect(document.body.textContent).toContain('下载中')
     })
 
     it('shows extracting message', async () => {
       mockState.phase = 'extracting'
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('解压中')
+      expect(document.body.textContent).toContain('解压中')
     })
 
     it('shows backing_up message', async () => {
       mockState.phase = 'backing_up'
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('备份中')
+      expect(document.body.textContent).toContain('备份中')
     })
 
     it('shows replacing message', async () => {
       mockState.phase = 'replacing'
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('替换中')
+      expect(document.body.textContent).toContain('替换中')
     })
 
     it('shows restarting message', async () => {
       mockState.phase = 'restarting'
       mockIsRestarting.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('重启中')
+      expect(document.body.textContent).toContain('重启中')
     })
 
     it('shows state.message for unknown phase', async () => {
@@ -265,9 +299,9 @@ describe('UpgradeDialog', () => {
       mockState.message = 'Custom message'
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.text()).toContain('Custom message')
+      expect(document.body.textContent).toContain('Custom message')
     })
   })
 
@@ -277,10 +311,10 @@ describe('UpgradeDialog', () => {
       mockState.progress = 60
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-progress-bar').exists()).toBe(true)
-      expect(wrapper.find('.ug-progress-fill').exists()).toBe(true)
+      expect($('.ug-progress-bar')).toBeTruthy()
+      expect($('.ug-progress-fill')).toBeTruthy()
     })
   })
 
@@ -288,20 +322,20 @@ describe('UpgradeDialog', () => {
     it('shows completed message', async () => {
       mockIsCompleted.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-completed').exists()).toBe(true)
-      expect(wrapper.text()).toContain('完成')
+      expect($('.ug-completed')).toBeTruthy()
+      expect(document.body.textContent).toContain('完成')
     })
 
     it('shows backup path when available', async () => {
       mockIsCompleted.value = true
       mockState.backup_path = '/tmp/backup'
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-backup-path').exists()).toBe(true)
-      expect(wrapper.text()).toContain('/tmp/backup')
+      expect($('.ug-backup-path')).toBeTruthy()
+      expect(document.body.textContent).toContain('/tmp/backup')
     })
   })
 
@@ -310,11 +344,11 @@ describe('UpgradeDialog', () => {
       mockIsFailed.value = true
       mockState.error = 'Network error'
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-failed').exists()).toBe(true)
-      expect(wrapper.text()).toContain('失败')
-      expect(wrapper.text()).toContain('Network error')
+      expect($('.ug-failed')).toBeTruthy()
+      expect(document.body.textContent).toContain('失败')
+      expect(document.body.textContent).toContain('Network error')
     })
   })
 
@@ -322,34 +356,34 @@ describe('UpgradeDialog', () => {
     it('can close when completed', async () => {
       mockIsCompleted.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-close').exists()).toBe(true)
-      expect(wrapper.find('.ug-cancel').exists()).toBe(true)
+      expect($('.ug-close')).toBeTruthy()
+      expect($('.ug-cancel')).toBeTruthy()
     })
 
     it('can close when failed', async () => {
       mockIsFailed.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-close').exists()).toBe(true)
+      expect($('.ug-close')).toBeTruthy()
     })
 
     it('can close when not in progress', async () => {
       mockIsInProgress.value = false
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-close').exists()).toBe(true)
+      expect($('.ug-close')).toBeTruthy()
     })
 
     it('cannot close when in progress', async () => {
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-close').exists()).toBe(false)
+      expect($('.ug-close')).toBeFalsy()
     })
   })
 
@@ -357,53 +391,53 @@ describe('UpgradeDialog', () => {
     it('shows start button when upgrade available', async () => {
       mockHasUpgrade.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-start').exists()).toBe(true)
+      expect($('.ug-start')).toBeTruthy()
     })
 
     it('shows retry text when failed', async () => {
       mockHasUpgrade.value = true
       mockIsFailed.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-start').text()).toBe('重试')
+      expect($('.ug-start')!.textContent).toBe('重试')
     })
 
     it('calls startUpgrade on click', async () => {
       mockHasUpgrade.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      await wrapper.find('.ug-start').trigger('click')
+      $('.ug-start')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       expect(mockStartUpgrade).toHaveBeenCalled()
     })
 
     it('does not show start button when no upgrade available', async () => {
       mockHasUpgrade.value = false
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-start').exists()).toBe(false)
+      expect($('.ug-start')).toBeFalsy()
     })
 
     it('does not show start button when in progress', async () => {
       mockHasUpgrade.value = true
       mockIsInProgress.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-start').exists()).toBe(false)
+      expect($('.ug-start')).toBeFalsy()
     })
 
     it('does not show start button when completed', async () => {
       mockHasUpgrade.value = true
       mockIsCompleted.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-start').exists()).toBe(false)
+      expect($('.ug-start')).toBeFalsy()
     })
   })
 
@@ -411,16 +445,16 @@ describe('UpgradeDialog', () => {
     it('shows close text when completed', async () => {
       mockIsCompleted.value = true
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-cancel').text()).toBe('关闭')
+      expect($('.ug-cancel')!.textContent).toBe('关闭')
     })
 
     it('shows cancel text when not completed', async () => {
       const wrapper = mountDialog()
-      ;(wrapper.vm as any).show()
+      ;(wrapper!.vm as any).show()
       await nextTick()
-      expect(wrapper.find('.ug-cancel').text()).toBe('取消')
+      expect($('.ug-cancel')!.textContent).toBe('取消')
     })
   })
 })

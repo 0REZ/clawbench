@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { mount, VueWrapper } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import CopyAgentDialog from '@/components/settings/CopyAgentDialog.vue'
 
@@ -25,64 +26,119 @@ const i18n = createI18n({
   },
 })
 
-function mountDialog(sourceName = 'Claude') {
-  return mount(CopyAgentDialog, {
-    props: { sourceName },
+// CopyAgentDialog renders inside ModalDialog which Teleports its overlay to
+// <body>, so element lookups must go through document.body — the dialog
+// content is not part of the component's own wrapper tree.
+function $(selector: string): HTMLElement | null {
+  return document.body.querySelector(selector)
+}
+
+let wrapper: VueWrapper | null = null
+let host: HTMLDivElement | null = null
+
+beforeEach(() => {
+  vi.useRealTimers()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  if (wrapper) {
+    wrapper.unmount()
+    wrapper = null
+  }
+  if (host?.parentNode) host.parentNode.removeChild(host)
+  host = null
+  document.body.querySelectorAll('.modal-overlay').forEach((el) => el.remove())
+})
+
+function mountDialog(sourceName = 'Claude', open = true) {
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  wrapper = mount(CopyAgentDialog, {
+    props: { sourceName, open },
+    attachTo: host,
     global: { plugins: [i18n] },
   })
+  return wrapper
 }
 
 describe('CopyAgentDialog', () => {
   it('renders with pre-filled name', async () => {
-    const wrapper = mountDialog('Claude')
-    await wrapper.vm.$nextTick()
-    const input = wrapper.find('.copy-agent-dialog__input')
-    expect(input.exists()).toBe(true)
-    // Verify the internal ref was set correctly on mount
-    const vm = wrapper.vm as any
+    const w = mountDialog('Claude')!
+    await w.vm.$nextTick()
+    const input = $('.copy-agent-dialog__input')
+    expect(input).toBeTruthy()
+    // Verify the internal ref was set when the dialog opened
+    const vm = w.vm as any
     expect(vm.$.setupState.newName).toContain('Claude')
   })
 
   it('emits close when cancel button clicked', async () => {
-    const wrapper = mountDialog()
-    const cancelBtn = wrapper.find('.copy-agent-dialog__btn--cancel')
-    await cancelBtn.trigger('click')
-    expect(wrapper.emitted('close')).toBeTruthy()
+    const w = mountDialog()!
+    const cancelBtn = $('.modal-btn')!
+    cancelBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    expect(w.emitted('close')).toBeTruthy()
   })
 
   it('emits confirmed with trimmed name on submit', async () => {
-    const wrapper = mountDialog('Test')
+    const w = mountDialog('Test')!
     // Set the reactive ref via setupState and force re-render
-    const vm = wrapper.vm as any
+    const vm = w.vm as any
     vm.$.setupState.newName = '  My Agent  '
-    wrapper.vm.$forceUpdate()
-    await wrapper.vm.$nextTick()
-    const submitBtn = wrapper.find('.copy-agent-dialog__btn--submit')
-    await submitBtn.trigger('click')
-    expect(wrapper.emitted('confirmed')).toBeTruthy()
-    expect(wrapper.emitted('confirmed')![0]).toEqual(['My Agent'])
+    w.vm.$forceUpdate()
+    await w.vm.$nextTick()
+    const submitBtn = $('.modal-btn.primary')!
+    submitBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    expect(w.emitted('confirmed')).toBeTruthy()
+    expect(w.emitted('confirmed')![0]).toEqual(['My Agent'])
   })
 
   it('disables submit button when name is empty', async () => {
-    const wrapper = mountDialog('')
-    await wrapper.vm.$nextTick()
-    const submitBtn = wrapper.find('.copy-agent-dialog__btn--submit')
-    expect((submitBtn.element as HTMLButtonElement).disabled).toBe(true)
+    mountDialog('')
+    await nextTick()
+    const submitBtn = $('.modal-btn.primary') as HTMLButtonElement
+    expect(submitBtn.disabled).toBe(true)
   })
 
   it('emits close when overlay clicked', async () => {
-    const wrapper = mountDialog()
-    const overlay = wrapper.find('.copy-agent-dialog-overlay')
-    await overlay.trigger('click.self')
-    expect(wrapper.emitted('close')).toBeTruthy()
+    vi.useFakeTimers()
+    const w = mountDialog()!
+    await nextTick()
+    const overlay = $('.modal-overlay')!
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await nextTick()
+    // ModalDialog runs a 250ms leave animation before emitting close
+    expect(w.emitted('close')).toBeFalsy()
+    vi.advanceTimersByTime(250)
+    await nextTick()
+    expect(w.emitted('close')).toBeTruthy()
   })
 
   it('renders header and input field', async () => {
-    const wrapper = mountDialog()
-    await wrapper.vm.$nextTick()
-    expect(wrapper.find('.copy-agent-dialog__header').exists()).toBe(true)
-    expect(wrapper.find('.copy-agent-dialog__input').exists()).toBe(true)
-    expect(wrapper.find('.copy-agent-dialog__btn--cancel').exists()).toBe(true)
-    expect(wrapper.find('.copy-agent-dialog__btn--submit').exists()).toBe(true)
+    mountDialog()
+    await nextTick()
+    expect($('.copy-agent-dialog__input')).toBeTruthy()
+    expect($('.modal-btn')).toBeTruthy()
+    expect($('.modal-btn.primary')).toBeTruthy()
+  })
+
+  it('does not render when open is false', async () => {
+    mountDialog('Claude', false)
+    await nextTick()
+    expect($('.modal-overlay')).toBeFalsy()
+  })
+
+  it('pre-fills name when opened after being closed', async () => {
+    const w = mountDialog('Claude', false)!
+    await nextTick()
+    expect($('.modal-overlay')).toBeFalsy()
+
+    await w.setProps({ open: true, sourceName: 'DeepSeek' })
+    await nextTick()
+    expect($('.modal-overlay')).toBeTruthy()
+    const vm = w.vm as any
+    expect(vm.$.setupState.newName).toContain('DeepSeek')
   })
 })

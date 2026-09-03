@@ -34,7 +34,7 @@
   width: 100%;
   box-sizing: border-box;
   padding: 5px 8px 6px;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
   font-size: 13px;
   display: flex;
   flex-wrap: wrap;
@@ -129,7 +129,7 @@
   background: transparent;
   color: var(--text-muted);
   font-size: 12px;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
+  font-family: var(--font-mono, 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace);
   line-height: 1;
   border-radius: 3px;
   cursor: pointer;
@@ -254,7 +254,9 @@
    - Markdown preview (MarkdownSearchBar.vue: every match wrapped in a
      <mark class="md-search-match">, the active one additionally gets the
      .search-match-flash class to blink)
-   The flash keyframes are reused verbatim by both hosts.
+   The flash animation reuses the canonical `line-flash` keyframes from
+   assets/code-viewer.css so every jump highlight (TOC / file-annotation /
+   search / message) blinks at the same frequency, count and accent tint.
 
    Note: `.cm-editor` prefix outranks @codemirror/search's baseTheme rules
    (`.ͼ2 .cm-searchMatch`), which would otherwise paint matches yellow/orange. */
@@ -265,18 +267,11 @@
 .cm-editor.cm-editor .cm-searchMatch-selected {
   background: color-mix(in srgb, var(--accent-color, #4a90d9) 55%, transparent);
 }
-
-@keyframes search-match-flash {
-  0%, 100% { background-color: transparent; }
-  25% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 75%, transparent); }
-  50% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 40%, transparent); }
-  75% { background-color: color-mix(in srgb, var(--accent-color, #4a90d9) 65%, transparent); }
-}
 .cm-editor.cm-editor .cm-searchMatch-flash {
-  animation: search-match-flash 0.7s ease-out 1;
+  animation: line-flash 1.2s ease-out 1;
 }
 /* Markdown active-match <mark> reuses the same flash animation. */
 .search-match-flash {
-  animation: search-match-flash 0.7s ease-out 1;
+  animation: line-flash 1.2s ease-out 1;
 }
 

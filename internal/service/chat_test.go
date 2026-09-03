@@ -180,9 +180,10 @@ CREATE TABLE IF NOT EXISTS chat_thinking (
 	message_id INTEGER NOT NULL,
 	session_id TEXT NOT NULL,
 	think_id TEXT NOT NULL,
+	seq INTEGER NOT NULL DEFAULT 0,
 	text TEXT NOT NULL DEFAULT '',
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-	UNIQUE(think_id, message_id)
+	UNIQUE(think_id, message_id, seq)
 );
 `
 
@@ -3350,6 +3351,42 @@ func TestGetStreamingMessageID_SessionIsolation(t *testing.T) {
 	assert.Equal(t, s1StreamingID, id1, "session 1 should return its own streaming message")
 	assert.Equal(t, s2StreamingID, id2, "session 2 should return its own streaming message")
 	assert.NotEqual(t, id1, id2, "different sessions should not return each other's message IDs")
+}
+
+// ---------- GetStreamingMessageInfo ----------
+
+func TestGetStreamingMessageInfo_ReturnsQueueID(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Stream Info")
+
+	// Streaming assistant row answers a queued message (queue_id persisted).
+	_, err := service.AddChatMessage("/project", "claude", sid, "user", "question", nil, false, "")
+	assert.NoError(t, err)
+	streamingID, err := service.AddChatMessage("/project", "claude", sid, "assistant", "{}", nil, true, "", "pending-abc")
+	assert.NoError(t, err)
+
+	id, queueID := service.GetStreamingMessageInfo(sid)
+	assert.Equal(t, streamingID, id)
+	assert.Equal(t, "pending-abc", queueID)
+}
+
+func TestGetStreamingMessageInfo_NoStreamingRow(t *testing.T) {
+	setupDB(t)
+
+	sid := helperCreateSession(t, "/project", "claude", "Stream Info Empty")
+
+	// Only a finalized assistant row exists — GetStreamingMessageInfo must NOT
+	// fall back to it (unlike GetStreamingMessageID): the subscribe-time
+	// stream_start re-emit describes the LIVE stream only.
+	_, err := service.AddChatMessage("/project", "claude", sid, "assistant", "final", nil, true, "", "pending-stale")
+	assert.NoError(t, err)
+	_, err = service.FinalizeStreamingMessage("/project", "claude", sid, "final content")
+	assert.NoError(t, err)
+
+	id, queueID := service.GetStreamingMessageInfo(sid)
+	assert.Equal(t, int64(0), id)
+	assert.Equal(t, "", queueID)
 }
 
 // ---------- SaveRawResponse ----------

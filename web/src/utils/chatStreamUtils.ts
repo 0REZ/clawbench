@@ -743,7 +743,7 @@ export type ChatMessageAction =
   | { type: 'clear' }
   | { type: 'prepend_older'; olderMsgs: ChatMessage[] }
   // ── WS structural events ──
-  | { type: 'ws_stream_start'; messageId: number }
+  | { type: 'ws_stream_start'; messageId: number; answeredQueueId?: string }
   | { type: 'ws_user_message'; data: { messageId?: number; content?: string; files?: FileEntry[]; senderClientId?: string; queueId?: string; backend?: string } }
   | { type: 'ws_queue_drain'; queueId: string; text: string; files: FileEntry[]; dbMessageId?: number; backend?: string }
   | { type: 'ws_queue_cancel'; queueIds: string[] }
@@ -1199,7 +1199,31 @@ export function chatMessageReducer(state: ChatMessage[], action: ChatMessageActi
     }
     case 'ws_stream_start': {
       const sm = state.find((m) => m.role === 'assistant' && m.streaming)
-      if (sm) sm.id = action.messageId
+      if (sm) {
+        sm.id = action.messageId
+        // Re-anchor the streaming reply to its TRUE question. The backend
+        // streams the answered queue id (the queueId of the user message this
+        // run answers) on every stream_start. A recovery placeholder created
+        // before the question bubble arrived (missed queue_drain/stream_start
+        // while unsubscribed, then rebuilt on the "running" session_update)
+        // may be anchored to the newest STALE user message — anchoring there
+        // sorts the reply ABOVE its real question until the DB rebuild.
+        //
+        // The answered queue id IS a resolvable anchor key: sortMessages'
+        // byKey indexes every user message by queueId / id / _remoteQueueId,
+        // and the drain/user_message handlers re-sort when the question
+        // arrives, so the reply dynamically lands right after its own question
+        // no matter the event order. rebuildFromDb's Channel 2 additionally
+        // matches the live placeholder to the DB streaming row by
+        // (r.queueId === live.parentQueueId), so a queueId anchor survives
+        // db_load. A stale numeric-id anchor (findAnchorUserIdx fallback)
+        // provides none of that — it keeps the reply stranded above its real
+        // question.
+        if (action.answeredQueueId && String(sm.parentQueueId ?? '') !== action.answeredQueueId) {
+          sm.parentQueueId = action.answeredQueueId
+          sortMessages(state)
+        }
+      }
       return state
     }
     case 'ws_user_message': {

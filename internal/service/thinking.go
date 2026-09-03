@@ -12,11 +12,15 @@ import (
 )
 
 // ThinkingRecord represents a row in the chat_thinking table.
+// Text is the full concatenated thinking text for the (message_id, think_id)
+// pair across all seq chunks. Seq is internal chunk ordering and never exposed
+// through the API JSON.
 type ThinkingRecord struct {
 	ID        int64     `json:"id"`
 	MessageID int64     `json:"message_id"`
 	SessionID string    `json:"session_id"`
 	ThinkID   string    `json:"think_id"`
+	Seq       int       `json:"-"`
 	Text      string    `json:"text"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -30,19 +34,52 @@ func generateThinkingID() string {
 	return "th_" + hex.EncodeToString(b)
 }
 
-// UpsertThinking inserts or updates a thinking record in chat_thinking.
-// No-op when think_id or text is empty.
+// UpsertThinking stores the complete thinking text for a (think_id, message_id)
+// pair as a single seq=0 chunk. It deletes any prior chunks (streaming flushes
+// may have appended seq=0..n deltas) before inserting, so the stored text is
+// exactly the passed full text — the seq=0 row is the canonical "final" state
+// used by Finalize / forced flush / migration. Atomic under a write transaction
+// so a concurrent reader never observes an empty window.
 func UpsertThinking(messageID int64, sessionID, thinkID, text string) error {
 	if thinkID == "" || text == "" {
 		return nil
 	}
-	_, err := WriteExecContext(context.Background(), `
-		INSERT INTO chat_thinking (message_id, session_id, think_id, text)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(think_id, message_id) DO UPDATE SET text = excluded.text
-	`, messageID, sessionID, thinkID, text)
+	tx, err := WriteBegin()
 	if err != nil {
-		return fmt.Errorf("UpsertThinking: %w", err)
+		return fmt.Errorf("UpsertThinking begin: %w", err)
+	}
+	defer writeMu.Unlock()
+	defer func() { _ = tx.Rollback() }()
+
+	ctx := context.Background()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM chat_thinking WHERE think_id = ? AND message_id = ?", thinkID, messageID); err != nil {
+		return fmt.Errorf("UpsertThinking delete: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text)
+		VALUES (?, ?, ?, 0, ?)
+	`, messageID, sessionID, thinkID, text); err != nil {
+		return fmt.Errorf("UpsertThinking insert: %w", err)
+	}
+	return tx.Commit()
+}
+
+// AppendThinkingSegment inserts a single incremental delta chunk at the given
+// seq for a (think_id, message_id) pair. Used by the streaming flush to persist
+// only the text that grew since the last flush window instead of rewriting the
+// full accumulated text. Idempotent per seq: a retry after a failure overwrites
+// the same chunk with identical text (ON CONFLICT), never duplicating bytes.
+func AppendThinkingSegment(messageID int64, sessionID, thinkID string, seq int, delta string) error {
+	if thinkID == "" || delta == "" {
+		return nil
+	}
+	_, err := WriteExecContext(context.Background(), `
+		INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(think_id, message_id, seq) DO UPDATE SET text = excluded.text
+	`, messageID, sessionID, thinkID, seq, delta)
+	if err != nil {
+		return fmt.Errorf("AppendThinkingSegment: %w", err)
 	}
 	return nil
 }
@@ -57,63 +94,117 @@ func DeleteThinkingByMessage(messageID int64) error {
 	return nil
 }
 
-// GetThinking retrieves a thinking record by think_id and message_id.
-// Returns nil if not found.
+// GetThinking retrieves the full (concatenated) thinking text for a think_id +
+// message_id pair. Returns nil if not found. All seq chunks are concatenated in
+// order, so the returned text is identical whether the record was written as a
+// single full upsert or as incremental streaming segments.
 func GetThinking(thinkID string, messageID int64) (*ThinkingRecord, error) {
-	var r ThinkingRecord
-	err := dbRead.QueryRowContext(context.Background(), `
-		SELECT id, message_id, session_id, think_id, text, created_at
+	return scanThinkingChunks(thinkID, messageID)
+}
+
+// scanThinkingChunks fetches all seq rows for a (thinkID, messageID) pair,
+// concatenates their text in seq order, and returns a single record. Returns
+// (nil, nil) when no rows exist.
+func scanThinkingChunks(thinkID string, messageID int64) (*ThinkingRecord, error) {
+	rows, err := dbRead.QueryContext(context.Background(), `
+		SELECT id, message_id, session_id, think_id, seq, text, created_at
 		FROM chat_thinking WHERE think_id = ? AND message_id = ?
-	`, thinkID, messageID).Scan(&r.ID, &r.MessageID, &r.SessionID, &r.ThinkID, &r.Text, &r.CreatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+		ORDER BY seq ASC
+	`, thinkID, messageID)
 	if err != nil {
-		return nil, fmt.Errorf("GetThinking: %w", err)
+		return nil, fmt.Errorf("scanThinkingChunks query: %w", err)
 	}
-	return &r, nil
+	defer func() { _ = rows.Close() }()
+
+	var rec *ThinkingRecord
+	for rows.Next() {
+		var r ThinkingRecord
+		if err := rows.Scan(&r.ID, &r.MessageID, &r.SessionID, &r.ThinkID, &r.Seq, &r.Text, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanThinkingChunks scan: %w", err)
+		}
+		if rec == nil {
+			rec = &ThinkingRecord{
+				ID:        r.ID, // id of the lowest-seq chunk (stable anchor)
+				MessageID: r.MessageID,
+				SessionID: r.SessionID,
+				ThinkID:   r.ThinkID,
+				Seq:       r.Seq,
+				CreatedAt: r.CreatedAt,
+			}
+		}
+		rec.Text += r.Text
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scanThinkingChunks iterate: %w", err)
+	}
+	return rec, nil
 }
 
 // GetThinkingBySession retrieves a thinking record by think_id and session_id.
 // Fallback for ACP multi-assistant-message sessions where the frontend may not
 // know the exact message_id (mirrors GetToolCallBySession).
 func GetThinkingBySession(thinkID, sessionID string) (*ThinkingRecord, error) {
-	var r ThinkingRecord
+	var messageID int64
 	err := dbRead.QueryRowContext(context.Background(), `
-		SELECT id, message_id, session_id, think_id, text, created_at
-		FROM chat_thinking WHERE think_id = ? AND session_id = ?
+		SELECT message_id FROM chat_thinking WHERE think_id = ? AND session_id = ?
 		ORDER BY created_at DESC LIMIT 1
-	`, thinkID, sessionID).Scan(&r.ID, &r.MessageID, &r.SessionID, &r.ThinkID, &r.Text, &r.CreatedAt)
+	`, thinkID, sessionID).Scan(&messageID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("GetThinkingBySession: %w", err)
+		return nil, fmt.Errorf("GetThinkingBySession locate: %w", err)
 	}
-	return &r, nil
+	return scanThinkingChunks(thinkID, messageID)
 }
 
 // GetThinkingBySessionAll retrieves all thinking records for a session.
-// Used by BuildForkContext to batch-fetch thinking text without N+1 queries.
+// Each distinct (think_id, message_id) pair is returned once with its chunks
+// concatenated in seq order. Used by BuildForkContext to batch-fetch thinking
+// text without N+1 queries.
 func GetThinkingBySessionAll(sessionID string) ([]ThinkingRecord, error) {
 	rows, err := dbRead.QueryContext(context.Background(), `
-		SELECT id, message_id, session_id, think_id, text, created_at
+		SELECT message_id, think_id, seq, text
 		FROM chat_thinking WHERE session_id = ?
+		ORDER BY message_id ASC, think_id ASC, seq ASC
 	`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("GetThinkingBySessionAll: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var records []ThinkingRecord
+	// Group chunks by (message_id, think_id) preserving first-seen order.
+	type groupKey struct {
+		messageID int64
+		thinkID   string
+	}
+	var order []groupKey
+	grouped := make(map[groupKey]*ThinkingRecord)
 	for rows.Next() {
-		var r ThinkingRecord
-		if err := rows.Scan(&r.ID, &r.MessageID, &r.SessionID, &r.ThinkID, &r.Text, &r.CreatedAt); err != nil {
+		var msgID int64
+		var thinkID, text string
+		var seq int
+		if err := rows.Scan(&msgID, &thinkID, &seq, &text); err != nil {
 			return nil, fmt.Errorf("GetThinkingBySessionAll scan: %w", err)
 		}
-		records = append(records, r)
+		key := groupKey{msgID, thinkID}
+		rec, ok := grouped[key]
+		if !ok {
+			rec = &ThinkingRecord{MessageID: msgID, ThinkID: thinkID, SessionID: sessionID, Seq: seq}
+			grouped[key] = rec
+			order = append(order, key)
+		}
+		rec.Text += text
 	}
-	return records, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetThinkingBySessionAll iterate: %w", err)
+	}
+
+	records := make([]ThinkingRecord, 0, len(order))
+	for _, k := range order {
+		records = append(records, *grouped[k])
+	}
+	return records, nil
 }
 
 // slimThinkingInContent parses content JSON, extracts thinking block text into

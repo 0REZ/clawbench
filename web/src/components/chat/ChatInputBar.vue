@@ -2127,7 +2127,7 @@ defineExpose({
 }
 
 .attachment-filename {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2444,7 +2444,7 @@ defineExpose({
   flex: 1;
   min-width: 0;
   color: var(--text-muted, #999);
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;

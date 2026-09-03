@@ -109,7 +109,7 @@ function onDiffClick(event: MouseEvent) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, monospace);
   background: var(--bg-tertiary, #f0f0f0);
   padding: 3px 8px;
   user-select: none;
@@ -168,7 +168,7 @@ function onDiffClick(event: MouseEvent) {
   opacity: 0.5;
   font-size: 13px;
   font-weight: 700;
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, monospace);
   transition: opacity 0.15s, color 0.15s, background 0.15s;
   outline: none;
   box-shadow: none;
@@ -219,7 +219,7 @@ function onDiffClick(event: MouseEvent) {
   width: max-content;
   min-width: 100%;
   border-collapse: collapse;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -298,7 +298,7 @@ function onDiffClick(event: MouseEvent) {
 
 /* Fallback raw diff */
 .git-diff-scroll :deep(.diff-raw) {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;

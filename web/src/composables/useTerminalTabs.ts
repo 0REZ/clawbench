@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import type { Terminal as TerminalType } from '@xterm/xterm'
 import { stripSyncOutput } from '@/utils/terminalSessionUtils'
 import { patchTerminalZoomCoords } from '@/utils/terminalZoomUtils'
+import { DEFAULT_TERMINAL_MONO_STACK } from '@/utils/fontConfig'
 
 export interface TerminalTab {
   id: string
@@ -38,6 +39,8 @@ export function useTerminalTabs(
   getWsUrl: (cwd?: string, cols?: number, rows?: number) => string,
   opts: {
     fontSize: Ref<number>
+    /** CSS font-family stack for xterm. Defaults to a JetBrains-centric stack. */
+    fontFamily?: Readonly<Ref<string>>
     getXtermTheme: () => Record<string, unknown>
     /** xterm 实例创建后回调（用于订阅选区变化等）。 */
     onTermCreated?: (term: TerminalType) => void
@@ -66,7 +69,7 @@ export function useTerminalTabs(
     const term = new Terminal({
       theme: opts.getXtermTheme(),
       fontSize: opts.fontSize.value,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+      fontFamily: opts.fontFamily?.value || DEFAULT_TERMINAL_MONO_STACK,
       cursorBlink: true,
       convertEol: false,
       scrollback: 5000,
@@ -343,6 +346,15 @@ export function useTerminalTabs(
     }
   }
 
+  /** Update font family on all xterm instances. */
+  function updateFontFamily(family: string) {
+    for (const tab of tabs.value) {
+      if (tab.xterm) {
+        tab.xterm.options.fontFamily = family
+      }
+    }
+  }
+
   /** Update theme on all xterm instances. */
   function updateTheme(theme: Record<string, unknown>) {
     for (const tab of tabs.value) {
@@ -375,6 +387,7 @@ export function useTerminalTabs(
     connectActiveTab,
     disposeAll,
     updateFontSize,
+    updateFontFamily,
     updateTheme,
     getTab,
   }

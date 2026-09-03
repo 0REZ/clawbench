@@ -137,7 +137,7 @@ const sections = computed<HelpSection[]>(() => {
   flex-shrink: 0;
   font-weight: 700;
   color: var(--text-primary, #1a1a1a);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 12px;
   padding: 2px 8px;
   border-radius: 6px;

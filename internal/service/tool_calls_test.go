@@ -309,3 +309,106 @@ func TestInitDB_MigratesChatToolCallsDurationColumn(t *testing.T) {
 		t.Errorf("expected default duration_ms=0, got %d", dur)
 	}
 }
+
+func TestInitDB_MigratesChatThinkingSeq(t *testing.T) {
+	// Simulate a database created before chat_thinking had the seq column and
+	// the (think_id, message_id, seq) unique constraint.
+	dbDir := t.TempDir()
+	clawDir := filepath.Join(dbDir, ".clawbench")
+	if err := os.MkdirAll(clawDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	dbPath := filepath.Join(clawDir, "ClawBench.db")
+	oldDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open old db: %v", err)
+	}
+	if _, err := oldDB.Exec(`
+		CREATE TABLE chat_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project_path TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			session_id TEXT,
+			backend TEXT NOT NULL DEFAULT 'claude',
+			streaming INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE chat_sessions (
+			id TEXT PRIMARY KEY,
+			project_path TEXT NOT NULL,
+			backend TEXT NOT NULL,
+			title TEXT NOT NULL,
+			agent_id TEXT DEFAULT '',
+			model TEXT DEFAULT '',
+			external_session_id TEXT DEFAULT '',
+			session_type TEXT NOT NULL DEFAULT 'chat',
+			archived INTEGER NOT NULL DEFAULT 0,
+			last_read_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(project_path, backend, id)
+		);
+		CREATE TABLE chat_thinking (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id INTEGER NOT NULL REFERENCES chat_history(id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL,
+			think_id TEXT NOT NULL,
+			text TEXT NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(think_id, message_id)
+		);
+		CREATE INDEX idx_thinking_message ON chat_thinking(message_id);
+		CREATE INDEX idx_thinking_session ON chat_thinking(session_id, created_at DESC);
+		INSERT INTO chat_sessions (id, project_path, backend, title) VALUES ('s', '/p', 'b', 'T');
+		INSERT INTO chat_history (id, project_path, role, content, session_id, backend) VALUES (1, '/p', 'assistant', '{"blocks":[]}', 's', 'b');
+		INSERT INTO chat_thinking (id, message_id, session_id, think_id, text) VALUES (1, 1, 's', 'th_old1', 'full thinking text');
+	`); err != nil {
+		t.Fatalf("create old schema: %v", err)
+	}
+	_ = oldDB.Close()
+
+	// InitDB runs the migration that rebuilds chat_thinking with seq.
+	if err := initTestDB(dbDir); err != nil {
+		t.Fatalf("initTestDB: %v", err)
+	}
+	defer func() {
+		db.Close()
+		dbRead.Close()
+	}()
+	_ = dbRead
+
+	var hasSeq int
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('chat_thinking') WHERE name='seq'").Scan(&hasSeq); err != nil {
+		t.Fatalf("query column info: %v", err)
+	}
+	if hasSeq != 1 {
+		t.Fatal("expected seq column to be added by InitDB migration")
+	}
+
+	// Existing row migrated as a seq=0 single chunk, text preserved.
+	var text string
+	if err := db.QueryRow(`SELECT text FROM chat_thinking WHERE think_id = 'th_old1' AND seq = 0`).Scan(&text); err != nil {
+		t.Fatalf("query migrated thinking: %v", err)
+	}
+	if text != "full thinking text" {
+		t.Errorf("expected preserved thinking text, got %q", text)
+	}
+
+	// New unique constraint allows multiple seq chunks per think_id.
+	if _, err := db.Exec(`INSERT INTO chat_thinking (message_id, session_id, think_id, seq, text) VALUES (1, 's', 'th_old1', 1, 'delta')`); err != nil {
+		t.Fatalf("insert seq=1 chunk must succeed under new constraint: %v", err)
+	}
+
+	// Migration is idempotent — running InitDB again must not reset the chunks.
+	if err := initTestDB(dbDir); err != nil {
+		t.Fatalf("second initTestDB: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM chat_thinking WHERE think_id = 'th_old1'`).Scan(&count); err != nil {
+		t.Fatalf("count chunks: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 chunks after idempotent re-run, got %d", count)
+	}
+}

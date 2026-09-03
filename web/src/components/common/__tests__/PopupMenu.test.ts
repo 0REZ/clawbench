@@ -1,12 +1,21 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import PopupMenu from '../PopupMenu.vue'
 
+// Track computeMenuStyle options so tests can assert scrollable behavior.
+// hoisted: vi.mock is hoisted above imports, so the fn must be created here.
+const { computeMenuStyle } = vi.hoisted(() => ({
+  computeMenuStyle: vi.fn(() => ({ top: '10px', left: '20px' })),
+}))
 vi.mock('@/utils/popupMenuPosition', () => ({
-  computeMenuStyle: () => ({ top: '10px', left: '20px' }),
+  computeMenuStyle,
 }))
 
 describe('PopupMenu', () => {
+  beforeEach(() => {
+    computeMenuStyle.mockClear()
+    computeMenuStyle.mockReturnValue({ top: '10px', left: '20px' })
+  })
   it('renders when show is true', () => {
     const wrapper = mount(PopupMenu, {
       props: { show: true },
@@ -44,5 +53,51 @@ describe('PopupMenu', () => {
     })
     await wrapper.find('.popup-menu').trigger('keydown.escape')
     expect(wrapper.emitted('update:show')).toBeTruthy()
+  })
+
+  it('adds popup-menu--app class when appSurface is set', () => {
+    const wrapper = mount(PopupMenu, {
+      props: { show: true, appSurface: true },
+      global: { stubs: { Teleport: { template: '<div><slot/></div>' } } },
+    })
+    expect(wrapper.find('.popup-menu').classes()).toContain('popup-menu--app')
+  })
+
+  it('does not add popup-menu--app class by default', () => {
+    const wrapper = mount(PopupMenu, {
+      props: { show: true },
+      global: { stubs: { Teleport: { template: '<div><slot/></div>' } } },
+    })
+    expect(wrapper.find('.popup-menu').classes()).not.toContain('popup-menu--app')
+  })
+
+  it('keeps the root scrollable by default (scrollable:true → overflowY auto)', async () => {
+    vi.useFakeTimers()
+    computeMenuStyle.mockReturnValue({ top: '10px', left: '20px', overflowY: 'auto' })
+    const wrapper = mount(PopupMenu, {
+      props: { show: false, targetElement: { getBoundingClientRect: () => ({}) } },
+      global: { stubs: { Teleport: { template: '<div><slot/></div>' } } },
+    })
+    // Position is (re)computed in requestAnimationFrame after show flips true.
+    await wrapper.setProps({ show: true })
+    await vi.advanceTimersByTimeAsync(16)
+    const style = computeMenuStyle.mock.calls[0]?.[1]
+    expect(style?.scrollable).toBe(true)
+    vi.useRealTimers()
+    wrapper.unmount()
+  })
+
+  it('appSurface menus delegate scrolling to the slot content (scrollable:false)', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(PopupMenu, {
+      props: { show: false, appSurface: true, targetElement: { getBoundingClientRect: () => ({}) } },
+      global: { stubs: { Teleport: { template: '<div><slot/></div>' } } },
+    })
+    await wrapper.setProps({ show: true })
+    await vi.advanceTimersByTimeAsync(16)
+    const style = computeMenuStyle.mock.calls[0]?.[1]
+    expect(style?.scrollable).toBe(false)
+    vi.useRealTimers()
+    wrapper.unmount()
   })
 })

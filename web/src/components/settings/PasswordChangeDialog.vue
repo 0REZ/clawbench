@@ -1,8 +1,15 @@
 <template>
-  <div class="password-dialog-overlay" @click.self="handleClose">
-    <div class="password-dialog">
-      <div class="password-dialog__header">{{ t('settings.changePasswordTitle') }}</div>
-
+  <!-- Full-viewport dialog. ModalDialog Teleports to <body>, escaping the
+       settings tab-panel's `isolation: isolate` stacking context — without
+       this the inline overlay was trapped below the chat column in
+       wide-screen mode and covered by it, no matter the z-index. -->
+  <ModalDialog
+    :open="innerOpen"
+    :title="t('settings.changePasswordTitle')"
+    :z-index="2500"
+    @close="onModalClose"
+  >
+    <div class="password-dialog__body">
       <div class="password-dialog__field">
         <label class="password-dialog__label">{{ t('settings.currentPassword') }}</label>
         <div class="password-dialog__input-row">
@@ -75,31 +82,36 @@
 
       <div v-if="localError" class="password-dialog__error">{{ localError }}</div>
       <div v-if="serverError" class="password-dialog__error">{{ serverError }}</div>
-
-      <div class="password-dialog__actions">
-        <button class="password-dialog__btn password-dialog__btn--cancel" @click="handleClose" :disabled="submitting">
-          {{ t('common.cancel') }}
-        </button>
-        <button
-          class="password-dialog__btn password-dialog__btn--submit"
-          :disabled="!canSubmit || submitting"
-          @click="submit"
-        >
-          <LoadingIndicator v-if="submitting" size="sm" inline />
-          <span v-else>{{ t('settings.changePasswordBtn') }}</span>
-        </button>
-      </div>
     </div>
-  </div>
+
+    <template #footer>
+      <button class="modal-btn" @click="handleClose" :disabled="submitting">
+        {{ t('common.cancel') }}
+      </button>
+      <button
+        class="modal-btn primary"
+        :disabled="!canSubmit || submitting"
+        @click="submit"
+      >
+        <LoadingIndicator v-if="submitting" size="sm" inline />
+        <span v-else>{{ t('settings.changePasswordBtn') }}</span>
+      </button>
+    </template>
+  </ModalDialog>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { apiPost } from '@/utils/api'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
+import ModalDialog from '@/components/common/ModalDialog.vue'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
+
+const props = defineProps<{
+  open: boolean
+}>()
 
 const emit = defineEmits<{
   close: []
@@ -121,16 +133,31 @@ const showConfirm = ref(false)
 
 const newPasswordRef = ref<HTMLInputElement | null>(null)
 const confirmPasswordRef = ref<HTMLInputElement | null>(null)
+
+// Mirror the parent-controlled `open` prop. A local copy lets the dialog
+// refuse to stay closed while a submit is in flight (re-opening instantly
+// instead of forwarding the close), matching the old inline dialog's guard.
+const innerOpen = ref(props.open)
+watch(() => props.open, (v) => {
+  innerOpen.value = v
+})
+
 let unregisterBack: (() => void) | null = null
 
-onMounted(() => {
-  unregisterBack = registerBackHandler({
-    id: 'password-change-dialog',
-    canGoBack: () => !submitting.value,
-    goBack: () => handleClose(),
-    priority: PRIORITY_OVERLAY,
-  })
-})
+// Register the Android back handler only while the dialog is open.
+watch(() => props.open, (v) => {
+  if (v) {
+    unregisterBack = registerBackHandler({
+      id: 'password-change-dialog',
+      canGoBack: () => !submitting.value,
+      goBack: () => handleClose(),
+      priority: PRIORITY_OVERLAY,
+    })
+  } else if (unregisterBack) {
+    unregisterBack()
+    unregisterBack = null
+  }
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   if (unregisterBack) { unregisterBack(); unregisterBack = null }
@@ -267,39 +294,28 @@ function handleClose() {
   if (submitting.value) return
   emit('close')
 }
+
+/** ModalDialog finished its leave animation and asks to close. Block the
+ *  close while a submit is in flight (re-open instantly instead). */
+function onModalClose() {
+  if (submitting.value) {
+    innerOpen.value = false
+    nextTick(() => { innerOpen.value = true })
+    return
+  }
+  emit('close')
+}
 </script>
 
 <style scoped>
-.password-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+.password-dialog__body {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 16px;
-}
-
-.password-dialog {
-  background: var(--bg-primary);
-  border-radius: 16px;
-  padding: 24px;
-  width: 100%;
-  max-width: 380px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-}
-
-.password-dialog__header {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 20px;
-  text-align: center;
+  flex-direction: column;
+  padding: 14px 16px 6px;
 }
 
 .password-dialog__field {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .password-dialog__label {
@@ -416,51 +432,45 @@ function handleClose() {
   border-radius: 8px;
 }
 
-.password-dialog__actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 20px;
-}
-
-.password-dialog__btn {
-  flex: 1;
-  padding: 12px;
-  border: none;
-  border-radius: 10px;
-  font-size: 15px;
+/* Footer buttons — same visual language as the other ModalDialog consumers
+   (QuickSendEditModal, QuickCommandEditModal, …): a bordered neutral cancel
+   and an accent primary action. */
+.modal-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary);
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-}
-
-.password-dialog__btn--cancel {
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-}
-
-.password-dialog__btn--submit {
-  background: var(--accent-color);
-  color: #fff;
-}
-
-.password-dialog__btn--submit:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.12s, opacity 0.12s;
 }
 
 @media (hover: hover) {
-  .password-dialog__btn--cancel:hover {
-    background: var(--bg-secondary);
-  }
-  .password-dialog__btn--submit:not(:disabled):hover {
-    background: var(--accent-hover);
+  .modal-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary, #f5f5f5);
   }
 }
 
-.password-dialog__btn--cancel:active {
-  background: var(--bg-secondary);
+.modal-btn.primary {
+  background: var(--accent-color, #0066cc);
+  color: #fff;
+  border-color: var(--accent-color, #0066cc);
 }
 
-.password-dialog__btn--submit:not(:disabled):active {
-  background: var(--accent-hover);
+@media (hover: hover) {
+  .modal-btn.primary:hover:not(:disabled) {
+    background: var(--accent-hover, #0055aa);
+  }
+}
+
+.modal-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

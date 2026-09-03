@@ -220,15 +220,16 @@
       :max-height="440"
       :menu-items-count="6"
       anchor="right"
+      app-surface
     >
-      <div class="theme-picker" @click.stop>
-        <div class="theme-picker-title">{{ t('terminal.theme') }}</div>
+      <div class="theme-picker app-menu-column" @click.stop>
+        <div class="app-menu-title">{{ t('terminal.theme') }}</div>
         <div v-if="themeLoading" class="theme-picker-status">{{ t('terminal.themeLoading') }}</div>
         <div v-else-if="themeLoadError" class="theme-picker-status theme-picker-error">
           <span>{{ t('terminal.themeLoadFailed') }}</span>
           <button class="theme-retry-btn" @click="ensureThemesLoaded">{{ t('common.retry') }}</button>
         </div>
-        <div v-else class="theme-picker-list">
+        <div v-else class="app-menu-scroll">
           <button
             class="theme-item"
             :class="{ active: themeSelection === TERMINAL_THEME_AUTO }"
@@ -292,6 +293,7 @@ import {
   showErrorOverlay as showErrorOverlayUtil,
 } from '@/utils/terminalFontUtils'
 import { localConfig, setLocalConfig, useSettingsConfig } from '@/composables/useSettingsConfig'
+import { buildDualFontStack, DEFAULT_TERMINAL_MONO_STACK, ensureFontLoaded, isBundledChoice, MONO_FONT_CHOICES } from '@/utils/fontConfig'
 import { shouldAutoRefocusTerminal, shouldInstallTerminalBlurRefocus } from '@/utils/terminalBlurUtils'
 import type { KeyDef } from '@/utils/terminalKeyDefs'
 import {
@@ -327,6 +329,15 @@ const { getServerValueWithDefault } = useSettingsConfig()
 
 // Font size with persistence
 const fontSize = ref<number>((localConfig.terminalFontSize as number) || DEFAULT_FONT_SIZE)
+
+// Font family follows the Settings → Appearance mono font choice (+fallback).
+// xterm is canvas-rendered and cannot read CSS vars, so resolve the stored
+// choices to a concrete stack (default stack when both are 'default').
+const fontFamily = computed(() => buildDualFontStack(
+  localConfig.fontMono as string,
+  localConfig.fontMonoFallback as string,
+  DEFAULT_TERMINAL_MONO_STACK,
+))
 
 // Max sessions from server config
 const maxSessions = computed(() => {
@@ -643,6 +654,7 @@ const quickCmdDrawer = useTabDrawer('terminal', showEditDialog)
 
 const tabManager = useTerminalTabs(getWsUrl, {
   fontSize,
+  fontFamily,
   getXtermTheme,
   errorMessages: {
     shellStartFailed: t('terminal.shellStartFailed'),
@@ -669,6 +681,34 @@ const tabManager = useTerminalTabs(getWsUrl, {
 })
 
 const { tabs, activeTabId, activeTab } = tabManager
+
+// React to mono font changes from the Settings panel: when the chosen font is
+// a self-hosted bundled webfont, wait for it to finish loading BEFORE setting
+// the xterm fontFamily so glyph measurement uses the real font (xterm measures
+// synchronously and never re-measures when a webfont arrives late). Then
+// re-fit the active terminal because cell metrics may have changed.
+async function applyMonoFontChange() {
+  const primary = localConfig.fontMono as string | undefined
+  const fallback = localConfig.fontMonoFallback as string | undefined
+  if (isBundledChoice(primary, MONO_FONT_CHOICES) && primary) await ensureFontLoaded(primary)
+  if (isBundledChoice(fallback, MONO_FONT_CHOICES) && fallback) await ensureFontLoaded(fallback)
+  tabManager.updateFontFamily(fontFamily.value)
+  const active = tabManager.activeTab.value
+  requestAnimationFrame(() => {
+    try { active?.fitAddon?.fit() } catch { /* ignore */ }
+  })
+}
+
+watch(() => [localConfig.fontMono, localConfig.fontMonoFallback], () => {
+  void applyMonoFontChange()
+})
+
+// Cold-start case: the user already picked a bundled font before opening the
+// terminal (e.g. after a reload). Existing instances were created with a stack
+// that may still be loading — re-run the ensure+set+fit sequence on mount.
+onMounted(() => {
+  void applyMonoFontChange()
+})
 
 // Terminal viewport — uses the active tab's xterm and container
 const viewport = useTerminalViewport(
@@ -1723,7 +1763,7 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
 }
 
 .toolbar-btn.btn-modifier, .toolbar-btn.btn-nav, .toolbar-btn.btn-arrow, .toolbar-btn.btn-symbol, .toolbar-btn.btn-action { background: transparent; }
-.toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; font-weight: 700; }
+.toolbar-btn.btn-symbol { color: var(--toolbar-key-text); font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace); font-size: 15px; font-weight: 700; }
 
 /* WebView bold compensation — same mechanism as chat markdown bold
  * (markdown-common.css): font-weight alone renders lighter/softer in Android
@@ -1814,20 +1854,22 @@ defineExpose({ activate: () => {}, deactivate: () => {} })
   flex: 1;
   min-width: 0;
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Terminal theme picker (unscoped because PopupMenu teleports to body) */
-.theme-picker { padding: 0; min-width: 160px; }
-.theme-picker-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); padding: 5px 10px 4px; border-bottom: 1px solid var(--border-color); }
+/* Terminal theme picker (unscoped because PopupMenu teleports to body).
+   Container surface comes from PopupMenu appSurface; title uses the shared
+   .app-menu-title. The theme-item* entry rules below mirror AppHeader's copy —
+   both are global, so they must stay in sync (kept here so the terminal
+   picker renders identically even if the AppHeader styles are not loaded). */
+.theme-picker { min-width: 160px; }
 .theme-picker-status { padding: 10px 12px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .theme-picker-error { display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .theme-retry-btn { padding: 4px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 12px; }
-.theme-picker-list { max-height: 300px; overflow-y: auto; }
 .theme-item + .theme-item { border-top: 1px solid var(--border-color); }
 .theme-item {
   display: flex; align-items: center; gap: 6px;

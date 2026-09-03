@@ -54,3 +54,31 @@ export function buildPortUrl(localPort: number, protocol?: string, path?: string
   }
   return `${scheme}://localhost:${localPort}${path || '/'}`
 }
+
+/** Result of sshInstallHint: how to obtain a local `ssh` client per OS. */
+export type SshInstallHint =
+  | { kind: 'windows'; url: string }              // Download page
+  | { kind: 'mac'; noInstall: true }              // Preinstalled
+  | { kind: 'linux'; command: string }            // Package-manager install command
+  | null                                          // Unknown platform — no hint
+
+const WINDOWS_OPENSSH_URL = 'https://learn.microsoft.com/windows-server/administration/openssh/openssh_install_firstuse'
+
+/**
+ * Resolves the platform-specific hint for getting an `ssh` client on the machine
+ * that runs the manual SSH tunnel command (web mode only; tunnel guide is hidden
+ * in app mode). Pass the static UA booleans so the function stays pure/testable:
+ *   windows → official OpenSSH download/install page
+ *   mac     → OpenSSH is bundled with macOS, nothing to install
+ *   linux   → distro-agnostic apt/yum fallback install command
+ */
+export function sshInstallHint(opts: {
+  windows: boolean
+  macDesktop: boolean
+  linuxDesktop: boolean
+}): SshInstallHint {
+  if (opts.windows) return { kind: 'windows', url: WINDOWS_OPENSSH_URL }
+  if (opts.macDesktop) return { kind: 'mac', noInstall: true }
+  if (opts.linuxDesktop) return { kind: 'linux', command: 'sudo apt install openssh-client || sudo yum install openssh-clients' }
+  return null
+}

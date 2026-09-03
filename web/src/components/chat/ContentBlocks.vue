@@ -1572,7 +1572,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .tool-output-body pre {
   margin: 0;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1605,7 +1605,7 @@ onUnmounted(() => {
 }
 
 .content-blocks .tool-detail .tool-file-path {
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, monospace);
   font-size: 11px;
   font-weight: 600;
   color: var(--accent-color);
@@ -1637,7 +1637,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .edit-diff-body {
   white-space: pre;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   min-width: max-content;
@@ -1679,7 +1679,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .file-preview-body {
   white-space: pre;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   overflow-x: auto;
@@ -1714,7 +1714,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .file-write-body {
   white-space: pre;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   overflow-x: auto;
@@ -1727,7 +1727,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .tool-json-body {
   white-space: pre;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   overflow-x: auto;
@@ -1750,7 +1750,7 @@ onUnmounted(() => {
 }
 
 .content-blocks .tool-detail .bash-terminal-body {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   line-height: 1.5;
   background: var(--bg-tertiary);
@@ -2058,7 +2058,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .grep-pattern-text,
 .content-blocks .tool-detail .grep-path-text {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2125,7 +2125,7 @@ onUnmounted(() => {
 
 .content-blocks .tool-detail .glob-pattern-text,
 .content-blocks .tool-detail .glob-path-text {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2189,7 +2189,7 @@ onUnmounted(() => {
 }
 
 .content-blocks .tool-detail .web-fetch-link {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   color: var(--accent-color);
   text-decoration: none;
@@ -2201,7 +2201,7 @@ onUnmounted(() => {
 }
 
 .content-blocks .tool-detail .web-fetch-text {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2286,7 +2286,7 @@ onUnmounted(() => {
   margin: 2px 0;
 }
 .content-blocks .tool-detail .agent-call-prompt code {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 10px;
   background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
   padding: 1px 4px;
@@ -2337,7 +2337,7 @@ onUnmounted(() => {
 .content-blocks .tool-detail .skill-call-name {
   font-weight: 600;
   color: #0891b2;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
 }
 
@@ -2353,7 +2353,7 @@ onUnmounted(() => {
   padding: 4px 8px;
   background: var(--bg-tertiary);
   border-radius: 4px;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   line-height: 1.5;
 }
 
@@ -2395,7 +2395,7 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-primary);
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
 }
 
 .content-blocks .tool-detail .permission-tool-detail {
@@ -2422,7 +2422,7 @@ onUnmounted(() => {
 }
 
 .content-blocks .tool-detail .permission-tool-detail code {
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, monospace);
   font-size: 11px;
   color: var(--text-primary);
   word-break: break-all;

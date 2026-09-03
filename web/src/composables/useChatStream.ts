@@ -258,6 +258,11 @@ export function useChatStream(options: UseChatStreamOptions) {
       case 'stream_start': {
         if (sessionChanged()) return
         const messageId = payload.message_id as number | undefined
+        // The answered queue id (the streaming row's queue_id — the queueId of
+        // the user message this run answers). Lets the reducer re-anchor a
+        // recovery placeholder that was built before its question bubble
+        // arrived, so the reply sorts after its own question instead of above it.
+        const answeredQueueId = typeof payload.queue_id === 'string' ? payload.queue_id : undefined
         if (messageId) {
           // Event-driven placeholder: if no streaming assistant message exists
           // (e.g. client opened the session mid-stream, or the optimistic
@@ -265,11 +270,18 @@ export function useChatStream(options: UseChatStreamOptions) {
           // the current streaming id. The DB row id is used as the message id
           // so subsequent content events (findStreamingMsg) match it.
           if (!findStreamingMsg(messages.value)) {
-            // Anchor to the newest non-pending user message so rebuildFromDb's
-            // Channel 2 (r.queueId === live.parentQueueId) can match this
-            // placeholder even when the loadHistory DB snapshot raced the new
-            // streaming row (Channel 1 fails, Channel 3 fails — no empty row).
-            const anchorIdx = findAnchorUserIdx()
+            // Anchor to the answered question's queue id when the backend
+            // provided it — the authoritative anchor (resolves once the
+            // question bubble is in the array, and lets rebuildFromDb Channel
+            // 2 match the DB streaming row). Fall back to the newest non-pending
+            // user message only when the backend sent no queue id (e.g.
+            // scheduled runs with no question), preserving the old behavior.
+            const anchorParent = answeredQueueId
+              ? undefined
+              : (() => {
+                  const anchorIdx = findAnchorUserIdx()
+                  return anchorIdx !== -1 ? String(messages.value[anchorIdx].id) : undefined
+                })()
             dispatch({ type: 'stream_placeholder', msg: {
               role: 'assistant',
               id: messageId,
@@ -279,15 +291,16 @@ export function useChatStream(options: UseChatStreamOptions) {
               createdAt: new Date().toISOString(),
               backend: currentBackend.value,
               seq: nextClientSeq(),
-              parentQueueId: anchorIdx !== -1 ? String(messages.value[anchorIdx].id) : undefined,
+              parentQueueId: answeredQueueId || anchorParent,
             } as ChatMessage })
             onRenderNeeded()
             onScrollBottom(false)
           }
           // ws_stream_start is idempotent: it re-sets the id on the existing
           // streaming message (a no-op when the placeholder above already
-          // carries the DB id).
-          dispatch({ type: 'ws_stream_start', messageId })
+          // carries the DB id) and re-anchors to the answered question when a
+          // recovery placeholder was anchored to a stale user message.
+          dispatch({ type: 'ws_stream_start', messageId, answeredQueueId })
         }
         break
       }

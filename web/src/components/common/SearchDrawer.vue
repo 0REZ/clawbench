@@ -380,7 +380,7 @@ defineExpose({
   gap: 10px;
   padding: 5px 14px;
   cursor: pointer;
-  font-family: 'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace;
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace);
   font-size: 12px;
   line-height: 1.6;
   border-bottom: 1px solid var(--border-color, #f0f0f0);

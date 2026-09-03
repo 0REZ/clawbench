@@ -505,6 +505,28 @@ describe('ChatPanelContent — failed send keeps input text', () => {
   })
 })
 
+describe('ChatPanelContent — send failure always toasts', () => {
+  async function sourceRegion(start: string, end: string) {
+    const mod = await import('@/components/chat/ChatPanelContent.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    return source.slice(source.indexOf(start), source.indexOf(end))
+  }
+
+  it('shows the send-failed toast before any cleanup step that could throw', async () => {
+    // sendMessageNow's catch previously toasted LAST (after optimistic_remove /
+    // disconnectStream / loading / autoSpeech). If any of those cleanup steps
+    // threw, the error would skip to sendMessage's catch (which restores the
+    // input) and the user would never see the failure toast. The toast must be
+    // the FIRST statement of the catch so a failed send always surfaces.
+    const region = await sourceRegion('async function sendMessageNow(text, filePaths, files)', 'async function handleToolSendMessage(text)')
+    const catchBody = region.slice(region.indexOf('} catch (err) {'), region.lastIndexOf('throw err'))
+    expect(catchBody).toMatch(/toast\.show\(t\('toast\.sendFailed'\)/)
+    const toastIdx = catchBody.indexOf("toast.show(t('toast.sendFailed')")
+    const removeIdx = catchBody.indexOf("dispatch({ type: 'optimistic_remove'")
+    expect(removeIdx).toBeGreaterThan(toastIdx)
+  })
+})
+
 // ── First-open scroll-to-bottom ──
 // Root cause: the active watch passed forceScrollBottom=false on EVERY open.
 // On first app launch there is no prior scroll position (fresh DOM, scrollTop=0),

@@ -26,6 +26,13 @@
     --radius-sm: 6px;
     --radius-md: 10px;
     --dock-height: calc(47px + env(safe-area-inset-bottom, 0));
+
+    /* ── Font stacks (user-configurable via Settings → Appearance).
+       Runtime overrides the selected open-source font to the head of each
+       stack through <html> inline style (see utils/fontConfig.ts).
+       Values here must mirror DEFAULT_UI_STACK / DEFAULT_MONO_STACK. ── */
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+    --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Segoe UI Mono', 'Roboto Mono', Consolas, 'Liberation Mono', monospace;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════

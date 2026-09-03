@@ -10,6 +10,7 @@ import (
 
 	"clawbench/internal/middleware"
 	"clawbench/internal/model"
+	"clawbench/internal/service"
 )
 
 // ServeFileRename handles file and directory rename operations.
@@ -53,6 +54,12 @@ func ServeFileRename(w http.ResponseWriter, r *http.Request) {
 		slog.Error("rename failed", slog.String("old", absOld), slog.String("new", absNew), slog.String("err", err.Error()))
 		model.WriteError(w, model.Internal(fmt.Errorf("rename failed: %w", err)))
 		return
+	}
+
+	// Renaming moves the file — a share pointing at the old path would break
+	// (the link references a path that no longer exists). Revoke it.
+	if err := service.DeleteFileSharesUnderPath(absOld); err != nil {
+		slog.Warn("rename: cleanup of file shares failed", "path", absOld, "err", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -150,11 +157,16 @@ func ServeFileDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Revoke any public share links pointing at the deleted file/directory.
+	if err := service.DeleteFileSharesUnderPath(absPath); err != nil {
+		slog.Warn("delete: cleanup of file shares failed", "path", absPath, "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // ServeFileBatchDelete handles deleting multiple files/directories in a single request.
-func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // batch delete with per-item error handling
+func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -172,59 +184,74 @@ func ServeFileBatchDelete(w http.ResponseWriter, r *http.Request) { //nolint:goc
 
 	deleted := 0
 	var errs []string
+	var deletedPaths []string
 	for _, p := range req.Paths {
-		// Resolve each path: absolute validated directly, relative resolved against project cookie
-		var absPath string
-		if filepath.IsAbs(p) {
-			ap, err := filepath.Abs(p)
-			if err != nil || !isPathUnderAnyRoot(ap) {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			absPath = ap
-		} else {
-			projectPath := middleware.GetProjectFromCookie(r)
-			if projectPath == "" {
-				errs = append(errs, p+": no project")
-				continue
-			}
-			baseAbs, err := filepath.Abs(projectPath)
-			if err != nil {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			ap, ok := model.ValidatePath(baseAbs, p)
-			if !ok || !isPathUnderAnyRoot(ap) {
-				errs = append(errs, p+": access denied")
-				continue
-			}
-			absPath = ap
-		}
-
-		info, err := os.Stat(absPath)
-		if err != nil {
-			errs = append(errs, p+": not found")
+		absPath, errMsg := resolveBatchDeletePath(r, p)
+		if errMsg != "" {
+			errs = append(errs, p+": "+errMsg)
 			continue
 		}
-		if info.IsDir() {
-			if err := safeRemoveAll(absPath); err != nil {
-				errs = append(errs, p+": delete failed: "+err.Error())
-				continue
-			}
-		} else {
-			if err := os.Remove(absPath); err != nil {
-				errs = append(errs, p+": delete failed: "+err.Error())
-				continue
-			}
+		if err := deletePathEntry(absPath); err != nil {
+			errs = append(errs, p+": "+err.Error())
+			continue
 		}
 		deleted++
+		deletedPaths = append(deletedPaths, absPath)
 	}
 
 	result := map[string]interface{}{"ok": true, "deleted": deleted} //nolint:goconst // response key
 	if len(errs) > 0 {
 		result["errors"] = errs
 	}
+	// Revoke public share links for successfully deleted paths.
+	if deleted > 0 {
+		if err := cleanupSharesForDeletedPaths(deletedPaths); err != nil {
+			slog.Warn("batch-delete: cleanup of file shares failed", "err", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// resolveBatchDeletePath resolves a batch-delete path to an absolute path under
+// a root. Returns the absolute path, or a non-empty error message on failure.
+const errBatchAccessDenied = "access denied"
+
+func resolveBatchDeletePath(r *http.Request, p string) (string, string) {
+	// Resolve each path: absolute validated directly, relative resolved against project cookie
+	if filepath.IsAbs(p) {
+		ap, err := filepath.Abs(p)
+		if err != nil || !isPathUnderAnyRoot(ap) {
+			return "", errBatchAccessDenied
+		}
+		return ap, ""
+	}
+
+	projectPath := middleware.GetProjectFromCookie(r)
+	if projectPath == "" {
+		return "", "no project"
+	}
+	baseAbs, err := filepath.Abs(projectPath)
+	if err != nil {
+		return "", errBatchAccessDenied
+	}
+	ap, ok := model.ValidatePath(baseAbs, p)
+	if !ok || !isPathUnderAnyRoot(ap) {
+		return "", errBatchAccessDenied
+	}
+	return ap, ""
+}
+
+// deletePathEntry removes a single file or directory tree. Directories are
+// removed recursively; the caller pre-validates the path is under a root.
+func deletePathEntry(absPath string) error {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("not found")
+	}
+	if info.IsDir() {
+		return safeRemoveAll(absPath)
+	}
+	return os.Remove(absPath)
 }
 
 // ServeFileCreate handles file creation.
@@ -397,6 +424,11 @@ func ServeFileMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Moving changes the path — revoke any share pointing at the source path.
+	if err := service.DeleteFileSharesUnderPath(srcAbsPath); err != nil {
+		slog.Warn("move: cleanup of file shares failed", "path", srcAbsPath, "err", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -531,6 +563,19 @@ func copyDir(src, dst string) error { //nolint:gocognit // recursive directory c
 			if err := copyFile(srcPath, dstPath); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// cleanupSharesForDeletedPaths revokes share links for deleted paths. For a
+// directory the share could point to the directory itself or any file inside it,
+// so every successful deletion is applied with prefix semantics via
+// DeleteFileSharesUnderPath.
+func cleanupSharesForDeletedPaths(paths []string) error {
+	for _, p := range paths {
+		if err := service.DeleteFileSharesUnderPath(p); err != nil {
+			return err
 		}
 	}
 	return nil

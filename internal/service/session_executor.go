@@ -42,6 +42,10 @@ const (
 	contentKeyMetadata = "metadata"
 	// cancelReasonUser is the cancel reason when the user explicitly cancels.
 	cancelReasonUser = "user"
+	// cancelReasonRestart is set during graceful server shutdown before the
+	// session context is cancelled — the executor persists a restart warning so
+	// the frontend shows the interrupted-response banner after reload.
+	cancelReasonRestart = "restart"
 	// blockTypeWarning is the content block type for warning messages.
 	blockTypeWarning = "warning"
 	// eventTypeContentReset clears accumulated blocks from a failed Prompt before retry.
@@ -209,6 +213,22 @@ type SessionExecutor struct {
 	// than a dirty flag) is robust to direct e.blocks mutations in tests and
 	// keeps the write count proportional to actual changes.
 	lastWrittenContent string
+
+	// thinkingFlushed tracks, per thinking block (by think_id), how much of its
+	// text has been persisted to chat_thinking as incremental seq chunks. The
+	// streaming flush appends only b.Text[flushedBytes:] at the next seq, so a
+	// long running thinking block (tens of KB) is never re-written in full on
+	// every 500ms window. Persisted in memory (single writer inside the event
+	// loop, under e.mu) — not re-derived from the DB on each flush.
+	thinkingFlushed map[string]*thinkingFlushState
+}
+
+// thinkingFlushState is the per-block incremental flush cursor. nextSeq is the
+// seq value the next delta chunk will be stored at; flushedBytes is the length
+// of b.Text already persisted (everything before it is durable).
+type thinkingFlushState struct {
+	nextSeq      int
+	flushedBytes int
 }
 
 // NewSessionExecutor creates a new executor for the given configuration.
@@ -223,6 +243,7 @@ func NewSessionExecutor(ctx context.Context, cfg RunConfig) *SessionExecutor {
 		toolStarts:            make(map[string]time.Time),
 		pendingToolCalls:      make(map[string]struct{}),
 		pendingContextPatches: make(map[string]string),
+		thinkingFlushed:       make(map[string]*thinkingFlushState),
 	}
 	// Register so graceful shutdown can flush this stream's accumulated blocks.
 	// Removed by unregisterActiveStream once the executor has finished.
@@ -339,6 +360,7 @@ func (e *SessionExecutor) handleNonTerminalEvent(event ai.StreamEvent) {
 		e.pendingToolCalls = make(map[string]struct{})
 		e.pendingContextPatches = make(map[string]string)
 		e.lastWrittenContent = ""
+		e.thinkingFlushed = make(map[string]*thinkingFlushState)
 		e.mu.Unlock()
 		// Reset the streaming message in DB to empty so stale partial content
 		// doesn't persist if the retry Prompt fails or the server crashes.
@@ -735,19 +757,37 @@ func (e *SessionExecutor) flushPendingContextState() {
 	e.pendingContextPatches = make(map[string]string)
 }
 
-// flushPendingThinking persists the current thinking-block full text into
-// chat_thinking on every flush window, so a hard crash loses at most the
-// thinking that grew since the last flush instead of the whole block. The
-// chat_history.content row stays slim (thinking text removed) — the full text
-// lives here in chat_thinking, exactly like tool calls live in chat_tool_calls.
+// flushPendingThinking persists the thinking-block text that grew since the
+// last flush window into chat_thinking as incremental seq chunks, so a hard
+// crash loses at most the thinking that grew since the last flush instead of
+// the whole block. The chat_history.content row stays slim (thinking text
+// removed) — the full text lives here in chat_thinking, exactly like tool calls
+// live in chat_tool_calls.
+//
+// Incremental semantics: each thinking block tracks (nextSeq, flushedBytes) in
+// e.thinkingFlushed. Each flush appends only b.Text[flushedBytes:] as the next
+// seq chunk and advances the cursor on success. A long running block (tens of
+// KB) is therefore never rewritten in full every 500ms — each flush writes only
+// the delta since the previous window. Failure does not advance the cursor, so
+// the next flush retries the same seq idempotently (AppendThinkingSegment is
+// ON CONFLICT upsert).
 //
 // ThinkID stability: a thinking block gets a stable ID on first flush and
-// reuses it on every subsequent flush (upsert overwrites the row), so the
-// same (message_id, think_id) always refers to the latest text. Finalize
-// reuses these IDs via slimThinkingInContent (blocks that already carry
-// think_id are not regenerated), so no orphan rows and no duplicates.
+// reuses it on every subsequent flush, so the same (message_id, think_id)
+// always refers to the latest text. Finalize reuses these IDs via
+// slimThinkingInContent (blocks that already carry think_id are not
+// regenerated), so no orphan rows and no duplicates.
 func (e *SessionExecutor) flushPendingThinking() {
 	if e.cfg.StreamingMessageID == 0 || e.cfg.SessionID == "" {
+		return
+	}
+	// Once the graceful-shutdown forced flush has run, persistThinkingToDB (in
+	// flushStreamingLocked) owns thinking persistence entirely: it deletes all
+	// chunks and rewrites the full text as a single seq=0 row on every flush.
+	// Incremental appends here would be deleted moments later by that rewrite —
+	// skip them so force mode stays full-rewrite and normal mode stays
+	// incremental.
+	if e.forceIncludeThinking {
 		return
 	}
 	for i := range e.blocks {
@@ -762,11 +802,26 @@ func (e *SessionExecutor) flushPendingThinking() {
 		if b.Text == "" {
 			continue
 		}
-		if err := UpsertThinking(e.cfg.StreamingMessageID, e.cfg.SessionID, b.ThinkID, b.Text); err != nil {
-			slog.Warn("flush thinking failed",
-				slog.String("thinkID", b.ThinkID),
-				slog.String("err", err.Error()))
+		st := e.thinkingFlushed[b.ThinkID]
+		if st == nil {
+			st = &thinkingFlushState{}
+			e.thinkingFlushed[b.ThinkID] = st
 		}
+		// Nothing grew since the last flush (or content_reset shrank the block
+		// past the cursor — defensive; content_reset clears the map anyway).
+		if len(b.Text) <= st.flushedBytes {
+			continue
+		}
+		delta := b.Text[st.flushedBytes:]
+		if err := AppendThinkingSegment(e.cfg.StreamingMessageID, e.cfg.SessionID, b.ThinkID, st.nextSeq, delta); err != nil {
+			slog.Warn("flush thinking delta failed",
+				slog.String("thinkID", b.ThinkID),
+				slog.Int("seq", st.nextSeq),
+				slog.String("err", err.Error()))
+			continue // do not advance — retry same seq next window
+		}
+		st.flushedBytes = len(b.Text)
+		st.nextSeq++
 	}
 }
 
@@ -898,6 +953,9 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 		if slimContent := persistThinkingToDB(content, e.cfg.StreamingMessageID, e.cfg.SessionID); slimContent != content {
 			_ = UpdateStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, slimContent)
 		}
+		// flushPendingThinking is guarded off while forceIncludeThinking is set
+		// (persistThinkingToDB above fully owns thinking persistence in force
+		// mode), so no cursor realignment is needed here.
 	}
 }
 
@@ -935,6 +993,20 @@ func (e *SessionExecutor) buildContentJSON(blocks []model.ContentBlock, result R
 	// User-initiated cancel: just mark cancelled, never add a warning block.
 	// The frontend renders a clean "cancelled" badge — no alarming warning needed.
 	if result.CancelReason == cancelReasonUser {
+		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta, statusCancelled: true}
+		blocksJSON, _ := json.Marshal(contentMap)
+		return string(blocksJSON), blocks
+	}
+
+	// Graceful-shutdown/restart interrupt with partial content: append a restart
+	// warning block so the frontend renders the interrupted banner ("继续"
+	// button) on reload — mirrors the startup orphan-cleanup behavior.
+	if result.CancelReason == cancelReasonRestart {
+		blocks = append(blocks, model.ContentBlock{
+			Type:   blockTypeWarning,
+			Text:   "Server restarted, AI response interrupted",
+			Reason: ai.ReasonRestart,
+		})
 		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta, statusCancelled: true}
 		blocksJSON, _ := json.Marshal(contentMap)
 		return string(blocksJSON), blocks
@@ -1069,6 +1141,11 @@ func (e *SessionExecutor) Finalize(result RunResult, eventCh <-chan ai.StreamEve
 	// The WS terminal event keeps full blocks (result.Blocks); only the
 	// persisted content is slimmed. StreamingMessageID is the streaming row.
 	dbContent := persistThinkingToDB(content, e.cfg.StreamingMessageID, e.cfg.SessionID)
+	// Finalize is terminal: no rate-limited flush runs after this point. Clear
+	// the incremental cursor so a concurrent graceful-shutdown forced flush
+	// racing this Finalize cannot append stale chunks for think_ids whose rows
+	// persistThinkingToDB just rewrote.
+	e.thinkingFlushed = make(map[string]*thinkingFlushState)
 
 	msgID, err := FinalizeStreamingMessage(e.cfg.ProjectPath, e.cfg.BackendName, e.cfg.SessionID, dbContent)
 	if err != nil {

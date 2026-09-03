@@ -1,8 +1,23 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, computed, ref } from 'vue'
 import { createI18n } from 'vue-i18n'
 import FileHeader from '../FileHeader.vue'
+import { useFileShare } from '@/composables/useFileShare'
+
+// useFileShare is a module-level singleton; isolate it per test.
+const { markShared, markUnshared, resetFileShareState } = useFileShare()
+
+beforeEach(() => {
+  resetFileShareState()
+  // The share-highlight watcher fires a server query on mount; keep it inert.
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }))
+})
+
+afterEach(() => {
+  resetFileShareState()
+  vi.unstubAllGlobals()
+})
 
 // Minimal i18n instance for tests
 const i18n = createI18n({
@@ -29,9 +44,12 @@ const i18n = createI18n({
           stickyScroll: 'Sticky Scroll',
           fileHistory: 'File history',
           shareExternal: 'Share',
+          shareLink: 'Share link',
+          shareLinkActive: 'Share link (active)',
           exportHtml: 'Export HTML',
           edit: 'Edit',
           finishEditing: 'Finish editing',
+          details: 'Details',
         },
         overlay: { back: 'Back', forward: 'Forward' },
       },
@@ -57,6 +75,23 @@ vi.mock('@/composables/useFileRefresh', () => ({
 vi.mock('@/composables/useAppMode.ts', () => ({
   useAppMode: () => ({ isAppMode: { value: false } }),
 }))
+
+// Mock wide-screen state — drag-to-chat (draggable file name) is gated on it
+const mockIsWideScreen = ref(true)
+vi.mock('@/composables/useWideScreenLayout', () => ({
+  getWideScreenState: () => ({ isWideScreen: mockIsWideScreen }),
+}))
+
+// Keep the real setAttachDragData (verifies the drag payload) but stub the
+// ghost element builder/cleanup so tests don't touch the real DOM + timers.
+vi.mock('@/utils/attachDrag', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/attachDrag')>()
+  return {
+    ...actual,
+    buildAttachDragImage: vi.fn(() => document.createElement('div')),
+    cleanupDragGhost: vi.fn(),
+  }
+})
 
 // Mock useChatContext
 const mockAddAttachedFile = vi.fn()
@@ -316,6 +351,76 @@ describe('FileHeader', () => {
     expect(wrapper.emitted('showDetails')).toBeTruthy()
   })
 
+  describe('file details button', () => {
+    it('renders as the last toolbar action (after delete)', () => {
+      const wrapper = mountHeader()
+      const btns = wrapper.findAll('.header-actions .file-header-btn')
+      const detailsIdx = btns.findIndex(b => b.attributes('title') === 'Details')
+      const deleteIdx = btns.findIndex(b => b.attributes('title') === 'Delete')
+      expect(detailsIdx).toBeGreaterThanOrEqual(0)
+      expect(deleteIdx).toBeGreaterThanOrEqual(0)
+      expect(detailsIdx).toBeGreaterThan(deleteIdx)
+    })
+
+    it('emits showDetails when the details button is clicked', async () => {
+      const wrapper = mountHeader()
+      const btn = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Details')
+      expect(btn).toBeTruthy()
+      await btn!.trigger('click')
+      expect(wrapper.emitted('showDetails')).toBeTruthy()
+    })
+  })
+
+  describe('file name drag-to-chat', () => {
+    it('is draggable on wide screens', () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader()
+      const nameEl = wrapper.find('.file-path-hint')
+      expect(nameEl.attributes('draggable')).toBe('true')
+      expect(nameEl.classes()).toContain('file-path-draggable')
+    })
+
+    it('is not draggable on narrow screens (drag-to-chat requires split view)', () => {
+      mockIsWideScreen.value = false
+      const wrapper = mountHeader()
+      const nameEl = wrapper.find('.file-path-hint')
+      expect(nameEl.attributes('draggable')).toBe('false')
+      expect(nameEl.classes()).not.toContain('file-path-draggable')
+    })
+
+    it('writes the attach drag payload with the file path on dragstart', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader()
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).toHaveBeenCalledWith(
+        'application/x-clawbench-attach',
+        JSON.stringify({ path: '/tmp/main.ts', isDir: false }),
+      )
+      expect(dt.setData).toHaveBeenCalledWith('text/plain', '/tmp/main.ts')
+      expect(dt.setDragImage).toHaveBeenCalled()
+    })
+
+    it('does not write attach data when the file has no path', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader({ file: { name: 'no-path.ts', path: '', content: '' } })
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).not.toHaveBeenCalled()
+    })
+
+    it('does not write attach data when the file has no name', async () => {
+      mockIsWideScreen.value = true
+      const wrapper = mountHeader({ file: { name: '', path: '/tmp/no-name.ts' } })
+      const dt = { setData: vi.fn(), setDragImage: vi.fn(), effectAllowed: '' }
+      const nameEl = wrapper.find('.file-path-hint')
+      await nameEl.trigger('dragstart', { dataTransfer: dt })
+      expect(dt.setData).not.toHaveBeenCalled()
+    })
+  })
+
   it('emits toggleToc when toc button is clicked', async () => {
     const wrapper = mountHeader({ file: { name: 'main.ts', path: '/tmp/main.ts', content: 'code' } })
     // Locate the TOC button by its title (the button order varies with the
@@ -505,6 +610,55 @@ describe('FileHeader', () => {
     it('hides the search button for media files without text content', () => {
       const wrapper = mountHeader({ file: { name: 'photo.png', path: '/tmp/photo.png', content: null } })
       expect((wrapper.vm as any).$.setupState.hasSearch).toBe(false)
+    })
+  })
+
+  describe('share link button', () => {
+    it('includes shareLink in the toolbar for a regular file', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const ids = (wrapper.vm as any).$.setupState.toolbarInlineIds
+      expect(ids).toContain('shareLink')
+    })
+
+    it('hides shareLink while editing', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: true })
+      const ids = (wrapper.vm as any).$.setupState.toolbarInlineIds
+      expect(ids).not.toContain('shareLink')
+    })
+
+    it('emits shareLink when the share link button is clicked', async () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link')
+      expect(button).toBeTruthy()
+      await button!.trigger('click')
+      expect(wrapper.emitted('shareLink')).toBeTruthy()
+    })
+
+    it('shows the active state when the file is shared', async () => {
+      markShared('/tmp/readme.md')
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link (active)')
+      expect(button).toBeTruthy()
+      expect(button!.classes()).toContain('active')
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(true)
+    })
+
+    it('clears the active state after the share is revoked', async () => {
+      markShared('/tmp/readme.md')
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(true)
+
+      markUnshared('/tmp/readme.md')
+      await nextTick()
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(false)
+    })
+
+    it('is not active for an unshared file', () => {
+      const wrapper = mountHeader({ file: { name: 'readme.md', path: '/tmp/readme.md', content: '# hi' }, viewMode: 'rendered', editing: false })
+      const button = wrapper.findAll('.header-actions .file-header-btn').find(b => b.attributes('title') === 'Share link')
+      expect(button).toBeTruthy()
+      expect(button!.classes()).not.toContain('active')
+      expect((wrapper.vm as any).$.setupState.isShared).toBe(false)
     })
   })
 })

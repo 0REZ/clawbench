@@ -324,6 +324,68 @@ describe('useSettingsConfig', () => {
     })
   })
 
+  describe('font config side effects', () => {
+    it('setLocalConfig for fontMono dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontMono', 'Fira Code')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontMono: 'Fira Code' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontMono')
+    })
+
+    it('setLocalConfig for fontUi dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontUi', 'Inter')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontUi: 'Inter' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontUi')
+    })
+
+    it('setLocalConfig for fontMonoFallback dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontMonoFallback', 'Sarasa Mono SC')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontMonoFallback: 'Sarasa Mono SC' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontMonoFallback')
+    })
+
+    it('setLocalConfig for fontUiFallback dispatches clawbench-font-change', () => {
+      const { setLocalConfig } = useSettingsConfig()
+      const listener = vi.fn()
+      window.addEventListener('clawbench-font-change', listener)
+
+      setLocalConfig('fontUiFallback', 'SimSun')
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        detail: { fontUiFallback: 'SimSun' },
+      }))
+
+      window.removeEventListener('clawbench-font-change', listener)
+      localStorage.removeItem('clawbench-settings-fontUiFallback')
+    })
+  })
+
   describe('patchAgentField', () => {
     it('patches agent field and updates local agent data', async () => {
       const { patchAgentField } = useSettingsConfig()

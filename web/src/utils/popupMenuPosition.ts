@@ -38,6 +38,13 @@ export function computeMenuStyle(
     viewportWidth?: number
     viewportHeight?: number
     anchor?: 'left' | 'right' | 'auto'
+    /**
+     * When false, the menu root does NOT scroll itself (`overflowY` is omitted).
+     * Used by menus whose inner content scrolls independently so a header /
+     * footer can stay pinned (e.g. the app-menu-styled theme picker).
+     * Default: true
+     */
+    scrollable?: boolean
   } = {}
 ): Record<string, string> {
   const defaultVp = typeof window !== 'undefined' ? getZoomedViewport() : { width: 1024, height: 768 }
@@ -48,6 +55,7 @@ export function computeMenuStyle(
     viewportWidth = defaultVp.width,
     viewportHeight = defaultVp.height,
     anchor = 'auto',
+    scrollable = true,
   } = opts
 
   const gap = 4
@@ -80,27 +88,31 @@ export function computeMenuStyle(
     // Menu appears BELOW the anchor
     const top = toFixedCSS(rect.bottom + gap)
     const availableBelow = viewportHeight - (rect.bottom + gap) - edgeMargin
-    return {
+    const style: Record<string, string> = {
       position: 'fixed',
       top: `${top}px`,
       ...horizontal,
       maxWidth: `${maxWidth}px`,
       maxHeight: `min(${maxHeight}px, ${toFixedCSS(availableBelow)}px)`,
-      overflowY: 'auto',
     }
+    // When the menu doesn't scroll itself the caller handles overflow
+    // internally (pinned header/footer + scrollable middle).
+    if (scrollable) style.overflowY = 'auto'
+    return style
   }
 
   // Menu appears ABOVE the anchor (preferred)
   const bottom = toFixedCSS(viewportHeight - rect.top + gap)
   const availableAbove = rect.top - gap - edgeMargin
-  return {
+  const style: Record<string, string> = {
     position: 'fixed',
     bottom: `${bottom}px`,
     ...horizontal,
     maxWidth: `${maxWidth}px`,
     maxHeight: `min(${maxHeight}px, ${toFixedCSS(availableAbove)}px)`,
-    overflowY: 'auto',
   }
+  if (scrollable) style.overflowY = 'auto'
+  return style
 }
 
 /** Right-align the menu to the anchor's right edge. */

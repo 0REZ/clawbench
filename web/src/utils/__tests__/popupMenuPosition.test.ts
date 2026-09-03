@@ -221,7 +221,7 @@ describe('computeMenuStyle', () => {
   })
 
   describe('style invariants', () => {
-    it('always includes position, maxWidth, maxHeight, overflowY', () => {
+    it('always includes position, maxWidth, maxHeight, overflowY (scrollable default)', () => {
       const rects = [
         mockRect({ top: 5, bottom: 40, left: 100, right: 140 }),
         mockRect({ top: 400, bottom: 440, left: 100, right: 140 }),
@@ -234,6 +234,20 @@ describe('computeMenuStyle', () => {
         expect(style.maxWidth).toBeDefined()
         expect(style.maxHeight).toBeDefined()
         expect(style.overflowY).toBe('auto')
+      }
+    })
+
+    it('omits overflowY when scrollable=false (root scrolls off → inner region scrolls)', () => {
+      const rects = [
+        mockRect({ top: 5, bottom: 40, left: 100, right: 140 }),
+        mockRect({ top: 400, bottom: 440, left: 100, right: 140 }),
+      ]
+      for (const rect of rects) {
+        const style = computeMenuStyle(rect, { viewportWidth: 1024, viewportHeight: 768, scrollable: false })
+        expect(style.position).toBe('fixed')
+        expect(style.maxWidth).toBeDefined()
+        expect(style.maxHeight).toBeDefined()
+        expect(style.overflowY).toBeUndefined()
       }
     })
 

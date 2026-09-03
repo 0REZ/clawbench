@@ -36,8 +36,20 @@ function createMockNavigation() {
   }
 }
 
+const { mockConsumePendingSettingsCategory, mockPendingSettingsCategory } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { ref } = require('vue')
+  return {
+    mockConsumePendingSettingsCategory: vi.fn(() => null),
+    mockPendingSettingsCategory: ref<string | null>(null),
+  }
+})
+
 vi.mock('@/composables/useSettingsNavigation', () => ({
   useSettingsNavigation: () => createMockNavigation(),
+  consumePendingSettingsCategory: mockConsumePendingSettingsCategory,
+  pendingSettingsCategory: mockPendingSettingsCategory,
+  setPendingSettingsCategory: vi.fn(),
 }))
 
 vi.mock('@/composables/useSettingsConfig', () => ({
@@ -119,6 +131,9 @@ describe('SettingsPage', () => {
     mockCheckAllGuards.mockReturnValue(true)
     mockDialogConfirm.mockResolvedValue(false)
     mockPopNav.mockReset()
+    mockConsumePendingSettingsCategory.mockReset()
+    mockConsumePendingSettingsCategory.mockReturnValue(null)
+    mockPendingSettingsCategory.value = null
   })
 
   it('shows index view when nav stack is empty', () => {

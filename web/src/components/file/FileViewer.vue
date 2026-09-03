@@ -26,6 +26,7 @@
       @refresh="emit('refresh')"
       @overlay-close="handleOverlayCloseRequest"
       @share-external="emit('shareExternal')"
+      @share-link="emit('shareLink')"
       @export-html="handleExportHtml"
       @fit-width="handleFitWidth"
     />
@@ -315,7 +316,7 @@ import { useFileNavStack } from '@/composables/useFileNavStack.ts'
 import { useTextSelectionActive } from '@/composables/useTextSelection.ts'
 import { useFileEditor } from '@/composables/useFileEditor.ts'
 import { useTocDockPreference } from '@/composables/useTocDockPreference.ts'
-import { exportRenderedHtml, imageIssueReasonKey } from '@/utils/exportHtml.ts'
+import { exportMarkdownToHtml, imageIssueReasonKey } from '@/utils/exportMarkdownHtml.ts'
 import { downloadBlob, buildLocalFileUrl, downloadFileByPath } from '@/utils/download.ts'
 import { useToast } from '@/composables/useToast.ts'
 import { useCodeEditorSave } from '@/composables/useCodeEditorSave.ts'
@@ -339,7 +340,7 @@ const props = defineProps({
     /** Wide-screen layout — renders the inline TOC dock vs narrow drawer. */
     docked: { type: Boolean, default: false },
 })
-const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'jump', 'jumpPage'])
+const emit = defineEmits(['delete', 'showDetails', 'openGitHistory', 'toggleToc', 'closeToc', 'toggleSearch', 'closeSearch', 'searchChange', 'toggleView', 'refresh', 'openFile', 'overlayClose', 'navigateBack', 'navigateForward', 'shareExternal', 'shareLink', 'jump', 'jumpPage'])
 
 const fileNav = useFileNavStack()
 const { active: textSelecting } = useTextSelectionActive()
@@ -625,19 +626,23 @@ function handleDownload(path) {
 }
 
 async function handleExportHtml() {
-    if (!props.file?.path || !contentRef.value) return
-    const markdownBodyEl = contentRef.value.querySelector('.markdown-body')
-    if (!markdownBodyEl) return
+    if (!props.file?.path) return
+    const file = props.file
+    // Export must re-render from source markdown (shared preview pipeline),
+    // so it no longer depends on the live .markdown-body DOM being rendered.
+    if (file.content == null) return
 
     toast.show(t('file.header.exportingHtml'), { icon: '📄', type: 'info', duration: 0 })
     try {
-        const result = await exportRenderedHtml({
-            markdownBodyEl,
-            filePath: props.file.path,
-            fileName: props.file.name,
+        const result = await exportMarkdownToHtml({
+            content: file.content,
+            path: file.path,
+            projectRoot: store.state.projectRoot,
+            homeDir: store.state.homeDir,
+            fileName: file.name,
             locale: locale.value,
         })
-        const htmlName = props.file.name.replace(/\.md$/i, '.html')
+        const htmlName = file.name.replace(/\.md$/i, '.html')
         downloadBlob(result.html, htmlName, 'text/html')
         const msgs = [t('file.header.exportHtmlSuccess')]
         if (result.issues.length > 0) {

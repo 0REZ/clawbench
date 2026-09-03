@@ -4,6 +4,7 @@ import i18n, { STORAGE_KEY as LOCALE_KEY, setLocaleCookie } from '@/i18n'
 import { useAgents } from '@/composables/useAgents'
 import { getNative } from '@/utils/clawbenchNative'
 import { resolveThemeId, applyThemeAttributes } from '@/utils/themeMeta'
+import { applyFontConfig } from '@/utils/fontConfig'
 
 const LOCAL_PREFIX = 'clawbench-settings-'
 
@@ -180,6 +181,39 @@ const legacyKeys: Record<string, {
       applyUIScale(value)
     },
   },
+  fontMono: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, value, localConfig.fontMonoFallback as string | undefined, localConfig.fontUi as string | undefined, localConfig.fontUiFallback as string | undefined)
+      // Notify JS font consumers (xterm / CodeMirror / mermaid) to re-apply
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontMono: value } }))
+    },
+  },
+  fontUi: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, localConfig.fontMono as string | undefined, localConfig.fontMonoFallback as string | undefined, value, localConfig.fontUiFallback as string | undefined)
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontUi: value } }))
+    },
+  },
+  fontMonoFallback: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, localConfig.fontMono as string | undefined, value, localConfig.fontUi as string | undefined, localConfig.fontUiFallback as string | undefined)
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontMonoFallback: value } }))
+    },
+  },
+  fontUiFallback: {
+    key: '',
+    format: 'raw',
+    sideEffect(value: string) {
+      applyFontConfig(document, localConfig.fontMono as string | undefined, localConfig.fontMonoFallback as string | undefined, localConfig.fontUi as string | undefined, value)
+      window.dispatchEvent(new CustomEvent('clawbench-font-change', { detail: { fontUiFallback: value } }))
+    },
+  },
 }
 
 /** Read initial value from prefixed key (falls back to legacy key, then default) */
@@ -291,6 +325,10 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   notificationSound: true,
   floatingStatusWindow: false,
   liveUpdate: true,
+  fontMono: 'default',
+  fontUi: 'default',
+  fontMonoFallback: 'default',
+  fontUiFallback: 'default',
 }
 
 // Build reactive local config from legacy localStorage + defaults

@@ -66,6 +66,29 @@
               <div class="tunnel-guide-step">{{ t('proxy.tunnelGuideStep2') }}</div>
               <div class="tunnel-guide-step">{{ t('proxy.tunnelGuideStep3') }}</div>
             </div>
+            <div v-if="installContext" class="tunnel-guide-install">
+              <span class="tunnel-guide-install-hint">{{ t('proxy.tunnelNeedSshHint') }}</span>
+              <a
+                v-if="installContext.kind === 'windows'"
+                class="tunnel-guide-install-link"
+                :href="installContext.url"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {{ t('proxy.tunnelInstallWin') }}
+              </a>
+              <span v-else-if="installContext.kind === 'mac'" class="tunnel-guide-install-note">
+                {{ t('proxy.tunnelInstallMac') }}
+              </span>
+              <template v-else-if="installContext.kind === 'linux'">
+                <span class="tunnel-guide-install-note">{{ t('proxy.tunnelInstallLinux') }}</span>
+                <span class="tunnel-guide-install-code">{{ installContext.command }}</span>
+                <button class="tunnel-guide-copy" @click="copyInstallCommand" :title="t('proxy.copyCommand')">
+                  <Copy :size="12" />
+                  {{ installCopied ? t('common.copied') : t('proxy.copyCommand') }}
+                </button>
+              </template>
+            </div>
             <div class="tunnel-guide-command">
               <code>{{ sshInfo.command }}</code>
               <button class="tunnel-guide-copy" @click="copySSHCommand" :title="t('proxy.copyCommand')">
@@ -243,6 +266,8 @@ import RefreshButton from '@/components/common/RefreshButton.vue'
 import { usePortForward } from '@/composables/usePortForward.ts'
 import { useTabDrawer } from '@/composables/useTabDrawer.ts'
 import { useToast } from '@/composables/useToast.ts'
+import { isWindowsUA, isMacDesktopUA, isLinuxDesktopUA } from '@/composables/usePlatformDetect.ts'
+import { sshInstallHint } from '@/utils/portForwardUtils.ts'
 
 const { t } = useI18n()
 
@@ -290,6 +315,24 @@ function handleOpenScan() {
 }
 
 const sshCopied = ref(false)
+const installCopied = ref(false)
+
+// Tunnel guide: per-OS hint for getting a local ssh client when the manual
+// tunnel command is meant to run on this machine (web mode only).
+const installContext = computed(() => sshInstallHint({
+  windows: isWindowsUA,
+  macDesktop: isMacDesktopUA,
+  linuxDesktop: isLinuxDesktopUA,
+}))
+
+async function copyInstallCommand() {
+  if (!installContext.value?.command) return
+  try {
+    await navigator.clipboard.writeText(installContext.value.command)
+    installCopied.value = true
+    setTimeout(() => { installCopied.value = false }, 2000)
+  } catch {}
+}
 
 // Track which ports are currently reconnecting (for spinning button state)
 const reconnectingPorts = ref(new Set())
@@ -731,6 +774,45 @@ async function handleRetryTunnel() {
   line-height: 1.4;
 }
 
+/* Tunnel guide: per-OS ssh install hint (web mode) */
+.tunnel-guide-install {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tunnel-guide-install-hint {
+  color: var(--text-muted, #999);
+  font-weight: 600;
+}
+
+.tunnel-guide-install-link {
+  color: var(--accent-color, #0066cc);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .tunnel-guide-install-link:hover {
+    text-decoration: underline;
+  }
+}
+
+.tunnel-guide-install-note {
+  color: var(--text-secondary, #666);
+}
+
+.tunnel-guide-install-code {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-primary, #1a1a1a);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
 .tunnel-guide-command {
   background: var(--bg-tertiary, #f5f5f5);
   border: 1px solid var(--border-color, #e5e5e5);
@@ -743,7 +825,7 @@ async function handleRetryTunnel() {
 }
 
 .tunnel-guide-command code {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-size: 10px;
   color: var(--text-primary, #1a1a1a);
   word-break: break-all;
@@ -788,7 +870,7 @@ async function handleRetryTunnel() {
 }
 
 .fingerprint-value {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   color: var(--text-muted, #999);
   word-break: break-all;
 }
@@ -893,7 +975,7 @@ async function handleRetryTunnel() {
 }
 
 .port-scan-item-port {
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   font-weight: 700;
   font-size: 15px;
   flex-shrink: 0;
@@ -918,7 +1000,7 @@ async function handleRetryTunnel() {
 
 .port-scan-item-process {
   font-size: 11px;
-  font-family: monospace;
+  font-family: var(--font-mono, monospace);
   color: var(--text-muted, #999);
   overflow: hidden;
   text-overflow: ellipsis;
