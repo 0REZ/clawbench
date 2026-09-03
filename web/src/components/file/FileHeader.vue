@@ -69,7 +69,7 @@
 
       <!-- Share link button (create/manage a public link for this file) -->
       <button v-if="!editing && toolbarInlineIds.includes('shareLink')" class="file-header-btn" :class="{ active: isShared }" @click.stop="$emit('shareLink')" :title="isShared ? t('file.header.shareLinkActive') : t('file.header.shareLink')">
-        <Link2 :size="14" />
+        <ScreenShare :size="14" />
       </button>
 
       <!-- Download button -->
@@ -163,7 +163,7 @@
               {{ t('file.header.shareExternal') }}
             </button>
             <button v-if="!editing && toolbarCollapsedIds.includes('shareLink')" class="dropdown-item" :class="{ active: isShared }" @click="$emit('shareLink'); menuOpen = false">
-              <Link2 :size="14" />
+              <ScreenShare :size="14" />
               {{ isShared ? t('file.header.shareLinkActive') : t('file.header.shareLink') }}
             </button>
             <a v-if="!isAppMode && toolbarCollapsedIds.includes('download')" class="dropdown-item" :href="buildLocalFileUrl(file.path, { download: true })" :download="file.name" @click="menuOpen = false">
@@ -213,7 +213,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { isRefreshing } from '@/composables/useFileRefresh'
 import RefreshButton from '@/components/common/RefreshButton.vue'
 import { useI18n } from 'vue-i18n'
-import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, Link2, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2, Info } from 'lucide-vue-next'
+import { List, Search, MoreVertical, Download, Trash2, GitBranch, TextWrap, Hash, RotateCw, Pin, X, Paperclip, Share2, ScreenShare, FileOutput, Eye, MoveHorizontal, FolderOpen, Pencil, Code2, Info } from 'lucide-vue-next'
 import { getFileType } from '@/utils/fileType.ts'
 import { fileSupportsToc } from '@/utils/tocSupport.ts'
 import { useAppMode } from '@/composables/useAppMode.ts'
