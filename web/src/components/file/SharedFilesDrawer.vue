@@ -1,7 +1,7 @@
 <template>
   <BottomSheet :open="drawer.effectiveOpen.value" auto @close="drawer.close()">
     <template #header>
-      <Share2 :size="16" class="bs-header-icon" />
+      <Share :size="16" class="bs-header-icon" />
       <span class="bs-header-title">{{ t('sharedFiles.title') }}</span>
     </template>
 
@@ -77,7 +77,7 @@
 
 <script setup>
 import { ref, watch } from 'vue'
-import { Share2, Copy, ExternalLink, Trash2 } from 'lucide-vue-next'
+import { Share, Copy, ExternalLink, Trash2 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import BottomSheet from '@/components/common/BottomSheet.vue'
 import FileIcon from '@/components/common/FileIcon.vue'
