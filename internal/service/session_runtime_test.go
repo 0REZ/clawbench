@@ -255,6 +255,25 @@ func TestCancelAllSessions_BadValue(t *testing.T) {
 	assert.False(t, ok, "non-CancelFunc entry must be removed")
 }
 
+func TestCancelAllSessions_SetsRestartReason(t *testing.T) {
+	cleanupAllSessionState()
+	defer cleanupAllSessionState()
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	RegisterSessionCancel("session-all-r1", cancel1)
+	RegisterSessionCancel("session-all-r2", cancel2)
+
+	// Graceful shutdown cancels every registered session AND records the
+	// restart reason so each executor persists a restart warning block.
+	CancelAllSessions()
+
+	assert.Error(t, ctx1.Err(), "session-all-r1 context must be cancelled")
+	assert.Error(t, ctx2.Err(), "session-all-r2 context must be cancelled")
+	assert.Equal(t, cancelReasonRestart, GetCancelReason("session-all-r1"))
+	assert.Equal(t, cancelReasonRestart, GetCancelReason("session-all-r2"))
+}
+
 func TestCancelSession_Running_NoCancelFunc_ClearsQueue(t *testing.T) {
 	cleanupAllSessionState()
 	defer cleanupAllSessionState()

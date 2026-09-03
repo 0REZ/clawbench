@@ -42,6 +42,10 @@ const (
 	contentKeyMetadata = "metadata"
 	// cancelReasonUser is the cancel reason when the user explicitly cancels.
 	cancelReasonUser = "user"
+	// cancelReasonRestart is set during graceful server shutdown before the
+	// session context is cancelled — the executor persists a restart warning so
+	// the frontend shows the interrupted-response banner after reload.
+	cancelReasonRestart = "restart"
 	// blockTypeWarning is the content block type for warning messages.
 	blockTypeWarning = "warning"
 	// eventTypeContentReset clears accumulated blocks from a failed Prompt before retry.
@@ -989,6 +993,20 @@ func (e *SessionExecutor) buildContentJSON(blocks []model.ContentBlock, result R
 	// User-initiated cancel: just mark cancelled, never add a warning block.
 	// The frontend renders a clean "cancelled" badge — no alarming warning needed.
 	if result.CancelReason == cancelReasonUser {
+		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta, statusCancelled: true}
+		blocksJSON, _ := json.Marshal(contentMap)
+		return string(blocksJSON), blocks
+	}
+
+	// Graceful-shutdown/restart interrupt with partial content: append a restart
+	// warning block so the frontend renders the interrupted banner ("继续"
+	// button) on reload — mirrors the startup orphan-cleanup behavior.
+	if result.CancelReason == cancelReasonRestart {
+		blocks = append(blocks, model.ContentBlock{
+			Type:   blockTypeWarning,
+			Text:   "Server restarted, AI response interrupted",
+			Reason: ai.ReasonRestart,
+		})
 		contentMap := map[string]any{contentKeyBlocks: blocks, contentKeyMetadata: meta, statusCancelled: true}
 		blocksJSON, _ := json.Marshal(contentMap)
 		return string(blocksJSON), blocks

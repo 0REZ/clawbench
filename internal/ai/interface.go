@@ -113,6 +113,7 @@ const (
 	ReasonRequestFailed = "request_failed" // Codex turn.failed
 	ReasonRefused       = "refused"        // ACP stopReason=refusal (agent declined / model unavailable / upstream error)
 	ReasonPanic         = "panic"          // AI goroutine panicked
+	ReasonRestart       = "restart"        // Server restart/graceful shutdown interrupted the stream
 )
 
 // SelectOptionDef describes a single selectable option (e.g., mode, thinking effort level).

@@ -543,6 +543,44 @@ func TestSessionExecutor_BuildContentJSON_WithBlocksAndCancel(t *testing.T) {
 	assert.Len(t, finalBlocks, 1) // original block, no extra warning when blocks present + cancel
 }
 
+func TestSessionExecutor_BuildContentJSON_WithBlocks_RestartCancel(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cfg := RunConfig{
+		Mode:        ModeInteractive,
+		ProjectPath: "/test",
+		BackendName: "test",
+		SessionID:   sid,
+		AgentID:     "test-agent",
+		ChatRequest: ai.ChatRequest{Prompt: "hello"},
+	}
+	executor := NewSessionExecutor(ctx, cfg)
+
+	blocks := []model.ContentBlock{{Type: "text", Text: "partial response"}}
+	result := RunResult{CancelReason: cancelReasonRestart, Blocks: blocks}
+	meta := &ai.Metadata{}
+	content, finalBlocks := executor.buildContentJSON(blocks, result, meta)
+
+	// Restart interrupt keeps the partial content AND appends a restart warning
+	// block (so the frontend shows the "服务重启，AI 响应中断" banner with the
+	// continue button after reload), and marks the message cancelled.
+	assert.Contains(t, content, `"cancelled":true`)
+	require.Len(t, finalBlocks, 2, "original partial block + restart warning block")
+	assert.Equal(t, "text", finalBlocks[0].Type)
+	assert.Equal(t, "partial response", finalBlocks[0].Text)
+	assert.Equal(t, "warning", finalBlocks[1].Type)
+	assert.Equal(t, ai.ReasonRestart, finalBlocks[1].Reason)
+	assert.Contains(t, content, `"reason":"restart"`)
+}
+
 func TestSessionExecutor_BuildContentJSON_DefaultEmptyReason(t *testing.T) {
 	setupExecutorDB(t)
 	model.Agents = map[string]*model.Agent{
