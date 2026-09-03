@@ -2264,6 +2264,7 @@ export default {
     regenerate: '重新生成',
     revoke: '关闭分享',
     revoked: '已关闭分享，原链接已失效',
+    openPage: '打开页面',
   },
   sharedFiles: {
     button: '已分享文件',

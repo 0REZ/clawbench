@@ -39,6 +39,7 @@ const messages = {
       regenerate: 'Regenerate',
       revoke: 'Revoke',
       revoked: 'Revoked',
+      openPage: 'Open page',
     },
   },
 }
@@ -98,6 +99,19 @@ describe('ShareLinkDialog', () => {
     await nextTick()
     const input = wrapper.find('input')
     expect((input.element as HTMLInputElement).value).toBe('https://host.example/share/tok1')
+  })
+
+  it('renders an open-page link that opens the share URL in a new tab', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ token: 'tok1', path: '/share/tok1' }))
+    const wrapper = mountDialog()
+    await flushPromises()
+    await nextTick()
+
+    const openLink = wrapper.find('a.share-dialog-btn')
+    expect(openLink.exists()).toBe(true)
+    expect(openLink.attributes('href')).toBe('https://host.example/share/tok1')
+    expect(openLink.attributes('target')).toBe('_blank')
+    expect(openLink.attributes('rel')).toBe('noopener noreferrer')
   })
 
   it('creates a link via POST and copies it', async () => {

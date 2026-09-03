@@ -17,6 +17,7 @@
         <div class="share-dialog-hint">{{ t('shareDialog.explain') }}</div>
         <div class="share-dialog-file">{{ file.name }}</div>
         <button class="share-dialog-primary" :disabled="creating" @click="createLink">
+          <Link2 :size="14" />
           {{ creating ? t('common.loading') : t('shareDialog.generate') }}
         </button>
       </template>
@@ -32,19 +33,38 @@
             readonly
             @focus="$event.target.select()"
           />
+          <a
+            class="share-dialog-btn"
+            :href="linkUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            :title="t('shareDialog.openPage')"
+          >
+            <ExternalLink :size="14" />
+            {{ t('shareDialog.openPage') }}
+          </a>
           <button class="share-dialog-btn" :title="t('common.copy')" @click="copyLink">
             <Copy :size="14" />
             {{ t('common.copy') }}
           </button>
         </div>
         <div class="share-dialog-actions">
-          <button class="share-dialog-secondary" @click="regenerateLink">{{ t('shareDialog.regenerate') }}</button>
-          <button class="share-dialog-secondary danger" @click="revokeLink">{{ t('shareDialog.revoke') }}</button>
+          <button class="share-dialog-secondary" @click="regenerateLink">
+            <RefreshCw :size="14" />
+            {{ t('shareDialog.regenerate') }}
+          </button>
+          <button class="share-dialog-secondary danger" @click="revokeLink">
+            <Trash2 :size="14" />
+            {{ t('shareDialog.revoke') }}
+          </button>
         </div>
       </template>
     </div>
     <template #footer>
-      <button class="share-dialog-cancel" @click="$emit('close')">{{ t('common.close') }}</button>
+      <button class="share-dialog-cancel" @click="$emit('close')">
+        <X :size="14" />
+        {{ t('common.close') }}
+      </button>
     </template>
   </ModalDialog>
 </template>
@@ -52,7 +72,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Copy } from 'lucide-vue-next'
+import { Copy, ExternalLink, Link2, RefreshCw, Trash2, X } from 'lucide-vue-next'
 import ModalDialog from '@/components/common/ModalDialog.vue'
 import { useToast } from '@/composables/useToast.ts'
 import { useFileShare } from '@/composables/useFileShare.ts'
@@ -179,6 +199,10 @@ async function revokeLink() {
 }
 .share-dialog-primary {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   padding: 8px 16px;
   background: var(--accent-color, #0066cc);
   color: #fff;
@@ -193,6 +217,7 @@ async function revokeLink() {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .share-dialog-link-input {
   flex: 1;
@@ -208,6 +233,7 @@ async function revokeLink() {
 .share-dialog-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   padding: 7px 12px;
   background: var(--bg-tertiary, #f0f0f0);
@@ -217,6 +243,7 @@ async function revokeLink() {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
 }
 .share-dialog-actions {
   display: flex;
@@ -224,6 +251,10 @@ async function revokeLink() {
   flex-wrap: wrap;
 }
 .share-dialog-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   padding: 7px 12px;
   background: var(--bg-tertiary, #f0f0f0);
   color: var(--text-secondary, #666);
@@ -234,6 +265,10 @@ async function revokeLink() {
 }
 .share-dialog-secondary.danger { color: #cf222e; }
 .share-dialog-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   padding: 7px 14px;
   background: var(--bg-tertiary, #f0f0f0);
   color: var(--text-secondary, #666);

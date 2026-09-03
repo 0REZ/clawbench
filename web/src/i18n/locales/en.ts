@@ -2264,6 +2264,7 @@ export default {
     regenerate: 'Regenerate',
     revoke: 'Revoke share',
     revoked: 'Share revoked — the old link no longer works',
+    openPage: 'Open page',
   },
   sharedFiles: {
     button: 'Shared files',
