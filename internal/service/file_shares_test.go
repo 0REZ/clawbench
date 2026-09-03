@@ -175,6 +175,40 @@ func TestFileShares_DeleteSharesUnderPath_EscapesLikeWildcards(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+// TestFileShares_DeleteSharesUnderPath_WindowsBackslashChildren guards against
+// a cross-platform regression: the child-prefix LIKE pattern must be built from
+// the real path separator. A hardcoded '/' separator (with ESCAPE '\') fails to
+// revoke shares under backslash-separated (Windows) paths, which surfaced as a
+// CI failure in TestShareCleanup_OnDirectoryDelete on windows-latest.
+func TestFileShares_DeleteSharesUnderPath_WindowsBackslashChildren(t *testing.T) {
+	db := setupTestDBForFileShares(t)
+	defer func() { _ = db.Close() }()
+
+	dir := `C:\repo\clean\docs`
+	childFile := dir + `\a.md`
+	nestedFile := dir + `\sub\b.md`
+
+	childTok, _, err := service.UpsertFileShare(childFile, "a.md")
+	require.NoError(t, err)
+	nestedTok, _, err := service.UpsertFileShare(nestedFile, "b.md")
+	require.NoError(t, err)
+	// Sibling sharing a prefix (docs-other) must survive.
+	otherTok, _, err := service.UpsertFileShare(dir+`-other\x.md`, "x.md")
+	require.NoError(t, err)
+
+	require.NoError(t, service.DeleteFileSharesUnderPath(dir))
+
+	_, _, ok, err := service.GetFileShareByToken(childTok)
+	require.NoError(t, err)
+	assert.False(t, ok, "direct child share must be revoked")
+	_, _, ok, err = service.GetFileShareByToken(nestedTok)
+	require.NoError(t, err)
+	assert.False(t, ok, "nested child share must be revoked")
+	_, _, ok, err = service.GetFileShareByToken(otherTok)
+	require.NoError(t, err)
+	assert.True(t, ok, "prefix sibling share must survive")
+}
+
 func TestFileShares_DeleteByPaths(t *testing.T) {
 	db := setupTestDBForFileShares(t)
 	defer func() { _ = db.Close() }()

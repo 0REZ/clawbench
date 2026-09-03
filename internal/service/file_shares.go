@@ -119,9 +119,16 @@ func DeleteFileSharesUnderPath(path string) error {
 	if path == "" {
 		return nil
 	}
+	// Child rows are matched with a LIKE prefix that accepts BOTH separator
+	// styles: a stored share path may use '/' (production on Unix, or tests
+	// written with forward-slash literals) or '\' (production on Windows).
+	// Matching only one style silently fails to revoke shares on the other —
+	// the LIKE runs under `ESCAPE '\'`, so each appended separator must be
+	// escaped exactly like a separator appearing inside the path itself.
+	prefix := escapeLikePrefix(path)
 	if _, err := WriteExec(
-		"DELETE FROM file_shares WHERE path = ? OR path LIKE ? ESCAPE '\\'",
-		path, escapeLikePrefix(path)+"\\/%",
+		"DELETE FROM file_shares WHERE path = ? OR path LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\'",
+		path, prefix+"\\/%", prefix+"\\\\%",
 	); err != nil {
 		return fmt.Errorf("delete shares under path: %w", err)
 	}
