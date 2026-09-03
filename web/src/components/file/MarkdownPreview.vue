@@ -33,15 +33,15 @@
 
 <script setup lang="ts">
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import { renderMarkdownHtml, renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
-import { isThumbExtension, buildThumbUrl, getThumbWidth } from '@/utils/chatRenderUtils.ts'
+import { renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
 import { usePlatformDetect } from '@/composables/usePlatformDetect.ts'
 import { useDoubleClickCopy } from '@/composables/useDoubleClickCopy.ts'
 import { useQuoteQuestion } from '@/composables/useQuoteQuestion.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { handleCodeBlockClick, handleTableBlockClick } from '@/composables/useCodeBlockHeader.ts'
 import { store } from '@/stores/app.ts'
-import { dirName, splitPath, joinPath } from '@/utils/path.ts'
+import { dirName } from '@/utils/path.ts'
+import { buildMarkdownPreviewDom } from '@/composables/useMarkdownRenderPipeline.ts'
 import { useTableRowExpand } from '@/composables/useTableRowExpand.ts'
 import TableRowModal from '@/components/common/TableRowModal.vue'
 import MarkdownSearchBar from '@/components/file/MarkdownSearchBar.vue'
@@ -119,7 +119,7 @@ const { handleDblClick } = useDoubleClickCopy({
     },
 })
 
-const { annotateFilePaths, verifyFilePaths, resolveRelativePath, openFilePath, parseFileUri } = useFilePathAnnotation()
+const { verifyFilePaths, resolveRelativePath, openFilePath, parseFileUri } = useFilePathAnnotation()
 const { isPC } = usePlatformDetect()
 
 function handleClick(event: MouseEvent) {
@@ -191,44 +191,6 @@ function handleClick(event: MouseEvent) {
 }
 
 
-function fixLocalImagePaths(html: string): string {
-    const currentDir = props.file?.path ? dirName(props.file.path) : ''
-    let result = html.replace(/<img\s+([^>]*src=[^>]*)>/gi, (match: string, attrs: string) => {
-        const srcMatch = attrs.match(/src="([^"]*)"/)
-        if (!srcMatch) return match
-        const src = srcMatch[1]
-        if (/^(https?:|\/\/|^\/)/i.test(src)) return match
-        let resolved = joinPath(currentDir, src)
-        try {
-            resolved = decodeURIComponent(resolved)
-        } catch { /* malformed encoding, use as-is */ }
-        const parts = splitPath(resolved)
-        const normalized = []
-        for (const part of parts) {
-            if (part === '.' || part === '') continue
-            if (part === '..') { normalized.pop(); continue }
-            normalized.push(encodeURIComponent(part))
-        }
-        const rel = normalized.join('/')
-        const fullSrc = `/api/local-file/${rel}?t=${imageTimestamp.value}`
-        // Raster formats the thumb endpoint can decode → use a lightweight JPEG
-        // thumbnail for the inline src (kept stable so ETag revalidation refreshes
-        // it when the source file changes) and keep the full image for the lightbox.
-        // Other formats (svg/webp/gif/… ) keep serving the original full-size file.
-        const thumbSrc = isThumbExtension(src) ? buildThumbUrl(rel, getThumbWidth(isPC.value)) : null
-        const replacement = thumbSrc
-            ? `src="${thumbSrc}" data-full-src="${fullSrc}"`
-            : `src="${fullSrc}"`
-        return match.replace(`src="${src}"`, replacement)
-    })
-    // Add lightbox-img class to all <img> tags for lightbox activation
-    result = result.replace(/<img(\s+[^>]*?)>/gi, (_match: string, attrs: string) => {
-      const clean = attrs.replace(/\s*class="[^"]*"/i, '')
-      return `<span class="lightbox-img-wrap"><img${clean} class="lightbox-img"><span class="lightbox-expand-icon"></span></span>`
-    })
-    return result
-}
-
 /**
  * Compute marker positions from live DOM.
  * Uses extractBlockElements to get element references directly,
@@ -280,18 +242,17 @@ function computeMarkerPositions() {
 async function doRender(f: { content: string; path?: string; error?: boolean }) {
     const renderId = ++currentRenderId
     imageTimestamp.value = Date.now()
-    let html = renderMarkdownHtml(f.content, {
-        sanitize: false,
-        skipEnhancements: true,
-        fixImagePaths: fixLocalImagePaths
-    })
 
-    const currentDir = f?.path ? dirName(f.path) : ''
-    const { html: annotatedHtml, detectedPaths } = annotateFilePaths(html, {
-        projectRoot: store.state.projectRoot,
-        baseDir: currentDir,
-        homeDir: store.state.homeDir
-    })
+    // Shared with the HTML exporter so exported files match the preview exactly.
+    const { html: annotatedHtml, detectedPaths } = buildMarkdownPreviewDom(
+        {
+            content: f.content,
+            path: f.path || '',
+            projectRoot: store.state.projectRoot,
+            homeDir: store.state.homeDir,
+        },
+        { isPC: isPC.value, imageTimestamp: imageTimestamp.value }
+    )
     renderedHtml.value = annotatedHtml
 
     if (renderId !== currentRenderId) return

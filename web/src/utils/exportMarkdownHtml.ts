@@ -1,37 +1,58 @@
 /**
- * Export rendered Markdown as a self-contained HTML file.
+ * Export a rendered markdown FILE as a self-contained HTML document whose
+ * content styling and fixed TOC match the in-app markdown preview exactly.
+ *
+ * Unlike the legacy exportRenderedHtml (which cloned the live .markdown-body
+ * DOM), this module re-runs the SAME render pipeline the preview uses
+ * (buildMarkdownPreviewDom — shared with MarkdownPreview.vue) against a
+ * detached container, so the export is independent of the on-screen preview
+ * scroll / render state.
  *
  * Pipeline:
- * 1. Clone the .markdown-body DOM
- * 2. Inline images via /api/file/batch-base64
- * 3. Handle failed Mermaid diagrams (keeps the already-rendered theme SVG)
- * 4. Inline CSS via stylesheet serialization (current theme variables only)
- * 5. Build TOC (floating button + right drawer)
- * 6. Add code block copy/wrap interaction JS
- * 7. Assemble complete HTML document using the current app theme
+ *  1. buildMarkdownPreviewDom(content, path, projectRoot, homeDir) → annotated html
+ *  2. Mount into a detached <div class="markdown-content">
+ *  3. verifyFilePaths(detectedPaths) — disk-based annotation correction
+ *  4. renderMermaidInElement(el, 'export') — render diagrams (keeps failed ones)
+ *  5. Inline images via /api/file/batch-base64
+ *  6. Replace failed Mermaid blocks with static error indicators
+ *  7. Clean detached DOM (scripts/iframes/.katex-mathml/diff markers)
+ *  8. Inline CSS — rules that HIT the exported DOM (serializeCss hit-detection),
+ *     KaTeX fonts used by the document (data-URI), + base typography overrides
+ *  9. Build a fixed right-side TOC (visual/interaction aligned with TocDock)
+ * 10. Assemble the standalone HTML document using the current app theme
  */
 
-import { isDarkTheme } from '@/utils/themeMeta'
+import { buildMarkdownPreviewDom } from '@/composables/useMarkdownRenderPipeline.ts'
+import { verifyFilePaths } from '@/composables/useFilePathAnnotation.ts'
+import { renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
+import { isDarkTheme } from '@/utils/themeMeta.ts'
+import { escapeHtml } from '@/utils/html.ts'
+import { buildKatexFontCss } from '@/utils/katexFontEmbed.ts'
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
 export interface ExportOptions {
-    markdownBodyEl: HTMLElement
-    filePath: string
-    fileName: string
-    /**
-     * Current UI locale ('zh' | 'en' | ...). Used to localize the interactive
-     * labels embedded in the exported standalone HTML (copy feedback, TOC
-     * title, word-wrap tooltips). Falls back to 'en' when omitted.
-     */
+    /** Raw markdown content of the file being exported. */
+    content: string
+    /** File path (project-relative). Used to resolve images + path annotations. */
+    path: string
+    /** Project root; defaults to the app store's current project root. */
+    projectRoot?: string
+    /** User home directory for ~/ path expansion in annotations. */
+    homeDir?: string
+    /** File name used for the HTML <title> (defaults to basename of path). */
+    fileName?: string
+    /** Current UI locale ('zh' | 'en' | ...). Localizes embedded labels. */
     locale?: string
+    /** Desktop rendering mode (affects thumbnail width). Defaults to platform detect. */
+    isPC?: boolean
 }
 
 /** One image that could not be embedded into the exported HTML. */
 export interface ImageIssue {
     /** Image path or URL as it appears in the markdown. */
     path: string
-    /** Machine-readable reason code (see reasonText for display). */
+    /** Machine-readable reason code (see imageIssueReasonCode). */
     reason: string
     /** Whether it was a skipped local file or an external URL. */
     kind: 'skipped' | 'external'
@@ -63,11 +84,12 @@ interface BatchBase64Response {
 }
 
 /**
- * Extract image paths from /api/local-file/ URLs in the cloned DOM,
- * call batch-base64 API, and replace src with data URIs.
+ * Extract image paths from /api/local-file/ URLs in the container DOM, call
+ * batch-base64 API, and replace src with data URIs. Prefers data-full-src
+ * (full-size original) over an inline thumbnail src.
  */
-async function inlineImages(clone: HTMLElement): Promise<{ skipped: number; external: number; issues: ImageIssue[] }> {
-    const imgs = Array.from(clone.querySelectorAll('img')) as HTMLImageElement[]
+async function inlineImages(container: HTMLElement): Promise<{ skipped: number; external: number; issues: ImageIssue[] }> {
+    const imgs = Array.from(container.querySelectorAll('img')) as HTMLImageElement[]
     if (imgs.length === 0) return { skipped: 0, external: 0, issues: [] }
 
     const issues: ImageIssue[] = []
@@ -156,152 +178,15 @@ async function inlineImages(clone: HTMLElement): Promise<{ skipped: number; exte
     return { skipped, external, issues }
 }
 
-// ─── CSS inlining (stylesheet serialization) ───────────────────────────────────
-
-/**
- * Collect and serialize CSS rules that apply to .markdown-body and its descendants.
- *
- * The exported document is static (no theme switching), so only the CSS variable
- * block for the CURRENT theme is exported, not all 26 themes. Rules are matched
- * by selector: rules targeting markdown-body/its widgets, the exported `:root`,
- * and the current theme's `[data-theme="..."]` block.
- */
-function serializeCss(_markdownBodyEl: HTMLElement): string {
-    const rules: string[] = []
-    const themeId = document.documentElement.getAttribute('data-theme') || 'github-light'
-
-    // Selector for the current theme's CSS variable block. Match both quoted
-    // and unquoted forms — CSSOM serializes [data-theme=github-dark] to
-    // [data-theme="github-dark"] in real browsers, but jsdom and minified CSS
-    // may keep either form. Anchor the theme id at a value boundary so a
-    // prefix theme (e.g. "nord") does not also match its longer sibling
-    // ("nord-light").
-    const currentThemeRe = new RegExp(`data-theme=['"]?${escapeRegExp(themeId)}(?=['"\\s\\]]|$)`)
-
-    // Whether a selector refers to the current theme's variable block.
-    const isCurrentThemeBlock = (sel: string): boolean => currentThemeRe.test(sel)
-
-    for (const sheet of Array.from(document.styleSheets)) {
-        let cssRules: CSSRuleList
-        try {
-            cssRules = sheet.cssRules
-        } catch {
-            // Cross-origin stylesheet — skip (would need async fetch)
-            continue
-        }
-
-        for (const rule of Array.from(cssRules)) {
-            if (rule instanceof CSSStyleRule) {
-                const sel = rule.selectorText
-                // Include rules that target markdown-body or its descendants,
-                // the exported :root block, the current theme's variable block,
-                // or hljs rules (wrapped by [data-hljs-theme="..."]).
-                if (
-                    sel.includes('.markdown-body') ||
-                    sel === ':root' ||
-                    isCurrentThemeBlock(sel) ||
-                    sel.includes('[data-hljs-theme') ||
-                    sel.includes('.markdown-content') ||
-                    sel.includes('.hljs') ||
-                    sel.includes('.katex') ||
-                    sel.includes('.code-line') ||
-                    sel.includes('.line-num') ||
-                    sel.includes('.code-text') ||
-                    sel.includes('.code-block-pre') ||
-                    sel.includes('.code-block-header') ||
-                    sel.includes('.code-block-wrapper') ||
-                    sel.includes('.code-block-copy-btn') ||
-                    sel.includes('.code-block-wrap-btn') ||
-                    sel.includes('.code-block-lang') ||
-                    sel.includes('.code-block-header-actions') ||
-                    sel.includes('.code-block-copied-text') ||
-                    sel.includes('.code-file-path') ||
-                    sel.includes('.table-block-wrapper') ||
-                    sel.includes('.table-block-header') ||
-                    sel.includes('.table-block-label') ||
-                    sel.includes('.table-block-copy-btn') ||
-                    sel.includes('.table-block-copy-dropdown') ||
-                    sel.includes('.table-block-copy-menu') ||
-                    sel.includes('.table-block-copy-menu-item') ||
-                    sel.includes('.table-block-wrap-btn') ||
-                    sel.includes('.table-block-header-actions') ||
-                    sel.includes('.table-block-copied-text') ||
-                    sel.includes('.table-wrap') ||
-                    sel.includes('.line-flash') ||
-                    sel.includes('.copy-flash') ||
-                    sel.includes('.char-flash-delete') ||
-                    sel.includes('.char-flash-add') ||
-                    sel.includes('.chat-file-path') ||
-                    sel.includes('.chat-file-open-btn') ||
-                    sel.includes('.chat-commit-hash') ||
-                    sel.includes('.chat-commit-hash-pending') ||
-                    sel.includes('.chat-commit-open-btn') ||
-                    sel.includes('.chat-url-open-btn') ||
-                    sel.includes('.chat-worktree-btn') ||
-                    sel.includes('.mermaid')
-                ) {
-                    let text = rule.cssText
-
-                    // hljs styles are loaded for both light + dark via
-                    // [data-hljs-theme="light"/"dark"] (see hljsThemeWrapper vite
-                    // plugin). The exported doc is single-theme, so normalize the
-                    // selector to the exported base attribute so the current
-                    // theme's hljs colors apply. Match quoted/unquoted forms.
-                    text = text.replace(/\[data-hljs-theme=["']?light["']?\]/g, '[data-theme-base="light"]')
-                    text = text.replace(/\[data-hljs-theme=["']?dark["']?\]/g, '[data-theme-base="dark"]')
-
-                    rules.push(text)
-                }
-            } else if (rule instanceof CSSKeyframesRule) {
-                // Include @keyframes used by animations in exported content
-                const name = rule.name
-                if (
-                    name.includes('line-flash') ||
-                    name.includes('copy-flash') ||
-                    name.includes('char-flash') ||
-                    name.includes('url-btn-spin')
-                ) {
-                    rules.push(rule.cssText)
-                }
-            } else if (rule instanceof CSSMediaRule) {
-                // Include media rules that contain markdown-body rules
-                const innerRules: string[] = []
-                for (const inner of Array.from(rule.cssRules)) {
-                    if (inner instanceof CSSStyleRule) {
-                        const sel = inner.selectorText
-                        if (sel.includes('.markdown-body') || sel.includes('.hljs') || sel.includes('.katex')) {
-                            let text = inner.cssText
-                            text = text.replace(/\[data-hljs-theme=["']?light["']?\]/g, '[data-theme-base="light"]')
-                            text = text.replace(/\[data-hljs-theme=["']?dark["']?\]/g, '[data-theme-base="dark"]')
-                            innerRules.push(text)
-                        }
-                    } else if (inner instanceof CSSKeyframesRule) {
-                        const name = inner.name
-                        if (name.includes('line-flash') || name.includes('copy-flash') || name.includes('char-flash') || name.includes('diff-marker') || name.includes('url-btn-spin')) {
-                            innerRules.push(inner.cssText)
-                        }
-                    }
-                }
-                if (innerRules.length > 0) {
-                    rules.push(`@media ${rule.conditionText} { ${innerRules.join(' ')} }`)
-                }
-            }
-        }
-    }
-
-    return rules.join('\n')
-}
-
 // ─── Mermaid error handling ────────────────────────────────────────────────────
 
 /**
- * Replace unrendered Mermaid blocks (pre.mermaid without SVG child)
- * with error indicators. Also handles data-mermaid-error containers
- * (from retry-enabled error fallbacks) by replacing them with static
- * error divs (stripping the retry button which is meaningless in export).
+ * Replace unrendered Mermaid blocks (pre.mermaid / div.mermaid / code.mermaid
+ * without an SVG child) with static error indicators, stripping any retry
+ * button (meaningless in a standalone export).
  */
-function handleFailedMermaid(clone: HTMLElement): void {
-    const mermaidBlocks = clone.querySelectorAll('pre.mermaid, div.mermaid, code.mermaid')
+function handleFailedMermaid(container: HTMLElement): void {
+    const mermaidBlocks = container.querySelectorAll('pre.mermaid, div.mermaid, code.mermaid')
     for (const block of Array.from(mermaidBlocks)) {
         // If it contains an SVG, Mermaid rendered successfully
         if (block.querySelector('svg')) continue
@@ -328,19 +213,180 @@ function handleFailedMermaid(clone: HTMLElement): void {
     }
 }
 
-// ─── TOC generation ────────────────────────────────────────────────────────────
+// ─── CSS serialization (hit-detection against the exported DOM) ────────────────
 
 /**
- * Build self-contained TOC HTML + JS for the exported document.
- * Uses var() references so colors come from the exported theme variables.
- *
- * Layout: a persistent right-side TOC sidebar inside a flex row wrapper
- * (`toc-layout`), always visible by default. A collapse button on the sidebar
- * toggles it into a slim rail; clicking it again restores the sidebar.
+ * Is this selector one whose CSS rules matter for rendered markdown content?
+ * Used as a fallback for selectors that cannot be tested against the DOM via
+ * querySelectorAll (pseudo-class/element selectors throw SyntaxError).
  */
-function buildToc(clone: HTMLElement, locale: string): { tocLayoutHtml: string; tocSidebarHtml: string; tocCss: string; tocJs: string } {
+function selectorReferencesContent(selector: string): boolean {
+    const contentTokens = [
+        '.markdown-body', '.markdown-content', '.katex', '.hljs', '.code-block',
+        '.table-block', '.table-wrap', '.chat-file-path', '.chat-file-open-btn',
+        '.chat-commit-hash', '.chat-commit-open-btn', '.lightbox', '.mermaid',
+        '.mermaid-error', '.line-flash', '.copy-flash', '.char-flash',
+        '.chat-audio-player', '.chat-audio-wrapper', '.chat-video-player',
+        '.chat-video-wrapper', '.code-line', '.line-num', '.code-text',
+        '.code-block-pre', '.copied-feedback', '.toc-', '.export-lightbox',
+    ]
+    return contentTokens.some(tok => selector.includes(tok))
+}
+
+/**
+ * Collect CSS rules that apply to the exported DOM.
+ *
+ * Instead of a hand-maintained selector whitelist (which drifts out of sync with
+ * component CSS), test every rule's selector against the exported container: a
+ * rule is included when `container.matches(sel) || container.querySelector(sel)`
+ * finds a match. This is "what you see is what you get" — any rule that styles
+ * an element present in the exported document is carried over, and app chrome
+ * selectors (.app-container, .header, …) are naturally excluded because those
+ * elements don't exist in the exported document.
+ *
+ * Selectors that cannot be evaluated against the container still need handling:
+ * - dynamic state pseudo-classes (:hover/:active/:focus/…) DO NOT throw in
+ *   matches()/querySelector() — they just resolve against the element's live
+ *   state (false in a detached/static container). We strip the state pseudo
+ *   from the selector and test the base selector so those interaction rules
+ *   (hover underlines, copy-button hover states, table row hover…) are kept.
+ * - pseudo-elements (::before/::after) DO throw in querySelector; those fall
+ *   back to selectorReferencesContent().
+ *
+ * :root (static layout vars), the current theme's [data-theme="..."] variable
+ * block, hljs selectors and content keyframes get special handling as before.
+ */
+function serializeCss(container: HTMLElement, themeId: string): string {
+    const rules: string[] = []
+
+    // Anchor the theme id at a value boundary so a prefix theme (e.g. "nord")
+    // does not also match its longer sibling ("nord-light").
+    const currentThemeRe = new RegExp(`data-theme=['"]?${escapeRegExp(themeId)}(?=['"\\s\\]]|$)`)
+
+    const isCurrentThemeBlock = (sel: string): boolean => currentThemeRe.test(sel)
+
+    // Dynamic state pseudo-classes that don't throw in matches()/querySelector()
+    // but would resolve false against a detached container are stripped below so
+    // the base rule still matches the exported element.
+
+    // Does a selector match the exported container (or any descendant)?
+    const selectorHits = (sel: string): boolean => {
+        try {
+            if (container.matches(sel)) return true
+            if (container.querySelector(sel)) return true
+        } catch {
+            // Pseudo-element selector (::before/::after) — cannot querySelector.
+            return selectorReferencesContent(sel)
+        }
+        // html/body level: the container is not <html>/<body>, but selectors
+        // like `html, body { ... }` or `html { ... }` must still apply to the
+        // exported document. Match the leading html/body part manually.
+        if (/^(:root|html|body)/.test(sel)) return true
+        // Universal / element selectors that affect typography broadly.
+        if (sel === '*' || sel === 'body *') return true
+        // State pseudo-class rules (e.g. ".markdown-body a:hover"): strip the
+        // pseudo and test the base selector against the container. A fresh
+        // (non-global) regex avoids lastIndex bleed across rules. When the base
+        // does not match (e.g. jsdom cannot match table rows inside detached
+        // subtrees) fall back to the token heuristic — the original selector
+        // still names content classes, so this keeps the rule without leaking
+        // app chrome (.app-container:hover has no content token).
+        const statePseudoRe = /:(hover|active|focus|focus-within|focus-visible|visited|checked)\b/
+        const stateMatch = sel.match(statePseudoRe)
+        if (stateMatch) {
+            const base = sel.replace(statePseudoRe, '')
+            try {
+                if (container.matches(base) || container.querySelector(base)) return true
+            } catch {
+                // The remaining selector still has pseudo-elements — token fallback.
+            }
+            return selectorReferencesContent(sel)
+        }
+        return false
+    }
+
+    for (const sheet of Array.from(document.styleSheets)) {
+        let cssRules: CSSRuleList
+        try {
+            cssRules = sheet.cssRules
+        } catch {
+            // Cross-origin stylesheet — skip (would need async fetch)
+            continue
+        }
+
+        for (const rule of Array.from(cssRules)) {
+            if (rule instanceof CSSStyleRule) {
+                const sel = rule.selectorText
+                if (
+                    sel === ':root' ||
+                    isCurrentThemeBlock(sel) ||
+                    selectorHits(sel) ||
+                    sel.includes('[data-hljs-theme') ||
+                    sel.includes('.hljs')
+                ) {
+                    let text = rule.cssText
+
+                    // hljs styles are loaded for both light + dark via
+                    // [data-hljs-theme="light"/"dark"]. The exported doc is
+                    // single-theme, so normalize the selector to the exported
+                    // base attribute so the current theme's hljs colors apply.
+                    text = text.replace(/\[data-hljs-theme=["']?light["']?\]/g, '[data-theme-base="light"]')
+                    text = text.replace(/\[data-hljs-theme=["']?dark["']?\]/g, '[data-theme-base="dark"]')
+
+                    rules.push(text)
+                }
+            } else if (rule instanceof CSSFontFaceRule) {
+                // KaTeX fonts handled separately by buildKatexFontCss (data URI
+                // embedding depends on which families the document actually uses).
+                continue
+            } else if (rule instanceof CSSKeyframesRule) {
+                const name = rule.name
+                if (name.includes('line-flash') || name.includes('copy-flash') || name.includes('char-flash') || name.includes('url-btn-spin') || name.includes('mermaid')) {
+                    rules.push(rule.cssText)
+                }
+            } else if (rule instanceof CSSMediaRule) {
+                // Include media rules that contain content-hitting rules
+                const innerRules: string[] = []
+                for (const inner of Array.from(rule.cssRules)) {
+                    if (inner instanceof CSSStyleRule) {
+                        const sel = inner.selectorText
+                        if (selectorHits(sel) || sel.includes('.hljs')) {
+                            let text = inner.cssText
+                            text = text.replace(/\[data-hljs-theme=["']?light["']?\]/g, '[data-theme-base="light"]')
+                            text = text.replace(/\[data-hljs-theme=["']?dark["']?\]/g, '[data-theme-base="dark"]')
+                            innerRules.push(text)
+                        }
+                    } else if (inner instanceof CSSKeyframesRule) {
+                        const name = inner.name
+                        if (name.includes('line-flash') || name.includes('copy-flash') || name.includes('char-flash') || name.includes('diff-marker') || name.includes('url-btn-spin') || name.includes('mermaid')) {
+                            innerRules.push(inner.cssText)
+                        }
+                    }
+                }
+                if (innerRules.length > 0) {
+                    rules.push(`@media ${rule.conditionText} { ${innerRules.join(' ')} }`)
+                }
+            }
+        }
+    }
+
+    return rules.join('\n')
+}
+
+// ─── Fixed TOC generation (aligned with in-app TocDock / TocPanel) ───────────
+
+/**
+ * Build a fixed right-side TOC matching the in-app wide-screen TocDock:
+ * 260px sticky sidebar, header bar, level-indented items, hover/active
+ * highlight, click-smooth-scroll with a highlight-hold window, scroll-follow
+ * via IntersectionObserver, and a collapse-to-rail toggle.
+ *
+ * The standalone document does not have the app's split pane / tab chrome, so
+ * the sidebar sticks to the viewport top while the content scrolls.
+ */
+function buildTocStandalone(container: HTMLElement, locale: string): { tocLayoutHtml: string; tocSidebarHtml: string; tocCss: string; tocJs: string } {
     // Headings
-    const headings = Array.from(clone.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLHeadingElement[]
+    const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLHeadingElement[]
     if (headings.length === 0) return { tocLayoutHtml: '', tocSidebarHtml: '', tocCss: '', tocJs: '' }
 
     interface TocEntry {
@@ -367,21 +413,19 @@ function buildToc(clone: HTMLElement, locale: string): { tocLayoutHtml: string; 
     const collapseTitle = isZh ? '收起目录' : 'Collapse TOC'
     const expandTitle = isZh ? '展开目录' : 'Expand TOC'
 
-    // Build TOC list HTML
-    const tocItemsHtml = entries.map(e => {
-        const indent = (e.level - 1) * 16
-        return `<a class="toc-item" data-level="${e.level}" href="#${escapeHtml(e.id)}" style="padding-left: ${8 + indent}px">${escapeHtml(e.text)}</a>`
-    }).join('\n')
+    // Level-based indentation (mirrors TocPanel data-level rules).
+    const tocItemsHtml = entries.map(e =>
+        `<a class="toc-item" data-level="${e.level}" href="#${escapeHtml(e.id)}">${escapeHtml(e.text)}</a>`
+    ).join('\n')
 
-    // Persistent right-side TOC sidebar. Always rendered in the flow; the
-    // collapse toggle JS hides/shows it by toggling a class on the layout.
     const tocSidebarHtml = `<aside id="toc-sidebar" class="toc-sidebar"><div class="toc-sidebar-header"><span class="toc-sidebar-title">${tocTitle}</span><button id="toc-collapse" class="toc-collapse-btn" title="${collapseTitle}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button></div>${tocItemsHtml}</aside>`
 
     // Collapsed rail: a narrow fixed strip shown when the sidebar is hidden.
     const tocRailHtml = `<button id="toc-rail" class="toc-rail-btn" title="${expandTitle}" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`
 
-    // TOC JS — collapse/expand toggle. Collapsed state is NOT persisted (each
-    // open of the exported file starts with the TOC expanded).
+    // TOC JS: collapse/expand + click-to-scroll + IntersectionObserver scroll-follow
+    // with a highlight-hold window (mirrors TocPanel: while a clicked smooth
+    // scroll sweeps across intervening headings, keep the clicked item active).
     const tocJs = `
 (function() {
     var sidebar = document.getElementById('toc-sidebar');
@@ -389,6 +433,7 @@ function buildToc(clone: HTMLElement, locale: string): { tocLayoutHtml: string; 
     var rail = document.getElementById('toc-rail');
     var layout = document.getElementById('toc-layout');
     if (!sidebar || !collapseBtn || !rail || !layout) return;
+
     collapseBtn.addEventListener('click', function(e) {
         e.stopPropagation();
         layout.classList.add('toc-collapsed');
@@ -399,44 +444,122 @@ function buildToc(clone: HTMLElement, locale: string): { tocLayoutHtml: string; 
         layout.classList.remove('toc-collapsed');
         rail.hidden = true;
     });
-    // Clicking a TOC entry scrolls to the heading; sidebar stays expanded.
+
+    var holdUntil = 0;
+    function hold() { holdUntil = Date.now() + 1500; }
+    function held() { return Date.now() < holdUntil; }
+
+    // Click a TOC entry: smooth-scroll to the heading + keep it highlighted
+    // for a short window so the scroll-follow observer does not steal it.
     sidebar.addEventListener('click', function(e) {
         var a = e.target.closest('a.toc-item');
         if (!a) return;
         e.preventDefault();
+        setActive(a);
+        hold();
         var id = a.getAttribute('href').slice(1);
         var el = document.getElementById(id);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+
+    function setActive(item) {
+        var act = sidebar.querySelector('.toc-item.active');
+        if (act) act.classList.remove('active');
+        if (item) item.classList.add('active');
+    }
+
+    // Scroll-follow: highlight the heading currently in the upper part of the viewport.
+    if ('IntersectionObserver' in window) {
+        var items = sidebar.querySelectorAll('.toc-item');
+        var byId = {};
+        for (var i = 0; i < items.length; i++) byId[items[i].getAttribute('href').slice(1)] = items[i];
+        var observer = new IntersectionObserver(function(entries) {
+            if (held()) return;
+            for (var j = 0; j < entries.length; j++) {
+                if (entries[j].isIntersecting) {
+                    var link = byId[entries[j].target.id];
+                    if (link) { setActive(link); break; }
+                }
+            }
+        }, { rootMargin: '-60px 0px -70% 0px' });
+        var headings = document.querySelectorAll('.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6');
+        for (var k = 0; k < headings.length; k++) observer.observe(headings[k]);
+    }
 })();`
 
-    // TOC + layout CSS — all via var() for theme support
+    // Sidebar CSS — mirrors TocDock/TocPanel visual language via var() colors.
     const tocCss = `
-/* Layout: content + persistent TOC sidebar in a flex row */
-.toc-layout { display: flex; flex-direction: row; align-items: flex-start; }
-.toc-layout .markdown-body { flex: 1; min-width: 0; }
-.toc-layout .toc-sidebar { flex: 0 0 240px; width: 240px; max-width: 280px; position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow-y: auto; box-sizing: border-box; padding: 12px 8px; background: var(--bg-primary); border-left: 1px solid var(--border-color); }
+/* Layout: content + fixed TOC sidebar in a flex row */
+.toc-layout { display: flex; flex-direction: row; align-items: flex-start; min-height: 100vh; }
+.toc-layout .markdown-body { flex: 1 1 auto; min-width: 0; max-width: min(900px, 100%); margin: 0 auto; }
 .toc-layout.toc-collapsed .toc-sidebar { display: none; }
-.toc-sidebar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 8px; }
-.toc-sidebar-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.toc-collapse-btn { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; }
-.toc-collapse-btn:hover { background: var(--bg-tertiary); color: var(--accent-color); }
-.toc-item { display: block; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; color: var(--text-secondary); text-decoration: none; transition: background 0.15s, color 0.15s; border-left: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toc-sidebar {
+    flex: 0 0 260px;
+    width: 260px;
+    max-width: 280px;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    overflow-y: auto;
+    box-sizing: border-box;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+.toc-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+    min-height: 28px;
+}
+.toc-sidebar-title { flex: 1; font-size: 11px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toc-collapse-btn { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; flex-shrink: 0; }
+.toc-collapse-btn:hover { background: var(--accent-color-dim, rgba(74, 144, 217, 0.12)); color: var(--accent-color); }
+.toc-item {
+    display: block;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    transition: background 0.15s, color 0.15s;
+    border-left: 2px solid transparent;
+    white-space: nowrap;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 .toc-item:hover { background: var(--bg-tertiary); color: var(--accent-color); }
-.toc-rail-btn { position: fixed; top: 50%; right: 0; transform: translateY(-50%); width: 28px; height: 64px; border: 1px solid var(--border-color); border-right: none; border-radius: 6px 0 0 6px; background: var(--bg-primary); color: var(--text-secondary); cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1000; }
+.toc-item.active { color: var(--accent-color); border-left-color: var(--accent-color); background: var(--bg-tertiary); border-radius: 0; }
+.toc-item[data-level="2"] { padding-left: 20px; }
+.toc-item[data-level="3"] { padding-left: 32px; }
+.toc-item[data-level="4"] { padding-left: 44px; }
+.toc-item[data-level="5"] { padding-left: 56px; }
+.toc-item[data-level="6"] { padding-left: 68px; }
+.toc-rail-btn {
+    position: fixed; top: 50%; right: 0; transform: translateY(-50%);
+    width: 28px; height: 64px;
+    border: 1px solid var(--border-color); border-right: none; border-radius: 6px 0 0 6px;
+    background: var(--bg-primary); color: var(--text-secondary); cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1000;
+}
+/* Author display:flex above overrides the UA [hidden]{display:none}; re-assert it
+   so the rail stays hidden until the sidebar is collapsed. */
+.toc-rail-btn[hidden] { display: none; }
 .toc-rail-btn:hover { color: var(--accent-color); }`
 
     return { tocLayoutHtml: `<div id="toc-layout" class="toc-layout">`, tocSidebarHtml: tocSidebarHtml + tocRailHtml, tocCss, tocJs }
 }
 
-// ─── Code block + Table block interaction JS ────────────────────────────────────
+// ─── Code block + table block interaction JS ──────────────────────────────────
 
-/**
- * Generate JS for code block and table block copy/wrap toggle buttons.
- * Code blocks: .code-block-wrapper with .code-block-copy-btn/.code-block-wrap-btn
- * Table blocks: .table-block-wrapper with .table-block-copy-btn/.table-block-wrap-btn
- * Both use data-action="copy"/"wrap" pattern from useCodeBlockHeader.ts.
- */
 function buildCodeBlockJs(locale: string): string {
     const isZh = locale === 'zh'
     const copiedText = isZh ? '已复制' : 'Copied'
@@ -683,85 +806,10 @@ function buildCodeBlockJs(locale: string): string {
 })();`
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Lightbox JS ───────────────────────────────────────────────────────────────
 
-function escapeHtml(text: string): string {
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-}
-
-/** Escape a string for safe use inside a RegExp. */
-function escapeRegExp(text: string): string {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-// ─── Main export function ─────────────────────────────────────────────────────
-
-export async function exportRenderedHtml(options: ExportOptions): Promise<ExportResult> {
-    const { markdownBodyEl, fileName } = options
-
-    // Current UI locale — used to localize labels embedded in the exported
-    // standalone HTML (copy feedback, TOC title, word-wrap tooltips).
-    const locale = options.locale || 'en'
-    const isZh = locale === 'zh'
-
-    // 1. Clone DOM
-    const clone = markdownBodyEl.cloneNode(true) as HTMLElement
-
-    // 1b. Remove <script> tags from clone (Mermaid injects scripts into SVGs;
-    //     these cause SyntaxError when opened as standalone HTML and are unnecessary
-    //     since the SVGs are already rendered)
-    for (const script of Array.from(clone.querySelectorAll('script'))) {
-        script.remove()
-    }
-
-    // 1c. Remove <iframe> elements from clone (some Mermaid rendering modes or
-    //     browser MathML handling can inject iframes; these cause "Unsafe attempt
-    //     to load URL" cross-origin errors when opened as file:// URLs)
-    for (const iframe of Array.from(clone.querySelectorAll('iframe'))) {
-        iframe.remove()
-    }
-
-    // 1d. Remove KaTeX MathML annotations (screen-reader-only <span class="katex-mathml">
-    //     containing <math> tags). Chrome tries to process MathML in a separate
-    //     security origin, triggering cross-origin errors on file:// URLs.
-    //     The visual rendering is handled by <span class="katex-html"> which remains.
-    for (const mathml of Array.from(clone.querySelectorAll('.katex-mathml'))) {
-        mathml.remove()
-    }
-
-    // 1e. Remove diff markers — interactive UI elements (colored side-bar buttons)
-    //     that open the diff drawer in the app. Meaningless in a standalone export.
-    for (const marker of Array.from(clone.querySelectorAll('.diff-marker'))) {
-        marker.remove()
-    }
-
-    // 1e. Note: <foreignObject> elements in Mermaid SVGs are kept as-is.
-    //     Chrome may log "Unsafe attempt to load URL" warnings on file:// URLs,
-    //     but this does NOT affect rendering — the content displays correctly.
-    //     Converting foreignObject HTML to SVG <text> breaks text layout,
-    //     so we leave them untouched.
-
-    // 2. Inline images
-    const { skipped: skippedImages, external: externalImages, issues } = await inlineImages(clone)
-
-    // 3. Handle failed Mermaid diagrams
-    handleFailedMermaid(clone)
-
-    // 4. Serialize CSS from stylesheets (current theme variables only)
-    const css = serializeCss(markdownBodyEl)
-
-    // 5. Build TOC
-    const { tocLayoutHtml, tocSidebarHtml, tocCss, tocJs } = buildToc(clone, locale)
-
-    // 6. Build code block interaction JS
-    const codeBlockJs = buildCodeBlockJs(locale)
-
-    // 7. Lightbox JS for exported HTML — opens full-screen image/SVG viewer
-    const lightboxJs = `
+function buildLightboxJs(): string {
+    return `
 (function() {
     function openLightbox(content, isSvg) {
         var overlay = document.createElement('div');
@@ -806,32 +854,134 @@ export async function exportRenderedHtml(options: ExportOptions): Promise<Export
         }
     });
 })();`
+}
 
-    // 7. Assemble HTML
-    const title = escapeHtml(fileName.replace(/\.md$/i, ''))
-    const bodyContent = clone.outerHTML
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
-    // Use the CURRENT app theme for the exported document. The theme CSS
-    // variables are scoped to [data-theme="<id>"], so both attributes are
-    // required for the markdown styles (tables, code blocks, etc.) to resolve.
-    const currentThemeId = document.documentElement.getAttribute('data-theme') || 'github-light'
-    const currentThemeBase = document.documentElement.getAttribute('data-theme-base') || (isDarkTheme(currentThemeId) ? 'dark' : 'light')
+/** Escape a string for safe use inside a RegExp. */
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
-    const html = `<!DOCTYPE html>
+/** Strip a leading directory path off a path (returns the basename). */
+function baseName(p: string): string {
+    const parts = p.split(/[/\\]/)
+    for (let i = parts.length - 1; i >= 0; i--) {
+        if (parts[i]) return parts[i]
+    }
+    return p
+}
+
+/**
+ * Read user-selected font stacks from the live <html> inline style. fontConfig
+ * sets --font-ui / --font-mono on documentElement.style, so the chosen fonts are
+ * not present in any stylesheet rule and would otherwise be lost in the export.
+ * Returns a CSS `:root { … }` block (empty when neither variable is set).
+ */
+function readInlineFontVars(): string {
+    const root = document.documentElement
+    let css = ''
+    for (const prop of ['--font-ui', '--font-mono']) {
+        const value = (root.style?.getPropertyValue(prop) || '').trim()
+        if (!value) continue
+        css += `${prop}: ${value};\n`
+    }
+    return css ? `:root {\n${css}}` : ''
+}
+
+// ─── Main export function ─────────────────────────────────────────────────────
+
+export async function exportMarkdownToHtml(options: ExportOptions): Promise<ExportResult> {
+    const locale = options.locale || 'en'
+    const isZh = locale === 'zh'
+    const path = options.path || ''
+    const fileName = options.fileName || baseName(path)
+
+    const projectRoot = options.projectRoot ?? ''
+    const homeDir = options.homeDir ?? ''
+    const content = options.content || ''
+
+    // 1. Render through the shared file-preview pipeline.
+    const { html: renderedHtml, detectedPaths } = buildMarkdownPreviewDom(
+        { content, path, projectRoot, homeDir },
+        { isPC: options.isPC }
+    )
+
+    // 2. Mount content into a HIDDEN host on the live document. Mermaid's
+    //    layout engine and path verification rely on attached-DOM behavior
+    //    (all other app call sites render attached); a fully detached subtree
+    //    can produce wrong diagram layout. The host is positioned off-screen
+    //    and removed at the end, so nothing is visible to the user.
+    const contentEl = document.createElement('div')
+    contentEl.className = 'markdown-content'
+    contentEl.innerHTML = renderedHtml
+
+    const host = document.createElement('div')
+    host.style.cssText = 'position:fixed;left:-9999px;top:0;width:900px;visibility:hidden;pointer-events:none;'
+    host.appendChild(contentEl)
+    document.body.appendChild(host)
+
+    try {
+        // 3. Disk-based annotation correction (mirrors MarkdownPreview.doRender).
+        if (detectedPaths.length > 0) {
+            await verifyFilePaths([...new Set(detectedPaths)], contentEl)
+        }
+
+        // 4. Render Mermaid diagrams (attached to the hidden host; lazy import idempotent).
+        await renderMermaidInElement(contentEl, 'export')
+
+        // 5. Inline images as data URIs.
+        const inlineResult = await inlineImages(contentEl)
+
+        // 6. Replace failed Mermaid blocks with static errors.
+        handleFailedMermaid(contentEl)
+
+        // 7. Clean the DOM (scripts/iframes/.katex-mathml/diff markers).
+        for (const script of Array.from(contentEl.querySelectorAll('script'))) script.remove()
+        for (const iframe of Array.from(contentEl.querySelectorAll('iframe'))) iframe.remove()
+        for (const mathml of Array.from(contentEl.querySelectorAll('.katex-mathml'))) mathml.remove()
+        for (const marker of Array.from(contentEl.querySelectorAll('.diff-marker'))) marker.remove()
+
+        // 8. Serialize CSS + KaTeX fonts + base typography.
+        const currentThemeId = document.documentElement.getAttribute('data-theme') || 'github-light'
+        const currentThemeBase = document.documentElement.getAttribute('data-theme-base') || (isDarkTheme(currentThemeId) ? 'dark' : 'light')
+
+        // Wrap content in a .markdown-body root (same structure as MarkdownPreview).
+        const bodyEl = document.createElement('div')
+        bodyEl.className = 'markdown-body'
+        bodyEl.setAttribute('data-file-path', path)
+        bodyEl.appendChild(contentEl)
+
+        const css = serializeCss(bodyEl, currentThemeId)
+        // User-selected fonts live as inline <html> CSS variables (set by fontConfig),
+        // so they never appear in any stylesheet rule. Carry the current values into
+        // the exported :root so prose/code use the same fonts as the in-app preview.
+        const fontVarsCss = readInlineFontVars()
+        const katexFontCss = await buildKatexFontCss(contentEl)
+
+        // 9. Build TOC.
+        const { tocLayoutHtml, tocSidebarHtml, tocCss, tocJs } = buildTocStandalone(bodyEl, locale)
+
+        // 10. Build interaction JS.
+        const codeBlockJs = buildCodeBlockJs(locale)
+        const lightboxJs = buildLightboxJs()
+
+        const title = escapeHtml(fileName.replace(/\.md$/i, ''))
+        const bodyContent = bodyEl.outerHTML
+        const { skipped: skippedImages, external: externalImages, issues } = inlineResult
+
+        const html = `<!DOCTYPE html>
 <html lang="${isZh ? 'zh-CN' : 'en'}" data-theme="${escapeHtml(currentThemeId)}" data-theme-base="${escapeHtml(currentThemeBase)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 <style>
+/* ─── Base document typography (mirrors app base.css html/body) ─── */
+html, body { margin: 0; padding: 0; font-size: 15px; line-height: 1.6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif; background: var(--bg-primary); color: var(--text-primary); }
+
 /* ─── Universal box-sizing reset (matches app base.css) ─── */
-*, *::before, *::after { box-sizing: border-box; }
-
-/* ─── Theme variables + markdown styles (current theme) ─── */
-${css}
-
-/* ─── Base reset with theme colors ─── */
-body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg-primary); color: var(--text-primary); }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
 /* ─── Scrollbar styling (matches app base.css) ─── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -842,13 +992,27 @@ body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'S
 ::-webkit-scrollbar-corner { background: transparent; }
 * { scrollbar-color: var(--scrollbar-thumb) transparent; }
 
+/* ─── Theme variables + content styles (rules hitting the exported DOM) ─── */
+${css}
+
+/* ─── User-selected font stacks carried from the app (--font-ui/--font-mono) ─── */
+${fontVarsCss}
+
+/* ─── Neutralize app-container semantics from .markdown-body (content.css) ───
+   In the app, .markdown-body is a flex child that owns its scroll area; in a
+   standalone doc the page scrolls, so the body must not constrain itself. */
+.toc-layout .markdown-body { overflow: visible; overflow-x: hidden; flex: 1 1 auto; min-height: auto; position: relative; width: 100%; }
+
+/* ─── KaTeX fonts used by this document (data-URI embedded) ─── */
+${katexFontCss}
+
 /* ─── Mermaid error ─── */
 .mermaid-error { border: 1px dashed var(--border-color); padding: 12px; margin: 8px 0; border-radius: 6px; color: var(--text-muted); font-size: 13px; }
 
 /* ─── Copied feedback text ─── */
 .copied-feedback { font-size: 11px; color: var(--accent-color); }
 
-/* ─── TOC + FAB buttons ─── */
+/* ─── Fixed TOC ─── */
 ${tocCss}
 
 /* ─── Lightbox expand icon (hover overlay on images/mermaid) ─── */
@@ -882,7 +1046,12 @@ ${lightboxJs}
 </body>
 </html>`
 
-    return { html, skippedImages, externalImages, issues }
+        return { html, skippedImages, externalImages, issues }
+    } finally {
+        // The host was only a render scaffold — remove it so the export never
+        // leaves hidden DOM behind.
+        host.remove()
+    }
 }
 
 /**
