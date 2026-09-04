@@ -135,15 +135,23 @@ describe('exportMarkdownToHtml', () => {
     expect(result.html).toContain('copyText')
   })
 
-  it('builds a persistent right-side fixed TOC from headings with IDs', async () => {
+  it('builds a share-style TOC shell from headings with IDs', async () => {
     const md = '# Intro\n\npara\n\n## Setup\n\nmore'
     const result = await exportMarkdownToHtml(opts({ content: md }))
-    expect(result.html).toContain('toc-sidebar')
+    // ShareView shell: topbar + body row + 240px TOC rail + scrollable content.
+    expect(result.html).toContain('share-topbar')
+    expect(result.html).toContain('share-file-name')
     expect(result.html).toContain('Table of Contents')
-    expect(result.html).toContain('href="#intro"')
-    expect(result.html).toContain('href="#setup"')
+    expect(result.html).toContain('share-toc')
+    expect(result.html).toContain('data-target="#intro"')
+    expect(result.html).toContain('data-target="#setup"')
     expect(result.html).toContain('IntersectionObserver')
     expect(result.html).toContain('rootMargin')
+    // The shell root mirrors the share page (.share-view wrapper).
+    expect(result.html).toContain('class="share-view"')
+    // Topbar carries a TOC toggle (share-btn) but NO download action.
+    expect(result.html).toContain('share-btn')
+    expect(result.html).not.toContain('share-download')
   })
 
   it('localizes TOC title, copy feedback and word-wrap labels for zh', async () => {
@@ -156,7 +164,7 @@ describe('exportMarkdownToHtml', () => {
   it('does not include TOC when no headings', async () => {
     const result = await exportMarkdownToHtml(opts({ content: 'Just a paragraph' }))
     expect(result.html).not.toContain('toc-sidebar')
-    expect(result.html).not.toContain('toc-collapse')
+    expect(result.html).not.toContain('id="toc-toggle"')
   })
 
   it('escapes HTML in TOC entries', async () => {
@@ -170,8 +178,10 @@ describe('exportMarkdownToHtml', () => {
     expect(result.html).toContain('data-level="1"')
     expect(result.html).toContain('data-level="2"')
     expect(result.html).toContain('data-level="3"')
-    expect(result.html).toContain('.toc-item[data-level="2"]')
-    expect(result.html).toContain('.toc-item[data-level="3"]')
+    // Share page indents items via inline padding-left (8 + (level-1)*14).
+    expect(result.html).toContain('padding-left:8px')
+    expect(result.html).toContain('padding-left:22px')
+    expect(result.html).toContain('padding-left:36px')
   })
 
   it('serializes CSS rules that hit the exported DOM only', async () => {
@@ -242,11 +252,60 @@ describe('exportMarkdownToHtml', () => {
     expect(result.html).not.toContain('--font-ui:')
   })
 
-  it('keeps collapsed TOC rail hidden (author display does not override [hidden])', async () => {
+  it('uses a single topbar toggle as the sole TOC on/off control', async () => {
     const result = await exportMarkdownToHtml(opts({ content: '# T' }))
-    // The rail must not be visible before collapse: re-assert display:none for [hidden].
-    expect(result.html).toContain('.toc-rail-btn[hidden]')
+    // No in-panel collapse button / old rail — TOC rail carries only its items.
+    expect(result.html).not.toContain('id="toc-collapse"')
+    expect(result.html).not.toContain('toc-rail-btn')
+    // The topbar toggle is present and starts in the open state (share-btn).
+    expect(result.html).toContain('id="toc-toggle"')
+    expect(result.html).toContain('share-topbar')
+    expect(result.html).toContain('share-btn')
+    expect(result.html).toContain('aria-expanded="true"')
+    expect(result.html).toContain('aria-controls="share-toc"')
+    // Collapsed state simply hides the rail via the body attribute.
+    expect(result.html).toContain('.share-body[data-toc-open="false"] .share-toc')
     expect(result.html).toContain('display: none')
+    // The chrome comes from the shared share-chrome.css stylesheet.
+    expect(result.html).toContain('.share-toc {')
+    expect(result.html).toContain('240px')
+    expect(result.html).toContain('.share-view')
+    // No topbar download button in the offline doc.
+    expect(result.html).not.toContain('share-download')
+  })
+
+  it('flashes the jumped heading when a TOC item is clicked', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '# T' }))
+    // The click handler adds .line-flash to the heading after scrolling.
+    expect(result.html).toContain(`el.classList.add('line-flash')`)
+    expect(result.html).toContain(`el.addEventListener('animationend', function() { el.classList.remove('line-flash'); }`)
+    // The animation comes from the shared share-chrome.css (self-contained).
+    expect(result.html).toContain('@keyframes line-flash')
+    expect(result.html).toContain('.line-flash {')
+  })
+
+  it('embeds the shared share-chrome.css (single source with the share SPA)', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '# T' }))
+    // Rules that live in css/share-chrome.css (used by ShareView.vue too) must
+    // be inlined verbatim — proving the export reuses the same style source
+    // instead of a hand-copied duplicate.
+    expect(result.html).toContain('Share chrome — the visual shell shared by')
+    expect(result.html).toContain('.share-view')
+    expect(result.html).toContain('.share-top-actions')
+    expect(result.html).toContain('.share-toc-title')
+    expect(result.html).toContain('.share-toc-item:hover')
+  })
+
+  it('flips the topbar TOC toggle state on click (open ⇄ collapsed)', async () => {
+    const result = await exportMarkdownToHtml(opts({ content: '# T' }))
+    // Toggling updates the body attribute that hides/shows the rail.
+    expect(result.html).toContain(`body.setAttribute('data-toc-open', next ? 'true' : 'false')`)
+    expect(result.html).toContain(`toggle.setAttribute('aria-expanded', next ? 'true' : 'false')`)
+    // The toggle is wired to setState (click listener on #toc-toggle).
+    expect(result.html).toContain(`toggle.addEventListener('click', function() { setState(!open); });`)
+    // Rail/item language mirrors the share page (share-toc / share-toc-item).
+    expect(result.html).toContain('share-toc-item')
+    expect(result.html).toContain('data-target')
   })
 
   it('includes CSS with var() references for theme support', async () => {

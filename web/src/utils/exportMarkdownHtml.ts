@@ -1,6 +1,7 @@
 /**
- * Export a rendered markdown FILE as a self-contained HTML document whose
- * content styling and fixed TOC match the in-app markdown preview exactly.
+ * Export a rendered markdown FILE as a self-contained HTML document styled like
+ * the public share page (ShareView): a top bar + scrollable content column + an
+ * optional right TOC rail with a top-bar toggle.
  *
  * Unlike the legacy exportRenderedHtml (which cloned the live .markdown-body
  * DOM), this module re-runs the SAME render pipeline the preview uses
@@ -18,7 +19,8 @@
  *  7. Clean detached DOM (scripts/iframes/.katex-mathml/diff markers)
  *  8. Inline CSS — rules that HIT the exported DOM (serializeCss hit-detection),
  *     KaTeX fonts used by the document (data-URI), + base typography overrides
- *  9. Build a fixed right-side TOC (visual/interaction aligned with TocDock)
+ *  9. Build a share-style chrome (top bar + scrollable content + right TOC rail,
+ *     matching ShareView.vue / the public /share page)
  * 10. Assemble the standalone HTML document using the current app theme
  */
 
@@ -28,6 +30,9 @@ import { renderMermaidInElement } from '@/composables/useMarkdownRenderer.ts'
 import { isDarkTheme } from '@/utils/themeMeta.ts'
 import { escapeHtml } from '@/utils/html.ts'
 import { buildKatexFontCss } from '@/utils/katexFontEmbed.ts'
+// The share SPA (ShareView) and this export embed the SAME chrome stylesheet so
+// the exported document keeps the exact look of the public share page.
+import shareChromeCss from '../../css/share-chrome.css?raw'
 
 // ─── Types ──────────────────────────────────────────────────────────────────────
 
@@ -373,21 +378,32 @@ function serializeCss(container: HTMLElement, themeId: string): string {
     return rules.join('\n')
 }
 
-// ─── Fixed TOC generation (aligned with in-app TocDock / TocPanel) ───────────
+// ─── Share-style chrome (aligned with the app's /share/{token} ShareView) ───
 
 /**
- * Build a fixed right-side TOC matching the in-app wide-screen TocDock:
- * 260px sticky sidebar, header bar, level-indented items, hover/active
- * highlight, click-smooth-scroll with a highlight-hold window, scroll-follow
- * via IntersectionObserver, and a collapse-to-rail toggle.
+ * Build the exported document shell by reusing the public share page's visual
+ * language (ShareView.vue):
  *
- * The standalone document does not have the app's split pane / tab chrome, so
- * the sidebar sticks to the viewport top while the content scrolls.
+ *   .share-topbar   — file name on the left + a TOC toggle button (no download;
+ *                     the recipient already holds the .html offline).
+ *   .share-body     — flex row that fills the viewport: the .markdown-body
+ *                     content scrolls in its own column and the TOC sits in a
+ *                     fixed-width right rail (240px) with a header + item list.
+ *
+ * The chrome CSS is NOT duplicated here: css/share-chrome.css is the single
+ * shared source — ShareView.vue imports it and the caller inlines the same file
+ * verbatim into the exported <style>. Only export-specific overrides live here.
+ *
+ * The TOC toggle lives in the top bar; it is the ONLY open/close control — the
+ * TOC panel itself carries no collapse button. On narrow viewports the rail is
+ * hidden and the button simply reveals/hides it.
  */
-function buildTocStandalone(container: HTMLElement, locale: string): { tocLayoutHtml: string; tocSidebarHtml: string; tocCss: string; tocJs: string } {
+function buildTocStandalone(container: HTMLElement, locale: string, displayName: string): { viewOpenHtml: string; topbarHtml: string; shellOpenHtml: string; contentOpenHtml: string; contentCloseHtml: string; sidebarHtml: string; shellCloseHtml: string; viewCloseHtml: string; tocCss: string; tocJs: string } {
+    const empty = { viewOpenHtml: '', topbarHtml: '', shellOpenHtml: '', contentOpenHtml: '', contentCloseHtml: '', sidebarHtml: '', shellCloseHtml: '', viewCloseHtml: '', tocCss: '', tocJs: '' }
+
     // Headings
     const headings = Array.from(container.querySelectorAll('h1, h2, h3, h4, h5, h6')) as HTMLHeadingElement[]
-    if (headings.length === 0) return { tocLayoutHtml: '', tocSidebarHtml: '', tocCss: '', tocJs: '' }
+    if (headings.length === 0) return empty
 
     interface TocEntry {
         level: number
@@ -406,73 +422,89 @@ function buildTocStandalone(container: HTMLElement, locale: string): { tocLayout
         })
     }
 
-    if (entries.length === 0) return { tocLayoutHtml: '', tocSidebarHtml: '', tocCss: '', tocJs: '' }
+    if (entries.length === 0) return empty
 
     const isZh = locale === 'zh'
     const tocTitle = isZh ? '目录' : 'Table of Contents'
-    const collapseTitle = isZh ? '收起目录' : 'Collapse TOC'
-    const expandTitle = isZh ? '展开目录' : 'Expand TOC'
+    const tocToggleTitle = isZh ? '收起目录' : 'Collapse TOC'
 
-    // Level-based indentation (mirrors TocPanel data-level rules).
+    // Level-based indentation mirrors the share page (level 1 is flush).
     const tocItemsHtml = entries.map(e =>
-        `<a class="toc-item" data-level="${e.level}" href="#${escapeHtml(e.id)}">${escapeHtml(e.text)}</a>`
+        `<button type="button" class="share-toc-item" data-level="${e.level}" data-target="#${escapeHtml(e.id)}" style="padding-left:${8 + (e.level - 1) * 14}px">${escapeHtml(e.text)}</button>`
     ).join('\n')
 
-    const tocSidebarHtml = `<aside id="toc-sidebar" class="toc-sidebar"><div class="toc-sidebar-header"><span class="toc-sidebar-title">${tocTitle}</span><button id="toc-collapse" class="toc-collapse-btn" title="${collapseTitle}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button></div>${tocItemsHtml}</aside>`
+    // Top bar — file name on the left + the sole TOC open/close toggle button
+    // in .share-top-actions (same skeleton as ShareView.vue). The single list
+    // icon is the share page's TOC affordance; no download action — the offline
+    // .html already holds everything.
+    const topbarHtml = `<div class="share-topbar"><span class="share-file-name">${escapeHtml(displayName)}</span><span class="share-spacer"></span><div class="share-top-actions"><button id="toc-toggle" class="share-btn" type="button" title="${tocToggleTitle}" aria-expanded="true" aria-controls="share-toc">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+</button></div></div>`
 
-    // Collapsed rail: a narrow fixed strip shown when the sidebar is hidden.
-    const tocRailHtml = `<button id="toc-rail" class="toc-rail-btn" title="${expandTitle}" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`
+    const viewOpenHtml = `<div class="share-view">`
+    const shellOpenHtml = `<div class="share-body" data-toc-open="true">`
+    const contentOpenHtml = `<div class="share-content">`
+    const contentCloseHtml = `</div>`
+    const sidebarHtml = `<aside id="share-toc" class="share-toc"><div class="share-toc-title">${tocTitle}</div>${tocItemsHtml}</aside>`
+    const shellCloseHtml = `</div>`
+    const viewCloseHtml = `</div>`
 
-    // TOC JS: collapse/expand + click-to-scroll + IntersectionObserver scroll-follow
-    // with a highlight-hold window (mirrors TocPanel: while a clicked smooth
-    // scroll sweeps across intervening headings, keep the clicked item active).
+    // TOC JS: topbar toggle open/close + click-to-scroll with highlight-hold
+    // window + IntersectionObserver scroll-follow (mirrors ShareView).
     const tocJs = `
 (function() {
-    var sidebar = document.getElementById('toc-sidebar');
-    var collapseBtn = document.getElementById('toc-collapse');
-    var rail = document.getElementById('toc-rail');
-    var layout = document.getElementById('toc-layout');
-    if (!sidebar || !collapseBtn || !rail || !layout) return;
+    var body = document.querySelector('.share-body');
+    var toggle = document.getElementById('toc-toggle');
+    var sidebar = document.getElementById('share-toc');
+    if (!body || !toggle || !sidebar) return;
 
-    collapseBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        layout.classList.add('toc-collapsed');
-        rail.hidden = false;
-    });
-    rail.addEventListener('click', function(e) {
-        e.stopPropagation();
-        layout.classList.remove('toc-collapsed');
-        rail.hidden = true;
-    });
-
+    var open = body.getAttribute('data-toc-open') !== 'false';
+    // On first load match the share page: start collapsed on narrow viewports.
+    if (window.innerWidth < 900 && open) setState(false);
+    function setState(next) {
+        open = next;
+        body.setAttribute('data-toc-open', next ? 'true' : 'false');
+        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        toggle.setAttribute('title', next ? '${tocToggleTitle}' : '${isZh ? '展开目录' : 'Expand TOC'}');
+        if (next) {
+            var act = sidebar.querySelector('.share-toc-item.active');
+            if (act) act.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+        }
+    }
+    toggle.addEventListener('click', function() { setState(!open); });
+    // Click a TOC entry: smooth-scroll to the heading + keep it highlighted
+    // for a short window so the scroll-follow observer does not steal it.
     var holdUntil = 0;
     function hold() { holdUntil = Date.now() + 1500; }
     function held() { return Date.now() < holdUntil; }
-
-    // Click a TOC entry: smooth-scroll to the heading + keep it highlighted
-    // for a short window so the scroll-follow observer does not steal it.
-    sidebar.addEventListener('click', function(e) {
-        var a = e.target.closest('a.toc-item');
-        if (!a) return;
-        e.preventDefault();
-        setActive(a);
-        hold();
-        var id = a.getAttribute('href').slice(1);
-        var el = document.getElementById(id);
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-
     function setActive(item) {
-        var act = sidebar.querySelector('.toc-item.active');
+        var act = sidebar.querySelector('.share-toc-item.active');
         if (act) act.classList.remove('active');
         if (item) item.classList.add('active');
     }
+    sidebar.addEventListener('click', function(e) {
+        var btn = e.target.closest('.share-toc-item');
+        if (!btn) return;
+        e.preventDefault();
+        setActive(btn);
+        hold();
+        var id = btn.getAttribute('data-target').slice(1);
+        var el = document.getElementById(id);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Flash the jumped heading (same .line-flash as the share SPA and the
+            // in-app markdown preview anchor jump; keyframes come from the shared
+            // share-chrome.css embedded below).
+            el.classList.add('line-flash');
+            el.addEventListener('animationend', function() { el.classList.remove('line-flash'); }, { once: true });
+        }
+    });
 
     // Scroll-follow: highlight the heading currently in the upper part of the viewport.
     if ('IntersectionObserver' in window) {
-        var items = sidebar.querySelectorAll('.toc-item');
+        var items = sidebar.querySelectorAll('.share-toc-item');
         var byId = {};
-        for (var i = 0; i < items.length; i++) byId[items[i].getAttribute('href').slice(1)] = items[i];
+        for (var i = 0; i < items.length; i++) byId[items[i].getAttribute('data-target').slice(1)] = items[i];
         var observer = new IntersectionObserver(function(entries) {
             if (held()) return;
             for (var j = 0; j < entries.length; j++) {
@@ -487,75 +519,35 @@ function buildTocStandalone(container: HTMLElement, locale: string): { tocLayout
     }
 })();`
 
-    // Sidebar CSS — mirrors TocDock/TocPanel visual language via var() colors.
+    // Export-only chrome CSS. The visual chrome (.share-topbar, .share-body,
+    // .share-toc, .share-toc-item, .share-btn, …) is NOT duplicated here — it is
+    // the shared css/share-chrome.css file that ShareView.vue also imports, and
+    // gets inlined verbatim into the exported <style> in the caller. This block
+    // only carries what is specific to a standalone document: the fixed-height
+    // viewport shell, the markdown reading column, and the TOC open/close state
+    // (the SPA hides the rail by unmounting it via v-if, a static export cannot).
     const tocCss = `
-/* Layout: content + fixed TOC sidebar in a flex row */
-.toc-layout { display: flex; flex-direction: row; align-items: flex-start; min-height: 100vh; }
-.toc-layout .markdown-body { flex: 1 1 auto; min-width: 0; max-width: min(900px, 100%); margin: 0 auto; }
-.toc-layout.toc-collapsed .toc-sidebar { display: none; }
-.toc-sidebar {
-    flex: 0 0 260px;
-    width: 260px;
-    max-width: 280px;
-    position: sticky;
-    top: 0;
-    align-self: flex-start;
-    height: 100vh;
-    overflow-y: auto;
-    box-sizing: border-box;
-    background: var(--bg-secondary);
-    border-left: 1px solid var(--border-color);
-    display: flex;
-    flex-direction: column;
+/* ─── Export-only chrome overrides on top of the shared share-chrome.css ─── */
+html, body { height: 100%; margin: 0; }
+.share-view { height: 100vh; }
+.share-content .markdown-body {
+    overflow: visible; overflow-x: hidden; flex: none; min-height: 100%;
+    position: relative; width: 100%; box-sizing: border-box;
 }
-.toc-sidebar-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 4px;
-    padding: 4px 6px;
-    border-bottom: 1px solid var(--border-color);
-    flex-shrink: 0;
-    min-height: 28px;
-}
-.toc-sidebar-title { flex: 1; font-size: 11px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toc-collapse-btn { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary); cursor: pointer; padding: 0; flex-shrink: 0; }
-.toc-collapse-btn:hover { background: var(--accent-color-dim, rgba(74, 144, 217, 0.12)); color: var(--accent-color); }
-.toc-item {
-    display: block;
-    padding: 6px 8px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: 13px;
-    color: var(--text-secondary);
-    transition: background 0.15s, color 0.15s;
-    border-left: 2px solid transparent;
-    white-space: nowrap;
-    text-decoration: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.toc-item:hover { background: var(--bg-tertiary); color: var(--accent-color); }
-.toc-item.active { color: var(--accent-color); border-left-color: var(--accent-color); background: var(--bg-tertiary); border-radius: 0; }
-.toc-item[data-level="2"] { padding-left: 20px; }
-.toc-item[data-level="3"] { padding-left: 32px; }
-.toc-item[data-level="4"] { padding-left: 44px; }
-.toc-item[data-level="5"] { padding-left: 56px; }
-.toc-item[data-level="6"] { padding-left: 68px; }
-.toc-rail-btn {
-    position: fixed; top: 50%; right: 0; transform: translateY(-50%);
-    width: 28px; height: 64px;
-    border: 1px solid var(--border-color); border-right: none; border-radius: 6px 0 0 6px;
-    background: var(--bg-primary); color: var(--text-secondary); cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-    display: flex; align-items: center; justify-content: center; padding: 0; z-index: 1000;
-}
-/* Author display:flex above overrides the UA [hidden]{display:none}; re-assert it
-   so the rail stays hidden until the sidebar is collapsed. */
-.toc-rail-btn[hidden] { display: none; }
-.toc-rail-btn:hover { color: var(--accent-color); }`
+.share-body[data-toc-open="false"] .share-toc { display: none; }
 
-    return { tocLayoutHtml: `<div id="toc-layout" class="toc-layout">`, tocSidebarHtml: tocSidebarHtml + tocRailHtml, tocCss, tocJs }
+/* Wide screens: cap the reading column (ShareView centers at 1080px) */
+@media (min-width: 1100px) {
+    .share-content .markdown-body { max-width: 1080px; }
+}
+
+/* Narrow viewport: default collapsed; topbar toggle reveals the rail */
+@media (max-width: 899px) {
+    .share-toc { display: none !important; }
+    .share-body[data-toc-open="true"] .share-toc { display: block !important; }
+}`
+
+    return { viewOpenHtml, topbarHtml, shellOpenHtml, contentOpenHtml, contentCloseHtml, sidebarHtml, shellCloseHtml, viewCloseHtml, tocCss, tocJs }
 }
 
 // ─── Code block + table block interaction JS ──────────────────────────────────
@@ -1177,8 +1169,8 @@ export async function exportMarkdownToHtml(options: ExportOptions): Promise<Expo
         const fontVarsCss = readInlineFontVars()
         const katexFontCss = await buildKatexFontCss(contentEl)
 
-        // 9. Build TOC.
-        const { tocLayoutHtml, tocSidebarHtml, tocCss, tocJs } = buildTocStandalone(bodyEl, locale)
+        // 9. Build TOC (share-page shell fragments; empty when no headings).
+        const { viewOpenHtml, topbarHtml, shellOpenHtml, contentOpenHtml, contentCloseHtml, sidebarHtml, shellCloseHtml, viewCloseHtml, tocCss, tocJs } = buildTocStandalone(bodyEl, locale, fileName)
 
         // 10. Build interaction JS.
         const codeBlockJs = buildCodeBlockJs(locale)
@@ -1216,11 +1208,6 @@ ${css}
 /* ─── User-selected font stacks carried from the app (--font-ui/--font-mono) ─── */
 ${fontVarsCss}
 
-/* ─── Neutralize app-container semantics from .markdown-body (content.css) ───
-   In the app, .markdown-body is a flex child that owns its scroll area; in a
-   standalone doc the page scrolls, so the body must not constrain itself. */
-.toc-layout .markdown-body { overflow: visible; overflow-x: hidden; flex: 1 1 auto; min-height: auto; position: relative; width: 100%; }
-
 /* ─── KaTeX fonts used by this document (data-URI embedded) ─── */
 ${katexFontCss}
 
@@ -1230,7 +1217,10 @@ ${katexFontCss}
 /* ─── Copied feedback text ─── */
 .copied-feedback { font-size: 11px; color: var(--accent-color); }
 
-/* ─── Fixed TOC ─── */
+/* ─── Share chrome (shared stylesheet — same file ShareView.vue imports) ─── */
+${shareChromeCss}
+
+/* ─── Export-only chrome overrides (see buildTocStandalone tocCss) ─── */
 ${tocCss}
 
 /* ─── Lightbox expand icon (hover overlay on images/mermaid) ─── */
@@ -1258,10 +1248,15 @@ ${tocCss}
 </style>
 </head>
 <body>
-${tocLayoutHtml}
+${viewOpenHtml}
+${topbarHtml}
+${shellOpenHtml}
+${contentOpenHtml}
 ${bodyContent}
-${tocSidebarHtml}
-${tocLayoutHtml ? '</div>' : ''}
+${contentCloseHtml}
+${sidebarHtml}
+${shellCloseHtml}
+${viewCloseHtml}
 <script>
 ${tocJs}
 ${codeBlockJs}

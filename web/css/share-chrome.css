@@ -1,0 +1,161 @@
+/* ==========================================================================
+   Share chrome — the visual shell shared by the public share SPA
+   (web/src/share/ShareView.vue) and the self-contained markdown HTML export
+   (web/src/utils/exportMarkdownHtml.ts).
+
+   Both consumers render the same skeleton:
+     .share-view > .share-topbar(.share-file-name + .share-spacer
+                                 + .share-top-actions > .share-btn)
+                > .share-body > (.share-content  +  .share-toc)
+   and import THIS file as their single style source for that chrome, so the
+   two outputs can never drift apart.
+
+   Only VISUAL rules live here. Open/close state (data-toc-open / toggling the
+   rail) and per-context height/scroll wiring stay with each consumer because
+   the SPA and the offline document behave differently on narrow viewports.
+
+   Height ownership stays with each context:
+   - Share SPA:  #app/.share-view fill the viewport (html,body,#app{height:100%}).
+   - Export doc: .share-view is given height:100% by the export's own base CSS.
+   ========================================================================== */
+
+/* Root flex column — fills whatever fixed-height parent the context provides */
+.share-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+}
+
+/* Top bar */
+.share-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, .25));
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+.share-file-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1f2328);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.share-spacer { flex: 1; }
+
+.share-top-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+
+/* Generic round icon button used by topbar actions (TOC toggle / download) */
+.share-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #57606a);
+  cursor: pointer;
+  flex-shrink: 0;
+  text-decoration: none;
+}
+@media (hover: hover) {
+  .share-btn:hover {
+    background: var(--bg-tertiary, #eaeef2);
+    color: var(--accent-color, #0969da);
+  }
+}
+
+/* Body: content column + TOC rail */
+.share-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.share-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* TOC rail */
+.share-toc {
+  flex: 0 0 240px;
+  width: 240px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border-color, rgba(128, 128, 128, .25));
+  padding: 8px;
+  box-sizing: border-box;
+  background: var(--bg-primary, #fff);
+}
+
+.share-toc-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #656d76);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 4px 8px 8px;
+}
+
+.share-toc-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 5px 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #57606a);
+  cursor: pointer;
+  border-radius: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .share-toc-item:hover {
+    background: var(--bg-tertiary, #eaeef2);
+    color: var(--accent-color, #0969da);
+  }
+}
+.share-toc-item.active {
+  color: var(--accent-color, #0969da);
+  background: var(--bg-tertiary, #eaeef2);
+  font-weight: 600;
+}
+
+/* Line flash used by TOC/anchor jumps (ShareView.scrollToHeading and the
+   export's inlined TOC JS). The canonical definition lives in
+   assets/code-viewer.css for the main app; both share consumers carry the same
+   animation here because the share SPA does not load code-viewer.css and the
+   offline export must be self-contained. */
+@keyframes line-flash {
+  0%, 100% { background: transparent; }
+  10%, 30% { background: color-mix(in srgb, var(--accent-color, #0066cc) 40%, transparent); }
+  20%, 40% { background: transparent; }
+  50%, 70% { background: color-mix(in srgb, var(--accent-color, #0066cc) 30%, transparent); }
+  60%, 80% { background: transparent; }
+  90%      { background: color-mix(in srgb, var(--accent-color, #0066cc) 20%, transparent); }
+}
+.line-flash {
+  animation: line-flash 1.2s ease-out forwards;
+}
