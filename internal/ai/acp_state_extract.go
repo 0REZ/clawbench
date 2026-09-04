@@ -204,6 +204,40 @@ func extractACPModelListFromResume(resumeResp *acp.ResumeSessionResponse) *Model
 	return extractModelListFromOpts(resumeResp.ConfigOptions)
 }
 
+// extractACPModeStateFromLoad extracts ModeState from a LoadSessionResponse.
+func extractACPModeStateFromLoad(loadResp *acp.LoadSessionResponse) *ModeState {
+	if loadResp == nil {
+		return nil
+	}
+	return extractModeStateFromModes(loadResp.Modes)
+}
+
+// extractACPConfigOptionsFromLoad extracts mode-relevant ConfigOptionState from a LoadSessionResponse.
+func extractACPConfigOptionsFromLoad(loadResp *acp.LoadSessionResponse) *ConfigOptionState {
+	if loadResp == nil {
+		return nil
+	}
+	return extractConfigOptionsFromOpts(loadResp.ConfigOptions)
+}
+
+// extractACPThinkingEffortFromLoad extracts ThinkingEffortState from a LoadSessionResponse.
+func extractACPThinkingEffortFromLoad(loadResp *acp.LoadSessionResponse) *ThinkingEffortState {
+	if loadResp == nil {
+		return nil
+	}
+	return extractThinkingEffortFromOpts(loadResp.ConfigOptions)
+}
+
+// extractACPModelListFromLoad extracts ModelListState from a LoadSessionResponse.
+// The LoadSession path is used for agents that advertise loadSession (e.g. claude
+// via claude-agent-acp); its response carries the same ConfigOptions as new/resume.
+func extractACPModelListFromLoad(loadResp *acp.LoadSessionResponse) *ModelListState {
+	if loadResp == nil {
+		return nil
+	}
+	return extractModelListFromOpts(loadResp.ConfigOptions)
+}
+
 func extractModelListFromOpts(opts []acp.SessionConfigOption) *ModelListState {
 	if len(opts) == 0 {
 		return nil

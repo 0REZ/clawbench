@@ -60,9 +60,18 @@ func (c *ACPConn) CacheNewSessionState() {
 // MergeResumedSessionState merges state from a ResumeSessionResponse, preserving
 // the user's current selections (re-applied by ensureAliveWithSession) while
 // updating available options lists from the resumed agent via the registry.
+// Sessions restored via the LoadSession path stash a LoadSessionResponse instead
+// (recoverViaLoadSession / SyncLoadSession), so when no resume response is
+// present we fall back to the load response — otherwise the model list (and
+// mode/effort options) would never reach the registry and the UI would keep
+// showing the static CLI-discovered defaults.
 func (c *ACPConn) MergeResumedSessionState() {
 	resumeResp := c.GetAndClearResumeSessionResp()
 	if resumeResp == nil {
+		if loadResp := c.GetAndClearLoadSessionResp(); loadResp != nil {
+			c.mergeLoadedSessionState(loadResp)
+			return
+		}
 		slog.Warn("acp: MergeResumedSessionState called with nil resumeResp")
 		return
 	}
@@ -79,6 +88,52 @@ func (c *ACPConn) MergeResumedSessionState() {
 	)
 
 	c.applyExtractedState(ext)
+}
+
+// mergeLoadedSessionState extracts session state from a LoadSessionResponse
+// (the caller has already consumed it from the stash). Mirrors the resume path:
+// LoadSessionResponse carries the same Modes + ConfigOptions shape.
+func (c *ACPConn) mergeLoadedSessionState(loadResp *acp.LoadSessionResponse) {
+	slog.Info(
+		"acp: merging loaded session state",
+		"has_modes", loadResp.Modes != nil,
+		"config_options_count", len(loadResp.ConfigOptions),
+	)
+
+	ext := c.extractLoadedSessionState(loadResp)
+	c.applyExtractedState(ext)
+}
+
+// extractLoadedSessionState extracts mode/config/thinking/model state from a
+// LoadSessionResponse, mirroring the resume branch of extractSessionState.
+func (c *ACPConn) extractLoadedSessionState(loadResp *acp.LoadSessionResponse) sessionStateExtracted {
+	var ext sessionStateExtracted
+
+	if modeState := extractACPModeStateFromLoad(loadResp); modeState != nil {
+		ext.modes = modeState.AvailableModes
+		ext.modeCurrentID = modeState.CurrentModeID
+		slog.Info("acp: loaded mode state", "current", modeState.CurrentModeID, "available", len(modeState.AvailableModes))
+	} else {
+		slog.Info("acp: no mode from loaded v1 Modes field")
+	}
+	ext.configState = extractACPConfigOptionsFromLoad(loadResp)
+	if effortState := extractACPThinkingEffortFromLoad(loadResp); effortState != nil {
+		ext.efforts = effortState.AvailableLevels
+		ext.effortCurrentID = effortState.CurrentID
+	}
+	if modelList := extractACPModelListFromLoad(loadResp); modelList != nil {
+		ext.models = modelList.Models
+		ext.modelCurrentID = modelList.CurrentModelID
+		slog.Info("acp: extracted model list from loaded session", "current", modelList.CurrentModelID, "available", len(modelList.Models))
+	} else if c.stdoutFilter != nil {
+		if cached := c.stdoutFilter.GetAndClearCachedModels(); cached != nil {
+			ext.models = cached.Models
+			ext.modelCurrentID = cached.CurrentModelID
+			slog.Info("acp: extracted model list from loaded SessionModelState extension", "current", cached.CurrentModelID, "available", len(cached.Models))
+		}
+	}
+
+	return ext
 }
 
 // extractSessionState extracts mode/config/thinking/model state from a session response.
