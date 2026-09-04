@@ -345,11 +345,14 @@ func (c *ACPConn) recoverViaResumeSession(ctx context.Context, cwd, acpSID strin
 }
 
 // reapplyConfigAfterResume re-applies cached mode/model/thinking config after a ResumeSession.
+// Config ids are resolved to what the agent advertised (resolveWireConfigIDLocked —
+// c.mu is held on this path via ensureAliveWithSession), falling back to the
+// historical hardcoded ids.
 func (c *ACPConn) reapplyConfigAfterResume(ctx context.Context, acpSID string, prevConfig cachedConfigSnapshot) {
 	reapplyStart := time.Now()
-	c.reapplyConfigOption(ctx, acpSID, "mode", prevConfig.mode)
-	c.reapplyConfigOption(ctx, acpSID, "model", prevConfig.model)
-	c.reapplyConfigOption(ctx, acpSID, "thinkingEffort", prevConfig.effort)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("mode", "mode"), prevConfig.mode)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("model", "model"), prevConfig.model)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("thought_level", "thinkingEffort"), prevConfig.effort)
 	slog.Info("acp perf: reapplyConfigAfterResume.total", "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(reapplyStart),
 		"mode", prevConfig.mode, "model", prevConfig.model, "effort", prevConfig.effort)
 }

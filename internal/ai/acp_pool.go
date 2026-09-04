@@ -798,6 +798,14 @@ type ACPConn struct {
 	// session/load so the handler can extract mode/config state. Cleared after reading.
 	lastLoadSessionResp *acp.LoadSessionResponse
 
+	// wireConfigIDs maps internal category keys ("model"/"thought_level"/"mode")
+	// to the config-option id the agent actually advertised in its session
+	// config options. Populated by applyExtractedState (new/resume/load paths);
+	// read by senders via resolveWireConfigID so config RPCs use the agent's
+	// own ids instead of hardcoded guesses (e.g. claude-agent-acp advertises
+	// "effort", not the historical "thinkingEffort").
+	wireConfigIDs map[string]string
+
 	// loadTargetSID is the ACP session ID to load via LoadSession.
 	loadTargetSID string
 

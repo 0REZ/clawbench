@@ -79,10 +79,13 @@ func (c *ACPConn) Prompt(ctx context.Context, prompt []acp.ContentBlock, streamC
 	// Apply config options: model, thinkingEffort, mode
 	// Each is skipped if unchanged or unsupported; if a config kills the connection,
 	// we return a configKilledConnectionError so the caller can retry.
+	// Config ids are resolved to what the agent itself advertised
+	// (resolveWireConfigID) with the historical hardcoded ids as fallback —
+	// agents differ (claude-agent-acp: "effort" vs legacy "thinkingEffort").
 	configs := []configOptionSpec{
-		{configID: "model", value: req.Model, label: "model"},
-		{configID: "thinkingEffort", value: req.ThinkingEffort, label: "thinking_effort"},
-		{configID: "mode", value: req.Mode, label: "mode"},
+		{configID: c.resolveWireConfigID("model", "model"), value: req.Model, label: "model"},
+		{configID: c.resolveWireConfigID("thought_level", "thinkingEffort"), value: req.ThinkingEffort, label: "thinking_effort"},
+		{configID: c.resolveWireConfigID("mode", "mode"), value: req.Mode, label: "mode"},
 	}
 	for _, cfg := range configs {
 		if cfg.value == "" {

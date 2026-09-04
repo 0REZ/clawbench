@@ -32,6 +32,12 @@ type sessionStateExtracted struct {
 	effortCurrentID string
 	models          []model.AgentModel
 	modelCurrentID  string
+	// Wire config-option ids as advertised by the agent for each category
+	// ("" when the agent did not report the option). Used by senders to
+	// address options by the agent's own id; e.g. claude-agent-acp advertises
+	// "effort" where the historical hardcoded guess was "thinkingEffort".
+	effortConfigID string
+	modelConfigID  string
 }
 
 // CacheNewSessionState extracts and caches mode/config/thinking/model state from
@@ -120,10 +126,12 @@ func (c *ACPConn) extractLoadedSessionState(loadResp *acp.LoadSessionResponse) s
 	if effortState := extractACPThinkingEffortFromLoad(loadResp); effortState != nil {
 		ext.efforts = effortState.AvailableLevels
 		ext.effortCurrentID = effortState.CurrentID
+		ext.effortConfigID = effortState.ConfigID
 	}
 	if modelList := extractACPModelListFromLoad(loadResp); modelList != nil {
 		ext.models = modelList.Models
 		ext.modelCurrentID = modelList.CurrentModelID
+		ext.modelConfigID = modelList.ConfigID
 		slog.Info("acp: extracted model list from loaded session", "current", modelList.CurrentModelID, "available", len(modelList.Models))
 	} else if c.stdoutFilter != nil {
 		if cached := c.stdoutFilter.GetAndClearCachedModels(); cached != nil {
@@ -160,6 +168,7 @@ func (c *ACPConn) extractSessionState(getResp func() (*acp.NewSessionResponse, *
 		if effortState := extractACPThinkingEffort(newResp); effortState != nil {
 			ext.efforts = effortState.AvailableLevels
 			ext.effortCurrentID = effortState.CurrentID
+			ext.effortConfigID = effortState.ConfigID
 			slog.Info("acp: extracted thinking effort", "current", effortState.CurrentID, "available", len(effortState.AvailableLevels))
 		} else {
 			slog.Info("acp: no thinking effort from configOptions")
@@ -167,6 +176,7 @@ func (c *ACPConn) extractSessionState(getResp func() (*acp.NewSessionResponse, *
 		if modelList := extractACPModelList(newResp); modelList != nil {
 			ext.models = modelList.Models
 			ext.modelCurrentID = modelList.CurrentModelID
+			ext.modelConfigID = modelList.ConfigID
 			slog.Info("acp: extracted model list", "current", modelList.CurrentModelID, "available", len(modelList.Models))
 		} else if c.stdoutFilter != nil {
 			if cached := c.stdoutFilter.GetAndClearCachedModels(); cached != nil {
@@ -191,10 +201,12 @@ func (c *ACPConn) extractSessionState(getResp func() (*acp.NewSessionResponse, *
 		if effortState := extractACPThinkingEffortFromResume(resumeResp); effortState != nil {
 			ext.efforts = effortState.AvailableLevels
 			ext.effortCurrentID = effortState.CurrentID
+			ext.effortConfigID = effortState.ConfigID
 		}
 		if modelList := extractACPModelListFromResume(resumeResp); modelList != nil {
 			ext.models = modelList.Models
 			ext.modelCurrentID = modelList.CurrentModelID
+			ext.modelConfigID = modelList.ConfigID
 		} else if c.stdoutFilter != nil {
 			if cached := c.stdoutFilter.GetAndClearCachedModels(); cached != nil {
 				ext.models = cached.Models
@@ -232,6 +244,10 @@ func (c *ACPConn) applyExtractedState(ext sessionStateExtracted) {
 		ext.configState.CurrentID = ext.modeCurrentID
 	}
 
+	// Remember the config-option ids the agent advertised for each category so
+	// senders address options by the agent's own id (see resolveWireConfigID).
+	c.mergeWireConfigIDs(ext)
+
 	// Set session-level current values on ACPConn
 	c.SetCurrentModeID(ext.modeCurrentID)
 	c.SetCurrentThinkingEffortID(ext.effortCurrentID)
@@ -248,6 +264,54 @@ func (c *ACPConn) applyExtractedState(ext sessionStateExtracted) {
 	listSessions := reg.GetListSessions(agentID)
 	promptImage := reg.GetPromptImage(agentID)
 	reg.ForceUpdateIfNeeded(agentID, ext.modes, ext.efforts, ext.models, nil, ext.configState, loadSession, listSessions, promptImage)
+}
+
+// mergeWireConfigIDs merges the config-option ids the agent advertised (per
+// internal category key) into the connection's wire-id map. Prior entries are
+// kept when a later extraction does not mention the option (e.g. a resume
+// response without configOptions must not erase knowledge from session/new).
+func (c *ACPConn) mergeWireConfigIDs(ext sessionStateExtracted) {
+	updates := map[string]string{}
+	if ext.configState != nil && ext.configState.ConfigID != "" {
+		updates["mode"] = ext.configState.ConfigID
+	}
+	if ext.effortConfigID != "" {
+		updates["thought_level"] = ext.effortConfigID
+	}
+	if ext.modelConfigID != "" {
+		updates["model"] = ext.modelConfigID
+	}
+	if len(updates) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wireConfigIDs == nil {
+		c.wireConfigIDs = make(map[string]string, len(updates))
+	}
+	for category, id := range updates {
+		c.wireConfigIDs[category] = id
+	}
+	slog.Info("acp: merged wire config ids", "updates", len(updates), "effort_id", c.wireConfigIDs["thought_level"], "model_id", c.wireConfigIDs["model"], "mode_id", c.wireConfigIDs["mode"])
+}
+
+// resolveWireConfigID returns the config-option id to use on the wire for the
+// given internal category, falling back to the historical hardcoded id when
+// the agent has not advertised one (older agents, or option unsupported).
+func (c *ACPConn) resolveWireConfigID(category, fallback string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.resolveWireConfigIDLocked(category, fallback)
+}
+
+// resolveWireConfigIDLocked is resolveWireConfigID for callers already holding
+// c.mu (the reapply path runs under ensureAliveWithSession's lock; Go mutexes
+// are not reentrant, so it must not re-lock).
+func (c *ACPConn) resolveWireConfigIDLocked(category, fallback string) string {
+	if id := c.wireConfigIDs[category]; id != "" {
+		return id
+	}
+	return fallback
 }
 
 // EmitSessionStateEvents emits mode_update, thinking_effort_update, and model_list_update
