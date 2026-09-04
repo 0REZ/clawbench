@@ -319,7 +319,6 @@ export default {
       contextUsage: '上下文',
       contextUsageTooltip: '{used} / {size} tokens ({pct}%)',
       contextCost: '费用',
-      costNoCurrency: '没有美元',
       used: '已用',
       size: '总量',
       remaining: '剩余',

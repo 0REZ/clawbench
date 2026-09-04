@@ -454,17 +454,18 @@ const categoryRows = computed(() => {
     .map(([key, value]) => ({ key, value: value ?? 0, label: labels[key] ? t(labels[key]) : key }))
 })
 // Currency symbols for common ISO 4217 codes. Unknown codes fall back to the
-// bare code (e.g. "123 CNY"), and an empty currency renders the honest
-// "no currency" placeholder — the amount is NOT a US-dollar figure in that
-// case (CodeBuddy reports cost.amount == credit with no currency).
+// bare code (e.g. "123 CNY"). When the backend reports an amount with NO
+// currency (CodeBuddy sends cost.amount == credit with an empty currency),
+// the row shows the bare number — no dollar sign, no currency code, nothing
+// fabricated on top of what the agent actually reported.
 const currencySymbols = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', KRW: '₩', AUD: 'A$', CAD: 'C$' }
 const contextCostDisplay = computed(() => {
   const amount = contextCost.value
   if (amount <= 0) return ''
   const cur = contextCurrency.value
-  if (!cur) return t('chat.sessionInfo.costNoCurrency')
-  const sym = currencySymbols[cur] ?? ''
   const formatted = amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2)
+  if (!cur) return formatted
+  const sym = currencySymbols[cur] ?? ''
   return sym ? `${sym}${formatted}` : `${formatted} ${cur}`
 })
 const dialog = useDialog()

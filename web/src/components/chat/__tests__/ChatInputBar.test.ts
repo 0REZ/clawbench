@@ -75,7 +75,6 @@ const i18n = createI18n({
           inputTokens: 'Input',
           outputTokens: 'Output',
           contextCost: 'Cost',
-          costNoCurrency: 'No currency',
           compact: 'Compact context',
         },
         autoApprove: {
@@ -1061,11 +1060,12 @@ describe('ChatInputBar', () => {
     mockContextCurrency.value = 'USD'
   })
 
-  it('cost row shows the honest no-currency placeholder when backend omits currency', async () => {
+  it('cost row shows the bare number when backend reports no currency', async () => {
     mockContextSize.value = 200000
     mockContextUsed.value = 5000
     // CodeBuddy-style: cost.amount mirrors credit and ships with an empty
-    // currency — rendering "$1.43 USD" would fabricate a dollar figure.
+    // currency — the row must show the bare number, not a fabricated
+    // "$1.43 USD" or any currency placeholder text.
     mockContextCost.value = 1.43
     mockContextCurrency.value = ''
 
@@ -1074,9 +1074,10 @@ describe('ChatInputBar', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.text()).toContain('Cost')
+    expect(wrapper.text()).toContain('1.43')
     expect(wrapper.text()).not.toContain('$')
     expect(wrapper.text()).not.toContain('USD')
-    expect(wrapper.text()).toContain('No currency')
+    expect(wrapper.text()).not.toContain('No currency')
 
     // Reset for other tests.
     mockContextCost.value = 0

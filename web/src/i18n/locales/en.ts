@@ -319,7 +319,6 @@ export default {
       contextUsage: 'Context',
       contextUsageTooltip: '{used} / {size} tokens ({pct}%)',
       contextCost: 'Cost',
-      costNoCurrency: 'No currency',
       used: 'Used',
       size: 'Total',
       remaining: 'Remaining',
