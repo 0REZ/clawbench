@@ -1876,6 +1876,114 @@ describe('duplicate message root causes (regression)', () => {
     expect((reply.blocks || []).filter((b: any) => b.type === 'tool_use')).toHaveLength(1)
   })
 
+  it('rebuildFromDb does NOT duplicate a DB done-thinking marker when live already rendered the thinking (continuous stream)', () => {
+    // Continuous streaming: the live placeholder already holds the thinking
+    // text the DB slim marker references (the DB flush is a stale subset that
+    // recorded the done block). Adopting the marker would duplicate the chip.
+    const messages: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [
+        { type: 'thinking', text: 'reasoned', done: true },
+        { type: 'text', text: 'full response' },
+      ], streaming: true, parentQueueId: '1' },
+    ]
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      // DB streaming row: done thinking block flushed as a slim marker + text prefix.
+      { role: 'assistant', id: 42, content: '', blocks: [
+        { type: 'thinking', think_id: 'th_1', done: true },
+        { type: 'text', text: 'full res' },
+      ], streaming: true },
+    ]
+    const merged = rebuildFromDb(messages, dbMsgs as any)
+    const reply = merged.find((m: any) => m.role === 'assistant' && m.id === 42)
+    expect(reply).toBeDefined()
+    const thinkings = (reply.blocks || []).filter((b: any) => b.type === 'thinking')
+    expect(thinkings).toHaveLength(1, 'DB done-thinking marker must not duplicate the live thinking block')
+    expect(thinkings[0].text).toBe('reasoned', 'the live block (with text) must win over the DB marker')
+    expect(thinkings[0].think_id).toBeUndefined()
+    const texts = (reply.blocks || []).filter((b: any) => b.type === 'text').map((b: any) => b.text)
+    expect(texts.join('')).toBe('full response')
+  })
+
+  it('rebuildFromDb adopts a DB done-thinking marker when live has NO thinking block (placeholder recreated)', () => {
+    // The live placeholder was recreated by a stream_start after the thinking
+    // finished, and only text events were replayed since. The DB marker is the
+    // only trace of the completed reasoning — it must be adopted.
+    const messages: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [{ type: 'text', text: 'full response here' }], streaming: true, parentQueueId: '1' },
+    ]
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [
+        { type: 'thinking', think_id: 'th_1', done: true },
+        { type: 'text', text: 'full response here' },
+      ], streaming: true },
+    ]
+    const merged = rebuildFromDb(messages, dbMsgs as any)
+    const reply = merged.find((m: any) => m.role === 'assistant' && m.id === 42)
+    expect(reply).toBeDefined()
+    const thinkings = (reply.blocks || []).filter((b: any) => b.type === 'thinking')
+    expect(thinkings).toHaveLength(1, 'DB done-thinking marker must be adopted when live lacks the reasoning')
+    expect(thinkings[0].think_id).toBe('th_1')
+    const texts = (reply.blocks || []).filter((b: any) => b.type === 'text').map((b: any) => b.text)
+    expect(texts.join('')).toBe('full response here')
+  })
+
+  it('rebuildFromDb adopts a DB done-thinking marker when the DB text is a genuine prefix live lacks (switch-back recovery)', () => {
+    // Switch-back race: the DB row holds flushed history (done thinking +
+    // tool + text prefix) that the re-created placeholder's live increment does
+    // not cover. The thinking marker must be prepended along with the tool.
+    const messages: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [{ type: 'text', text: ' continuing' }], streaming: true, parentQueueId: '1' },
+    ]
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [
+        { type: 'thinking', think_id: 'th_1', done: true },
+        { type: 'tool_use', name: 'Read', id: 'tool-1', done: true, status: 'success' },
+        { type: 'text', text: 'partial response' },
+      ], streaming: true },
+    ]
+    const merged = rebuildFromDb(messages, dbMsgs as any)
+    const reply = merged.find((m: any) => m.role === 'assistant' && m.id === 42)
+    expect(reply).toBeDefined()
+    expect(reply.streaming).toBe(true)
+    const thinkings = (reply.blocks || []).filter((b: any) => b.type === 'thinking')
+    expect(thinkings).toHaveLength(1, 'done-thinking marker must be prepended on switch-back recovery')
+    expect(thinkings[0].think_id).toBe('th_1')
+    const tools = (reply.blocks || []).filter((b: any) => b.type === 'tool_use')
+    expect(tools).toHaveLength(1)
+    expect(tools[0].id).toBe('tool-1')
+    const texts = (reply.blocks || []).filter((b: any) => b.type === 'text').map((b: any) => b.text)
+    expect(texts.join('')).toBe('partial response continuing')
+  })
+
+  it('rebuildFromDb keeps the slim done-thinking marker from a streaming row on a fresh page load (refresh recovery)', () => {
+    // A fresh refresh (empty message array → db_load) rebuilds purely from the
+    // DB row. The streaming row now carries the slim done marker, so the
+    // completed thinking renders as a collapsed chip (lazy-load on expand) —
+    // this is the reported bug's fix path.
+    const dbMsgs: any[] = [
+      { role: 'user', id: 1, content: 'A', blocks: [{ type: 'text', text: 'A' }] },
+      { role: 'assistant', id: 42, content: '', blocks: [
+        { type: 'thinking', think_id: 'th_1', done: true },
+        { type: 'text', text: 'partial answer' },
+        { type: 'tool_use', name: 'Read', id: 'tool-1', done: true, status: 'success' },
+      ], streaming: true },
+    ]
+    const merged = rebuildFromDb([], dbMsgs as any)
+    const reply = merged.find((m: any) => m.role === 'assistant' && m.id === 42)
+    expect(reply).toBeDefined()
+    expect(reply.streaming).toBe(true)
+    const thinkings = (reply.blocks || []).filter((b: any) => b.type === 'thinking')
+    expect(thinkings).toHaveLength(1, 'fresh refresh must keep the done-thinking marker')
+    expect(thinkings[0].think_id).toBe('th_1')
+    expect(thinkings[0].done).toBe(true)
+  })
+
   it('ws_user_message with queued flag creates pending remote bubble', () => {
     // Client A enqueues a message while its session is running; the broadcast
     // user_message carries queued:true. Client B must render the _remote bubble

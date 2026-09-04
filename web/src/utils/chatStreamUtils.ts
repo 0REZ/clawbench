@@ -805,8 +805,17 @@ function mergeStreamBlocks(dbBlocks: ContentBlock[], liveBlocks: ContentBlock[])
   // is missing.
   if (dbText && liveText.startsWith(dbText)) {
     const liveToolIds = new Set(liveBlocks.filter((b) => b.type === 'tool_use' && b.id).map((b) => b.id))
+    // DB slim thinking markers ({think_id, done}) reference reasoning the live
+    // stream already rendered when live holds a thinking block — adopting them
+    // would duplicate the chip. When live has NO thinking block (the placeholder
+    // was recreated after that thinking finished and replay emitted text only),
+    // the DB marker is genuinely missing and is adopted below.
+    const liveHasThinking = liveBlocks.some((b) => b.type === 'thinking')
     const extra = dbBlocks.filter(
-      (b) => b.type !== 'text' && !(b.type === 'tool_use' && b.id && liveToolIds.has(b.id)),
+      (b) =>
+        b.type !== 'text' &&
+        !(b.type === 'tool_use' && b.id && liveToolIds.has(b.id)) &&
+        !(b.type === 'thinking' && liveHasThinking),
     )
     return extra.length > 0 ? [...extra, ...liveBlocks] : liveBlocks
   }
