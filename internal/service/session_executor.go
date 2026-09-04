@@ -48,6 +48,8 @@ const (
 	cancelReasonRestart = "restart"
 	// blockTypeWarning is the content block type for warning messages.
 	blockTypeWarning = "warning"
+	// blockTypeThinking is the content block type for thinking (reasoning) text.
+	blockTypeThinking = "thinking"
 	// eventTypeContentReset clears accumulated blocks from a failed Prompt before retry.
 	eventTypeContentReset = "content_reset"
 	// eventTypeDone is the stream event type for stream completion.
@@ -793,7 +795,7 @@ func (e *SessionExecutor) flushPendingThinking() {
 	}
 	for i := range e.blocks {
 		b := &e.blocks[i]
-		if b.Type != "thinking" {
+		if b.Type != blockTypeThinking {
 			continue
 		}
 		// Stable ID: generate on first appearance, reuse afterwards.
@@ -917,7 +919,7 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 
 	serializedBlocks := make([]model.ContentBlock, 0, len(e.blocks))
 	for _, b := range e.blocks {
-		if b.Type == "thinking" {
+		if b.Type == blockTypeThinking {
 			// The full thinking text NEVER goes into the rate-limited content row
 			// (it lives in chat_thinking via flushPendingThinking; embedding even a
 			// slim think_id marker for an IN-PROGRESS block would leak an "empty
@@ -942,7 +944,7 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 				// Only blocks that actually reached chat_thinking get markers — an
 				// empty done block has no row to lazy-load and would 404.
 				serializedBlocks = append(serializedBlocks, model.ContentBlock{
-					Type:    "thinking",
+					Type:    blockTypeThinking,
 					ThinkID: b.ThinkID,
 					Done:    true,
 				})
