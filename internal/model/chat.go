@@ -118,11 +118,11 @@ type SummaryFileChanges []SummaryFileChange
 // heavy content was stripped by summarizeContentForView. Mirrors the block
 // fields the frontend banner renderer reads.
 type SummaryWarning struct {
-	Type        string `json:"type"`                  // "warning" | "error"
-	Text        string `json:"text,omitempty"`        // display text / fallback
-	Reason      string `json:"reason,omitempty"`      // structured reason for i18n (e.g. "restart")
-	ErrorCode   int    `json:"error_code,omitempty"`  // structured error code (e.g. ACP JSON-RPC -32603)
-	HTTPStatus  int    `json:"http_status,omitempty"` // upstream HTTP status when available (e.g. 500)
+	Type        string `json:"type"`                   // "warning" | "error"
+	Text        string `json:"text,omitempty"`         // display text / fallback
+	Reason      string `json:"reason,omitempty"`       // structured reason for i18n (e.g. "restart")
+	ErrorCode   int    `json:"error_code,omitempty"`   // structured error code (e.g. ACP JSON-RPC -32603)
+	HTTPStatus  int    `json:"http_status,omitempty"`  // upstream HTTP status when available (e.g. 500)
 	ErrorSource string `json:"error_source,omitempty"` // "agent" | "clawbench" | "network"
 }
 

@@ -145,7 +145,7 @@ func appendClientLog(source string, lines []byte) error {
 	// single huge batch cannot push a small file far past the limit either.
 	if fi, err := os.Stat(path); err == nil && fi.Size()+int64(len(lines)) > clientLogMaxBytes {
 		rotated := path + ".1"
-		_ = os.Remove(rotated)               // drop the previous generation
+		_ = os.Remove(rotated) // drop the previous generation
 		if err := os.Rename(path, rotated); err != nil {
 			// Not fatal: fall through and keep appending to the oversized file.
 			slog.Warn("client log rotate failed", slog.String("path", path), slog.String("err", err.Error()))

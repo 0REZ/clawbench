@@ -60,3 +60,37 @@ func TestAppendClientLog_SecondRotationDropsPreviousGen(t *testing.T) {
 	assert.Equal(t, strings.Repeat("b", int(clientLogMaxBytes)), string(rotated))
 	assert.False(t, strings.Contains(string(rotated), "a"))
 }
+
+// TestAppendClientLog_RenameFailureFallsThrough exercises the non-fatal rotate
+// fall-through: when the rename to .1 fails (e.g. a non-empty directory is
+// squatting on the .1 path), the append must still land in the live file
+// instead of erroring out and losing the batch.
+func TestAppendClientLog_RenameFailureFallsThrough(t *testing.T) {
+	origLogDir := model.ConfigInstance.LogDir
+	defer func() { model.ConfigInstance.LogDir = origLogDir }()
+
+	tmpDir := t.TempDir()
+	model.ConfigInstance.LogDir = tmpDir
+	path := filepath.Join(tmpDir, "js.log")
+	rotated := path + ".1"
+
+	// Fill the live file so the next append triggers the rotation branch.
+	big := strings.Repeat("x", int(clientLogMaxBytes))
+	require.NoError(t, appendClientLog("js", []byte(big)))
+
+	// Occupy the .1 path with a non-empty directory: os.Remove(rotated) fails
+	// (ENOTEMPTY) and os.Rename(js.log → js.log.1) fails (target not empty),
+	// exercising the slog.Warn fall-through inside the rotation branch.
+	require.NoError(t, os.MkdirAll(filepath.Join(rotated, "stub"), 0o755))
+	require.NoError(t, appendClientLog("js", []byte("tail")))
+
+	// Rotation failed, so the live file kept the full history…
+	live, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, big+"tail", string(live))
+
+	// …and the squatting directory was left untouched.
+	fi, err := os.Stat(rotated)
+	require.NoError(t, err)
+	assert.True(t, fi.IsDir())
+}
