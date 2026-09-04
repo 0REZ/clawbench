@@ -12,6 +12,41 @@
          directly from summaryCards — NOT by traversing blocks (which may be empty in
          summary-first loading). -->
     <template v-if="showingSummary && summary">
+      <!-- Warning/error banners from summaryCards.warnings — the summary view
+           renders with stripped content blocks ({"blocks":[]}), so warning/error
+           banners are carried here to stay visible (mirrors file-changes cards). -->
+      <template v-for="(w, wi) in summaryWarnings" :key="'sum-warn-' + wi">
+        <!-- Error block -->
+        <div v-if="w.type === 'error'" class="chat-error-card">
+          <AlertTriangle :size="14" class="error-icon" />
+          <span class="error-text">{{ getWarningText(w) }}</span>
+          <span v-if="errorSourceLabel(w)" class="error-source-chip" :class="'src-' + (w.error_source || '')">{{ errorSourceLabel(w) }}</span>
+          <button v-if="isResetableReason(w.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: w.reason })">
+            {{ t('chat.contentBlocks.resetSession') }}
+          </button>
+        </div>
+        <!-- Warning block: severe (disconnect/timeout/restart) renders as error-level red -->
+        <div v-else-if="w.type === 'warning' && isSevereWarning(w)" class="chat-error-card">
+          <AlertTriangle :size="14" class="error-icon" />
+          <span class="error-text">{{ getWarningText(w) }}</span>
+          <span v-if="errorSourceLabel(w)" class="error-source-chip" :class="'src-' + (w.error_source || '')">{{ errorSourceLabel(w) }}</span>
+          <button v-if="isResetableReason(w.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: w.reason })">
+            {{ t('chat.contentBlocks.resetSession') }}
+          </button>
+        </div>
+        <!-- Warning block: normal (parse errors, stderr) renders as amber -->
+        <div v-else-if="w.type === 'warning'" class="chat-warning-card">
+          <AlertCircle :size="14" class="warning-icon" />
+          <span class="warning-text">{{ getWarningText(w) }}</span>
+          <span v-if="errorSourceLabel(w)" class="error-source-chip" :class="'src-' + (w.error_source || '')">{{ errorSourceLabel(w) }}</span>
+          <button v-if="w.reason === 'restart'" class="warning-continue-btn" @click.stop="$emit('send-message', t('chat.contentBlocks.continue'))">
+            {{ t('chat.contentBlocks.continue') }}
+          </button>
+          <button v-if="isResetableReason(w.reason)" class="warning-reset-btn" @click.stop="$emit('reset-session', { reason: w.reason })">
+            {{ t('chat.contentBlocks.resetSession') }}
+          </button>
+        </div>
+      </template>
       <!-- Tool cards from summaryCards.tools (auto-expand tools render inline detail) -->
       <template v-for="(tool, ti) in summaryTools" :key="'sum-tool-' + ti">
         <div class="chat-tool-call done" :data-category="getToolIcon(tool.name).category" @click.stop="handleSummaryToolClick(tool, ti)">
@@ -428,6 +463,7 @@ function scheduledTaskKeys(bi: number) {
 const summaryTools = computed(() => props.summaryCards?.tools || [])
 const summaryTaskIDs = computed(() => props.summaryCards?.taskIDs || [])
 const summaryAskQuestions = computed(() => props.summaryCards?.askQuestions || [])
+const summaryWarnings = computed(() => props.summaryCards?.warnings || [])
 
 
 

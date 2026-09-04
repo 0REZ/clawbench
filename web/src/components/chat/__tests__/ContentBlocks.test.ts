@@ -512,6 +512,87 @@ describe('ContentBlocks', () => {
       expect(wrapper.html()).toContain('Summary text')
     })
 
+    it('renders restart warning banner from summaryCards.warnings (summary view)', async () => {
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'Summary text',
+        showingSummary: true,
+        summaryCards: {
+          warnings: [{ type: 'warning', reason: 'restart', text: 'Server restarted, AI response interrupted' }],
+        },
+      })
+      const card = wrapper.find('.chat-warning-card')
+      expect(card.exists()).toBe(true)
+      expect(card.text()).toContain('Server restarted, AI response interrupted')
+      const btn = card.find('.warning-continue-btn')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+      expect(wrapper.emitted('send-message')).toBeTruthy()
+      expect(wrapper.emitted('send-message')![0]).toEqual(['Continue'])
+    })
+
+    it('renders error banner from summaryCards.warnings with reset button', async () => {
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'Summary text',
+        showingSummary: true,
+        summaryCards: {
+          warnings: [{ type: 'error', reason: 'backend_exit', text: 'AI backend exited' }],
+        },
+      })
+      const card = wrapper.find('.chat-error-card')
+      expect(card.exists()).toBe(true)
+      expect(card.text()).toContain('AI backend exited')
+      const btn = card.find('.warning-reset-btn')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+      expect(wrapper.emitted('reset-session')).toBeTruthy()
+      expect(wrapper.emitted('reset-session')![0]).toEqual([{ reason: 'backend_exit' }])
+    })
+
+    it('renders severe warning (disconnect/timeout/panic) as error-level card from summaryCards.warnings', async () => {
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'Summary text',
+        showingSummary: true,
+        summaryCards: {
+          warnings: [{ type: 'warning', reason: 'disconnect', text: 'Connection lost' }],
+        },
+      })
+      // isSevereWarning({reason:'disconnect'}) → red error card, not amber.
+      const card = wrapper.find('.chat-error-card')
+      expect(card.exists()).toBe(true)
+      expect(card.text()).toContain('Connection lost')
+      const btn = card.find('.warning-reset-btn')
+      expect(btn.exists()).toBe(true)
+      await btn.trigger('click')
+      expect(wrapper.emitted('reset-session')).toBeTruthy()
+      expect(wrapper.emitted('reset-session')![0]).toEqual([{ reason: 'disconnect' }])
+    })
+
+    it('does not render warning banners when summaryCards has no warnings', () => {
+      const wrapper = mountBlocks({
+        blocks: [],
+        summary: 'Summary text',
+        showingSummary: true,
+        summaryCards: { tools: [], taskIDs: [], askQuestions: [] },
+      })
+      expect(wrapper.find('.chat-warning-card').exists()).toBe(false)
+      expect(wrapper.find('.chat-error-card').exists()).toBe(false)
+    })
+
+    it('does not render summary warnings in original mode (blocks branch)', () => {
+      const wrapper = mountBlocks({
+        blocks: [{ type: 'text', text: 'Original content' }],
+        summary: 'Summary text',
+        showingSummary: false,
+        summaryCards: { warnings: [{ type: 'warning', reason: 'restart', text: 'Server restarted' }] },
+      })
+      // Summary-only warnings must not leak into the original-content view.
+      expect(wrapper.html()).toContain('Original content')
+      expect(wrapper.find('.chat-warning-card').exists()).toBe(false)
+    })
+
     it('hides summary when showingSummary is false', () => {
       const wrapper = mountBlocks({
         blocks: [{ type: 'text', text: 'Original content' }],

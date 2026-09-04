@@ -216,6 +216,16 @@ export interface SummaryCards {
   askQuestions?: Array<Record<string, unknown>>
   createdFiles?: Array<string | { path: string; toolIDs?: string[] }>
   modifiedFiles?: Array<string | { path: string; toolIDs?: string[] }>
+  /** Warning/error banners carried into summary view, where content blocks are
+   *  stripped. Mirrors the ContentBlock fields the banner renderer reads. */
+  warnings?: Array<{
+    type?: 'warning' | 'error'
+    text?: string
+    reason?: string
+    error_code?: number
+    http_status?: number
+    error_source?: string
+  }>
 }
 
 // Merge a summaryCards file-change entry into a map of FileChange objects.

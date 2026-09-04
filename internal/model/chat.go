@@ -112,6 +112,20 @@ type SummaryFileChange struct {
 // []string format (plain paths) stored by older versions.
 type SummaryFileChanges []SummaryFileChange
 
+// SummaryWarning is a compact record of a warning/error content block present
+// in a message. Carried in summaryCards so the summary view can still surface
+// error banners (e.g. "Server restarted, AI response interrupted") when the
+// heavy content was stripped by summarizeContentForView. Mirrors the block
+// fields the frontend banner renderer reads.
+type SummaryWarning struct {
+	Type        string `json:"type"`                  // "warning" | "error"
+	Text        string `json:"text,omitempty"`        // display text / fallback
+	Reason      string `json:"reason,omitempty"`      // structured reason for i18n (e.g. "restart")
+	ErrorCode   int    `json:"error_code,omitempty"`  // structured error code (e.g. ACP JSON-RPC -32603)
+	HTTPStatus  int    `json:"http_status,omitempty"` // upstream HTTP status when available (e.g. 500)
+	ErrorSource string `json:"error_source,omitempty"` // "agent" | "clawbench" | "network"
+}
+
 // UnmarshalJSON accepts both the current object format
 // ([{"path":...,"toolIDs":[...]}]) and the legacy plain-path format
 // (["path1","path2"]).
@@ -148,6 +162,10 @@ type SummaryCards struct {
 	// omitted) and enable on-demand diff fetching via the tool call IDs.
 	CreatedFiles  SummaryFileChanges `json:"createdFiles,omitempty"`
 	ModifiedFiles SummaryFileChanges `json:"modifiedFiles,omitempty"`
+	// Warnings carry the warning/error blocks of a message so the summary view
+	// (where content blocks are stripped) still renders error banners — the
+	// same role CreatedFiles/ModifiedFiles play for the file-changes banner.
+	Warnings []SummaryWarning `json:"warnings,omitempty"`
 }
 
 // UnmarshalJSON implements custom deserialization for ChatMessage.

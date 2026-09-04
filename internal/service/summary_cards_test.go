@@ -112,3 +112,34 @@ func TestExtractSummaryCardsAskQuestionPerItemHeader(t *testing.T) {
 		t.Fatalf("per-item questions mismatch: %+v", cards.AskQuestions)
 	}
 }
+
+func TestExtractSummaryCardsWarnings(t *testing.T) {
+	blocks := []model.ContentBlock{
+		{Type: "warning", Text: "Server restarted, AI response interrupted", Reason: "restart"},
+		{Type: "error", Text: "AI backend exited", Reason: "backend_exit", ErrorCode: -32603, HTTPStatus: 500, ErrorSource: "agent"},
+		{Type: "text", Text: "ordinary answer"},
+		{Type: "tool_use", Name: "Bash", ID: "t1", Done: true, Status: "success"},
+	}
+	cards := extractSummaryCards(blocks)
+
+	if len(cards.Warnings) != 2 {
+		t.Fatalf("expected 2 warnings, got %d: %+v", len(cards.Warnings), cards.Warnings)
+	}
+	// Restart warning (amber banner + continue button on the frontend).
+	w0 := cards.Warnings[0]
+	if w0.Type != "warning" || w0.Text != "Server restarted, AI response interrupted" || w0.Reason != "restart" {
+		t.Fatalf("restart warning mismatch: %+v", w0)
+	}
+	if w0.ErrorCode != 0 || w0.HTTPStatus != 0 || w0.ErrorSource != "" {
+		t.Fatalf("restart warning should carry no structured error fields: %+v", w0)
+	}
+	// Error block (red banner with structured fields preserved).
+	w1 := cards.Warnings[1]
+	if w1.Type != "error" || w1.Text != "AI backend exited" || w1.Reason != "backend_exit" {
+		t.Fatalf("error warning mismatch: %+v", w1)
+	}
+	if w1.ErrorCode != -32603 || w1.HTTPStatus != 500 || w1.ErrorSource != "agent" {
+		t.Fatalf("error warning structured fields lost: %+v", w1)
+	}
+	// text/tool blocks must not be collected as warnings.
+}
