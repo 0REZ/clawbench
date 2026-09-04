@@ -46,6 +46,7 @@ DirectoryNotFound: Directory not found
 InvalidFilePath: Invalid file path
 FileTooLargeOrInvalid: File too large or invalid form
 NoFileProvided: No file provided
+UploadSaveFailed: "Unable to save file: {{.Error}}"
 FileMustHaveExtension: File must have an extension
 FileTypeNotAllowed: "File type not allowed: {{.Ext}}"
 MissingPathOrName: Missing path or name

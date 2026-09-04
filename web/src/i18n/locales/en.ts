@@ -1355,6 +1355,7 @@ export default {
     tooManyFiles: '{total} files selected, but only {remaining} slots remaining',
     fileTooLarge: '{name} exceeds {max}MB limit',
     completed: 'Uploaded {count} item(s)',
+    partial: 'Uploaded {ok} item(s), {failed} failed: {error}',
     cancelled: 'Upload cancelled',
     downloaded: 'Downloaded {count} item(s)',
     dirDownloadUnsupported: 'Tree download is not supported in this browser. Use Chrome/Edge with HTTPS.',

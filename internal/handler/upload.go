@@ -94,7 +94,7 @@ func UploadFile(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // mu
 		customDir = false
 		targetDir = filepath.Join(projectPath, ".clawbench", "uploads")
 		if err := os.MkdirAll(targetDir, 0o755); err != nil {
-			model.WriteError(w, model.Internal(fmt.Errorf("failed to create uploads directory")))
+			writeLocalizedErrorf(w, r, http.StatusInternalServerError, "UploadSaveFailed", map[string]any{"Error": err.Error()})
 			return
 		}
 	}
@@ -136,7 +136,7 @@ func UploadFile(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // mu
 	// Create destination file
 	dst, err := os.Create(dstPath)
 	if err != nil {
-		model.WriteError(w, model.Internal(fmt.Errorf("failed to create file")))
+		writeLocalizedErrorf(w, r, http.StatusInternalServerError, "UploadSaveFailed", map[string]any{"Error": err.Error()})
 		return
 	}
 	defer func() { _ = dst.Close() }()
@@ -144,7 +144,7 @@ func UploadFile(w http.ResponseWriter, r *http.Request) { //nolint:gocyclo // mu
 	// Copy file content
 	if _, err := io.Copy(dst, file); err != nil {
 		_ = os.Remove(dstPath)
-		model.WriteError(w, model.Internal(fmt.Errorf("failed to save file")))
+		writeLocalizedErrorf(w, r, http.StatusInternalServerError, "UploadSaveFailed", map[string]any{"Error": err.Error()})
 		return
 	}
 
@@ -192,7 +192,7 @@ func resolveRelPathDir(w http.ResponseWriter, r *http.Request, targetDir string)
 		return ""
 	}
 	if err := os.MkdirAll(subAbs, 0o755); err != nil {
-		model.WriteError(w, model.Internal(fmt.Errorf("failed to create upload subdirectory: %w", err)))
+		writeLocalizedErrorf(w, r, http.StatusInternalServerError, "UploadSaveFailed", map[string]any{"Error": err.Error()})
 		return ""
 	}
 	return subAbs

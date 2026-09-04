@@ -1355,6 +1355,7 @@ export default {
     tooManyFiles: '已选择 {total} 个文件，但仅剩 {remaining} 个名额',
     fileTooLarge: '{name} 超过 {max}MB 限制',
     completed: '已上传 {count} 项',
+    partial: '已上传 {ok} 项，{failed} 项失败: {error}',
     cancelled: '已取消上传',
     downloaded: '已下载 {count} 项',
     dirDownloadUnsupported: '当前浏览器不支持按文件树下载，请使用 Chrome/Edge 并开启 HTTPS 访问',

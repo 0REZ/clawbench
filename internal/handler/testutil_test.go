@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"clawbench/internal/middleware"
@@ -449,6 +450,26 @@ func assertStatus(t *testing.T, w *httptest.ResponseRecorder, expected int) {
 	t.Helper()
 	if w.Code != expected {
 		t.Errorf("expected status %d, got %d; body: %s", expected, w.Code, w.Body.String())
+	}
+}
+
+// assertSaveErrorBody asserts an upload 500 response is a JSON ErrorResponse
+// whose error message is the localized UploadSaveFailed text carrying the
+// underlying cause — NOT the generic "internal server error".
+func assertSaveErrorBody(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusInternalServerError {
+		return
+	}
+	var resp model.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("500 body is not a JSON error: %v; body: %s", err, w.Body.String())
+	}
+	if resp.MsgKey != "UploadSaveFailed" {
+		t.Errorf("expected msgKey UploadSaveFailed, got %q; body: %s", resp.MsgKey, w.Body.String())
+	}
+	if strings.Contains(resp.Error, "internal server error") {
+		t.Errorf("500 error must carry the underlying cause, got generic message; body: %s", w.Body.String())
 	}
 }
 
