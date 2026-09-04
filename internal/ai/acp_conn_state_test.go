@@ -309,6 +309,164 @@ func TestExtractACPModelListFromLoad_NilAndPopulated(t *testing.T) {
 	assert.Equal(t, "glm-5.3[1m]", ml.Models[1].Name)
 }
 
+func TestExtractACPStateFromLoad_NilResponses(t *testing.T) {
+	// The FromLoad extractors must be nil-safe: a nil LoadSessionResponse or a
+	// response with no relevant ConfigOptions yields nil (never a panic).
+	assert.Nil(t, extractACPModeStateFromLoad(nil))
+	assert.Nil(t, extractACPConfigOptionsFromLoad(nil))
+	assert.Nil(t, extractACPThinkingEffortFromLoad(nil))
+
+	// Empty ConfigOptions also yields nil for each extractor.
+	empty := &acp.LoadSessionResponse{}
+	assert.Nil(t, extractACPModeStateFromLoad(empty))
+	assert.Nil(t, extractACPConfigOptionsFromLoad(empty))
+	assert.Nil(t, extractACPThinkingEffortFromLoad(empty))
+	assert.Nil(t, extractACPModelListFromLoad(empty))
+}
+
+func TestMergeResumedSessionState_LoadResponseAllStateExtracted(t *testing.T) {
+	// A LoadSessionResponse carrying mode + thought_level + model config
+	// options must flow through the merge fallback into the registry — the
+	// mirror of the resume path when every sub-extractor returns non-nil.
+	agent := &model.Agent{ID: "test-merge-load-all", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-merge-load-all")
+
+	modeCat := acp.SessionConfigOptionCategoryMode
+	thoughtCat := acp.SessionConfigOptionCategoryThoughtLevel
+	modelCat := acp.SessionConfigOptionCategoryModel
+	loadResp := &acp.LoadSessionResponse{
+		Modes: &acp.SessionModeState{
+			CurrentModeId: "plan",
+			AvailableModes: []acp.SessionMode{
+				{Id: "plan", Name: "Plan"},
+			},
+		},
+		ConfigOptions: []acp.SessionConfigOption{
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &thoughtCat,
+					Id:           "thinkingEffort",
+					Name:         "Thinking Effort",
+					CurrentValue: "high",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "low", Name: "Low"},
+							{Value: "high", Name: "High"},
+						},
+					},
+				},
+			},
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modeCat,
+					Id:           "mode",
+					Name:         "Mode",
+					CurrentValue: "plan",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "plan", Name: "Plan"},
+						},
+					},
+				},
+			},
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modelCat,
+					Id:           "model",
+					Name:         "Model",
+					CurrentValue: "sonnet",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "default", Name: "Default (recommended)"},
+							{Value: "opus", Name: "glm-5.3[1m]"},
+							{Value: "sonnet", Name: "glm-5.3[1m]"},
+						},
+					},
+				},
+			},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastLoadSessionResp = loadResp
+	conn.mu.Unlock()
+
+	conn.MergeResumedSessionState()
+
+	assert.Equal(t, "plan", conn.GetCurrentModeID())
+	assert.Equal(t, "high", conn.GetCurrentThinkingEffortID())
+	assert.Equal(t, "sonnet", conn.GetCurrentModelID())
+
+	// Registry carries effort levels so the UI tier chips populate.
+	es := GetAgentCapabilityRegistry().GetThinkingEffortState(agent.ID, "high")
+	require.NotNil(t, es)
+	require.Len(t, es.AvailableLevels, 2)
+	assert.Equal(t, "low", es.AvailableLevels[0].ID)
+}
+
+func TestMergeResumedSessionState_LoadResponseStdoutFilterFallback(t *testing.T) {
+	// When the load response carries no model ConfigOptions but the
+	// stdoutFilter has cached models (agent reports models via the
+	// SessionModelState extension), the fallback must surface them — mirroring
+	// the resume branch.
+	agent := &model.Agent{ID: "test-merge-load-filter", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-merge-load-filter")
+
+	filter := newACPStdoutFilter(strings.NewReader(""))
+	defer filter.Close()
+	filter.modelsMu.Lock()
+	filter.cachedModels = &ModelListState{
+		CurrentModelID: "kimi-code/k3",
+		Models: []model.AgentModel{
+			{ID: "kimi-code/k3", Name: "Kimi K3"},
+		},
+	}
+	filter.modelsMu.Unlock()
+	conn.stdoutFilter = filter
+
+	modeCat := acp.SessionConfigOptionCategoryMode
+	loadResp := &acp.LoadSessionResponse{
+		Modes: &acp.SessionModeState{
+			CurrentModeId: "default",
+			AvailableModes: []acp.SessionMode{
+				{Id: "default", Name: "Default"},
+			},
+		},
+		// No model ConfigOptions — model list must come from stdoutFilter.
+		ConfigOptions: []acp.SessionConfigOption{
+			{
+				Select: &acp.SessionConfigOptionSelect{
+					Category:     &modeCat,
+					Id:           "mode",
+					Name:         "Mode",
+					CurrentValue: "default",
+					Options: acp.SessionConfigSelectOptions{
+						Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+							{Value: "default", Name: "Default"},
+						},
+					},
+				},
+			},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastLoadSessionResp = loadResp
+	conn.mu.Unlock()
+
+	conn.MergeResumedSessionState()
+
+	assert.Equal(t, "kimi-code/k3", conn.GetCurrentModelID())
+	ml := GetAgentCapabilityRegistry().GetModelListState(agent.ID, "kimi-code/k3")
+	require.NotNil(t, ml)
+	require.Len(t, ml.Models, 1)
+	assert.Equal(t, "kimi-code/k3", ml.Models[0].ID)
+
+	// Cache must be cleared after the fallback consumed it.
+	filter.modelsMu.Lock()
+	cached := filter.cachedModels
+	filter.modelsMu.Unlock()
+	assert.Nil(t, cached)
+}
+
 // ---------------------------------------------------------------------------
 // extractSessionState — newResp with all sub-extractors returning non-nil
 // ---------------------------------------------------------------------------
