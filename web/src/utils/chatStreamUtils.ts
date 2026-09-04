@@ -216,6 +216,16 @@ export interface SummaryCards {
   askQuestions?: Array<Record<string, unknown>>
   createdFiles?: Array<string | { path: string; toolIDs?: string[] }>
   modifiedFiles?: Array<string | { path: string; toolIDs?: string[] }>
+  /** Warning/error banners carried into summary view, where content blocks are
+   *  stripped. Mirrors the ContentBlock fields the banner renderer reads. */
+  warnings?: Array<{
+    type?: 'warning' | 'error'
+    text?: string
+    reason?: string
+    error_code?: number
+    http_status?: number
+    error_source?: string
+  }>
 }
 
 // Merge a summaryCards file-change entry into a map of FileChange objects.
@@ -370,6 +380,46 @@ let seqCounter = 0
 export function nextClientSeq(): number {
   seqCounter += 1
   return seqCounter
+}
+
+/**
+ * In-flight direct-send queueIds.
+ *
+ * A DIRECT-send POST (`/api/ai/chat`, idle session) persists its row and returns
+ * quickly, but a loadHistory GET that was already in flight BEFORE the POST
+ * committed (e.g. the `done`-triggered reload of the previous turn, or a slow
+ * panel-open load) can return a DB snapshot that predates the new row. When
+ * rebuildFromDb applies that stale snapshot it drops the just-pushed optimistic
+ * bubble as "transient without a DB row", and nothing ever re-creates it (the
+ * user_message self-echo only adopts an EXISTING bubble) — the user's own
+ * message vanishes from the list until the next forced reload.
+ *
+ * While a queueId is tracked here, rebuildFromDb treats a matching transient
+ * user bubble that has no DB row in the snapshot as "still being persisted",
+ * NOT as a stale duplicate, and keeps it. The entry is cleared as soon as a
+ * db_load snapshot actually contains the row (marking the send fully acked and
+ * any pre-commit GET settled), or explicitly by the caller on failure.
+ */
+const inFlightDirectSends = new Set<string>()
+
+/** Mark a direct-send queueId as in-flight (POST started, row not yet acked). */
+export function trackInFlightSend(queueId: string): void {
+  if (queueId) inFlightDirectSends.add(queueId)
+}
+
+/** Stop tracking a direct-send queueId (row observed in a db_load, or failure). */
+export function untrackInFlightSend(queueId: string): void {
+  if (queueId) inFlightDirectSends.delete(queueId)
+}
+
+/** Whether a direct-send with this queueId is still awaiting DB acknowledgment. */
+export function isInFlightSend(queueId?: string): boolean {
+  return !!queueId && inFlightDirectSends.has(queueId)
+}
+
+/** Test hook: clear the registry (imported by unit tests via before/afterEach). */
+export function resetInFlightSendsForTest(): void {
+  inFlightDirectSends.clear()
 }
 
 /**
@@ -805,8 +855,17 @@ function mergeStreamBlocks(dbBlocks: ContentBlock[], liveBlocks: ContentBlock[])
   // is missing.
   if (dbText && liveText.startsWith(dbText)) {
     const liveToolIds = new Set(liveBlocks.filter((b) => b.type === 'tool_use' && b.id).map((b) => b.id))
+    // DB slim thinking markers ({think_id, done}) reference reasoning the live
+    // stream already rendered when live holds a thinking block — adopting them
+    // would duplicate the chip. When live has NO thinking block (the placeholder
+    // was recreated after that thinking finished and replay emitted text only),
+    // the DB marker is genuinely missing and is adopted below.
+    const liveHasThinking = liveBlocks.some((b) => b.type === 'thinking')
     const extra = dbBlocks.filter(
-      (b) => b.type !== 'text' && !(b.type === 'tool_use' && b.id && liveToolIds.has(b.id)),
+      (b) =>
+        b.type !== 'text' &&
+        !(b.type === 'tool_use' && b.id && liveToolIds.has(b.id)) &&
+        !(b.type === 'thinking' && liveHasThinking),
     )
     return extra.length > 0 ? [...extra, ...liveBlocks] : liveBlocks
   }
@@ -920,6 +979,15 @@ export function rebuildFromDb(state: ChatMessage[], dbMessages: ChatMessage[]): 
 
   const used = new Set<ChatMessage>()
   const merged: ChatMessage[] = []
+
+  // A db_load snapshot that CONTAINS an in-flight send's row means the send has
+  // been fully acknowledged and persisted — any older pre-commit GET is settled
+  // by now, so the in-flight protection is no longer needed. Clearing here keeps
+  // the registry from leaking across turns: every finished turn ends in a
+  // loadHistory that includes the just-committed row.
+  for (const db of dbMessages) {
+    if (db.role === 'user' && db.queueId) untrackInFlightSend(db.queueId)
+  }
 
   for (const db of dbMessages) {
     // 1. Live streaming placeholder → keep its object, merge DB identity.
@@ -1035,8 +1103,24 @@ export function rebuildFromDb(state: ChatMessage[], dbMessages: ChatMessage[]): 
   const parentAdoption = new Map<string, string>()
   for (const m of state) {
     if (used.has(m)) continue
+
+    // In-flight direct-send bubble: its POST is still awaiting DB ack, so the
+    // snapshot may legitimately predate the row. Keep the bubble — a restart at
+    // this moment WOULD show the row, so dropping it is a stale-snapshot
+    // artifact, not convergence. The row in this snapshot would have cleared
+    // the registry above (untrackInFlightSend), so reaching here means the row
+    // genuinely is NOT in this snapshot → keep the optimistic bubble. This must
+    // run before the transient gate below: after optimistic_adopt_id the bubble
+    // carries a NUMERIC id (non-transient) but is still awaiting the row in a
+    // db_load, so it must be protected on the same basis.
+    if (m.role === 'user' && isInFlightSend(m.queueId || (typeof m.id === 'string' ? String(m.id) : undefined))) {
+      merged.push(m)
+      continue
+    }
+
     const isTransient = m.pending === true || m.streaming === true || typeof m.id === 'string'
     if (!isTransient) continue
+
     // A dropped optimistic/transient user bubble that corresponds to a DB row:
     // its replies anchor to the string id — rewrite them to the DB id below.
     if (m.role === 'user' && typeof m.id === 'string') {

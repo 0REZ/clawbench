@@ -18,7 +18,7 @@ import { getNative, isNativeApp as nativeBridgeIsNativeApp } from '@/utils/clawb
 const LOG_ENDPOINT = '/api/client-log'
 const FLUSH_INTERVAL_MS = 2000  // 2-second flush interval
 const BUFFER_CAPACITY = 200     // max buffered entries
-const FLUSH_THRESHOLD = 50      // flush early when threshold reached
+const FLUSH_TIMEOUT_MS = 5000   // abort a hung flush so isFlushing can never latch
 
 interface LogEntry {
   level: string  // 'D' | 'I' | 'W' | 'E'
@@ -56,6 +56,23 @@ function relayToNative(level: string, tag: string, args: unknown[]): void {
 const buffer: LogEntry[] = []
 let flushTimer: ReturnType<typeof setInterval> | null = null
 let isFlushing = false
+// HTTP relay master switch. Relayed (per-token) appLog calls still hit the
+// console and are appended to the ring buffer for diagnosis, but nothing is
+// POSTed to /api/client-log while disabled. Controlled by the "Debug Log
+// Capture" setting (SettingsCategory / App.vue) — a disabled relay must not
+// keep firing requests just because logs are flowing.
+let httpRelayEnabled = false
+
+// Set whether HTTP relay may flush. The relay starts DISABLED and is only
+// armed once the app boots with logCapture=true (or the user toggles it on).
+export function setLogCaptureEnabled(enabled: boolean): void {
+  httpRelayEnabled = enabled
+  if (enabled) {
+    startFlushTimer()
+  } else {
+    stopFlushTimer()
+  }
+}
 
 function isNativeApp(): boolean {
   try {
@@ -76,39 +93,41 @@ function enqueue(level: string, tag: string, args: unknown[]): void {
   if (buffer.length > BUFFER_CAPACITY) {
     buffer.splice(0, buffer.length - BUFFER_CAPACITY)
   }
-
-  // Flush early when threshold reached
-  if (buffer.length >= FLUSH_THRESHOLD) {
-    scheduleFlush()
-  }
-}
-
-function scheduleFlush(): void {
-  if (isFlushing) return
-  // Use microtask to coalesce multiple enqueues in the same event loop
-  Promise.resolve().then(doFlush)
+  // NOTE: no early/instant flush here. Entries are only sent on the single
+  // fixed-interval timer (startFlushTimer, FLUSH_INTERVAL_MS). Any per-entry or
+  // threshold-driven POST makes request rate track log rate, flooding the
+  // connection pool with requests that pile up Pending in DevTools.
 }
 
 async function doFlush(): Promise<void> {
-  if (isFlushing || buffer.length === 0) return
+  // Hard gate: only the timer calls doFlush. A disabled relay must never send.
+  if (!httpRelayEnabled || buffer.length === 0) return
+  if (isFlushing) return
   isFlushing = true
 
   const toSend = buffer.splice(0, 200) // max 200 per request (server limit)
   try {
-    await fetch(LOG_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entries: toSend }),
-      keepalive: true,
-    })
-  } catch {
-    // Server unreachable — discard, do not retry (avoid log storm)
-  }
-  isFlushing = false
-
-  // If more entries accumulated during flush, continue
-  if (buffer.length > 0) {
-    scheduleFlush()
+    // Abort hung requests: a fetch that never settles (dead keep-alive conn
+    // silently dropped by an intermediary) would otherwise leave isFlushing
+    // latched true and permanently stop the whole log relay.
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), FLUSH_TIMEOUT_MS)
+    try {
+      await fetch(LOG_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: toSend }),
+        keepalive: true,
+        signal: ctrl.signal,
+      })
+    } catch {
+      // Timeout (aborted) or server unreachable — discard, do not retry (avoid log storm)
+    } finally {
+      clearTimeout(timer)
+    }
+  } finally {
+    // Always release the flush lock, even if fetch threw synchronously.
+    isFlushing = false
   }
 }
 
@@ -123,6 +142,10 @@ export function stopFlushTimer(): void {
   if (flushTimer !== null) {
     clearInterval(flushTimer)
     flushTimer = null
+  }
+  // Disabling the relay must not send buffered entries afterwards — drop them.
+  if (!httpRelayEnabled) {
+    buffer.length = 0
   }
   doFlush()
 }

@@ -5,12 +5,9 @@ import { gt } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast.ts'
 import { tunnelStatusFromPorts as tunnelStatusFromPortsUtil, buildPortUrl } from '@/utils/portForwardUtils.ts'
 import { store } from '@/stores/app'
-import { appLog } from '@/utils/appLog'
 import { useSessionIdentity } from './useSessionIdentity'
 import { getNative, reconnectTunnel as nativeReconnectTunnel } from '@/utils/clawbenchNative'
 import type { ClawBenchNative } from '@/utils/clawbenchNative'
-
-const TAG = 'PortForward'
 
 interface ForwardedPort {
   port: number        // Target port on remote host
@@ -187,7 +184,6 @@ export function usePortForward() {
     connectingPorts.value = new Set(connectingPorts.value)
     // Register with Android native layer: pass localPort, targetPort, host
     if (isAppMode.value) {
-      appLog.d(TAG, 'registerPort: localPort=' + localPort + ', targetPort=' + port + ', host=' + (host || ''))
       // Native writes are fire-and-forget. The Android bridge is synchronous and returns
       // undefined, so wrap the result so .catch always works (Electron returns a Promise).
       Promise.resolve(getNative()?.addForwardedPort?.(localPort, port, host || '')).catch(() => {})

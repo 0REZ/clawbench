@@ -10,8 +10,9 @@
         :title="t('sharedFiles.clearAll')"
         @click.stop="clearAll"
       >
-        <RefreshCw v-if="clearing" :size="14" class="shared-files-clear-spin" />
-        <Trash2 v-else :size="14" />
+        <RefreshCw v-if="clearing" :size="13" class="shared-files-clear-spin" />
+        <Trash2 v-else :size="13" />
+        {{ clearing ? t('common.loading') : t('sharedFiles.clear') }}
       </button>
     </template>
 
@@ -334,13 +335,15 @@ defineExpose({ open: openDrawer })
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  gap: 4px;
   height: 28px;
+  padding: 0 8px;
   margin-left: auto;
   border: none;
   border-radius: 6px;
   background: transparent;
   color: #cf222e;
+  font-size: 13px;
   cursor: pointer;
   flex-shrink: 0;
 }

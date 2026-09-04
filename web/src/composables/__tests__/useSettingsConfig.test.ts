@@ -147,11 +147,11 @@ describe('useSettingsConfig', () => {
     localStorage.removeItem('clawbench-settings-notificationSound')
   })
 
-  it('localConfig has messageDisplayMode defaulting to summary', () => {
+  it('localConfig has messageDisplayMode defaulting to mixed', () => {
     const { localConfig } = useSettingsConfig()
     localStorage.removeItem('clawbench-settings-messageDisplayMode')
     expect('messageDisplayMode' in localConfig).toBe(true)
-    expect(localConfig.messageDisplayMode).toBe('summary')
+    expect(localConfig.messageDisplayMode).toBe('mixed')
   })
 
   it('setLocalConfig persists messageDisplayMode to localStorage', () => {
@@ -161,6 +161,17 @@ describe('useSettingsConfig', () => {
     expect(localConfig.messageDisplayMode).toBe('original')
     expect(localStorage.getItem('clawbench-settings-messageDisplayMode')).toBe('"original"')
 
+    localStorage.removeItem('clawbench-settings-messageDisplayMode')
+  })
+
+  it('sanitizes an invalid persisted messageDisplayMode back to mixed', async () => {
+    // Seed an invalid value before the module loads so the sanitizer runs.
+    localStorage.setItem('clawbench-settings-messageDisplayMode', '"bogus"')
+    vi.resetModules()
+    const fresh = await import('@/composables/useSettingsConfig')
+    expect(fresh.localConfig.messageDisplayMode).toBe('mixed')
+    // The sanitized default is written back to localStorage.
+    expect(localStorage.getItem('clawbench-settings-messageDisplayMode')).toBe('"mixed"')
     localStorage.removeItem('clawbench-settings-messageDisplayMode')
   })
 

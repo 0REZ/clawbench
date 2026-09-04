@@ -233,7 +233,7 @@ func slimThinkingInContent(content string) (string, []ThinkingRecord, error) {
 	changed := false
 	for i := range blocksRaw {
 		block, ok := blocksRaw[i].(map[string]any)
-		if !ok || block["type"] != "thinking" {
+		if !ok || block[contentKeyType] != blockTypeThinking {
 			continue
 		}
 		text, _ := block["text"].(string)

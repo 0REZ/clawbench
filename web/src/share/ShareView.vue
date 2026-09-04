@@ -275,6 +275,10 @@ function scrollToHeading(id: string) {
   const el = root.querySelector(`#${CSS.escape(id)}`)
   if (el) {
     el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    // Flash the jumped heading (reuses the canonical .line-flash animation from
+    // assets/code-viewer.css, same as the in-app markdown preview anchor jump).
+    el.classList.add('line-flash')
+    el.addEventListener('animationend', () => el.classList.remove('line-flash'), { once: true })
   }
 }
 
@@ -291,104 +295,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.share-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #1f2328);
-  overflow: hidden;
-}
-
-.share-topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 44px;
-  padding: 0 12px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-color, rgba(128,128,128,.25));
-  background: var(--bg-secondary, #f6f8fa);
-}
-
-.share-file-name {
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Structural chrome (.share-view/.share-topbar/.share-body/.share-content/
+   .share-toc/.share-btn/…) lives in css/share-chrome.css — the SAME source the
+   markdown HTML export embeds. Only page-specific rules stay below. */
 
 .share-status { font-size: 12px; color: var(--text-muted, #656d76); }
 .share-error { color: #cf222e; }
-.share-spacer { flex: 1; }
-
-.share-top-actions { display: flex; align-items: center; }
-
-.share-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary, #57606a);
-  cursor: pointer;
-  text-decoration: none;
-}
-.share-btn:hover { background: var(--bg-tertiary, #eaeef2); color: var(--accent-color, #0969da); }
-
-.share-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.share-content {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  position: relative;
-}.share-toc {
-  flex: 0 0 240px;
-  width: 240px;
-  min-width: 0;
-  overflow-y: auto;
-  border-left: 1px solid var(--border-color, rgba(128,128,128,.25));
-  padding: 8px;
-  box-sizing: border-box;
-}
-
-.share-toc-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-muted, #656d76);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-  padding: 4px 8px 8px;
-}
-
-.share-toc-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 5px 8px;
-  font-size: 13px;
-  color: var(--text-secondary, #57606a);
-  cursor: pointer;
-  border-radius: 5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.share-toc-item:hover { background: var(--bg-tertiary, #eaeef2); color: var(--accent-color, #0969da); }
 
 .share-center-hint {
   display: flex;

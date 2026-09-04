@@ -137,7 +137,7 @@ import { formatDuration } from '@/utils/format.ts'
 import { copyText } from '@/utils/clipboard.ts'
 import { extractSpeakableText } from '@/composables/useAutoSpeech.ts'
 import { extractFileChanges } from '@/utils/chatStreamUtils.ts'
-import { isShowingSummary } from '@/utils/chatSessionUtils.ts'
+import { isShowingSummary, normalizeDisplayMode } from '@/utils/chatSessionUtils.ts'
 import { localConfig } from '@/composables/useSettingsConfig'
 import { openFilePath } from '@/composables/useFilePathAnnotation.ts'
 import { store } from '@/stores/app.ts'
@@ -160,6 +160,8 @@ const props = defineProps({
   agents: Array,
   staticBlockCache: Object,
   active: { type: Boolean, default: true },
+  /** True when this message is the most recent assistant reply in the list (drives the 'mixed' display mode). */
+  isLastAssistant: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['toggle-tool', 'show-tool-detail', 'show-metadata', 'file-tag-click', 'task-card-click', 'send-message', 'render-flush', 'toggle-summary', 'ensure-content', 'resume-session', 'remove-pending', 'fork-from-message', 'reset-session'])
@@ -212,7 +214,10 @@ function handleToggleSummary() {
 // Uses extractSpeakableText to include AskUserQuestion blocks.
 // Falls back to the summary text when blocks are empty (summary-first loading
 // strips content), so the read-aloud button stays available in summary view.
-const displayMode = computed(() => (localConfig.messageDisplayMode === 'original' ? 'original' : 'summary'))
+// Global display mode: 'summary' | 'original' | 'mixed'. In 'mixed' the LAST
+// assistant reply renders full text (behaves like 'original'), older messages
+// render their summaries (behaves like 'summary').
+const displayMode = computed(() => normalizeDisplayMode(localConfig.messageDisplayMode))
 
 const msgText = computed(() => {
   if (props.msg?.role !== 'assistant') return ''
@@ -225,16 +230,21 @@ const msgText = computed(() => {
 // Whether to render the summary view. Computed from message state (summary
 // exists, content stripped), the user's explicit preference, and the global
 // default display mode. While the full text is being lazily fetched in
-// original mode, keep showing the summary as a placeholder so the message
-// bubble is never blank.
-const showSummary = computed(() => (props.msg ? isShowingSummary(props.msg, displayMode.value) : false))
+// original (or mixed-last-assistant) view, keep showing the summary as a
+// placeholder so the message bubble is never blank.
+const showSummary = computed(() => (props.msg ? isShowingSummary(props.msg, displayMode.value, { isLastAssistant: props.isLastAssistant }) : false))
 
-// In global original mode, a summarized message whose content was stripped by
-// Backend stripped content has nothing to render in original view — request the full text
-// once. Guarded by _loadingOriginal, blocks-present, and _loadAttempted (latch
-// set after the first fetch completes) to fire exactly once even on failure.
+// A summarized message whose content was stripped by the backend has nothing
+// to render in original view — request the full text once. Only applies when
+// this message is actually rendered as original: global 'original' mode, or
+// 'mixed' mode where this is the most recent assistant reply. Older messages
+// in 'mixed' show summaries and must NOT trigger lazy fetches (that would pull
+// the full content of every summarized message on screen).
+// Guarded by _loadingOriginal, blocks-present, and _loadAttempted (latch set
+// after the first fetch completes) to fire exactly once even on failure.
+const wantsOriginal = computed(() => displayMode.value === 'original' || (displayMode.value === 'mixed' && !!props.isLastAssistant))
 const needsLazyOriginal = computed(() =>
-  displayMode.value === 'original' &&
+  wantsOriginal.value &&
   props.msg?.summary != null && props.msg.summary !== '' &&
   (!props.msg.blocks || props.msg.blocks.length === 0) &&
   props.msg.showingSummary === undefined &&

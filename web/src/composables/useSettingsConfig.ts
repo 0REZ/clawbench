@@ -5,6 +5,7 @@ import { useAgents } from '@/composables/useAgents'
 import { getNative } from '@/utils/clawbenchNative'
 import { resolveThemeId, applyThemeAttributes } from '@/utils/themeMeta'
 import { applyFontConfig } from '@/utils/fontConfig'
+import { normalizeDisplayMode } from '@/utils/chatSessionUtils'
 
 const LOCAL_PREFIX = 'clawbench-settings-'
 
@@ -312,7 +313,7 @@ const localDefaults: Record<string, string | boolean | number | null> = {
   lineNumbers: false,
   stickyScroll: true,
   fileView: 'list',
-  messageDisplayMode: 'summary',
+  messageDisplayMode: 'mixed',
   terminalFontSize: 12,
   logCapture: false,
   swipeSession: false,
@@ -335,6 +336,16 @@ const localDefaults: Record<string, string | boolean | number | null> = {
 const localConfig = reactive<Record<string, string | boolean | number | null>>({})
 for (const key of Object.keys(localDefaults)) {
   localConfig[key] = readLocalValue(key, localDefaults[key])
+}
+// Sanitize: an invalid persisted value for messageDisplayMode falls back to
+// the default ('mixed'). Valid legacy values ('summary'/'original') are kept —
+// users may have picked them explicitly before 'mixed' existed.
+{
+  const normalized = normalizeDisplayMode(localConfig.messageDisplayMode)
+  if (normalized !== localConfig.messageDisplayMode) {
+    localConfig.messageDisplayMode = normalized
+    try { localStorage.setItem(LOCAL_PREFIX + 'messageDisplayMode', JSON.stringify(normalized)) } catch { /* ignore */ }
+  }
 }
 
 /** Set a local config value, persisting to both prefixed and legacy localStorage keys. */

@@ -48,6 +48,8 @@ const (
 	cancelReasonRestart = "restart"
 	// blockTypeWarning is the content block type for warning messages.
 	blockTypeWarning = "warning"
+	// blockTypeThinking is the content block type for thinking (reasoning) text.
+	blockTypeThinking = "thinking"
 	// eventTypeContentReset clears accumulated blocks from a failed Prompt before retry.
 	eventTypeContentReset = "content_reset"
 	// eventTypeDone is the stream event type for stream completion.
@@ -760,9 +762,10 @@ func (e *SessionExecutor) flushPendingContextState() {
 // flushPendingThinking persists the thinking-block text that grew since the
 // last flush window into chat_thinking as incremental seq chunks, so a hard
 // crash loses at most the thinking that grew since the last flush instead of
-// the whole block. The chat_history.content row stays slim (thinking text
-// removed) — the full text lives here in chat_thinking, exactly like tool calls
-// live in chat_tool_calls.
+// the whole block. The chat_history.content row never carries thinking full
+// text — the text lives here in chat_thinking, exactly like tool calls live in
+// chat_tool_calls. DONE blocks are referenced from the content row by a slim
+// think_id marker (see flushStreamingLocked) for mid-stream refresh recovery.
 //
 // Incremental semantics: each thinking block tracks (nextSeq, flushedBytes) in
 // e.thinkingFlushed. Each flush appends only b.Text[flushedBytes:] as the next
@@ -792,7 +795,7 @@ func (e *SessionExecutor) flushPendingThinking() {
 	}
 	for i := range e.blocks {
 		b := &e.blocks[i]
-		if b.Type != "thinking" {
+		if b.Type != blockTypeThinking {
 			continue
 		}
 		// Stable ID: generate on first appearance, reuse afterwards.
@@ -825,16 +828,30 @@ func (e *SessionExecutor) flushPendingThinking() {
 	}
 }
 
+// thinkingPersisted reports whether at least one seq chunk for thinkID was
+// successfully appended to chat_thinking (flushedBytes > 0). flushPendingThinking
+// creates the state entry before the first append attempt, so flushedBytes — not
+// entry existence — is the success signal (an AppendThinkingSegment failure
+// leaves it 0). Used by flushStreamingLocked to decide whether a done thinking
+// block is safe to reference with a slim content marker (no row to lazy-load
+// means the marker would 404 on expand).
+func (e *SessionExecutor) thinkingPersisted(thinkID string) bool {
+	st := e.thinkingFlushed[thinkID]
+	return st != nil && st.flushedBytes > 0
+}
+
 // flushStreamingMessage persists the current accumulated blocks to the database,
 // along with queued tool-call upserts, context-state patches, and the full
 // thinking text.
 //
-// The content row EXCLUDES thinking blocks entirely (they are process data
-// rendered live over WS). The full thinking text is written separately to
-// chat_thinking by flushPendingThinking (stable think_id upsert) on the same
-// flush window — so a hard crash loses at most the thinking that grew since
-// the last flush. Finalization (persistThinkingToDB) is what produces the
-// slim think_id markers in the completed message's content.
+// The content row never carries thinking full text — the full thinking text is
+// written separately to chat_thinking by flushPendingThinking (stable think_id
+// upsert) on the same flush window, so a hard crash loses at most the thinking
+// that grew since the last flush. DONE thinking blocks additionally get a slim
+// {think_id, done:true} marker in the content row (see flushStreamingLocked) so
+// a page refresh mid-stream can recover the completed reasoning via lazy-load.
+// Finalization (persistThinkingToDB) produces the final slim markers in the
+// completed message's content.
 //
 // Batched writes (tool-call upserts + context-state patches + thinking text)
 // are flushed every interval regardless of content changes so a burst of
@@ -852,10 +869,13 @@ func (e *SessionExecutor) flushStreamingMessage() {
 }
 
 // flushStreamingLocked writes the accumulated blocks to the database.
-// includeThinking controls whether thinking blocks are persisted in the content
+// includeThinking controls how thinking blocks are persisted in the content
 // row:
-//   - false (rate-limited flushes): thinking blocks are excluded from content;
-//     the full text is upserted to chat_thinking by flushPendingThinking.
+//   - false (rate-limited flushes): thinking full text is excluded from content;
+//     the text is upserted to chat_thinking by flushPendingThinking. DONE blocks
+//     get a slim {think_id, done:true} marker at their natural position so a
+//     refresh mid-stream can lazy-load the completed reasoning; in-progress
+//     blocks are left out entirely (a done=false marker is the spinner regression).
 //   - true (graceful-shutdown forced flush): the full thinking text is embedded
 //     in content, then slimThinkingInContent extracts it into chat_thinking —
 //     the one-shot durability point where the text may not have been flushed yet.
@@ -899,26 +919,35 @@ func (e *SessionExecutor) flushStreamingLocked(includeThinking bool) {
 
 	serializedBlocks := make([]model.ContentBlock, 0, len(e.blocks))
 	for _, b := range e.blocks {
-		if b.Type == "thinking" {
-			// Thinking blocks are EXCLUDED from the rate-limited content row.
-			// The full thinking text is persisted separately to chat_thinking by
-			// flushPendingThinking (stable think_id upsert) so a hard crash loses
-			// at most the thinking that grew since the last flush. Writing even a
-			// slim think_id marker into the streaming content would leak an
-			// "empty thinking block" into the frontend's live placeholder — the
+		if b.Type == blockTypeThinking {
+			// The full thinking text NEVER goes into the rate-limited content row
+			// (it lives in chat_thinking via flushPendingThinking; embedding even a
+			// slim think_id marker for an IN-PROGRESS block would leak an "empty
+			// thinking block" into the frontend's live placeholder — the
 			// mergeStreamBlocks path (db_load after stream_start) adopts the DB's
-			// non-text blocks into the live stream, and a slim thinking block
+			// non-text blocks into the live stream, and a done=false slim block
 			// there renders as a perpetual loading spinner until the message
-			// finalizes. The completed message's think_id markers are produced
-			// once, at finalization, by persistThinkingToDB.
+			// finalizes).
 			//
-			// Exception: the graceful-shutdown forced flush (forceIncludeThinking)
-			// writes the full thinking text into content too, then
-			// slimThinkingInContent extracts it into chat_thinking below — this
-			// is the one-shot durability point where the text may not have been
-			// flushed yet.
+			// EXCEPTION: a DONE thinking block (thinking_done received, text fully
+			// persisted to chat_thinking) gets a slim {think_id, done:true} marker at
+			// its natural position. A done marker renders as a collapsed chip (never
+			// a spinner), and it is what lets a page refresh mid-stream recover the
+			// already-completed reasoning via the /thinking lazy-load — the streaming
+			// row would otherwise carry no trace of the block and the thinking would
+			// be lost on reload. Finalize's persistThinkingToDB overwrites these
+			// markers with the final slim content (idempotent, same think_ids), so no
+			// orphan/duplicate rows are left behind.
 			if e.forceIncludeThinking {
 				serializedBlocks = append(serializedBlocks, b)
+			} else if b.Done && b.ThinkID != "" && e.thinkingPersisted(b.ThinkID) {
+				// Only blocks that actually reached chat_thinking get markers — an
+				// empty done block has no row to lazy-load and would 404.
+				serializedBlocks = append(serializedBlocks, model.ContentBlock{
+					Type:    blockTypeThinking,
+					ThinkID: b.ThinkID,
+					Done:    true,
+				})
 			}
 			continue
 		}

@@ -681,6 +681,95 @@ describe('ChatMessageItem', () => {
     })
   })
 
+  describe('global mixed mode (last assistant shows original, older show summary)', () => {
+    beforeEach(async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'mixed'
+    })
+
+    afterEach(async () => {
+      const cfg = await import('@/composables/useSettingsConfig')
+      ;(cfg.localConfig as any).messageDisplayMode = 'summary'
+    })
+
+    it('does NOT lazy-load the last assistant (original view) when content present', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm1', role: 'assistant', content: 'full', blocks: [{ type: 'text', text: 'Full' }], summary: 'Summary', streaming: false },
+        isLastAssistant: true,
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(false)
+    })
+
+    it('renders older summarized messages as summary in mixed mode', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm2', role: 'assistant', content: '', blocks: [], summary: 'Summary', streaming: false },
+        isLastAssistant: false,
+      })
+      await wrapper.vm.$nextTick()
+      // Blocks empty + not loading → summary shows (older message).
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('keeps the summary as placeholder while the last assistant lazy-loads', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm3', role: 'assistant', content: '', blocks: [], summary: 'Summary', _loadingOriginal: true, streaming: false },
+        isLastAssistant: true,
+      })
+      await wrapper.vm.$nextTick()
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('lazy-loads a stripped last assistant in mixed mode (like original)', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm5', role: 'assistant', content: '', blocks: [], summary: 'Summary', streaming: false },
+        isLastAssistant: true,
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeTruthy()
+      expect(wrapper.emitted('ensure-content')![0]).toEqual([expect.objectContaining({ id: 'm5' })])
+    })
+
+    it('does NOT lazy-load a stripped older message in mixed mode', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm6', role: 'assistant', content: '', blocks: [], summary: 'Summary', streaming: false },
+        isLastAssistant: false,
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('respects an explicit preference for the last assistant in mixed mode', async () => {
+      // User explicitly toggled the last assistant reply to show the summary →
+      // the position rule must not override it.
+      const wrapper = createWrapper({
+        msg: { id: 'm7', role: 'assistant', content: 'full', blocks: [{ type: 'text', text: 'Full' }], summary: 'Summary', showingSummary: true, streaming: false },
+        isLastAssistant: true,
+      })
+      await wrapper.vm.$nextTick()
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+    })
+
+    it('does not emit ensure-content after a failed load attempt for the last assistant', async () => {
+      const wrapper = createWrapper({
+        msg: { id: 'm4', role: 'assistant', content: '', blocks: [], summary: 'Summary', _loadAttempted: true, streaming: false },
+        isLastAssistant: true,
+      })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('ensure-content')).toBeUndefined()
+      const toggle = wrapper.findComponent({ name: 'SummaryToggle' })
+      expect(toggle.props('showingSummary')).toBe(true)
+    })
+  })
+
   describe('file attachment and action buttons', () => {
     it('renders FileAttachmentList for user message with files when content has no images', () => {
       const wrapper = createWrapper({

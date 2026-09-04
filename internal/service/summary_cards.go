@@ -50,6 +50,17 @@ func extractSummaryCards(blocks []model.ContentBlock) *model.SummaryCards {
 			}
 		case contentKeyText:
 			extractFromText(cards, b.Text)
+		case blockTypeWarning, eventTypeError:
+			// Preserve warning/error banners across the summary view, where the
+			// heavy content blocks are stripped (content = {"blocks":[]}).
+			cards.Warnings = append(cards.Warnings, model.SummaryWarning{
+				Type:        b.Type,
+				Text:        b.Text,
+				Reason:      b.Reason,
+				ErrorCode:   b.ErrorCode,
+				HTTPStatus:  b.HTTPStatus,
+				ErrorSource: b.ErrorSource,
+			})
 		}
 	}
 	return cards

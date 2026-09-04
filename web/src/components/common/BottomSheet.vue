@@ -35,7 +35,6 @@
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import { getWideScreenState } from '@/composables/useWideScreenLayout'
-import { appLog } from '@/utils/appLog'
 
 const props = defineProps({
   open: Boolean,
@@ -115,7 +114,6 @@ function registerDrawerBackHandler() {
     id,
     canGoBack: () => props.open && !leaving.value,
     goBack: () => {
-      appLog.d('BottomSheet', `back gesture closing drawer: ${id}`)
       // Drill-down drawers may customize the back gesture to emit an event
       // (e.g. "back") that returns to the parent drawer instead of closing.
       if (props.backEvent) {

@@ -59,7 +59,6 @@ function open(type: DialogState['type'], message: string, opts: {
         '\n  Previous:', prev.type, prev.message?.slice(0, 60),
         '\n  New:     ', type, message?.slice(0, 60),
       )
-      appLog.d(TAG, 'overwrite call stack:', new Error().stack)
       prev.resolve(null)
     }
     state.value = {

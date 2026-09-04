@@ -348,6 +348,53 @@ describe('useFileUpload', () => {
       expect(upload.dirUploadDone.value).toBe(2)
       expect(upload.dirUploading.value).toBe(false)
     })
+
+    it('all-failed dir upload shows a single error toast, not a false success', async () => {
+      xhrSendHandler = (xhr) => respondError(xhr, 'DirectoryNotFound')
+
+      const upload = useFileUpload()
+      await upload.handleFileDropToDir([makeFile('a.txt'), makeFile('b.txt')], '/dir')
+
+      // Failed dir uploads must never report a green success.
+      const completedCalls = mockToastShow.mock.calls.filter(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('upload.completed')
+      )
+      expect(completedCalls).toHaveLength(0)
+      // The final aggregate toast is upload.failed and carries the backend reason.
+      expect(mockToastShow).toHaveBeenCalledWith(
+        expect.stringContaining('upload.failed'),
+        expect.objectContaining({ type: 'error' }),
+      )
+      const failedCall = mockToastShow.mock.calls.find((call: any[]) => typeof call[0] === 'string' && call[0].includes('upload.failed'))
+      expect(failedCall![0]).toContain('DirectoryNotFound')
+      // Per-file errors are not toasted individually — only the summary shows.
+      expect(mockToastShow).toHaveBeenCalledTimes(1)
+    })
+
+    it('partial dir upload shows a partial toast with ok/failed counts', async () => {
+      let callIndex = 0
+      xhrSendHandler = (xhr) => {
+        callIndex++
+        if (callIndex === 1) {
+          respondSuccess(xhr, 'dir/ok.txt')
+        } else {
+          respondError(xhr, 'AccessDenied')
+        }
+      }
+
+      const upload = useFileUpload()
+      await upload.handleFileDropToDir([makeFile('ok.txt'), makeFile('bad.txt')], '/dir')
+
+      expect(mockToastShow).toHaveBeenCalledWith(
+        expect.stringContaining('upload.partial'),
+        expect.objectContaining({ type: 'error' }),
+      )
+      const partialCall = mockToastShow.mock.calls.find((call: any[]) => typeof call[0] === 'string' && call[0].includes('upload.partial'))
+      // Mock gt renders params as JSON: {ok:1,failed:1,error:...}
+      expect(partialCall![0]).toContain('"ok":1')
+      expect(partialCall![0]).toContain('"failed":1')
+      expect(partialCall![0]).toContain('AccessDenied')
+    })
   })
 
   describe('uploadFiles — file too large', () => {

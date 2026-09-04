@@ -202,7 +202,6 @@ export function useChatStream(options: UseChatStreamOptions) {
         seq: nextClientSeq(),
         parentQueueId: parentUserIdx !== -1 ? String(messages.value[parentUserIdx].id) : undefined,
       }
-      appLog.d(TAG, `[ensureStreamingPlaceholder] create placeholder id=${newStreaming.id} parentQueueId=${newStreaming.parentQueueId} reuse=${!!options?.reuseExistingStreaming}`)
       // Single write channel: the reducer pushes + re-sorts.
       dispatch({ type: 'stream_placeholder', msg: newStreaming })
       thinkingBlockCounter = 0
@@ -410,12 +409,6 @@ export function useChatStream(options: UseChatStreamOptions) {
 
         _forceCleanupStreamingState(messages.value, { onRenderNeeded, onExtractScheduledTasks })
 
-        const doneSummary = messages.value.map((m, i: number) =>
-          `[${i}] ${m.role}${m.id ? ` id=${m.id}` : ''}${m.streaming ? ' STREAMING' : ''} content="${(m.content || '').slice(0, 30)}" blocks=${m.blocks?.length || 0}`
-        ).join(' | ')
-        const pendingCount = messages.value.filter((m) => m.pending).length
-        appLog.d(TAG, `[done] pending msgs: ${pendingCount}; messages: ${doneSummary}`)
-
         // Unlock input bar and fire stream-end callbacks immediately so the user
         // sees the final state (meta bar, file-changes banner, summary toggle)
         // without waiting for the loadHistory REST round-trip. Previously these
@@ -447,10 +440,6 @@ export function useChatStream(options: UseChatStreamOptions) {
         // populated, etc.) but this is a non-urgent consistency refresh — the
         // user already sees the correct final state from forceCleanupStreamingState.
         onLoadHistory().then(() => {
-          const afterSummary = messages.value.map((m, i: number) =>
-            `[${i}] ${m.role}${m.id ? ` id=${m.id}` : ''}${m.streaming ? ' STREAMING' : ''} content="${(m.content || '').slice(0, 30)}" blocks=${m.blocks?.length || 0}`
-          ).join(' | ')
-          appLog.d(TAG, `[done→loadHistory] messages(${messages.value.length}): ${afterSummary}`)
           // Re-render Mermaid on the final DOM — loadHistory replaced messages
           // and Vue rebuilt the DOM, destroying any Mermaid SVGs rendered by the
           // earlier forceCleanupStreamingState onRenderNeeded(true) call.
@@ -644,21 +633,9 @@ export function useChatStream(options: UseChatStreamOptions) {
             ...(drainData.files || []).map(f => typeof f === 'string' ? { path: f, isDir: false } : f),
             ...(drainData.filePaths || []).map(p => ({ path: p, isDir: false })),
           ]
-          const beforeLen = messages.value.length
-          const beforeStreamingCount = messages.value.filter((m) => m.streaming).length
-          // Diagnostic: what pending/string-id bubbles exist before this drain.
-          const bubbleSummary = messages.value
-            .filter((m) => m.pending || typeof m.id === 'string')
-            .map((m) => `[${String(m.id)}${m.queueId ? '/q=' + m.queueId : ''}${m.pending ? '/P' : ''}]`)
-            .join(' ')
-          appLog.d(TAG, `[queue_drain] before: ${bubbleSummary}`)
           dispatch({ type: 'ws_queue_drain', queueId: drainData.queueId || '', text: drainText, files: drainFiles, dbMessageId: drainData.messageId || undefined, backend: currentBackend.value })
           // Extract scheduled tasks from the newly added message(s).
           onExtractScheduledTasks?.(messages.value)
-
-          const afterLen = messages.value.length
-          const afterStreamingCount = messages.value.filter((m) => m.streaming).length
-          appLog.d(TAG, `[queue_drain] sid=${eventSessionId.slice(0,8)} queueId=${drainData.queueId || 'none'} msgId=${drainData.messageId || 'none'} text="${drainText.slice(0,40)}" | before(${beforeLen},streaming=${beforeStreamingCount}) after(${afterLen},streaming=${afterStreamingCount})`)
 
           if (isOpen.value) {
             onRenderNeeded()
@@ -673,10 +650,7 @@ export function useChatStream(options: UseChatStreamOptions) {
         const eventSessionId = cancelData.sessionId || sessionId
         if (eventSessionId !== currentSessionId.value) break
         const ids = cancelData.queueIds || []
-        const before = messages.value.length
         dispatch({ type: 'ws_queue_cancel', queueIds: ids })
-        const removed = before - messages.value.length
-        appLog.d(TAG, `[queue_cancel] sid=${eventSessionId.slice(0,8)} removed ${removed} pending msgs with queueIds: ${ids.join(',') || 'none'}`)
         onRenderNeeded()
         break
       }

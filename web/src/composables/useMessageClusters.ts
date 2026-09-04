@@ -63,7 +63,6 @@ onEvent((event: string, data: unknown) => {
   // After cancel, block stale "computing" events from the dying goroutine.
   // Only terminal events (done/error/cancelled) can clear the guard.
   if (cancelledGuard && d.status === 'computing') {
-    appLog.d('MsgCluster', 'Blocked stale computing WS event after cancel')
     return
   }
 

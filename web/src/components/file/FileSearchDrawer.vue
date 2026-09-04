@@ -115,7 +115,6 @@ import { useFileSearch, type FileSearchResult } from '@/composables/useFileSearc
 import { useListNav } from '@/composables/useListNav'
 import { useListKeys } from '@/composables/useListKeys'
 import { navToFileInManager } from '@/composables/useFilePathAnnotation'
-import { appLog } from '@/utils/appLog'
 import { isThumbableExt } from '@/utils/fileManager'
 
 const { t, locale } = useI18n()
@@ -256,7 +255,6 @@ function handleClose() {
 }
 
 function onResultClick(r: FileSearchResult) {
-  appLog.d('FileSearch', 'result clicked', r.path)
   handleClose()
   if (r.type === 'dir') {
     emit('navigateDir', r.path)
@@ -270,7 +268,6 @@ function onResultClick(r: FileSearchResult) {
 }
 
 function onOpenDir(r: FileSearchResult) {
-  appLog.d('FileSearch', 'open directory', r.path)
   handleClose()
   navToFileInManager(r.path)
 }

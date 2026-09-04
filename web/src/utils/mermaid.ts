@@ -21,6 +21,39 @@ const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
 /** Monotonic counter for unique container/render IDs (avoids Date.now() collisions) */
 let _idCounter = 0
 
+// ── CSS-zoom suspension during render ──────────────────────────────────────
+// The app's appearance "缩放" setting applies CSS zoom (html { zoom: s }) for a
+// true browser-zoom feel (useSettingsConfig.applyUIScale). Mermaid v11 decides
+// whether a node label wraps by measuring the label div and comparing the
+// result with an EXACT equality against the wrapping width:
+//     bbox = div.getBoundingClientRect(); if (bbox.width === 200) { …wrap… }
+// Under CSS zoom != 1, getBoundingClientRect() returns zoom-scaled widths
+// (e.g. 200 × 1.1 = 220), so the strict equality never holds and long labels
+// stay frozen in white-space:nowrap, overflowing/clipping against the node
+// border. Suspending zoom for the duration of mermaid.render() lets mermaid
+// measure in unscaled layout coordinates; the produced SVG is vector content
+// and re-scales cleanly when zoom is restored.
+let _zoomSuspendDepth = 0
+let _savedZoom: string | null = null
+
+function suspendZoom(): void {
+    const html = document.documentElement
+    if (_zoomSuspendDepth === 0) {
+        _savedZoom = html.style.zoom
+        html.style.zoom = ''
+    }
+    _zoomSuspendDepth++
+}
+
+function restoreZoom(): void {
+    _zoomSuspendDepth--
+    if (_zoomSuspendDepth === 0) {
+        const html = document.documentElement
+        if (_savedZoom) html.style.zoom = _savedZoom
+        _savedZoom = null
+    }
+}
+
 let _initialized = false
 let _initPromise: Promise<void> | null = null
 
@@ -169,55 +202,72 @@ export async function renderMermaidInElement(
         return
     }
 
-    const renderPromises = containers.map(async ({ container, source }) => {
-        // Use a separate render ID (different from container.id) so that
-        // cleanupMermaidOrphan() doesn't accidentally remove our container.
-        const renderId = `mrender-${_idCounter++}`
-        try {
-            const result = await mermaid.render(renderId, source)
-            container.innerHTML = result.svg
-            // Add expand icon for lightbox (real DOM element so PC clicks can target it)
-            const expandIcon = document.createElement('span')
-            expandIcon.className = 'lightbox-expand-icon'
-            container.appendChild(expandIcon)
-        } catch (err: unknown) {
-            // Mermaid v11 inserts an error SVG + wrapper div into the DOM
-            // with the render id before throwing — remove them so they don't
-            // flash on page transitions
-            cleanupMermaidOrphan(renderId)
-            appLog.w('Mermaid', `Render failed for ${container.id}`, err)
-            const errMsg = escapeHtml((err as { message?: string })?.message || String(err))
-            container.dataset.mermaidError = '1'
-            container.innerHTML = mermaidErrorHtml(errMsg)
-        }
-    })
+    // Suspend the app's CSS UI zoom while mermaid measures label widths — the
+    // zoom would otherwise break its exact-width wrap decision (see above).
+    suspendZoom()
+    try {
+        const renderPromises = containers.map(async ({ container, source }) => {
+            // Use a separate render ID (different from container.id) so that
+            // cleanupMermaidOrphan() doesn't accidentally remove our container.
+            const renderId = `mrender-${_idCounter++}`
+            try {
+                const result = await mermaid.render(renderId, source)
+                container.innerHTML = result.svg
+                // Add expand icon for lightbox (real DOM element so PC clicks can target it)
+                const expandIcon = document.createElement('span')
+                expandIcon.className = 'lightbox-expand-icon'
+                container.appendChild(expandIcon)
+            } catch (err: unknown) {
+                // Mermaid v11 inserts an error SVG + wrapper div into the DOM
+                // with the render id before throwing — remove them so they don't
+                // flash on page transitions
+                cleanupMermaidOrphan(renderId)
+                appLog.w('Mermaid', `Render failed for ${container.id}`, err)
+                const errMsg = escapeHtml((err as { message?: string })?.message || String(err))
+                container.dataset.mermaidError = '1'
+                container.innerHTML = mermaidErrorHtml(errMsg)
+            }
+        })
 
-    await Promise.all(renderPromises)
+        await Promise.all(renderPromises)
+    } finally {
+        restoreZoom()
+    }
 }
 
 // Re-render all rendered mermaid diagrams on the page (called after theme switch)
 export async function reRenderMermaid(): Promise<void> {
     if (!_initialized) return
     const mermaid = await getMermaid()
-    document.querySelectorAll<HTMLDivElement>('div.mermaid[data-mermaid]').forEach(container => {
-        // Skip error containers — re-render only successfully rendered diagrams
-        if (container.dataset.mermaidError) return
-        const source = container.dataset.mermaid
-        if (!source) return
-        const id = container.id || `mermaid-${_idCounter++}`
-        container.removeAttribute('id')
-        const renderId = `mrender-${_idCounter++}`
-        mermaid.render(renderId, source).then(result => {
-            container.innerHTML = result.svg
-            container.id = id
-            // Re-add expand icon after innerHTML replaces content
-            const expandIcon = document.createElement('span')
-            expandIcon.className = 'lightbox-expand-icon'
-            container.appendChild(expandIcon)
-        }).catch(err => {
-            // Mermaid v11 inserts an error SVG + wrapper div before throwing
-            cleanupMermaidOrphan(renderId)
-            appLog.w('Mermaid', 'Re-render failed', err)
-        })
-    })
+    const containers = Array.from(document.querySelectorAll<HTMLDivElement>('div.mermaid[data-mermaid]'))
+        .filter(container => !container.dataset.mermaidError)
+    if (containers.length === 0) return
+
+    // Same CSS-zoom suspension as renderMermaidInElement — theme re-renders
+    // re-measure label widths and would hit the same nowrap freeze under zoom.
+    suspendZoom()
+    try {
+        await Promise.all(containers.map(async (container) => {
+            const source = container.dataset.mermaid
+            if (!source) return
+            const id = container.id || `mermaid-${_idCounter++}`
+            container.removeAttribute('id')
+            const renderId = `mrender-${_idCounter++}`
+            try {
+                const result = await mermaid.render(renderId, source)
+                container.innerHTML = result.svg
+                container.id = id
+                // Re-add expand icon after innerHTML replaces content
+                const expandIcon = document.createElement('span')
+                expandIcon.className = 'lightbox-expand-icon'
+                container.appendChild(expandIcon)
+            } catch (err: unknown) {
+                // Mermaid v11 inserts an error SVG + wrapper div before throwing
+                cleanupMermaidOrphan(renderId)
+                appLog.w('Mermaid', 'Re-render failed', err)
+            }
+        }))
+    } finally {
+        restoreZoom()
+    }
 }

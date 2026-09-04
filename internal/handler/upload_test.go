@@ -784,6 +784,8 @@ func TestUploadFile_CustomDir(t *testing.T) {
 		w := callHandler(UploadFile, req)
 		// Should fail with 500 (can't create file in read-only dir)
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		// The 500 body must carry the real reason so the frontend can surface it.
+		assertSaveErrorBody(t, w)
 	})
 
 	t.Run("DefaultUploadDir_MkdirAllFail_Returns500", func(t *testing.T) {
@@ -808,6 +810,8 @@ func TestUploadFile_CustomDir(t *testing.T) {
 		w := callHandler(UploadFile, req)
 		// Should fail with 500 (can't create .clawbench/uploads/ directory)
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		// The 500 body must carry the real reason so the frontend can surface it.
+		assertSaveErrorBody(t, w)
 	})
 
 	t.Run("SymlinkDirOutsideWatchDir_Returns403", func(t *testing.T) {
@@ -904,6 +908,7 @@ func TestUploadFile_RelPathMkdirAllFail(t *testing.T) {
 
 	w := callHandler(UploadFile, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assertSaveErrorBody(t, w)
 }
 
 func TestUploadFile_RelPathSymlinkOutside(t *testing.T) {
