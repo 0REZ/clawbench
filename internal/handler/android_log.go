@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -124,6 +125,13 @@ func ServeClientLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"written": totalWritten})
 }
 
+// clientLogMaxBytes is the per-source client-log file cap. When an append
+// would push the file past this size the current file is rotated to .1
+// (replacing any older .1) and a fresh file is started. js.log/android.log
+// grow unboundedly otherwise (they are append-only with no rotation),
+// eventually filling the disk.
+const clientLogMaxBytes = 50 << 20 // 50 MiB per source
+
 // appendClientLog appends formatted log lines to the source-specific log file.
 // Caller must hold the appropriate mutex.
 func appendClientLog(source string, lines []byte) error {
@@ -131,6 +139,17 @@ func appendClientLog(source string, lines []byte) error {
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
+	}
+
+	// Rotate before appending when the file is already at/over the cap, so a
+	// single huge batch cannot push a small file far past the limit either.
+	if fi, err := os.Stat(path); err == nil && fi.Size()+int64(len(lines)) > clientLogMaxBytes {
+		rotated := path + ".1"
+		_ = os.Remove(rotated)               // drop the previous generation
+		if err := os.Rename(path, rotated); err != nil {
+			// Not fatal: fall through and keep appending to the oversized file.
+			slog.Warn("client log rotate failed", slog.String("path", path), slog.String("err", err.Error()))
+		}
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // log file, not security-sensitive
