@@ -110,7 +110,6 @@ export function useFileSearch() {
     params.set('limit', String(displayLimit + 1))
 
     const url = `/api/dir/search?${params.toString()}`
-    appLog.d('FileSearch', 'opening SSE', url)
 
     eventSource = new EventSource(url)
 

@@ -27,6 +27,13 @@ export interface PendingFile {
 const pendingFiles = ref<PendingFile[]>([])
 let uploadGeneration = 0
 
+// Error messages collected during a directory upload (file manager). Individual
+// per-file failures are suppressed while uploading and aggregated into a single
+// summary toast at the end, otherwise the per-file error toast is immediately
+// overwritten by the completion toast (useToast is a singleton) and the user
+// sees a false "success".
+let dirUploadErrorMsgs: string[] = []
+
 // Upload progress for directory uploads (file manager)
 const dirUploading = ref(false)
 const dirUploadProgress = ref(0)
@@ -45,12 +52,30 @@ export function useFileUpload() {
 
   function uploadOneFile(file: File, dir?: string, autoAttach?: boolean, relPath?: string) {
     return new Promise((resolve) => {
+      const isDirUpload = !!dir
+
+      // Route a failure reason either to an immediate toast (chat attachment)
+      // or into the dir-upload collector for a single summary toast at the end.
+      // Dir mode must NOT toast per-file, otherwise the completion toast
+      // (singleton) overwrites the error and the user sees no failure at all.
+      // The stored reason stays bare (no "upload failed" prefix); finishDirUpload
+      // wraps it in the aggregate message exactly once.
+      function notifyError(msg: string) {
+        if (isDirUpload) dirUploadErrorMsgs.push(msg)
+        else toast.show(msg, { icon: '⚠️', type: 'error' })
+      }
+      // Chat toasts keep the "上传失败:" prefix; dir mode stores the bare reason.
+      function failError(reason: string) {
+        if (isDirUpload) dirUploadErrorMsgs.push(reason)
+        else toast.show(gt('upload.failed', { error: reason }), { icon: '⚠️', type: 'error' })
+      }
+
       // Pre-flight size check: prevent sending a request that will be
       // rejected by the server's MaxBytesReader (which causes onerror
       // instead of a readable error response).
       const maxSizeBytes = store.state.uploadMaxSizeMB * 1024 * 1024
       if (file.size > maxSizeBytes) {
-        toast.show(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }), { icon: '⚠️', type: 'error' })
+        notifyError(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }))
         resolve(false)
         return
       }
@@ -59,7 +84,6 @@ export function useFileUpload() {
       const previewUrl = isImage ? URL.createObjectURL(file) : null
 
       // Push entry then get reactive proxy from array (only for chat upload, not dir upload)
-      const isDirUpload = !!dir
       let entry: PendingFile | null = null
       if (!isDirUpload) {
         const idx = pendingFiles.value.length
@@ -114,7 +138,7 @@ export function useFileUpload() {
               const i = pendingFiles.value.indexOf(entry)
               if (i !== -1) pendingFiles.value.splice(i, 1)
             }
-            toast.show(gt('upload.failed', { error: data.error || gt('upload.unknownError') }), { icon: '⚠️', type: 'error' })
+            failError(data.error || gt('upload.unknownError'))
             resolve(false)
           }
         } catch {
@@ -123,7 +147,7 @@ export function useFileUpload() {
             const i = pendingFiles.value.indexOf(entry)
             if (i !== -1) pendingFiles.value.splice(i, 1)
           }
-          toast.show(gt('upload.parseError'), { icon: '⚠️', type: 'error' })
+          notifyError(gt('upload.parseError'))
           resolve(false)
         }
       }
@@ -142,10 +166,9 @@ export function useFileUpload() {
         // When the server's MaxBytesReader rejects the upload, the XHR
         // gets onerror instead of onload with a parseable response.
         // If the file exceeds the threshold, show a size-specific error.
-        const msg = file.size > maxSizeBytes
+        notifyError(file.size > maxSizeBytes
           ? gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB })
-          : gt('upload.networkError')
-        toast.show(msg, { icon: '⚠️', type: 'error' })
+          : gt('upload.networkError'))
         resolve(false)
       }
 
@@ -160,7 +183,7 @@ export function useFileUpload() {
           const i = pendingFiles.value.indexOf(entry)
           if (i !== -1) pendingFiles.value.splice(i, 1)
         }
-        toast.show(gt('upload.timeout'), { icon: '⚠️', type: 'error' })
+        notifyError(gt('upload.timeout'))
         resolve(false)
       }
 
@@ -169,6 +192,33 @@ export function useFileUpload() {
 
       xhr.send(formData)
     })
+  }
+
+  /** Aggregate the dir-upload result into a single summary toast. */
+  function finishDirUpload(okCount: number, failCount: number) {
+    dirUploading.value = false
+    dirUploadProgress.value = 0
+    activeDirXhr = null
+    const cancelled = dirUploadCancelled.value
+    const errs = dirUploadErrorMsgs
+    dirUploadCancelled.value = false
+    dirUploadErrorMsgs = []
+    if (cancelled) {
+      toast.show(gt('upload.cancelled'), { icon: '⏹️', type: 'info' })
+      return
+    }
+    if (failCount === 0) {
+      if (okCount > 0) {
+        toast.show(gt('upload.completed', { count: okCount }), { icon: '✅', type: 'success' })
+      }
+      return
+    }
+    const firstErr = errs[0] || gt('upload.unknownError')
+    if (okCount > 0) {
+      toast.show(gt('upload.partial', { ok: okCount, failed: failCount, error: firstErr }), { icon: '⚠️', type: 'error' })
+    } else {
+      toast.show(gt('upload.failed', { error: firstErr }), { icon: '⚠️', type: 'error' })
+    }
   }
 
   async function uploadFiles(files: File[], dir?: string, preserveStructure = false) {
@@ -196,33 +246,39 @@ export function useFileUpload() {
       dirUploadTotal.value = toUpload.length
       dirUploadDone.value = 0
       dirUploadProgress.value = 0
+      dirUploadErrorMsgs = []
     }
+
+    let okCount = 0
+    let failCount = 0
 
     for (const file of toUpload) {
       if (isDirUpload && dirUploadCancelled.value) break
       if (file.size > maxSizeBytes) {
-        toast.show(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }), { icon: '⚠️', type: 'error' })
-        if (isDirUpload) dirUploadDone.value++
+        const msg = gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB })
+        if (isDirUpload) {
+          dirUploadErrorMsgs.push(msg)
+          failCount++
+          dirUploadDone.value++
+        } else {
+          toast.show(msg, { icon: '⚠️', type: 'error' })
+        }
         continue
       }
       // When preserving folder structure, derive each file's relative sub-path
       // (including the top-level folder) from webkitRelativePath.
       const relPath = preserveStructure ? folderRelPath(file) || undefined : undefined
-      await uploadOneFile(file, dir, false, relPath)
+      const ok = await uploadOneFile(file, dir, false, relPath)
       if (isDirUpload && dirUploadCancelled.value) break
-      if (isDirUpload) dirUploadDone.value++
+      if (isDirUpload) {
+        if (ok) okCount++
+        else failCount++
+        dirUploadDone.value++
+      }
     }
 
     if (isDirUpload) {
-      dirUploading.value = false
-      dirUploadProgress.value = 0
-      activeDirXhr = null
-      if (dirUploadCancelled.value) {
-        toast.show(gt('upload.cancelled'), { icon: '⏹️', type: 'info' })
-      } else if (dirUploadDone.value > 0) {
-        toast.show(gt('upload.completed', { count: dirUploadDone.value }), { icon: '✅', type: 'success' })
-      }
-      dirUploadCancelled.value = false
+      finishDirUpload(okCount, failCount)
     }
   }
 
@@ -317,19 +373,25 @@ export function useFileUpload() {
     dirUploading.value = true
     dirUploadCancelled.value = false
     activeDirXhr = null
+    dirUploadErrorMsgs = []
     const total = result.files.length + result.emptyDirs.length
     dirUploadTotal.value = total
     dirUploadDone.value = 0
     dirUploadProgress.value = 0
     let done = 0
+    let okCount = 0
+    let failCount = 0
 
     for (const { file, relPath } of result.files) {
       if (dirUploadCancelled.value) break
       if (file.size > maxSizeBytes) {
-        toast.show(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }), { icon: '⚠️', type: 'error' })
+        dirUploadErrorMsgs.push(gt('upload.fileTooLarge', { name: file.name, max: store.state.uploadMaxSizeMB }))
+        failCount++
       } else {
-        await uploadOneFile(file, dir, false, relPath || undefined)
+        const ok = await uploadOneFile(file, dir, false, relPath || undefined)
         if (dirUploadCancelled.value) break
+        if (ok) okCount++
+        else failCount++
       }
       done++
       dirUploadDone.value = done
@@ -338,19 +400,14 @@ export function useFileUpload() {
     for (const emptyDir of result.emptyDirs) {
       if (dirUploadCancelled.value) break
       const ok = await createDir(dir, emptyDir)
-      if (ok) done++
-      dirUploadDone.value = done
+      if (ok) {
+        done++
+        okCount++
+        dirUploadDone.value = done
+      }
     }
 
-    dirUploading.value = false
-    dirUploadProgress.value = 0
-    activeDirXhr = null
-    if (dirUploadCancelled.value) {
-      toast.show(gt('upload.cancelled'), { icon: '⏹️', type: 'info' })
-    } else if (done > 0) {
-      toast.show(gt('upload.completed', { count: done }), { icon: '✅', type: 'success' })
-    }
-    dirUploadCancelled.value = false
+    finishDirUpload(okCount, failCount)
   }
 
   /** Abort an in-progress directory upload or tree download. */

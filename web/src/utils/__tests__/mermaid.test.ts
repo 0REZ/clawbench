@@ -84,6 +84,37 @@ describe('mermaid', () => {
             expect(mockRender).toHaveBeenCalled()
         })
 
+        it('should suspend CSS zoom during render and restore after (nowrap freeze fix)', async () => {
+            // Regression: the app's appearance "缩放" sets CSS zoom on <html>.
+            // Under zoom != 1, mermaid's exact-width wrap check
+            // (getBoundingClientRect().width === 200) never matches, freezing
+            // long node labels in nowrap. Rendering must measure without zoom.
+            const html = document.documentElement
+            html.style.zoom = '1.25'
+
+            // Capture the html zoom value at the moment mermaid.render runs.
+            const zoomDuringRender: string[] = []
+            mockRender.mockImplementation((_id: string) => {
+                zoomDuringRender.push(html.style.zoom)
+                return Promise.resolve({ svg: '<svg>done</svg>' })
+            })
+
+            const el = document.createElement('div')
+            const pre = document.createElement('pre')
+            pre.className = 'mermaid'
+            pre.textContent = 'graph TD; A-->B'
+            el.appendChild(pre)
+
+            await renderMermaidInElement(el)
+
+            // mermaid.render must have observed zoom suspended (empty), and the
+            // page zoom is restored after rendering completes.
+            expect(zoomDuringRender.length).toBeGreaterThan(0)
+            expect(zoomDuringRender.every(z => z === '')).toBe(true)
+            expect(html.style.zoom).toBe('1.25')
+            expect(el.querySelector('div.mermaid svg')).not.toBeNull()
+        })
+
         it('should set data-rendered attribute and replace block with rendered SVG', async () => {
             mockRender.mockResolvedValue({ svg: '<svg>rendered</svg>' })
 

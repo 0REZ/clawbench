@@ -87,7 +87,7 @@ import { useAgents } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { useAppMode } from '@/composables/useAppMode'
-import { startFlushTimer, stopFlushTimer } from '@/utils/appLog'
+import { setLogCaptureEnabled } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { usePwaInstall } from '@/composables/usePwaInstall'
 import { downloadByUrl } from '@/utils/download'
@@ -310,16 +310,17 @@ async function handleUpdate(item: ItemSpec, value: unknown) {
   if (item.source === 'local') {
     setLocalConfig(item.key, value as string | number | boolean)
     if (item.key === 'logCapture') {
+      // setLogCaptureEnabled arms/stands down the HTTP log relay AND starts/
+      // stops the periodic flush timer accordingly.
+      setLogCaptureEnabled(!!value)
       if (value) {
         try {
           getNative()?.startLogCapture?.()?.catch(() => {})
         } catch { /* not in app mode */ }
-        startFlushTimer()
       } else {
         try {
           getNative()?.stopLogCapture?.()?.catch(() => {})
         } catch { /* not in app mode */ }
-        stopFlushTimer()
       }
     }
     return

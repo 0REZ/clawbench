@@ -15,6 +15,9 @@ import '../../css/code-block.css'
 import '../../css/code-block-header.css'
 import '../../css/content.css'
 import '../../css/components.css'
+// Share chrome (topbar/body/TOC rail) — single shared source also used by the
+// markdown HTML export (exportMarkdownHtml.ts embeds the same file).
+import '../../css/share-chrome.css'
 
 import { createApp } from 'vue'
 import ShareView from './ShareView.vue'

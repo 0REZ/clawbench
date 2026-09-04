@@ -200,6 +200,9 @@ func (c *ACPConn) emitPromptTailMetadata(resp acp.PromptResponse, streamCh chan<
 		if resp.StopReason != "" {
 			meta.StopReason = string(resp.StopReason)
 		}
+		// Record this turn's requestId as the completed-turn baseline for the
+		// replayed-chunk filter in mapACPSessionUpdate (see lastCompletedRequestID).
+		c.setLastCompletedRequestID(meta.RequestID)
 		forwardACPEvent(streamCh, StreamEvent{Type: "metadata", Meta: meta})
 		return
 	}
@@ -302,6 +305,11 @@ func (c *ACPConn) emitPromptResponseUsage(usage *acp.Usage, respMeta map[string]
 	if acc != nil {
 		applyMetaExtractionToMetadata(meta, acc)
 	}
+	// Record this turn's requestId as the completed-turn baseline for the
+	// replayed-chunk filter in mapACPSessionUpdate (see lastCompletedRequestID).
+	// meta.RequestID is the genuine turn requestId here because the filter has
+	// already kept any stale previous-turn chunk from polluting metaAccum.
+	c.setLastCompletedRequestID(meta.RequestID)
 
 	slog.Info("acp conn: PromptResponse.Usage",
 		"clawbench_sid", c.clawbenchSID,

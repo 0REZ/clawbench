@@ -48,14 +48,44 @@ func mapACPSessionUpdate(update acp.SessionUpdate, ch chan<- StreamEvent, ctx co
 		// thinking_done so the frontend can stop the thinking spinner immediately.
 		forwardACPEvent(ch, StreamEvent{Type: "thinking_done"})
 		content := update.AgentMessageChunk.Content
-		if content.Text != nil {
-			forwardACPEvent(ch, StreamEvent{Type: "content", Content: content.Text.Text})
+		// Defensive filter against a codebuddy CLI resume defect: when an ACP
+		// session is reused across prompts, codebuddy occasionally re-emits the
+		// final agent_message_chunk of the PREVIOUS turn at the start of the NEW
+		// turn's stream, carrying the PREVIOUS turn's requestId. Without this,
+		// the stale text is appended to the new message's first text block and
+		// its stale _meta pollutes the message-level metadata.requestId (both
+		// observed in production: a replayed ask-question block surfaced in the
+		// wrong assistant message). Drop such chunks here — the raw output
+		// buffer (AppendRawOutput above) still keeps every line for debugging.
+		//
+		// Deliberately scoped to CodeBuddy text chunks only:
+		//   - Compared against the last COMPLETED TURN's requestId, not a
+		//     rolling per-chunk value — genuine chunks of one turn share a
+		//     single requestId, so a rolling comparison would drop the stream.
+		//   - agent_thought_chunk is left untouched: a thinking-only turn can
+		//     legitimately reuse a requestId, and thinking duplication is
+		//     already handled by the frontend's think_id mechanism.
+		//   - AppendRawOutput (above) is intentionally unconditional so the
+		//     ai_raw_responses debug trail stays complete.
+		replayed := false
+		if conn != nil && content.Text != nil && backendID == "codebuddy" {
+			if rid := metaString(update.AgentMessageChunk.Meta[metaKeyCodeBuddyRequestID]); rid != "" && rid == conn.getLastCompletedRequestID() {
+				slog.Warn("acp: dropping replayed agent_message_chunk from previous turn",
+					slog.String("request_id", rid),
+					slog.String("clawbench_sid", conn.clawbenchSID))
+				replayed = true
+			}
 		}
-		// Per-agent _meta on the chunk (e.g. CodeBuddy OpenAI-style usage +
-		// codebuddy.ai/* trace) — accumulate onto the connection so the
-		// turn-final metadata reflects the richest observed values.
-		if conn != nil {
-			mergeMetaExtractionToConn(conn, backendID, update.AgentMessageChunk.Meta)
+		if !replayed {
+			if content.Text != nil {
+				forwardACPEvent(ch, StreamEvent{Type: "content", Content: content.Text.Text})
+			}
+			// Per-agent _meta on the chunk (e.g. CodeBuddy OpenAI-style usage +
+			// codebuddy.ai/* trace) — accumulate onto the connection so the
+			// turn-final metadata reflects the richest observed values.
+			if conn != nil {
+				mergeMetaExtractionToConn(conn, backendID, update.AgentMessageChunk.Meta)
+			}
 		}
 
 	case update.AgentThoughtChunk != nil:

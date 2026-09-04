@@ -72,6 +72,7 @@
       :agents="agents"
       :staticBlockCache="staticBlockCache"
       :active="active"
+      :isLastAssistant="isLastAssistant(msg, i)"
       @toggle-tool="$emit('toggle-tool', $event)"
       @show-tool-detail="$emit('show-tool-detail', $event)"
       @show-metadata="$emit('show-metadata', $event)"
@@ -160,6 +161,7 @@ import { computeRemainingCount } from '@/utils/messageListUtils.ts'
 import { StreamFrameScheduler } from '@/utils/streamFrameScheduler'
 import { isUserScrolling, shouldPin, SCROLL_STOP_MS, NEAR_BOTTOM_PX, RESUME_FOLLOW_PX, updateUserLeftBottom } from '@/utils/scrollState'
 import { appLog } from '@/utils/appLog'
+import { isLastAssistantMessage } from '@/utils/chatSessionUtils'
 
 const { t } = useI18n()
 
@@ -191,6 +193,13 @@ const { handleDblClick } = useDoubleClickCopy()
 const { openFilePath } = useFilePathAnnotation()
 const dialog = useDialog()
 const { handleLocalhostUrlClick } = useLocalhostUrlClickHandler()
+
+// Whether a message is the most recent assistant reply (drives the 'mixed'
+// display mode: the last assistant reply renders as original text, older ones
+// as summaries). Identity comparison against the full ordered list.
+function isLastAssistant(msg, _i) {
+  return isLastAssistantMessage(props.messages, msg)
+}
 
 const { tableRowModal, closeTableRowModal, tableRowPrev, tableRowNext, handleTableRowClick, onTableMouseDown, onTableTouchStart } = useTableRowExpand()
 

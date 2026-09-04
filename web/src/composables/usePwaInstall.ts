@@ -18,7 +18,6 @@ if (typeof window !== 'undefined') {
   window.addEventListener('beforeinstallprompt', (e: Event) => {
     e.preventDefault()
     deferredPrompt.value = e as BeforeInstallPromptEvent
-    appLog.d(TAG, 'beforeinstallprompt captured')
   })
   window.addEventListener('appinstalled', () => {
     installed.value = true

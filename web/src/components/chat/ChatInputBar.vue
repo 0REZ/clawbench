@@ -266,7 +266,7 @@
           </div>
           <div v-if="contextCost > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
-            <span class="usage-popup-value">${{ contextCost.toFixed(2) }} {{ contextCurrency || 'USD' }}</span>
+            <span class="usage-popup-value">{{ contextCostDisplay }}</span>
           </div>
           <!-- Context breakdown section (CodeBuddy usageByCategory) -->
           <template v-if="categoryRows.length">
@@ -336,7 +336,6 @@ import { useVoiceInput } from '@/composables/useVoiceInput'
 import { useChatRecommendation } from '@/composables/useChatRecommendation'
 import { usePlatformDetect } from '@/composables/usePlatformDetect'
 import { useChatContext } from '@/composables/useChatContext'
-import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
@@ -453,6 +452,21 @@ const categoryRows = computed(() => {
   return Object.entries(cat)
     .filter(([, v]) => (v ?? 0) > 0)
     .map(([key, value]) => ({ key, value: value ?? 0, label: labels[key] ? t(labels[key]) : key }))
+})
+// Currency symbols for common ISO 4217 codes. Unknown codes fall back to the
+// bare code (e.g. "123 CNY"). When the backend reports an amount with NO
+// currency (CodeBuddy sends cost.amount == credit with an empty currency),
+// the row shows the bare number — no dollar sign, no currency code, nothing
+// fabricated on top of what the agent actually reported.
+const currencySymbols = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', KRW: '₩', AUD: 'A$', CAD: 'C$' }
+const contextCostDisplay = computed(() => {
+  const amount = contextCost.value
+  if (amount <= 0) return ''
+  const cur = contextCurrency.value
+  const formatted = amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2)
+  if (!cur) return formatted
+  const sym = currencySymbols[cur] ?? ''
+  return sym ? `${sym}${formatted}` : `${formatted} ${cur}`
 })
 const dialog = useDialog()
 const quickSendStore = useQuickSend()
@@ -1364,7 +1378,6 @@ function onPaste(e) {
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation()
 
     const uniqueFiles = dedupePasteFiles(files)
-    appLog.d('ChatInputBar', 'Pasted image/files detected, uploading and attaching:', uniqueFiles.map(f => f.name))
     // Show dynamic paste uploading feedback tied to upload lifecycle
     const generation = ++pasteUploadGeneration
     clearTimeout(pasteOverlayTimer)

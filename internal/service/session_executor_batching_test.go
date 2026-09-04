@@ -554,3 +554,254 @@ func TestExecutor_ForceFlush_ThenGrowth_FullRewrite(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []int{0}, seqs, "force mode must keep a single seq=0 full rewrite, no incremental chunks")
 }
+
+// --- DONE thinking slim markers in the streaming content row ---
+//
+// A completed thinking block (thinking_done received) must leave a slim
+// {think_id, done:true} marker in the streaming content row so a page refresh
+// mid-stream can lazy-load the already-finished reasoning. In-progress blocks
+// stay excluded (a done=false slim marker is the empty-spinner regression).
+
+// TestExecutor_DoneThinking_WritesSlimMarkerInContent verifies that a thinking
+// block marked done mid-stream gets a slim marker in the streaming content row
+// (text stripped, think_id + done preserved), and that the text is retrievable
+// via GetThinking — the exact contract a page refresh relies on.
+func TestExecutor_DoneThinking_WritesSlimMarkerInContent(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// Thinking streams and gets persisted; capture the stable think_id.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "reasoned"})
+	executor.flushStreamingMessage()
+	require.Len(t, executor.blocks, 1)
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID)
+
+	// In-progress: content row must NOT carry any thinking marker yet.
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Empty(t, blocksRaw, "in-progress thinking must stay excluded from content")
+
+	// thinking_done arrives → next flush writes the slim marker.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking_done"})
+	executor.flushStreamingMessage()
+
+	content = readStreamingContent(t, msgID)
+	doneBlocks, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, doneBlocks, 1)
+	thinkingBlock, ok := doneBlocks[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "thinking", thinkingBlock["type"])
+	assert.Equal(t, firstID, thinkingBlock["think_id"], "done marker must carry the stable think_id")
+	assert.Equal(t, true, thinkingBlock["done"], "done marker must carry done=true")
+	assert.NotContains(t, thinkingBlock, "text", "content must not carry the thinking text")
+
+	// Refresh-simulation: the marker resolves to the full text via GetThinking.
+	rec, err := GetThinking(firstID, msgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "reasoned", rec.Text)
+}
+
+// TestExecutor_InProgressThinking_StillExcludedFromContent is the regression
+// guard for 6c6a4a48: a slim marker for an IN-PROGRESS thinking block must
+// never appear in the streaming content (it would leak an empty spinner into
+// the live placeholder via mergeStreamBlocks).
+func TestExecutor_InProgressThinking_StillExcludedFromContent(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part1"})
+	executor.flushStreamingMessage()
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "part2"})
+	executor.flushStreamingMessage()
+
+	// Never marked done — no marker in content across multiple flushes.
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Empty(t, blocksRaw, "in-progress thinking must never leak into streaming content")
+	for _, b := range blocksRaw {
+		blk, _ := b.(map[string]any)
+		assert.NotEqual(t, "thinking", blk["type"], "no thinking block may appear in streaming content")
+	}
+}
+
+// TestExecutor_EmptyDoneThinking_NoMarker verifies that a thinking block with
+// no text (never persisted to chat_thinking) does NOT produce a slim marker —
+// the marker would lazy-load to a 404 on expand.
+func TestExecutor_EmptyDoneThinking_NoMarker(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// An empty thinking block that completes: no text ever reached chat_thinking.
+	executor.blocks = append(executor.blocks, model.ContentBlock{Type: "thinking"})
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking_done"})
+	executor.flushStreamingMessage()
+
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	assert.Empty(t, blocksRaw, "empty done thinking block must not leave a marker (no row to lazy-load)")
+}
+
+// TestExecutor_DoneMarkerThenFinalize_NoDuplicates verifies that a slim marker
+// written mid-stream survives into the finalized message under the same
+// think_id with exactly one seq=0 row — Finalize is idempotent over the
+// mid-stream marker and leaves no orphan/duplicate rows.
+func TestExecutor_DoneMarkerThenFinalize_NoDuplicates(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+
+	// Stream → done → marker appears mid-stream.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "final reasoning"})
+	executor.flushStreamingMessage()
+	firstID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, firstID)
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking_done"})
+	executor.flushStreamingMessage()
+
+	mid := readStreamingContent(t, msgID)
+	midBlocks, ok := mid["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, midBlocks, 1, "mid-stream content must carry the done marker")
+	midThinking, ok := midBlocks[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, firstID, midThinking["think_id"], "done marker must be present mid-stream")
+
+	// Finalize: message completes, marker overwritten under the same think_id.
+	result := executor.buildResult(true, time.Now())
+	finalized := executor.Finalize(result, nil)
+	require.NotZero(t, finalized.MsgID)
+
+	var content string
+	err := dbRead.QueryRow("SELECT content FROM chat_history WHERE id = ?", finalized.MsgID).Scan(&content)
+	require.NoError(t, err)
+	assert.Contains(t, content, firstID, "finalized slim marker must keep the mid-stream think_id")
+
+	var contentMap map[string]any
+	require.NoError(t, json.Unmarshal([]byte(content), &contentMap))
+	blocksRaw, ok := contentMap["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocksRaw, 1)
+	thinkingBlock, ok := blocksRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "thinking", thinkingBlock["type"])
+	assert.Equal(t, firstID, thinkingBlock["think_id"])
+	assert.NotContains(t, thinkingBlock, "text", "finalized content must stay slim")
+
+	// Exactly one seq=0 row — no duplicate/orphan chunks.
+	count := 0
+	_ = dbRead.QueryRow("SELECT COUNT(*) FROM chat_thinking WHERE think_id = ? AND message_id = ?", firstID, finalized.MsgID).Scan(&count)
+	assert.Equal(t, 1, count, "Finalize must collapse the streaming chunks into one seq=0 row")
+
+	rec, err := GetThinking(firstID, finalized.MsgID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, "final reasoning", rec.Text, "full text must survive Finalize")
+}
+
+// TestExecutor_DoneAndInProgressThinking_SameFlush verifies that a single flush
+// can carry a slim marker for a DONE block while an in-progress block stays
+// excluded — the two rules compose.
+func TestExecutor_DoneAndInProgressThinking_SameFlush(t *testing.T) {
+	setupExecutorDB(t)
+	model.Agents = map[string]*model.Agent{
+		"test-agent": {ID: "test-agent", Name: "Test", Backend: "test"},
+	}
+	defer func() { model.Agents = nil }()
+
+	sid := setupExecutorSession(t, "test-agent")
+	msgID := getStreamingMsgIDForTest(t, sid)
+	executor := NewSessionExecutor(context.Background(), RunConfig{
+		Mode:               ModeInteractive,
+		ProjectPath:        "/test",
+		BackendName:        "test",
+		SessionID:          sid,
+		AgentID:            "test-agent",
+		StreamingMessageID: msgID,
+	})
+	defer executor.unregisterActiveStream()
+
+	// First thinking block completes.
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking", Content: "first done reasoning"})
+	executor.flushStreamingMessage()
+	doneID := executor.blocks[0].ThinkID
+	require.NotEmpty(t, doneID)
+	ai.AccumulateBlock(&executor.blocks, ai.StreamEvent{Type: "thinking_done"})
+
+	// Second thinking block (after a tool boundary) is still in progress.
+	executor.blocks = append(executor.blocks, model.ContentBlock{Type: "thinking"})
+	executor.blocks[len(executor.blocks)-1].Text = "second ongoing"
+	executor.flushStreamingMessage()
+
+	content := readStreamingContent(t, msgID)
+	blocksRaw, ok := content["blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, blocksRaw, 1, "only the done block leaves a marker")
+	thinkingBlock, ok := blocksRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, doneID, thinkingBlock["think_id"], "done block's marker must be in content")
+	assert.NotContains(t, content, "second ongoing", "in-progress block's text must not be in content")
+}

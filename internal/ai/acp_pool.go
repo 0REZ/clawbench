@@ -912,6 +912,19 @@ type ACPConn struct {
 	// metadata event in emitPromptResponseUsage and cleared each Prompt.
 	metaAccum *metaExtraction
 
+	// lastCompletedRequestID is the requestId of the most recently completed,
+	// successful turn on this connection (guarded by metaMu). It backs a
+	// defensive filter against a codebuddy CLI resume defect: when an ACP
+	// session is reused across prompts, codebuddy occasionally re-emits the
+	// final agent_message_chunk of the PREVIOUS turn at the start of the NEW
+	// turn's stream, carrying the previous turn's requestId. Dropping chunks
+	// whose requestId equals this value prevents that stale text from reaching
+	// the UI / DB persistence and its stale _meta from polluting the message's
+	// metadata. It must NOT be updated per-chunk (rolling): genuine chunks of
+	// one turn share a single requestId, so a rolling update would drop the
+	// whole stream. It is set only at the end of a successful turn.
+	lastCompletedRequestID string
+
 	// skillsPrompt is the pre-built system prompt section for CodeBuddy skills,
 	// injected into each prompt so CodeBuddy can auto-load skills. Populated
 	// during spawn for CodeBuddy backend. Empty if no skills found.
@@ -1410,6 +1423,28 @@ func (c *ACPConn) getAndClearMetaAccum() *metaExtraction {
 	acc := c.metaAccum
 	c.metaAccum = nil
 	return acc
+}
+
+// getLastCompletedRequestID returns the requestId of the most recently
+// completed successful turn, or "" when no turn has completed yet on this
+// connection (first prompt, or a freshly respawned connection). Safe to call
+// from the ACP notification goroutine (metaMu, never c.mu).
+func (c *ACPConn) getLastCompletedRequestID() string {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	return c.lastCompletedRequestID
+}
+
+// setLastCompletedRequestID records the requestId of a successfully completed
+// turn. Empty rids are ignored. See lastCompletedRequestID for why this is
+// turn-granular (not per-chunk) and only written on success.
+func (c *ACPConn) setLastCompletedRequestID(rid string) {
+	if rid == "" {
+		return
+	}
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+	c.lastCompletedRequestID = rid
 }
 
 // getMetaAccum returns the accumulated _meta extensions without clearing.
