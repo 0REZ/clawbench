@@ -146,7 +146,7 @@ describe('settingsFieldMap', () => {
     expect(categoryItems['dingtalk']).toBeUndefined()
   })
 
-  it('chat category has a local messageDisplayMode select with summary/original options', () => {
+  it('chat category has a local messageDisplayMode select with mixed/summary/original options', () => {
     const chatEntries = categoryItems['chat']
     const entry = chatEntries.find(e => e.type === 'item' && e.spec.key === 'messageDisplayMode')
     expect(entry).toBeDefined()
@@ -155,7 +155,7 @@ describe('settingsFieldMap', () => {
     expect(entry.spec.type).toBe('select')
     expect(entry.spec.sectionHeader).toBe('settings.items.chatMessageSection')
     const values = (entry.spec.options ?? []).map(o => o.value)
-    expect(values).toEqual(['summary', 'original'])
+    expect(values).toEqual(['mixed', 'summary', 'original'])
   })
 
   it('every server item in categoryItems has a corresponding field map entry', () => {

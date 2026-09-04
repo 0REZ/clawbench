@@ -5,6 +5,8 @@ import {
   applySummaryUpdate,
   shouldShowSummary,
   isShowingSummary,
+  isLastAssistantMessage,
+  normalizeDisplayMode,
 } from '@/utils/chatSessionUtils.ts'
 
 // ── buildMessageSnapshot ──
@@ -557,5 +559,123 @@ describe('summaryCards parsing', () => {
     applySummaryUpdate(msg, 'sum', { tools: [{ name: 'AskUserQuestion' }] }, true)
     expect(msg.summary).toBe('sum')
     expect(msg.summaryCards.tools[0].name).toBe('AskUserQuestion')
+  })
+})
+
+// ── mixed display mode ──
+// Mixed mode: the LAST assistant reply renders as original text; older
+// summarized messages render their summaries. Explicit per-message preference
+// and the stripped-content fallback always win.
+
+describe('shouldShowSummary in mixed mode', () => {
+  it('renders the last assistant reply as original (no explicit preference)', () => {
+    const msg = { summary: 'sum', blocks: [{ type: 'text', text: 'x' }] }
+    expect(shouldShowSummary(msg, 'mixed', { isLastAssistant: true })).toBe(false)
+  })
+
+  it('renders older messages as summaries in mixed mode', () => {
+    const msg = { summary: 'sum', blocks: [{ type: 'text', text: 'x' }] }
+    expect(shouldShowSummary(msg, 'mixed', { isLastAssistant: false })).toBe(true)
+  })
+
+  it('defaults to summary in mixed mode when isLastAssistant is omitted (safe default)', () => {
+    const msg = { summary: 'sum', blocks: [{ type: 'text', text: 'x' }] }
+    expect(shouldShowSummary(msg, 'mixed')).toBe(true)
+  })
+
+  it('keeps summary in mixed mode when the message has no summary', () => {
+    expect(shouldShowSummary({ blocks: [{ type: 'text', text: 'x' }] }, 'mixed', { isLastAssistant: true })).toBe(false)
+  })
+
+  it('respects explicit preference over the last-assistant position in mixed mode', () => {
+    // User toggled the last assistant reply to summary → showingSummary=true wins
+    expect(shouldShowSummary(
+      { summary: 'sum', blocks: [{ type: 'text', text: 'x' }], showingSummary: true },
+      'mixed', { isLastAssistant: true },
+    )).toBe(true)
+    // User toggled an older message to original → showingSummary=false wins
+    expect(shouldShowSummary(
+      { summary: 'sum', blocks: [{ type: 'text', text: 'x' }], showingSummary: false },
+      'mixed', { isLastAssistant: false },
+    )).toBe(false)
+  })
+
+  it('forces summary for stripped content even for the last assistant in mixed mode', () => {
+    // Blocks empty (backend stripped content) with an explicit original choice
+    // still falls back to the summary so the bubble is never blank.
+    expect(shouldShowSummary(
+      { summary: 'late sum', blocks: [], showingSummary: false },
+      'mixed', { isLastAssistant: true },
+    )).toBe(true)
+  })
+
+  it('lets the last assistant stripped message render original when no preference (lazy-load trigger)', () => {
+    // No explicit preference + stripped content + last assistant: behaves like
+    // 'original' mode — returns false so the component lazy-fetches full text.
+    expect(shouldShowSummary({ summary: 'sum', blocks: [] }, 'mixed', { isLastAssistant: true })).toBe(false)
+  })
+
+  it('keeps summary as placeholder during lazy-load in mixed mode for the last assistant', () => {
+    const msg = { summary: 'sum', blocks: [], _loadingOriginal: true }
+    expect(isShowingSummary(msg, 'mixed', { isLastAssistant: true })).toBe(true)
+    const attempted = { summary: 'sum', blocks: [], _loadAttempted: true }
+    expect(isShowingSummary(attempted, 'mixed', { isLastAssistant: true })).toBe(true)
+  })
+
+  it('isShowingSummary passes opts through for older messages in mixed mode', () => {
+    const msg = { summary: 'sum', blocks: [{ type: 'text', text: 'x' }] }
+    expect(isShowingSummary(msg, 'mixed', { isLastAssistant: false })).toBe(true)
+    expect(isShowingSummary(msg, 'mixed', { isLastAssistant: true })).toBe(false)
+  })
+})
+
+describe('isLastAssistantMessage', () => {
+  const user = { id: 'u1', role: 'user' }
+  const assistant1 = { id: 'a1', role: 'assistant' }
+  const assistant2 = { id: 'a2', role: 'assistant' }
+  const assistantStreaming = { id: 'local-x', role: 'assistant', streaming: true }
+
+  it('returns true for the last assistant message', () => {
+    expect(isLastAssistantMessage([user, assistant1, user, assistant2], assistant2)).toBe(true)
+  })
+
+  it('returns false for an older assistant message', () => {
+    expect(isLastAssistantMessage([user, assistant1, user, assistant2], assistant1)).toBe(false)
+  })
+
+  it('returns false for a user message', () => {
+    expect(isLastAssistantMessage([user, assistant1, user], user)).toBe(false)
+  })
+
+  it('counts a streaming assistant placeholder as the last assistant', () => {
+    expect(isLastAssistantMessage([user, assistant1, assistantStreaming], assistantStreaming)).toBe(true)
+  })
+
+  it('returns false when the list ends with a user message (last assistant is the one before it)', () => {
+    const msgs = [user, assistant1, user]
+    expect(isLastAssistantMessage(msgs, assistant1)).toBe(true)
+  })
+
+  it('handles empty/null input safely', () => {
+    expect(isLastAssistantMessage([], assistant1)).toBe(false)
+    expect(isLastAssistantMessage(null, assistant1)).toBe(false)
+    expect(isLastAssistantMessage(undefined, assistant1)).toBe(false)
+    expect(isLastAssistantMessage([assistant1], null)).toBe(false)
+  })
+})
+
+describe('normalizeDisplayMode', () => {
+  it('passes through valid modes', () => {
+    expect(normalizeDisplayMode('summary')).toBe('summary')
+    expect(normalizeDisplayMode('original')).toBe('original')
+    expect(normalizeDisplayMode('mixed')).toBe('mixed')
+  })
+
+  it('falls back to mixed for invalid values', () => {
+    expect(normalizeDisplayMode('legacy-invalid')).toBe('mixed')
+    expect(normalizeDisplayMode('')).toBe('mixed')
+    expect(normalizeDisplayMode(undefined)).toBe('mixed')
+    expect(normalizeDisplayMode(null)).toBe('mixed')
+    expect(normalizeDisplayMode(42)).toBe('mixed')
   })
 })

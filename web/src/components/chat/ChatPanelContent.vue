@@ -184,7 +184,7 @@ import { useAgents, populateACPStateFromCache } from '@/composables/useAgents'
 import { useToast } from '@/composables/useToast.ts'
 import { useFilePathAnnotation } from '@/composables/useFilePathAnnotation.ts'
 import { useNotification } from '@/composables/useNotification.ts'
-import { applySummaryUpdate, isShowingSummary } from '@/utils/chatSessionUtils.ts'
+import { applySummaryUpdate, isShowingSummary, isLastAssistantMessage, normalizeDisplayMode } from '@/utils/chatSessionUtils.ts'
 import { localConfig } from '@/composables/useSettingsConfig'
 import { nextClientSeq } from '@/utils/chatStreamUtils.ts'
 import { useFileUpload } from '@/composables/useFileUpload.ts'
@@ -1109,8 +1109,8 @@ async function handleToggleSummary(msgId) {
         await generateMessageSummary(msg)
         return
     }
-    const mode = (localConfig.messageDisplayMode === 'original' ? 'original' : 'summary')
-    const showingNow = isShowingSummary(msg, mode)
+    const mode = normalizeDisplayMode(localConfig.messageDisplayMode)
+    const showingNow = isShowingSummary(msg, mode, { isLastAssistant: isLastAssistantMessage(messages.value, msg) })
     // Switching FROM summary TO original: if blocks weren't loaded (content stripped by backend), fetch the full message.
     // Reset _loadAttempted so a previously failed load can be retried on explicit user action.
     if (showingNow && (!msg.blocks || msg.blocks.length === 0)) {

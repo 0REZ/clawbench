@@ -5,6 +5,8 @@ import {
   applySummaryUpdate,
   parseMessages,
   buildMessageSnapshot,
+  isLastAssistantMessage,
+  normalizeDisplayMode,
   type MessageDisplayMode,
 } from '@/utils/chatSessionUtils'
 
@@ -188,6 +190,19 @@ describe('shouldShowSummary', () => {
       summary: 'S',
       blocks: [],
     }, 'original')).toBe(false)
+  })
+
+  it('mixed mode shows original for the last assistant reply and summary for older ones', () => {
+    expect(shouldShowSummary({ summary: 'S', blocks: [{ type: 'text', text: 'Full' }] }, 'mixed', { isLastAssistant: true })).toBe(false)
+    expect(shouldShowSummary({ summary: 'S', blocks: [{ type: 'text', text: 'Full' }] }, 'mixed', { isLastAssistant: false })).toBe(true)
+  })
+
+  it('mixed mode lets the last assistant lazy-load stripped content (no preference)', () => {
+    expect(shouldShowSummary({ summary: 'S', blocks: [] }, 'mixed', { isLastAssistant: true })).toBe(false)
+  })
+
+  it('mixed mode keeps stripped older messages on the summary', () => {
+    expect(shouldShowSummary({ summary: 'S', blocks: [] }, 'mixed', { isLastAssistant: false })).toBe(true)
   })
 })
 
@@ -478,6 +493,27 @@ describe('ChatPanelContent — ensureMessageContent scroll re-sync', () => {
 // ── Failed-send input restore ──
 // When a message send fails (network disconnected / HTTP 5xx), the input box
 // must NOT stay cleared — the text is restored so the user can retry.
+
+describe('ChatPanelContent — handleToggleSummary uses normalized mode + last-assistant context', () => {
+  async function toggleRegion() {
+    const mod = await import('@/components/chat/ChatPanelContent.vue?raw')
+    const source = typeof mod.default === 'string' ? mod.default : ''
+    return source.slice(source.indexOf('async function handleToggleSummary'), source.indexOf('// Generate a reading summary'))
+  }
+
+  it('normalizes the global display mode instead of a two-value ternary', async () => {
+    const region = await toggleRegion()
+    expect(region).toMatch(/normalizeDisplayMode\(localConfig\.messageDisplayMode\)/)
+    // Two-value ternary must be gone so 'mixed' reaches the summary decision.
+    expect(region).not.toMatch(/=== 'original' \? 'original' : 'summary'/)
+  })
+
+  it('passes the last-assistant context into the visibility decision', async () => {
+    const region = await toggleRegion()
+    expect(region).toMatch(/isShowingSummary\(msg, mode, \{ isLastAssistant:/)
+    expect(region).toMatch(/isLastAssistantMessage\(messages\.value, msg\)/)
+  })
+})
 
 describe('ChatPanelContent — failed send keeps input text', () => {
   async function sourceRegion(start: string, end: string) {

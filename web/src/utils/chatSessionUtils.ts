@@ -97,7 +97,44 @@ export function parseMessages(
   })
 }
 
-export type MessageDisplayMode = 'summary' | 'original'
+export type MessageDisplayMode = 'summary' | 'original' | 'mixed'
+
+/**
+ * Normalize a raw messageDisplayMode value to one of the supported modes.
+ * Legacy values 'summary'/'original' pass through (users may have chosen them
+ * explicitly); any invalid/unknown value falls back to the default 'mixed'.
+ */
+export function normalizeDisplayMode(value: unknown): MessageDisplayMode {
+  if (value === 'summary' || value === 'original' || value === 'mixed') return value
+  return 'mixed'
+}
+
+/**
+ * Extra per-message context for the summary display decision.
+ * `isLastAssistant` — whether this message is the most recent assistant
+ * reply in the conversation. Only meaningful for the 'mixed' mode, where the
+ * last assistant reply renders as original text and older ones as summaries.
+ */
+export interface SummaryDisplayOptions {
+  isLastAssistant?: boolean
+}
+
+/**
+ * Whether `target` is the most recent assistant message in an ordered list.
+ * Scans from the end (list is chronological). Streaming/queued assistant
+ * placeholders count — they are the reply currently being generated.
+ */
+export function isLastAssistantMessage(
+  msgs: Array<Record<string, unknown>> | null | undefined,
+  target: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!Array.isArray(msgs) || target == null) return false
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (m && m.role === 'assistant') return m === target
+  }
+  return false
+}
 
 /**
  * Unwrap nested JSON serializations embedded in a message's text blocks.
@@ -133,10 +170,18 @@ export function unwrapTextBlocks(blocks: Record<string, unknown>[]): Record<stri
  *    to the global `defaultMode` when a summary exists and the user has not
  *    chosen. In 'original' mode with stripped content, this returns false so
  *    the component can lazily fetch the full content.
+ *
+ * The global `defaultMode` can be:
+ *  - 'summary' — summarized messages show the summary unless toggled.
+ *  - 'original' — summarized messages show full text unless toggled.
+ *  - 'mixed' — the last assistant reply (opts.isLastAssistant) shows full
+ *    text; all older summarized messages show the summary. Explicit user
+ *    preference and the stripped-content fallback always win.
  */
 export function shouldShowSummary(
   msg: Record<string, unknown> | { summary?: unknown; blocks?: unknown; showingSummary?: unknown },
   defaultMode: MessageDisplayMode = 'summary',
+  opts?: SummaryDisplayOptions,
 ): boolean {
   const hasSummary = msg.summary != null && msg.summary !== ''
   if (!hasSummary) return false
@@ -152,8 +197,12 @@ export function shouldShowSummary(
   }
   // No explicit preference: use the global default. In original mode with
   // stripped content this returns false so the component triggers a lazy
-  // fetch of the full content.
-  return defaultMode === 'summary'
+  // fetch of the full content. In mixed mode the last assistant reply behaves
+  // like 'original' — including triggering the lazy fetch for stripped content,
+  // so the most recent reply is never shown only as a summary.
+  if (defaultMode === 'original') return false
+  if (defaultMode === 'mixed') return !opts?.isLastAssistant
+  return true
 }
 
 /**
@@ -170,13 +219,14 @@ export function isShowingSummary(
     summary?: unknown; blocks?: unknown; showingSummary?: unknown; _loadingOriginal?: unknown; _loadAttempted?: unknown
   },
   defaultMode: MessageDisplayMode = 'summary',
+  opts?: SummaryDisplayOptions,
 ): boolean {
   const hasSummary = msg.summary != null && msg.summary !== ''
   if (!hasSummary) return false
   const blocksArr = msg.blocks as unknown as Array<unknown> | undefined
   const contentStripped = !blocksArr || blocksArr.length === 0
   if (contentStripped && hasSummary && (msg._loadingOriginal === true || msg._loadAttempted === true)) return true
-  return shouldShowSummary(msg, defaultMode)
+  return shouldShowSummary(msg, defaultMode, opts)
 }
 
 /**
