@@ -109,6 +109,11 @@ function scheduleFlush(): void {
 }
 
 async function doFlush(): Promise<void> {
+  // Hard gate: the visibilitychange handler also calls doFlush directly (tab
+  // switch/minimize). Without this guard a disabled relay would still POST the
+  // ring buffer whenever the page is hidden — exactly the "requests fire while
+  // Debug Log Capture is OFF" bug via an ungated path.
+  if (!httpRelayEnabled) return
   if (isFlushing || buffer.length === 0) return
   isFlushing = true
 

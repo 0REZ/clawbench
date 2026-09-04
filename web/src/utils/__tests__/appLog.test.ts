@@ -121,6 +121,25 @@ describe('appLog HTTP relay', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('visibilitychange(hidden) does NOT flush while disabled, but DOES when armed', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    // Disabled: tab-hide must not POST the ring buffer.
+    appLog.d('Test', 'off-window entry')
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await new Promise(r => setTimeout(r, 50))
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    // Armed: tab-hide flushes immediately.
+    setLogCaptureEnabled(true)
+    appLog.d('Test', 'armed entry')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled(), { timeout: 2000 })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.entries.map((e: { msg: string }) => e.msg)).toEqual(['off-window entry', 'armed entry'])
+  })
+
   it('enqueues entries and flushes them via HTTP POST when relay is armed', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'info').mockImplementation(() => {})
