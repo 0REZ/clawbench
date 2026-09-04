@@ -266,7 +266,7 @@
           </div>
           <div v-if="contextCost > 0" class="usage-popup-row">
             <span class="usage-popup-label">{{ t('chat.sessionInfo.contextCost') }}</span>
-            <span class="usage-popup-value">${{ contextCost.toFixed(2) }} {{ contextCurrency || 'USD' }}</span>
+            <span class="usage-popup-value">{{ contextCostDisplay }}</span>
           </div>
           <!-- Context breakdown section (CodeBuddy usageByCategory) -->
           <template v-if="categoryRows.length">
@@ -452,6 +452,20 @@ const categoryRows = computed(() => {
   return Object.entries(cat)
     .filter(([, v]) => (v ?? 0) > 0)
     .map(([key, value]) => ({ key, value: value ?? 0, label: labels[key] ? t(labels[key]) : key }))
+})
+// Currency symbols for common ISO 4217 codes. Unknown codes fall back to the
+// bare code (e.g. "123 CNY"), and an empty currency renders the honest
+// "no currency" placeholder — the amount is NOT a US-dollar figure in that
+// case (CodeBuddy reports cost.amount == credit with no currency).
+const currencySymbols = { USD: '$', CNY: '¥', EUR: '€', GBP: '£', JPY: '¥', HKD: 'HK$', KRW: '₩', AUD: 'A$', CAD: 'C$' }
+const contextCostDisplay = computed(() => {
+  const amount = contextCost.value
+  if (amount <= 0) return ''
+  const cur = contextCurrency.value
+  if (!cur) return t('chat.sessionInfo.costNoCurrency')
+  const sym = currencySymbols[cur] ?? ''
+  const formatted = amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2)
+  return sym ? `${sym}${formatted}` : `${formatted} ${cur}`
 })
 const dialog = useDialog()
 const quickSendStore = useQuickSend()

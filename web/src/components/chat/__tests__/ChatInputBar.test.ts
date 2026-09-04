@@ -75,6 +75,7 @@ const i18n = createI18n({
           inputTokens: 'Input',
           outputTokens: 'Output',
           contextCost: 'Cost',
+          costNoCurrency: 'No currency',
           compact: 'Compact context',
         },
         autoApprove: {
@@ -1039,6 +1040,47 @@ describe('ChatInputBar', () => {
     mockContextCachedReadTokens.value = 0
     mockContextCacheHitTokens.value = 0
     mockContextCacheMissTokens.value = 0
+  })
+
+  it('cost row renders the reported currency, never a fabricated dollar sign', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    // Claude-style: real USD cost reported with a currency code.
+    mockContextCost.value = 0.05126895
+    mockContextCurrency.value = 'USD'
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Cost')
+    expect(wrapper.text()).toContain('$0.05')
+
+    // Reset for other tests.
+    mockContextCost.value = 0
+    mockContextCurrency.value = 'USD'
+  })
+
+  it('cost row shows the honest no-currency placeholder when backend omits currency', async () => {
+    mockContextSize.value = 200000
+    mockContextUsed.value = 5000
+    // CodeBuddy-style: cost.amount mirrors credit and ships with an empty
+    // currency — rendering "$1.43 USD" would fabricate a dollar figure.
+    mockContextCost.value = 1.43
+    mockContextCurrency.value = ''
+
+    const wrapper = mountBar()
+    await wrapper.find('.session-info-usage').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Cost')
+    expect(wrapper.text()).not.toContain('$')
+    expect(wrapper.text()).not.toContain('USD')
+    expect(wrapper.text()).toContain('No currency')
+
+    // Reset for other tests.
+    mockContextCost.value = 0
+    mockContextCurrency.value = 'USD'
   })
 
   it('shows cache hit rate as hit/(hit+miss) percentage', async () => {
