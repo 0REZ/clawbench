@@ -415,7 +415,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, provide, nextTick, defineAsyncComponent } from 'vue'
-import { appLog, startFlushTimer, stopFlushTimer } from '@/utils/appLog'
+import { appLog, setLogCaptureEnabled, stopFlushTimer } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { resolveThemeId, applyThemeAttributes, buildThemePalette } from '@/utils/themeMeta'
 import { useDockOverflow } from '@/composables/useDockOverflow'
@@ -1335,7 +1335,9 @@ async function initializeApp() {
   if (isAppMode.value && localConfig.logCapture) {
     try { if (getNative()?.startLogCapture) getNative()?.startLogCapture()?.catch(() => {}) } catch {}
   }
-  if (localConfig.logCapture) startFlushTimer()
+  // Arm/stand-down the HTTP log relay. The relay is disabled by default and
+  // only sends /api/client-log while the "Debug Log Capture" switch is on.
+  setLogCaptureEnabled(!!localConfig.logCapture)
   loadSSHInfo().catch(() => {})
   loadTerminalStatus().catch(() => {})
   store.loadGitBranch().catch(() => {})

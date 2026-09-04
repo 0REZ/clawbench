@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { appLog, startFlushTimer, stopFlushTimer, _clearBuffer } from '@/utils/appLog'
+import { appLog, setLogCaptureEnabled, stopFlushTimer, _clearBuffer } from '@/utils/appLog'
 
 describe('appLog console output', () => {
   it('appLog.d calls console.log with [tag] prefix', () => {
@@ -97,6 +97,8 @@ describe('appLog HTTP relay', () => {
     vi.stubGlobal('fetch', fetchSpy)
     // Non-app mode window (no ClawBenchNative)
     delete (window as any).ClawBenchNative
+    // Stand down the relay from any previous test; tests arm it explicitly.
+    setLogCaptureEnabled(false)
   })
 
   afterEach(() => {
@@ -107,14 +109,26 @@ describe('appLog HTTP relay', () => {
     _clearBuffer()
   })
 
-  it('enqueues entries and flushes them via HTTP POST', async () => {
+  it('does NOT flush while the relay is disabled (Debug Log Capture off)', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     vi.spyOn(console, 'info').mockImplementation(() => {})
 
     appLog.d('ChatStream', 'SSE connected')
     appLog.i('Store', 'state loaded')
 
-    startFlushTimer()
+    // Even after the periodic flush window elapses, no request may fire.
+    await new Promise(r => setTimeout(r, 2500))
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('enqueues entries and flushes them via HTTP POST when relay is armed', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+
+    appLog.d('ChatStream', 'SSE connected')
+    appLog.i('Store', 'state loaded')
+
+    setLogCaptureEnabled(true)
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled(), { timeout: 3000 })
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/client-log', expect.objectContaining({
@@ -142,6 +156,7 @@ describe('appLog HTTP relay', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     ;(window as any).ClawBenchNative = { log: vi.fn(), isNativeApp: () => true }
 
+    setLogCaptureEnabled(true)
     appLog.d('Test', 'hello')
     // Give a tick for any async operations
     await new Promise(r => setTimeout(r, 100))
@@ -153,8 +168,88 @@ describe('appLog HTTP relay', () => {
     fetchSpy.mockRejectedValue(new Error('NetworkError'))
 
     appLog.e('Test', 'fail msg')
-    startFlushTimer()
+    setLogCaptureEnabled(true)
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled(), { timeout: 3000 })
     // Should not throw — silently discards
+  })
+
+  it('does not latch isFlushing when fetch rejects (rejected flush frees the relay)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    fetchSpy
+      .mockRejectedValueOnce(new Error('NetworkError'))
+      .mockResolvedValueOnce({ ok: true })
+
+    appLog.d('Test', 'first')
+    setLogCaptureEnabled(true)
+    // First flush (2s tick) rejects; the catch + finally must release the lock.
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1), { timeout: 5000 })
+
+    // A later flush must still fire — the lock was released in the finally.
+    appLog.d('Test', 'second')
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2), { timeout: 6000 })
+  })
+
+  it('aborts a hung fetch via AbortSignal so subsequent flushes are not blocked', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      // Never-settling fetch — the real-world dead keep-alive connection.
+      // Only the AbortController signal can release it.
+      fetchSpy.mockImplementation((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      })
+
+      appLog.d('Test', 'first')
+      setLogCaptureEnabled(true)
+      // Interval tick at t=2000 fires the first flush, which hangs awaiting fetch.
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+
+      // Queue another entry while the first flush is still hung.
+      appLog.d('Test', 'second')
+
+      // Advance past the 5s abort timeout: the hung fetch aborts, doFlush's
+      // finally releases the lock, and the queued entry flushes immediately.
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+      // The second flush is also hung (same never-settling mock). Let its own
+      // abort timer fire so doFlush releases the module-level lock before the
+      // test ends — otherwise the latched flush leaks into later tests.
+      await vi.advanceTimersByTimeAsync(5000)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('passes the abort signal through to fetch', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    fetchSpy.mockResolvedValue({ ok: true })
+
+    appLog.d('Test', 'hello')
+    setLogCaptureEnabled(true)
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled(), { timeout: 3000 })
+
+    expect(fetchSpy.mock.calls[0][1]).toMatchObject({ method: 'POST', keepalive: true })
+    expect(fetchSpy.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('disabling the relay mid-stream stops further requests', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    fetchSpy.mockResolvedValue({ ok: true })
+
+    setLogCaptureEnabled(true)
+    appLog.d('Test', 'first')
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalled(), { timeout: 3000 })
+
+    // Switch off: pending entries dropped, timer stopped, no further fetches.
+    setLogCaptureEnabled(false)
+    appLog.d('Test', 'second')
+    const countAfterDisable = fetchSpy.mock.calls.length
+    await new Promise(r => setTimeout(r, 2500))
+    expect(fetchSpy.mock.calls.length).toBe(countAfterDisable)
   })
 })
