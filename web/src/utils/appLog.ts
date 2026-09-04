@@ -18,7 +18,6 @@ import { getNative, isNativeApp as nativeBridgeIsNativeApp } from '@/utils/clawb
 const LOG_ENDPOINT = '/api/client-log'
 const FLUSH_INTERVAL_MS = 2000  // 2-second flush interval
 const BUFFER_CAPACITY = 200     // max buffered entries
-const FLUSH_THRESHOLD = 50      // flush early when threshold reached
 const FLUSH_TIMEOUT_MS = 5000   // abort a hung flush so isFlushing can never latch
 
 interface LogEntry {
@@ -94,27 +93,16 @@ function enqueue(level: string, tag: string, args: unknown[]): void {
   if (buffer.length > BUFFER_CAPACITY) {
     buffer.splice(0, buffer.length - BUFFER_CAPACITY)
   }
-
-  // Flush early when threshold reached — only while the relay is armed, so a
-  // disabled "Debug Log Capture" cannot fire requests from log volume alone.
-  if (httpRelayEnabled && buffer.length >= FLUSH_THRESHOLD) {
-    scheduleFlush()
-  }
-}
-
-function scheduleFlush(): void {
-  if (isFlushing) return
-  // Use microtask to coalesce multiple enqueues in the same event loop
-  Promise.resolve().then(doFlush)
+  // NOTE: no early/instant flush here. Entries are only sent on the single
+  // fixed-interval timer (startFlushTimer, FLUSH_INTERVAL_MS). Any per-entry or
+  // threshold-driven POST makes request rate track log rate, flooding the
+  // connection pool with requests that pile up Pending in DevTools.
 }
 
 async function doFlush(): Promise<void> {
-  // Hard gate: the visibilitychange handler also calls doFlush directly (tab
-  // switch/minimize). Without this guard a disabled relay would still POST the
-  // ring buffer whenever the page is hidden — exactly the "requests fire while
-  // Debug Log Capture is OFF" bug via an ungated path.
-  if (!httpRelayEnabled) return
-  if (isFlushing || buffer.length === 0) return
+  // Hard gate: only the timer calls doFlush. A disabled relay must never send.
+  if (!httpRelayEnabled || buffer.length === 0) return
+  if (isFlushing) return
   isFlushing = true
 
   const toSend = buffer.splice(0, 200) // max 200 per request (server limit)
@@ -140,12 +128,6 @@ async function doFlush(): Promise<void> {
   } finally {
     // Always release the flush lock, even if fetch threw synchronously.
     isFlushing = false
-  }
-
-  // If more entries accumulated during flush, continue — only while the relay
-  // is armed (the toggle may have been switched off mid-flush).
-  if (httpRelayEnabled && buffer.length > 0) {
-    scheduleFlush()
   }
 }
 

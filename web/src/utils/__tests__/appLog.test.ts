@@ -171,6 +171,22 @@ describe('appLog HTTP relay', () => {
     })
   })
 
+  it('high log volume does NOT fire requests between interval ticks (timer-only relay)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    setLogCaptureEnabled(true)
+
+    // Simulate a streaming burst: 120 entries, well past the old 50-entry
+    // early-flush threshold. With the timer-only relay, NO request may fire
+    // until the next 2s interval tick.
+    for (let i = 0; i < 120; i++) appLog.d('ChatStream', `token ${i}`)
+    expect(fetchSpy).not.toHaveBeenCalled()
+
+    // All 120 arrive in a single batched POST on the next tick.
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1), { timeout: 4000 })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.entries).toHaveLength(120)
+  })
+
   it('skips HTTP relay in Android app mode (native bridge handles it)', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {})
     ;(window as any).ClawBenchNative = { log: vi.fn(), isNativeApp: () => true }
@@ -230,9 +246,11 @@ describe('appLog HTTP relay', () => {
       // Queue another entry while the first flush is still hung.
       appLog.d('Test', 'second')
 
-      // Advance past the 5s abort timeout: the hung fetch aborts, doFlush's
-      // finally releases the lock, and the queued entry flushes immediately.
-      await vi.advanceTimersByTimeAsync(5000)
+      // Advance past the 5s abort timeout: the hung fetch aborts and doFlush's
+      // finally releases the lock. The queued entry stays buffered — with the
+      // timer-only relay it is sent on the NEXT 2s interval tick, not instantly.
+      await vi.advanceTimersByTimeAsync(5000) // t=7000: abort fires, lock released
+      await vi.advanceTimersByTimeAsync(2000) // t=9000: next tick sends entry 2
       expect(fetchSpy).toHaveBeenCalledTimes(2)
 
       // The second flush is also hung (same never-settling mock). Let its own
