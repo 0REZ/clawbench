@@ -193,6 +193,7 @@ import { buildMultiQuoteMessage, relativizeProjectPath } from '@/utils/quoteQues
 import { resetQuotePin } from '@/composables/useQuoteQuestion.ts'
 import { dedupeFiles } from '@/utils/fileAttachmentUtils.ts'
 import { enqueueAndMaybeStart } from '@/utils/chatQueueSend.ts'
+import { trackInFlightSend, untrackInFlightSend } from '@/utils/chatStreamUtils.ts'
 import { refreshCurrentFile } from '@/composables/useFileRefresh.ts'
 import { playNotificationSound } from '@/composables/useNotificationSound.ts'
 import { useAutoSpeech, extractSpeakableText } from '@/composables/useAutoSpeech.ts'
@@ -862,6 +863,11 @@ async function sendMessageNow(text, filePaths, files) {
       createdAt: new Date().toISOString(),
       seq: nextClientSeq(),
     }
+    // Guard this optimistic bubble against a stale loadHistory snapshot that
+    // was fetched before the POST committed its row (see trackInFlightSend in
+    // chatStreamUtils). rebuildFromDb keeps the bubble while the queueId is
+    // tracked; the registry clears itself once a db_load contains the row.
+    trackInFlightSend(pendingId)
     messageStore.dispatch({ type: 'optimistic_push', msg: optimisticMsg })
 
     render.updateRenderedContents()
@@ -937,7 +943,9 @@ async function sendMessageNow(text, filePaths, files) {
         // the "发送失败" toast would never appear.
         toast.show(t('toast.sendFailed'), { icon: '⚠️', type: 'error' })
         appLog.e(TAG, 'sendMessageNow failed', err)
-        // Remove the optimistically pushed user message on failure
+        // Remove the optimistically pushed user message on failure — its POST
+        // never committed, so the in-flight guard must also be released.
+        untrackInFlightSend(pendingId)
         messageStore.dispatch({ type: 'optimistic_remove', id: pendingId })
         stream.disconnectStream()
         loading.value = false

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import {
   FILE_MODIFYING_TOOLS,
   findLastBlockOfType,
@@ -17,6 +17,9 @@ import {
   rebuildFromDb,
   messageText,
   chatMessageReducer,
+  trackInFlightSend,
+  untrackInFlightSend,
+  resetInFlightSendsForTest,
 } from '@/utils/chatStreamUtils.ts'
 
 describe('FILE_MODIFYING_TOOLS', () => {
@@ -2846,5 +2849,108 @@ describe('queued message ordering after refresh (regression)', () => {
     expect(msgs[1].parentQueueId).toBe('pending-A')
     sortMessages(msgs)
     expect(msgs.map((m: any) => `${m.role}:${String(m.id)}`)).toEqual(['user:1', 'assistant:2', 'user:3'])
+  })
+})
+
+// ── In-flight direct-send guard (user bubble vanishes after stale db_load) ──
+//
+// Reported: sending a message in an IDLE session sometimes shows the assistant
+// reply streaming while the user's own bubble is completely absent, restored
+// only by a manual refresh (full db_load).
+//
+// Root cause: a loadHistory GET that was already in flight BEFORE the send POST
+// committed its row (e.g. the done-triggered reload of the previous turn, or a
+// slow panel-open load) returns a DB snapshot that predates the new row.
+// rebuildFromDb then drops the just-pushed optimistic bubble as "transient
+// without a DB row"; nothing re-creates it (the user_message self-echo only
+// adopts an EXISTING bubble). The next full reload (refresh / done of the
+// current turn) finally restores it — exactly the reported behavior.
+describe('in-flight direct-send guard in rebuildFromDb', () => {
+  beforeEach(() => { resetInFlightSendsForTest() })
+  afterEach(() => { resetInFlightSendsForTest() })
+
+  const u = (id: unknown, content: string, extra: Record<string, unknown> = {}) =>
+    ({ role: 'user' as const, id, content, blocks: content ? [{ type: 'text', text: content }] : [], files: [], createdAt: '2026-01-01T00:00:01Z', ...extra })
+  const a = (id: unknown, content: string, extra: Record<string, unknown> = {}) =>
+    ({ role: 'assistant' as const, id, content, blocks: content ? [{ type: 'text', text: content }] : [], createdAt: '2026-01-01T00:00:02Z', ...extra })
+
+  it('keeps an optimistic direct-send bubble when a stale db_load snapshot predates its row', () => {
+    trackInFlightSend('pending-msg2')
+    const state: any[] = [
+      u(1, 'msg1'),
+      a(2, 'reply1'),
+      u('pending-msg2', 'msg2', { seq: 99, queueId: 'pending-msg2' }),
+    ]
+    // The stale GET was fetched before the POST committed msg2 — snapshot has
+    // only msg1/reply1.
+    const staleDb: any[] = [u(1, 'msg1'), a(2, 'reply1')]
+    const merged = rebuildFromDb(state, staleDb)
+    const user2 = merged.filter((m: any) => m.role === 'user' && messageText(m) === 'msg2')
+    expect(user2).toHaveLength(1)
+    expect(user2[0].id).toBe('pending-msg2')
+    // It sorts after all DB-backed history (bottom), where the send pipeline
+    // expects it while it awaits DB ack.
+    expect(merged.map((m: any) => `${m.role}:${String(m.id)}`)).toEqual(['user:1', 'assistant:2', 'user:pending-msg2'])
+  })
+
+  it('keeps an ALREADY-ADOPTED (numeric id) in-flight bubble against a stale snapshot', () => {
+    // sendMessageNow's POST already returned and the bubble adopted its DB id
+    // (id=3, queueId preserved as the pending string id). A stale pre-commit
+    // GET still lands afterwards — the bubble is non-transient (numeric id) yet
+    // must not be dropped.
+    trackInFlightSend('pending-msg2')
+    const state: any[] = [
+      u(1, 'msg1'),
+      a(2, 'reply1'),
+      u(3, 'msg2', { queueId: 'pending-msg2' }),
+    ]
+    const staleDb: any[] = [u(1, 'msg1'), a(2, 'reply1')]
+    const merged = rebuildFromDb(state, staleDb)
+    const user2 = merged.filter((m: any) => m.role === 'user' && messageText(m) === 'msg2')
+    expect(user2).toHaveLength(1)
+    expect(user2[0].id).toBe(3)
+    expect(merged.map((m: any) => `${m.role}:${String(m.id)}`)).toEqual(['user:1', 'assistant:2', 'user:3'])
+  })
+
+  it('drops the transient bubble normally when its queueId is NOT in-flight (no regression)', () => {
+    const state: any[] = [
+      u(1, 'msg1'),
+      a(2, 'reply1'),
+      u('stale-bubble', 'msg2', { seq: 99, queueId: 'stale-bubble' }),
+    ]
+    const staleDb: any[] = [u(1, 'msg1'), a(2, 'reply1')]
+    const merged = rebuildFromDb(state, staleDb)
+    expect(merged.filter((m: any) => m.role === 'user' && m.content === 'msg2')).toHaveLength(0)
+  })
+
+  it('releases the guard once a db_load snapshot contains the row (send fully acked)', () => {
+    trackInFlightSend('pending-msg2')
+    const state: any[] = [
+      u(1, 'msg1'),
+      a(2, 'reply1'),
+      u('pending-msg2', 'msg2', { seq: 99, queueId: 'pending-msg2' }),
+    ]
+    // Fresh snapshot now includes the committed row (id=3).
+    const freshDb: any[] = [u(1, 'msg1'), a(2, 'reply1'), u(3, 'msg2', { queueId: 'pending-msg2' })]
+    const merged = rebuildFromDb(state, freshDb)
+    // Bubble replaced by the authoritative DB row.
+    expect(merged.filter((m: any) => m.role === 'user' && messageText(m) === 'msg2')).toHaveLength(1)
+    expect(merged.find((m: any) => m.role === 'user' && messageText(m) === 'msg2')!.id).toBe(3)
+    // Guard released: a subsequent stale rebuild would NOT resurrect it.
+    const staleDb: any[] = [u(1, 'msg1'), a(2, 'reply1')]
+    const merged2 = rebuildFromDb([u(1, 'msg1'), a(2, 'reply1'), u(3, 'msg2', { queueId: 'pending-msg2' })], staleDb)
+    expect(merged2.filter((m: any) => m.role === 'user' && messageText(m) === 'msg2')).toHaveLength(0)
+  })
+
+  it('untrackInFlightSend releases the guard on send failure', () => {
+    trackInFlightSend('pending-msg2')
+    untrackInFlightSend('pending-msg2')
+    const state: any[] = [
+      u(1, 'msg1'),
+      u('pending-msg2', 'msg2', { seq: 99, queueId: 'pending-msg2' }),
+    ]
+    const staleDb: any[] = [u(1, 'msg1')]
+    const merged = rebuildFromDb(state, staleDb)
+    expect(merged.filter((m: any) => m.role === 'user' && m.content === 'msg2')).toHaveLength(0)
   })
 })
