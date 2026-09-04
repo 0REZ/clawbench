@@ -237,9 +237,9 @@ type ModelListState struct {
 	// ConfigID is the config-option id the agent advertised for this option
 	// (e.g. "model"); empty when the agent did not report one. Kept so senders
 	// can address the option by the agent's own id instead of a hardcoded guess.
-	ConfigID        string             `json:"configId,omitempty"`
-	CurrentModelID  string             `json:"currentModelId"`
-	Models          []model.AgentModel `json:"models"`
+	ConfigID       string             `json:"configId,omitempty"`
+	CurrentModelID string             `json:"currentModelId"`
+	Models         []model.AgentModel `json:"models"`
 }
 
 // ThinkingEffortState carries the current and available thinking effort levels for an ACP session.
