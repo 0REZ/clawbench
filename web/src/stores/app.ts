@@ -372,7 +372,6 @@ async function loadFiles(dir = '', silent = false, _depth = 0, noLoading = false
         const data = await apiGet<{ items: DirEntry[] }>(url)
         // A newer loadFiles call started while we were awaiting — discard our result
         if (seq !== loadFilesSeq) {
-            appLog.d(TAG, `[loadFiles] seq=${seq} discarded (current=${loadFilesSeq})`)
             return
         }
         state.currentDir = dir
@@ -535,32 +534,24 @@ async function selectFile(path: string, isImageFile = false, isAudioFile = false
 }
 
 async function deleteFile(filePath: string): Promise<void> {
-    appLog.d(TAG, '[deleteFile] start:', filePath)
     const confirmed = await useDialog().confirm(gt('file.header.confirmDelete', { name: baseName(filePath) }), { dangerous: true })
-    appLog.d(TAG, '[deleteFile] dialog result:', confirmed)
     if (!confirmed) {
-        appLog.d(TAG, '[deleteFile] user cancelled')
         return
     }
     try {
         await apiPost('/api/file/delete', { path: filePath })
-        appLog.d(TAG, '[deleteFile] API success')
     } catch (err: unknown) {
         // File not found = already deleted (e.g. concurrent delete), treat as success
         const msgKey = (err as Error & { msgKey?: string })?.msgKey
         if (msgKey !== 'FileNotFoundShort') {
             appLog.e(TAG, '[deleteFile] API error:', err)
             useToast().show(gt('file.toast.deleteFailed'), { type: 'error', icon: '⚠️' })
-        } else {
-            appLog.d(TAG, '[deleteFile] file already gone (404), treating as success')
         }
     }
     if (state.currentFile?.path === filePath) {
         closeCurrentFile(filePath)
     }
-    appLog.d(TAG, '[deleteFile] refreshing, currentDir:', state.currentDir, 'loadFilesSeq:', loadFilesSeq)
     await Promise.all([loadFiles(state.currentDir, false, 0, true), loadGitBranch()])
-    appLog.d(TAG, '[deleteFile] done, dirEntries count:', state.dirEntries.length)
 }
 
 // Update the in-memory content of the currently open file after a save, without
@@ -580,7 +571,6 @@ function markSaved(path: string, content: string): void {
 
 async function deleteFiles(paths: string[]): Promise<void> {
     if (!paths.length) return
-    appLog.d(TAG, '[deleteFiles] start:', paths.length, 'files')
     const results = await Promise.allSettled(paths.map(p => apiPost('/api/file/delete', { path: p })))
     const realFailures = results.filter(r => {
         if (r.status !== 'rejected') return false
@@ -595,7 +585,6 @@ async function deleteFiles(paths: string[]): Promise<void> {
         closeCurrentFile()
     }
     await Promise.all([loadFiles(state.currentDir, false, 0, true), loadGitBranch()])
-    appLog.d(TAG, '[deleteFiles] done, dirEntries count:', state.dirEntries.length)
 }
 
 async function renameFile(path: string, newName: string): Promise<void> {

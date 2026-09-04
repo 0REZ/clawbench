@@ -744,16 +744,13 @@ function switchTab(tab) {
 /** Handle clawbench-open-session event from Android push notification tap */
 function handleOpenSession(e) {
   const detail = e?.detail
-  appLog.d(TAG, 'clawbench-open-session event received, detail=', detail)
   if (!detail?.sessionId) {
     appLog.w(TAG, 'clawbench-open-session: no sessionId in detail, ignoring')
     return
   }
   const { sessionId, projectPath } = detail
-  appLog.d(TAG, 'clawbench-open-session: sessionId=', sessionId, 'projectPath=', projectPath, 'currentProject=', store.state.projectRoot)
   if (projectPath && projectPath !== store.state.projectRoot) {
     // Cross-project: hot switch without page reload
-    appLog.d(TAG, 'cross-project navigation, switching to', projectPath)
     hotSwitchProject(projectPath, sessionId).catch(() => {
       // If project switch fails, try same-project switch as fallback
       appLog.w(TAG, 'project switch failed, falling back to same-project switch')
@@ -762,7 +759,6 @@ function handleOpenSession(e) {
     })
   } else {
     // Same project: lightweight switch
-    appLog.d(TAG, 'same-project navigation, switching to session', sessionId)
     switchTab('chat')
     sessionIdentity.switchSession(sessionId)
   }
@@ -771,13 +767,11 @@ function handleOpenSession(e) {
 /** Handle clawbench-open-task event from Android push notification tap (task execution) */
 function handleOpenTask(e) {
   const detail = e?.detail
-  appLog.d(TAG, 'clawbench-open-task event received, detail=', detail)
   if (!detail?.taskId) {
     appLog.w(TAG, 'clawbench-open-task: no taskId in detail, ignoring')
     return
   }
   const { taskId, executionId, projectPath } = detail
-  appLog.d(TAG, 'clawbench-open-task: taskId=', taskId, 'executionId=', executionId, 'currentProject=', store.state.projectRoot)
 
   const navigateToTask = () => {
     switchTab('tasks')
@@ -790,7 +784,6 @@ function handleOpenTask(e) {
 
   if (projectPath && projectPath !== store.state.projectRoot) {
     // Cross-project: hot switch without page reload (same as session navigation)
-    appLog.d(TAG, 'cross-project navigation, switching to', projectPath)
     hotSwitchProject(projectPath, null, { taskId, executionId }).catch(() => {
       // If project switch fails, try same-project switch as fallback
       appLog.w(TAG, 'project switch failed, falling back to same-project switch')
@@ -798,7 +791,6 @@ function handleOpenTask(e) {
     })
   } else {
     // Same project: lightweight switch
-    appLog.d(TAG, 'same-project navigation, switching to task', taskId)
     navigateToTask()
   }
 }
@@ -1642,12 +1634,10 @@ async function handleRename({ path, name }) {
 }
 
 async function handleDelete(path) {
-    appLog.d(TAG, '[handleDelete] called, path:', path)
     const wasOverlay = fileNav.overlayOpen.value
     try {
         await store.deleteFile(path)
         removeRecentFile(path)
-        appLog.d(TAG, '[handleDelete] store.deleteFile resolved')
     } catch (err) {
         appLog.e(TAG, '[handleDelete] unhandled error:', err)
     }
@@ -2367,7 +2357,6 @@ onMounted(async () => {
         void (async () => {
           try {
             const nav = await getNative()?.getPendingNavigation?.()
-            appLog.d(TAG, 'getPendingNavigation poll result:', nav)
             if (nav) {
               const parsed = JSON.parse(nav)
               const { sessionId, taskId, executionId, projectPath } = parsed

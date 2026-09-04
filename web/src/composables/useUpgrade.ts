@@ -56,7 +56,6 @@ function ensureWsListener() {
     if (event !== 'upgrade_update') return
     const d = data as UpgradeState
     Object.assign(state, d)
-    appLog.d(TAG, 'WS update', { phase: d.phase, progress: d.progress })
   })
 }
 
@@ -123,7 +122,6 @@ async function pollUpgradeStatus() {
  *  Stops automatically when upgrade completes, fails, or times out. */
 function startReconnectPolling() {
   if (reconnectPollTimer) return
-  appLog.d(TAG, 'Starting reconnect polling...')
   pollStartTime = Date.now()
   reconnectPollTimer = setInterval(async () => {
     // Timeout guard — prevent infinite polling

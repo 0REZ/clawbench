@@ -336,7 +336,6 @@ import { useVoiceInput } from '@/composables/useVoiceInput'
 import { useChatRecommendation } from '@/composables/useChatRecommendation'
 import { usePlatformDetect } from '@/composables/usePlatformDetect'
 import { useChatContext } from '@/composables/useChatContext'
-import { appLog } from '@/utils/appLog'
 import { apiGet } from '@/utils/api'
 
 const { t } = useI18n()
@@ -1364,7 +1363,6 @@ function onPaste(e) {
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation()
 
     const uniqueFiles = dedupePasteFiles(files)
-    appLog.d('ChatInputBar', 'Pasted image/files detected, uploading and attaching:', uniqueFiles.map(f => f.name))
     // Show dynamic paste uploading feedback tied to upload lifecycle
     const generation = ++pasteUploadGeneration
     clearTimeout(pasteOverlayTimer)

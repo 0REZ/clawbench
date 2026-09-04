@@ -1,7 +1,6 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useGlobalEvents } from './useGlobalEvents'
 import { useSettingsNavigation } from './useSettingsNavigation'
-import { appLog } from '@/utils/appLog'
 
 // Delay before showing the reconnect mask, so transient blips that recover
 // within this window never flash a fullscreen overlay.
@@ -44,7 +43,6 @@ export function useConnectionOverlay() {
         showReconnect.value = false
         // If WS is not connected and we've connected before, restart the timer
         if (wsStatus.value !== 'connected' && hasConnectedOnce.value) {
-            appLog.d('ConnectionOverlay', 'foreground reset: restarting reconnect timer')
             reconnectTimer = setTimeout(() => {
                 showReconnect.value = true
                 reconnectTimer = null

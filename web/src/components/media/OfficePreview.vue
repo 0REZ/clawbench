@@ -165,7 +165,6 @@ function onWheel(e) {
 }
 
 function onRendered() {
-  appLog.d(TAG, 'Rendered:', props.file?.name)
   loading.value = false
   error.value = ''
   // Reset zoom on new render
@@ -205,11 +204,9 @@ watch(() => props.file?.path, (newPath, oldPath) => {
 })
 
 onMounted(() => {
-  appLog.d(TAG, 'Mounted, file:', props.file?.name)
 })
 
 onUnmounted(() => {
-  appLog.d(TAG, 'Unmounted')
 })
 
 defineExpose({

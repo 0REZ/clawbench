@@ -47,8 +47,6 @@ async function _doAcquire() {
       }
       held.value = true
       appLog.i(TAG, 'Web Wake Lock acquired')
-    } else {
-      appLog.d(TAG, 'Web Wake Lock API not available')
     }
   } catch (e) {
     appLog.w(TAG, 'Web Wake Lock acquire failed:', e)
@@ -70,7 +68,6 @@ async function _doAcquire() {
 /** Acquire the screen wake lock. No-op if already held. */
 async function acquire() {
   if (shouldHold) {
-    appLog.d(TAG, 'acquire skipped: already held')
     return
   }
   shouldHold = true

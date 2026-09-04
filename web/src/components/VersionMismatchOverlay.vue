@@ -28,7 +28,6 @@ import { useAppMode } from '@/composables/useAppMode'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { registerBackHandler, PRIORITY_OVERLAY } from '@/composables/useBackHandler'
 import LoadingIndicator from '@/components/common/LoadingIndicator.vue'
-import { appLog } from '@/utils/appLog'
 import { getNative } from '@/utils/clawbenchNative'
 import { normalizeVersion, isVersionedBuild, compareVersions, extractBaseVersion } from '@/utils/version'
 import { downloadByUrl } from '@/utils/download'
@@ -74,12 +73,10 @@ function show() {
 function tryShow() {
   if (!isAppMode.value) return
   if (!appVersion.value || !serverVersion.value) {
-    appLog.d('VersionMismatch', 'Skipping: version info not yet available', { appVersion: appVersion.value, serverVersion: serverVersion.value })
     return
   }
   // Skip check for non-versioned builds (short hashes, "dev", etc.)
   if (!isVersionedBuild(appVersion.value) || !isVersionedBuild(normalizedServerVersion.value)) {
-    appLog.d('VersionMismatch', 'Skipping: non-versioned build', { appVersion: appVersion.value, serverVersion: normalizedServerVersion.value })
     return
   }
   // Show only when APK is older than server (needs upgrade)

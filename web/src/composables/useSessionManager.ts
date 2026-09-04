@@ -3,11 +3,8 @@ import { useSessionIdentity, runningSessions } from '@/composables/useSessionIde
 import { cancelChat } from '@/utils/api'
 import { useToast } from '@/composables/useToast.ts'
 import { gt } from '@/composables/useLocale'
-import { appLog } from '@/utils/appLog'
 import type { FileEntry } from '@/utils/fileAttachmentUtils'
 import type { ChatMessageAction } from '@/utils/chatStreamUtils.ts'
-
-const TAG = 'SessionManager'
 
 /**
  * Unified session manager — ensures consistent cleanup around session operations.
@@ -96,7 +93,6 @@ export function useSessionManager(options: UseSessionManagerOptions) {
       ...attachedFiles,
     ]
 
-    appLog.d(TAG, `[enqueueMessage] sid=${sessionId.slice(0,8)} queueId=${queueId || 'none'} text="${inputText.slice(0,40)}"`)
 
     try {
       const resp = await fetch(

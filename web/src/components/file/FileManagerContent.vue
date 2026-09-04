@@ -985,7 +985,6 @@ function getDestDir(entry) {
 async function doCopy() {
     clipboard.entries = [ctxMenu.entry]
     clipboard.isCut = false
-    appLog.d(TAG, '[doCopy] entry:', ctxMenu.entry?.path)
     closeCtxMenu()
     if (toast) toast.show(t('common.copied'), { icon: '📋', type: 'success', duration: 1500 })
 }
@@ -995,7 +994,6 @@ function doCopyPath() {
     if (!entry?.path) return
     closeCtxMenu()
     const absPath = absPathForEntry(entry)
-    appLog.d(TAG, '[doCopyPath] absPath:', absPath)
     copyText(absPath, () => {
         if (toast) toast.show(t('file.context.pathCopied'), { icon: '📋', type: 'success', duration: 1500 })
     }, () => {
@@ -1017,7 +1015,6 @@ function absPathForEntry(entry) {
 async function doCut() {
     clipboard.entries = [ctxMenu.entry]
     clipboard.isCut = true
-    appLog.d(TAG, '[doCut] entry:', ctxMenu.entry?.path)
     closeCtxMenu()
     if (toast) toast.show(t('file.toast.cutDone'), { icon: '✂️', type: 'success', duration: 1500 })
 }
@@ -1027,7 +1024,6 @@ async function doPaste() {
     const entry = ctxMenu.entry
     closeCtxMenu()
     const destDir = getDestDir(entry)
-    appLog.d(TAG, '[doPaste] destDir:', destDir, 'entries:', clipboard.entries.map(e => e.path))
     const allOk = await transferEntries(clipboard.entries, destDir, clipboard.isCut)
     // Only clear clipboard on successful cut-paste; on failure keep entries so user can retry
     if (clipboard.isCut && allOk) {
@@ -1060,7 +1056,6 @@ async function transferEntries(entries, destDir, isMove) {
             let destPath = (destDir ? destDir + '/' : '') + srcEntry.name
             // Move to the same location is a no-op — skip the API call
             if (isMove && srcEntry.path === destPath) {
-                appLog.d(TAG, '[transfer] same-path no-op, skipping:', srcEntry.path)
                 continue
             }
             // Copy to the same directory: the backend treats src==dest as a no-op (200),
@@ -1069,14 +1064,11 @@ async function transferEntries(entries, destDir, isMove) {
             if (!isMove && srcEntry.path === destPath) {
                 attempt = 1
                 destPath = (destDir ? destDir + '/' : '') + numberedName(srcEntry.name, attempt)
-                appLog.d(TAG, '[transfer] same-dir copy, using numbered name:', destPath)
             }
             // Guard: don't move a directory into itself or one of its descendants
             if (isMove && (srcEntry.path === destDir || destDir.startsWith(srcEntry.path + '/'))) {
-                appLog.d(TAG, '[transfer] skip self-nesting move:', srcEntry.path, '→', destDir)
                 continue
             }
-            appLog.d(TAG, '[transfer]', isMove ? 'moving' : 'copying', srcEntry.path, '→', destPath)
             let resp
             while (true) {
                 resp = await fetch(api, {
@@ -1090,7 +1082,6 @@ async function transferEntries(entries, destDir, isMove) {
                     attempt++
                     const candidate = numberedName(srcEntry.name, attempt)
                     destPath = (destDir ? destDir + '/' : '') + candidate
-                    appLog.d(TAG, '[transfer] conflict, retrying as:', destPath)
                     continue
                 }
                 break
@@ -1522,13 +1513,11 @@ function doDelete() {
     // under the cursor. Delegate to doBatchDelete so the confirmation dialog
     // matches the explicit multi-select delete flow.
     if (multiSelect.active && multiSelect.selected.size > 0) {
-        appLog.d(TAG, '[doDelete] emitting batchDelete for:', multiSelect.selected.size, 'items')
         closeCtxMenu()
         doBatchDelete()
         return
     }
     const path = ctxMenu.entry.path
-    appLog.d(TAG, '[doDelete] emitting delete for:', path)
     closeCtxMenu()
     emit('delete', path)
 }
@@ -1603,11 +1592,9 @@ async function handleKeydown(e) {
             doBatchDelete()
         } else if (selectedPath.value) {
             e.preventDefault()
-            appLog.d(TAG, '[kbd:Delete] emitting delete for:', selectedPath.value)
             emit('delete', selectedPath.value)
         } else if (props.currentFile) {
             e.preventDefault()
-            appLog.d(TAG, '[kbd:Delete] emitting delete for:', props.currentFile.path)
             emit('delete', props.currentFile.path)
         }
         return
