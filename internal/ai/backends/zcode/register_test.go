@@ -13,7 +13,7 @@ import (
 
 func TestZcodeBackendPlugin_RegisteredInBackends(t *testing.T) {
 	plugin := backends.Lookup("zcode")
-	require.NotNil(t, "zcode should be registered in backends registry", plugin)
+	require.NotNil(t, plugin, "zcode should be registered in backends registry")
 	assert.Equal(t, "zcode", plugin.ID)
 }
 
