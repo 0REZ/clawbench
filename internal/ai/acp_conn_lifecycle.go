@@ -345,11 +345,14 @@ func (c *ACPConn) recoverViaResumeSession(ctx context.Context, cwd, acpSID strin
 }
 
 // reapplyConfigAfterResume re-applies cached mode/model/thinking config after a ResumeSession.
+// Config ids are resolved to what the agent advertised (resolveWireConfigIDLocked —
+// c.mu is held on this path via ensureAliveWithSession), falling back to the
+// historical hardcoded ids.
 func (c *ACPConn) reapplyConfigAfterResume(ctx context.Context, acpSID string, prevConfig cachedConfigSnapshot) {
 	reapplyStart := time.Now()
-	c.reapplyConfigOption(ctx, acpSID, "mode", prevConfig.mode)
-	c.reapplyConfigOption(ctx, acpSID, "model", prevConfig.model)
-	c.reapplyConfigOption(ctx, acpSID, "thinkingEffort", prevConfig.effort)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("mode", "mode"), prevConfig.mode)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("model", "model"), prevConfig.model)
+	c.reapplyConfigOption(ctx, acpSID, c.resolveWireConfigIDLocked("thought_level", "thinkingEffort"), prevConfig.effort)
 	slog.Info("acp perf: reapplyConfigAfterResume.total", "clawbench_sid", c.clawbenchSID, "elapsed", time.Since(reapplyStart),
 		"mode", prevConfig.mode, "model", prevConfig.model, "effort", prevConfig.effort)
 }
@@ -768,9 +771,19 @@ func (c *ACPConn) CancelTurn(ctx context.Context) {
 
 // SetSessionConfigOption sets a config option for this session.
 // Also updates cached state so re-emitted WS events reflect the new value.
+//
+// configID is the agent-facing (wire) config-option id as sent on the wire —
+// for well-known categories it is resolved through the agent's advertised ids
+// first (see resolveWireConfigID), so callers may pass either the historical
+// hardcoded id (e.g. "thinkingEffort") or the internal category key
+// ("thought_level") and the actual RPC still uses what the agent advertised
+// (e.g. claude-agent-acp's "effort"). Dedup/unsupported tracking keys on the
+// resolved wire id, so a rejection under one spelling is not bypassed by
+// sending under another (issue #429).
 func (c *ACPConn) SetSessionConfigOption(ctx context.Context, configID, value string) {
-	if !c.shouldSetConfig(configID, value) {
-		slog.Debug("acp conn: SetSessionConfigOption skipped (unchanged)", "config_id", configID, "value", value, "clawbench_sid", c.clawbenchSID)
+	category, wireID := c.resolveConfigCategory(configID)
+	if !c.shouldSetConfig(wireID, value) {
+		slog.Debug("acp conn: SetSessionConfigOption skipped (unchanged)", "config_id", wireID, "value", value, "clawbench_sid", c.clawbenchSID)
 		return
 	}
 
@@ -783,11 +796,11 @@ func (c *ACPConn) SetSessionConfigOption(ctx context.Context, configID, value st
 		return
 	}
 
-	wasUnsupported := c.IsConfigUnsupported(configID)
+	wasUnsupported := c.IsConfigUnsupported(wireID)
 
-	c.setSessionConfigOption(ctx, acpSID, configID, value)
+	c.setSessionConfigOption(ctx, acpSID, wireID, value)
 
-	nowUnsupported := c.IsConfigUnsupported(configID)
+	nowUnsupported := c.IsConfigUnsupported(wireID)
 
 	if nowUnsupported {
 		return
@@ -795,16 +808,39 @@ func (c *ACPConn) SetSessionConfigOption(ctx context.Context, configID, value st
 
 	_ = wasUnsupported
 
-	switch configID {
+	c.markConfigSet(wireID, value)
+
+	// Keep the session-level cached current value in sync so re-emitted WS
+	// events reflect the new selection.
+	switch category {
 	case "mode":
 		c.UpdateCachedCurrent("mode", value)
-		c.markConfigSet("mode", value)
-	case "thinking_effort", "thought_level", "thinkingEffort":
+	case "thought_level":
 		c.UpdateCachedCurrent("thought_level", value)
-		c.markConfigSet("thinkingEffort", value)
 	case "model":
 		c.UpdateCachedCurrent("model", value)
-		c.markConfigSet("model", value)
+	}
+}
+
+// resolveConfigCategory maps a caller-supplied config id (historical hardcoded
+// spelling or internal category key) to the connection's wire id for the
+// option. Returns (internalCategory, wireID) where wireID is what the agent
+// advertised (falling back to the historical spelling when unknown), so
+// dedup/unsupported bookkeeping stays on the single id actually sent on the
+// wire.
+func (c *ACPConn) resolveConfigCategory(configID string) (category, wireID string) {
+	switch configID {
+	case "mode":
+		return "mode", c.resolveWireConfigID("mode", "mode")
+	case "thought_level", "thinkingEffort", "thinking_effort":
+		return "thought_level", c.resolveWireConfigID("thought_level", "thinkingEffort")
+	case "model":
+		return "model", c.resolveWireConfigID("model", "model")
+	default:
+		// Unknown agent-specific category: send under the literal id. The
+		// session cache key is the wire id itself (category==wireID is only
+		// used by the well-known cases above).
+		return configID, configID
 	}
 }
 
@@ -813,10 +849,20 @@ func (c *ACPConn) setSessionConfigOption(ctx context.Context, acpSessionID, conf
 	c.mu.Lock()
 	conn := c.conn
 	alive := c.alive && c.isAliveLocked()
+	hook := c.setConfigOptionFn
 	c.mu.Unlock()
 
 	if conn == nil || !alive {
 		slog.Debug("acp conn: skipping set_config_option on dead connection", "config_id", configID, "value", value)
+		return
+	}
+
+	// Test override: record the (resolved) wire config id without an RPC.
+	if hook != nil {
+		hookErr := hook(ctx, acpSessionID, configID, value)
+		if hookErr != nil {
+			slog.Warn("acp conn: set_config_option hook failed", "config_id", configID, "value", value, "error", hookErr)
+		}
 		return
 	}
 

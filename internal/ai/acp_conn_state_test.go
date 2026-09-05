@@ -1908,3 +1908,142 @@ func TestScheduleCommandsReEmit_NoCommands_NoEmit(t *testing.T) {
 	events := drainStreamEvents(ch)
 	assert.Empty(t, events, "no events expected when registry has no commands")
 }
+
+// ---------------------------------------------------------------------------
+// Wire config-option id resolution (category → agent-advertised id)
+// ---------------------------------------------------------------------------
+
+func TestBuildSelectStatesCaptureConfigID(t *testing.T) {
+	// The builders must retain the config-option id the agent advertised so
+	// senders can address the option by the agent's own id (e.g. "effort")
+	// instead of the historical hardcoded "thinkingEffort".
+	effortCat := acp.SessionConfigOptionCategoryThoughtLevel
+	modelCat := acp.SessionConfigOptionCategoryModel
+
+	es := buildThinkingEffortStateFromSelect(&acp.SessionConfigOptionSelect{
+		Category:     &effortCat,
+		Id:           "effort",
+		CurrentValue: "max",
+		Options: acp.SessionConfigSelectOptions{
+			Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+				{Value: "max", Name: "Max"},
+			},
+		},
+	})
+	assert.Equal(t, "effort", es.ConfigID)
+
+	ml := buildModelListStateFromSelect(&acp.SessionConfigOptionSelect{
+		Category:     &modelCat,
+		Id:           "model",
+		CurrentValue: "sonnet",
+		Options: acp.SessionConfigSelectOptions{
+			Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{
+				{Value: "sonnet", Name: "Sonnet"},
+			},
+		},
+	})
+	assert.Equal(t, "model", ml.ConfigID)
+}
+
+func TestResolveWireConfigID_FallbackWhenUnadvertised(t *testing.T) {
+	agent := &model.Agent{ID: "test-wire-id-fallback", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-wire-id-fallback")
+
+	// No extraction ran → historical hardcoded ids must be used unchanged.
+	assert.Equal(t, "thinkingEffort", conn.resolveWireConfigID("thought_level", "thinkingEffort"))
+	assert.Equal(t, "model", conn.resolveWireConfigID("model", "model"))
+	assert.Equal(t, "mode", conn.resolveWireConfigID("mode", "mode"))
+}
+
+func TestResolveWireConfigID_UsesAdvertisedIDs(t *testing.T) {
+	// claude-agent-acp advertises "effort" while the legacy hardcoded id was
+	// "thinkingEffort" — after caching session state, sends must resolve to
+	// the agent's own ids. A distinct mode id ("sessionMode") proves arbitrary
+	// agents are honored too.
+	agent := &model.Agent{ID: "test-wire-id-advertised", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-wire-id-advertised")
+
+	modeCat := acp.SessionConfigOptionCategoryMode
+	effortCat := acp.SessionConfigOptionCategoryThoughtLevel
+	modelCat := acp.SessionConfigOptionCategoryModel
+	sessResp := &acp.NewSessionResponse{
+		SessionId: acp.SessionId("acp-wire-id"),
+		ConfigOptions: []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{
+				Category: &modeCat, Id: "sessionMode", CurrentValue: "auto",
+				Options: acp.SessionConfigSelectOptions{Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{{Value: "auto", Name: "Auto"}}},
+			}},
+			{Select: &acp.SessionConfigOptionSelect{
+				Category: &effortCat, Id: "effort", CurrentValue: "max",
+				Options: acp.SessionConfigSelectOptions{Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{{Value: "max", Name: "Max"}}},
+			}},
+			{Select: &acp.SessionConfigOptionSelect{
+				Category: &modelCat, Id: "model", CurrentValue: "sonnet",
+				Options: acp.SessionConfigSelectOptions{Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{{Value: "sonnet", Name: "Sonnet"}}},
+			}},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastNewSessionResp = sessResp
+	conn.mu.Unlock()
+
+	conn.CacheNewSessionState()
+
+	assert.Equal(t, "effort", conn.resolveWireConfigID("thought_level", "thinkingEffort"))
+	assert.Equal(t, "sessionMode", conn.resolveWireConfigID("mode", "mode"))
+	assert.Equal(t, "model", conn.resolveWireConfigID("model", "model"))
+}
+
+func TestResolveWireConfigID_KeepsPriorIDsOnPartialExtraction(t *testing.T) {
+	// A later extraction without configOptions (e.g. a bare resume response)
+	// must not erase previously advertised ids.
+	agent := &model.Agent{ID: "test-wire-id-partial", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-wire-id-partial")
+
+	effortCat := acp.SessionConfigOptionCategoryThoughtLevel
+	sessResp := &acp.NewSessionResponse{
+		SessionId: acp.SessionId("acp-wire-partial"),
+		ConfigOptions: []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{
+				Category: &effortCat, Id: "effort", CurrentValue: "high",
+				Options: acp.SessionConfigSelectOptions{Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{{Value: "high", Name: "High"}}},
+			}},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastNewSessionResp = sessResp
+	conn.mu.Unlock()
+	conn.CacheNewSessionState()
+	assert.Equal(t, "effort", conn.resolveWireConfigID("thought_level", "thinkingEffort"))
+
+	// Resume with no configOptions at all.
+	conn.mu.Lock()
+	conn.lastResumeSessionResp = &acp.ResumeSessionResponse{}
+	conn.mu.Unlock()
+	conn.MergeResumedSessionState()
+	assert.Equal(t, "effort", conn.resolveWireConfigID("thought_level", "thinkingEffort"), "advertised id must survive a configOptions-free resume")
+}
+
+func TestMergeLoadedSessionStatePopulatesWireConfigIDs(t *testing.T) {
+	// The LoadSession path (#427) must populate the wire-id map too, so
+	// reopened sessions also send config ids the agent recognizes.
+	agent := &model.Agent{ID: "test-wire-id-load", Backend: "acp-stdio", AcpCommand: "echo"}
+	conn := newACPConn(agent, "test-wire-id-load")
+
+	effortCat := acp.SessionConfigOptionCategoryThoughtLevel
+	loadResp := &acp.LoadSessionResponse{
+		ConfigOptions: []acp.SessionConfigOption{
+			{Select: &acp.SessionConfigOptionSelect{
+				Category: &effortCat, Id: "effort", CurrentValue: "max",
+				Options: acp.SessionConfigSelectOptions{Ungrouped: &acp.SessionConfigSelectOptionsUngrouped{{Value: "max", Name: "Max"}}},
+			}},
+		},
+	}
+	conn.mu.Lock()
+	conn.lastLoadSessionResp = loadResp
+	conn.mu.Unlock()
+
+	conn.MergeResumedSessionState() // falls back to the load response
+
+	assert.Equal(t, "effort", conn.resolveWireConfigID("thought_level", "thinkingEffort"))
+}

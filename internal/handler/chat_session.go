@@ -407,6 +407,8 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		// is slow (e.g., Claude bridge adapter starting its CLI subprocess).
 		// Blocking the HTTP handler would tie up a browser HTTP/1.1 connection
 		// and prevent other requests (like session list) from being served.
+		// The internal category key is passed ("mode"); SetSessionConfigOption
+		// resolves it to the config-option id the agent advertised (issue #429).
 		if conn := ai.GetACPConnManager().GetConn(sessionID); conn != nil {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -419,11 +421,16 @@ func ServeAISessionUpdate(w http.ResponseWriter, r *http.Request) {
 		// Persist thinking effort change to DB context_state so it survives restarts
 		persistContextStateThinkingEffortChange(sessionID, req.ThinkingEffort)
 		// Forward thinking effort change to ACP agent — same async pattern as mode.
+		// "thought_level" is the internal category key; SetSessionConfigOption
+		// resolves it to the agent-advertised id (claude-agent-acp: "effort"),
+		// falling back to the historical "thinkingEffort" when unadvertised —
+		// otherwise the effort selector silently fails for agents whose id
+		// naming differs from ours (issue #429).
 		if conn := ai.GetACPConnManager().GetConn(sessionID); conn != nil {
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				conn.SetSessionConfigOption(ctx, "thinkingEffort", req.ThinkingEffort)
+				conn.SetSessionConfigOption(ctx, "thought_level", req.ThinkingEffort)
 			}()
 		}
 	}

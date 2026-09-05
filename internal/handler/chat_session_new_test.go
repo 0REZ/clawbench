@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -703,4 +705,93 @@ func TestDestroySession_BadMethod(t *testing.T) {
 
 	w := callHandler(DestroySession, req)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+func TestServeAISessionUpdate_ThinkingEffort_UsesAdvertisedWireID(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	agent := &model.Agent{ID: "effort-wire-agent", Backend: "claude", Transport: "acp-stdio", AcpCommand: "claude --acp"}
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "patch-effort-wire", agent.ID, "", "default", "chat")
+	require.NoError(t, err)
+
+	conn := ai.NewACPConnForTest(agent, sessionID)
+	conn.SetAliveForTest()
+	conn.SetSessionMappingForTest(sessionID, "acp-sid-effort-wire")
+	// claude-agent-acp advertises its effort option as "effort" (issue #429);
+	// a caller passing the legacy spelling must still resolve to it.
+	conn.SetWireConfigIDsForTest(map[string]string{"thought_level": "effort"})
+
+	var (
+		mu   sync.Mutex
+		sent []string // captured wire config ids
+	)
+	conn.SetConfigOptionFnForTest(func(_ context.Context, _, configID, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, configID)
+		return nil
+	})
+	ai.GetACPConnManager().SetConnForTest(sessionID, conn)
+	t.Cleanup(func() { ai.GetACPConnManager().CloseConn(sessionID) })
+
+	req := newRequest(t, http.MethodPatch, "/api/ai/session/update?session_id="+sessionID, map[string]any{
+		"thinkingEffort": "high",
+	})
+	w := callHandler(ServeAISessionUpdate, req)
+	assertOK(t, w)
+
+	// The forward is async; wait for the RPC to land.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(sent) == 1
+	}, 2*time.Second, 5*time.Millisecond, "PATCH must forward the effort change to the ACP agent")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"effort"}, sent, "handler must send the agent-advertised wire id, not the legacy hardcoded one")
+}
+
+func TestServeAISessionUpdate_ThinkingEffort_FallbackWhenUnadvertised(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	agent := &model.Agent{ID: "effort-fallback-agent", Backend: "claude", Transport: "acp-stdio", AcpCommand: "claude --acp"}
+	sessionID, err := service.CreateSession(env.ProjectDir, "claude", "patch-effort-fallback", agent.ID, "", "default", "chat")
+	require.NoError(t, err)
+
+	conn := ai.NewACPConnForTest(agent, sessionID)
+	conn.SetAliveForTest()
+	conn.SetSessionMappingForTest(sessionID, "acp-sid-effort-fallback")
+	// No advertised ids → historical hardcoded "thinkingEffort" is used.
+
+	var (
+		mu   sync.Mutex
+		sent []string
+	)
+	conn.SetConfigOptionFnForTest(func(_ context.Context, _, configID, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		sent = append(sent, configID)
+		return nil
+	})
+	ai.GetACPConnManager().SetConnForTest(sessionID, conn)
+	t.Cleanup(func() { ai.GetACPConnManager().CloseConn(sessionID) })
+
+	req := newRequest(t, http.MethodPatch, "/api/ai/session/update?session_id="+sessionID, map[string]any{
+		"thinkingEffort": "medium",
+	})
+	w := callHandler(ServeAISessionUpdate, req)
+	assertOK(t, w)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(sent) == 1
+	}, 2*time.Second, 5*time.Millisecond, "PATCH must forward the effort change to the ACP agent")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"thinkingEffort"}, sent, "unadvertised agent keeps the historical wire id")
 }
