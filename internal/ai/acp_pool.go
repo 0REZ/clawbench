@@ -894,6 +894,12 @@ type ACPConn struct {
 	// ACP JSON-RPC call is used.
 	listSessionsFn func(ctx context.Context, cursor *string) ([]acp.SessionInfo, *string, error)
 
+	// setConfigOptionFn overrides the SetSessionConfigOption RPC for testing.
+	// If nil, the real ACP JSON-RPC call is used (see setSessionConfigOption).
+	// Invoked with the resolved wire config id so tests can assert which id a
+	// given internal category maps to for the connection's agent.
+	setConfigOptionFn func(ctx context.Context, acpSessionID, configID, value string) error
+
 	// rawOutputBuf accumulates raw ACP JSON-RPC notification payloads for
 	// debugging (written to ai_raw_responses on Finalize). This is a separate
 	// buffer from the StreamEvent channel so raw_output events don't consume
@@ -1907,6 +1913,29 @@ func (c *ACPConn) SetListSessionsFnForTest(fn func(ctx context.Context, cursor *
 	c.mu.Lock()
 	c.listSessionsFn = fn
 	c.mu.Unlock()
+}
+
+// SetConfigOptionFnForTest overrides the SetSessionConfigOption RPC for testing.
+// If fn is non-nil, it is called (with the resolved wire config id) instead of
+// the real ACP JSON-RPC call. Production code must not use this.
+func (c *ACPConn) SetConfigOptionFnForTest(fn func(ctx context.Context, acpSessionID, configID, value string) error) {
+	c.mu.Lock()
+	c.setConfigOptionFn = fn
+	c.mu.Unlock()
+}
+
+// SetWireConfigIDsForTest injects the connection's agent-advertised wire
+// config-option ids (category → wire id) for testing, as if an extraction had
+// populated them. Production code must not use this.
+func (c *ACPConn) SetWireConfigIDsForTest(ids map[string]string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wireConfigIDs == nil {
+		c.wireConfigIDs = make(map[string]string, len(ids))
+	}
+	for category, id := range ids {
+		c.wireConfigIDs[category] = id
+	}
 }
 
 // InjectAliveConnForTest creates and registers an alive ACPConn for testing.
