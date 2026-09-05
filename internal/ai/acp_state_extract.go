@@ -278,6 +278,7 @@ func buildConfigOptionStateFromSelect(sel *acp.SessionConfigOptionSelect, catego
 // buildThinkingEffortStateFromSelect builds a ThinkingEffortState from an ACP thought_level config option.
 func buildThinkingEffortStateFromSelect(sel *acp.SessionConfigOptionSelect) *ThinkingEffortState {
 	state := &ThinkingEffortState{
+		ConfigID:  string(sel.Id),
 		CurrentID: string(sel.CurrentValue),
 	}
 
@@ -311,6 +312,7 @@ func buildThinkingEffortStateFromSelect(sel *acp.SessionConfigOptionSelect) *Thi
 // with Category "model". Returns nil if no models are available.
 func buildModelListStateFromSelect(sel *acp.SessionConfigOptionSelect) *ModelListState {
 	state := &ModelListState{
+		ConfigID:       string(sel.Id),
 		CurrentModelID: string(sel.CurrentValue),
 	}
 
